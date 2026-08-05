@@ -1,0 +1,16 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Build, test, and local runtime output.
+bin/
+build/
+coverage/
+dist/
+tmp/
+var/
+
+# Editor metadata.
+.idea/
+.vscode/
