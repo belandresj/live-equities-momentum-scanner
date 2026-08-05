@@ -1,9 +1,35 @@
 # Phase 1 decisions brief
 
-**Status:** Authoritative drafting input for Phase 1. Decisions recorded as
-settled below came from owner review. Items under **Open owner decisions** remain
-unapproved. This brief is not itself the final product or architecture
-specification.
+**Status:** Historical Phase 1 drafting record; non-authoritative.
+
+**Synchronized:** 2026-08-05
+
+This brief preserves the inputs and alternatives used to draft Phase 1. The
+approved [`product contract`](../product/product-goals.md) and approved
+architecture contracts—[`system overview`](../architecture/system-overview.md),
+[`data/time/event`](../architecture/data-time-and-event-contract.md), and
+[`Scanner State Engine lifecycle`](../architecture/scanner-state-engine-lifecycle.md)—
+control wherever this history is less specific or stale. The brief cannot
+override them.
+
+## Current resolution index
+
+The former open decisions in section 16 now classify as follows. No item in the
+historical list remains a blocker to Phase 1 owner approval.
+
+| # | Current classification | Controlling contract or named destination |
+| ---: | --- | --- |
+| 1 | Resolved in Phase 1 | Universe and exact adjusted-prior-close policy: `PG-UNIVERSE-01`, `PG-REFERENCE-01`, and `PG-RANK-01` in the [product contract](../product/product-goals.md). Provider retrieval/cache mechanics remain in the universe/session-binding specification. |
+| 2 | Resolved in Phase 1 | Qualification formula and correction-aware session latch: `PG-RANK-03`. |
+| 3 | Resolved in Phase 1 at product level | Version 1 fields, formulas, ranking effects, and availability independence: `PG-FEATURE-*` and `PG-AVAIL-*`. Reference-block eligibility, condition fixtures, quote validation, and retained algorithms remain in the aggregate-feature and T/Q specifications. |
+| 4 | Resolved in Phase 1 | `degraded_bootstrap` is a permanent, explicitly partial product projection under `PG-RANK-05`; it is not a diagnostic-only substitute for the qualified table. |
+| 5 | Resolved in Phase 1 | Process live, backend ready, ranking current, and field/T/Q currentness are distinct under `PG-OBS-03` and `LIFE-PUBLISH-*`. Exact timing and HTTP mappings remain in the readiness/operations specification. |
+| 6 | Intentionally deferred | Checkpoint cadence, encoding, retained representation, and restart objective belong to the checkpoint/restart specification; version 1 checkpoint support and coherent `T0` semantics are already mandatory. |
+| 7 | Intentionally deferred | Polling, SSE, or WebSocket snapshot delivery belongs to the snapshot API/UI specification. |
+| 8 | Intentionally deferred | Predecessor UI reuse versus replacement follows approval of the snapshot API/UI specification. |
+| 9 | Intentionally deferred | T/Q pressure thresholds, hysteresis, and restoration timing belong to the T/Q coverage/pressure specification; aggregate-first priority is settled. |
+| 10 | Intentionally deferred | Implementation language and build/deployment tooling are lower-level implementation-plan choices unless a consequential tradeoff requires an ADR. |
+| 11 | Intentionally deferred | Replay artifact storage, retention, privacy, and provider-license policy belong to the aggregate replay specification and evidence registry before data is downloaded or committed. |
 
 ## 1. Purpose of the new repository
 
@@ -169,7 +195,7 @@ gaps using explicit intervals, generations, bounded pagination/concurrency, and
 one terminal result per requested symbol:
 
 ```text
-value | empty | failed | canceled | fenced
+completed_value | completed_empty | failed | canceled | fenced
 ```
 
 A successful fully reconciled empty result establishes `no_print_through(T)`.
@@ -332,7 +358,7 @@ planned
   = completed_value
   + completed_empty
   + failed
-  + canceled_or_deferred
+  + canceled
   + fenced
 ```
 
@@ -472,9 +498,11 @@ Do not make the predecessor repository a runtime dependency. Port a component
 only after its required contract is approved and its accidental architecture is
 separated from the needed behavior.
 
-## 16. Open owner decisions
+## 16. Historical open-owner decision list
 
-Phase 1 must resolve or explicitly defer:
+This is the original drafting list. The current classification is the resolution
+index at the top of this document; these items no longer carry open status merely
+because they are preserved below.
 
 1. Confirm the exact universe eligibility and adjusted-prior-close policy.
 2. Confirm the existing minimum aggregate tape qualification formula or revise

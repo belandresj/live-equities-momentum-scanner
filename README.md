@@ -11,12 +11,15 @@ Production implementation is not yet authorized.
 
 ## Current status
 
-**Phase 1: high-level product and architecture specification.**
+**Phase 1 complete: product and architecture contracts are owner-approved.**
 
-The authoritative drafting input is
-[`docs/plans/phase-1-decisions-brief.md`](docs/plans/phase-1-decisions-brief.md).
-The planned specification hierarchy is in
-[`docs/specification-map.md`](docs/specification-map.md).
+[`docs/product/product-goals.md`](docs/product/product-goals.md) is the highest
+product authority. The approved architecture contracts and the remaining
+pre-implementation specification sequence are indexed in
+[`docs/specification-map.md`](docs/specification-map.md). The original
+[`Phase 1 decisions brief`](docs/plans/phase-1-decisions-brief.md) is retained as
+non-authoritative design history. Current work is Phase 2 focused specification
+design; production implementation is not yet authorized.
 
 ## Design direction
 

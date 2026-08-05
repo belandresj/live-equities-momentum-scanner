@@ -18,9 +18,12 @@ one.
 
 ## Current phase
 
-The repository is in Phase 1 documentation design. Do not add production code,
-provider integrations, runtime infrastructure, or speculative tests until the
-applicable specifications are approved.
+Phase 1 product and architecture specification is complete and owner-approved.
+The repository is now in Phase 2 focused specification design.
+
+Do not add production code, provider integrations, runtime infrastructure, or
+speculative tests until the applicable focused component specifications and
+required ADRs are approved.
 
 ## Engineering rules
 
