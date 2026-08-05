@@ -19,7 +19,11 @@ pre-implementation specification sequence are indexed in
 [`docs/specification-map.md`](docs/specification-map.md). The original
 [`Phase 1 decisions brief`](docs/history/phase-1-decisions-brief.md) is retained as
 non-authoritative design history. Current work is Phase 2 focused specification
-design; production implementation is not yet authorized.
+design under the contract-first
+[`implementation process`](docs/implementation-process.md); production
+implementation is not yet authorized. When authorized, components will be
+implemented sequentially with specification work limited to one component
+ahead.
 
 ## Design direction
 
@@ -37,10 +41,12 @@ The scanner will have:
 - a versioned read-only backend API; and
 - an independently deployable UI.
 
-The predecessor repository is retained separately as a source of product
-contracts, Massive protocol behavior, observed edge cases, fixtures, and
-regression evidence. Its orchestration architecture is not the starting point
-for this implementation.
+The version 2 predecessor repository is retained separately as a source of
+Massive protocol behavior, observed edge cases, fixtures, and regression
+evidence. It is evidence, never authority, and may be inspected only through
+the narrow, owner-approved reuse process after a Phase 1-derived component
+boundary and reconnaissance scope have been approved. Its orchestration
+architecture is not the starting point for this implementation.
 
 ## Documentation
 
@@ -52,6 +58,8 @@ Approved contracts and current design sequence:
 - [Scanner State Engine lifecycle](docs/architecture/scanner-state-engine-lifecycle.md)
 - [Glossary](docs/glossary.md)
 - [Specification map](docs/specification-map.md)
+- [Implementation process](docs/implementation-process.md)
+- [Focused component specification template](docs/specifications/focused-component-spec-template.md)
 
 Non-authoritative Phase 1 history:
 

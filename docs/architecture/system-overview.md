@@ -742,24 +742,15 @@ first.
 | API field meanings and UI presentation | Port selectively after the new snapshot contract; keep deployment independent. |
 | Owner/recovery/planner/readiness orchestration | Do not transplant. Replace with this architecture and the lifecycle specification. |
 
-## 12. Deeper specifications required before implementation
+## 12. Focused specifications required before implementation
 
-This overview intentionally leaves detailed behavior to focused documents:
-
-1. data, time, normalized-event identity, and ordering;
-2. Scanner State Engine lifecycle and transition table;
-3. universe, schedule, and adjusted-prior-close binding;
-4. Massive live adapter and provider fixtures;
-5. canonical symbol state and feature-extension contract;
-6. hydration, gap recovery, terminal outcomes, and merge policy;
-7. aggregate features, qualification, ranking, and exact accounting;
-8. T/Q coverage, conditions, measurements, pressure, and warm-up;
-9. checkpoint contents, validation, cadence, atomic storage, and restart target;
-10. aggregate replay artifact, clock, controls, and provider-data restrictions;
-11. readiness thresholds, diagnostics, shutdown, and operational policy;
-12. versioned snapshot API and independent UI integration; and
-13. test strategy, evidence registry, differential replay, shadowing, and
-    cutover.
+The data/time/event and lifecycle contracts are complete Phase 1 architecture
+authorities, not future focused specifications. The current Phase 2 component
+sequence and status are controlled by the
+[`specification map`](../specification-map.md). Those focused specifications
+settle only the component details delegated in Section 14.2; they do not create
+another shared data/time, lifecycle, core-domain, proof-strategy, or evidence
+layer.
 
 Implementation must conform to its applicable finalized product, architecture,
 component, and proof contracts.
@@ -837,5 +828,8 @@ evidence and proof plan:
 11. exact offline, shadow, and cutover acceptance thresholds.
 
 These are not permissions for implementation agents to change the architecture.
-Each must be settled in the named specification or ADR before dependent code is
-authorized.
+Each component-specific choice must be settled in the applicable focused
+specification before dependent code is authorized. Repository-wide mechanical
+choices such as implementation language and build/deployment tooling must be
+settled in `AGENTS.md` or the implementation process before the first dependent
+assignment.
