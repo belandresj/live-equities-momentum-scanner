@@ -1,67 +1,90 @@
 # Live Equities Momentum Scanner
 
 Live Equities Momentum Scanner is a planned production-grade, real-time U.S.
-equities scanner for a discretionary momentum trader. It will rank qualified
-stocks by return from the adjusted previous regular-session close, display
-aggregate-derived context, and provide trade- and quote-derived measurements
-for the displayed top 20.
+equities scanner for a discretionary momentum trader. It ranks qualified stocks
+by return from the adjusted previous regular-session close, presents
+aggregate-derived session context, and provides trade- and quote-derived
+measurements for the displayed top 20.
 
-This repository is intentionally starting with product and architecture review.
-Production implementation is not yet authorized.
+The scanner is a market-data measurement and discovery product. It does not
+produce forecasts, recommendations, entries, exits, orders, or claims of
+executable trading expectancy.
 
-## Current status
+## Product behavior
 
-**Phase 1 complete: product and architecture contracts are owner-approved.**
+The scanner is designed to:
 
-[`docs/product/product-goals.md`](docs/product/product-goals.md) is the highest
-product authority. The approved architecture contracts and the remaining
-pre-implementation specification sequence are indexed in
-[`docs/specification-map.md`](docs/specification-map.md). The original
-[`Phase 1 decisions brief`](docs/history/phase-1-decisions-brief.md) is retained as
-non-authoritative design history. Current work is Phase 2 focused specification
-design under the contract-first
-[`implementation process`](docs/implementation-process.md); production
-implementation is not yet authorized. When authorized, components will be
-implemented sequentially with specification work limited to one component
-ahead.
+- bind each run to an exchange schedule, eligible U.S. common-stock/ADRC
+  universe, and exact adjusted prior closes;
+- consume live and historical one-second aggregates through one canonical event
+  and state path;
+- qualify symbols using the approved same-session aggregate-tape gate, then rank
+  passers by Day % descending with exact-symbol tie-breaking;
+- publish at most 20 rows with independently available price, range, Activity,
+  Tape Rate, and Spread measurements;
+- recover from fresh start, checkpoint restart, and same-process aggregate gaps
+  without fabricating marks or treating successful empty hydration as unfinished
+  work; and
+- expose readiness, coverage, population accounting, and field availability
+  honestly through a versioned read-only API.
 
-## Design direction
+The complete product contract is
+[`docs/product/product-goals.md`](docs/product/product-goals.md).
 
-The scanner will have:
+## Architecture
 
-- one authoritative `ScannerStateEngine`;
-- normalized aggregate, trade, and quote events;
-- one canonical per-symbol session state;
-- explicit bootstrap, checkpoint catch-up, live, and recovery lifecycles;
-- one qualification and ranking path;
-- default trade and quote coverage for the displayed top 20, with aggregate-
-  protecting load shedding;
-- coherent version 1 checkpoints;
-- deterministic offline aggregate replay;
-- a versioned read-only backend API; and
-- an independently deployable UI.
+The design has:
 
-The version 2 predecessor repository is retained separately as a source of
-Massive protocol behavior, observed edge cases, fixtures, and regression
-evidence. It is evidence, never authority, and may be inspected only through
-the narrow, owner-approved reuse process after a Phase 1-derived component
-boundary and reconnaissance scope have been approved. Its orchestration
-architecture is not the starting point for this implementation.
+- one authoritative `ScannerStateEngine` and one canonical per-symbol session
+  state;
+- normalized aggregate, trade, quote, control, hydration, replay, and timer
+  inputs;
+- one committed aggregate watermark and one qualification/ranking path;
+- explicit bootstrap, checkpoint catch-up, live, recovery, replay, suppression,
+  session-end, and shutdown lifecycles;
+- default T/Q coverage for displayed rows, with T/Q degraded before aggregate
+  correctness;
+- coherent checkpoints and deterministic offline aggregate replay;
+- immutable snapshots served by the scanner backend; and
+- an independently deployable UI that owns presentation, not market state.
 
-## Documentation
+The architecture deliberately excludes a database, microservice split, generic
+event bus, runtime plugin system, and browser-owned scanner logic unless a future
+approved requirement establishes a concrete need.
 
-Approved contracts and current design sequence:
+## Repository guide
 
-- [Product goals](docs/product/product-goals.md)
-- [System overview](docs/architecture/system-overview.md)
-- [Data, time, and event contract](docs/architecture/data-time-and-event-contract.md)
-- [Scanner State Engine lifecycle](docs/architecture/scanner-state-engine-lifecycle.md)
-- [Glossary](docs/glossary.md)
-- [Specification map](docs/specification-map.md)
-- [Implementation process](docs/implementation-process.md)
-- [Focused component specification template](docs/specifications/focused-component-spec-template.md)
+| Document | Purpose |
+| --- | --- |
+| [`AGENTS.md`](AGENTS.md) | Repository rules, authority order, engineering invariants, and agent-assignment requirements. |
+| [`docs/product/product-goals.md`](docs/product/product-goals.md) | Highest product authority: user-facing behavior, formulas, version 1 scope, and non-goals. |
+| [`docs/architecture/system-overview.md`](docs/architecture/system-overview.md) | Runtime topology, component boundaries, state ownership, and failure containment. |
+| [`docs/architecture/data-time-and-event-contract.md`](docs/architecture/data-time-and-event-contract.md) | Session, clock, event, ordering, coverage, reconciliation, replay, and checkpoint-cutoff semantics. |
+| [`docs/architecture/scanner-state-engine-lifecycle.md`](docs/architecture/scanner-state-engine-lifecycle.md) | Legal engine states, transitions, publication permissions, recovery, and termination. |
+| [`docs/glossary.md`](docs/glossary.md) | Shared vocabulary; the controlling product or architecture contract wins when more specific. |
+| [`docs/specification-map.md`](docs/specification-map.md) | Current component sequence, document status, dependencies, and implementation milestones. |
+| [`docs/implementation-process.md`](docs/implementation-process.md) | Contract-first research, approval, predecessor-reuse, proof, slice, integration, and release workflow. |
+| [`docs/specifications/focused-component-spec-template.md`](docs/specifications/focused-component-spec-template.md) | Mandatory template for focused component specifications. |
+| [`docs/history/`](docs/history/) | Non-authoritative Phase 1 drafting and review history. |
 
-Non-authoritative Phase 1 history:
+## How work advances
 
-- [Decisions brief](docs/history/phase-1-decisions-brief.md)
-- [Consistency review](docs/history/phase-1-consistency-review.md)
+Phase 1 product and architecture contracts are owner-approved. Current component
+status and the sequential implementation roadmap are maintained only in the
+[`specification map`](docs/specification-map.md).
+
+Focused specifications follow the contract-first
+[`implementation process`](docs/implementation-process.md): establish the Phase
+1-derived boundary, obtain approval for narrow version 2 reconnaissance,
+complete the component contract and proof allocation, then implement one
+owner-authorized slice at a time. Production implementation is not authorized
+merely because a specification draft exists.
+
+## Predecessor evidence
+
+The version 2 predecessor is retained separately as a source of Massive protocol
+behavior, observed edge cases, fixtures, algorithms, and regression evidence. It
+is evidence, never authority. It may be inspected only within a narrow,
+owner-approved reconnaissance scope after the new component boundary has been
+derived from Phase 1. Its orchestration architecture is not the starting point
+for this implementation.
