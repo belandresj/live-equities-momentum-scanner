@@ -38,11 +38,11 @@ the drafting brief is never used as a tie-breaker.
 | [`architecture/data-time-and-event-contract.md`](architecture/data-time-and-event-contract.md) | Approved architecture contract, 2026-08-05 | Session binding, normalized-event meaning, half-open windows, causal order, live/REST merge, hydration evidence, committed watermark, replay order, and checkpoint cutoff. Depends on product behavior and system ownership. |
 | [`architecture/scanner-state-engine-lifecycle.md`](architecture/scanner-state-engine-lifecycle.md) | Approved architecture contract, 2026-08-05 | Legal live/replay lifecycle states and transitions, progress/exit conditions, publication permissions, recovery, suppression, session end, and shutdown. Depends on the product, system, and data/time contracts. |
 | [`glossary.md`](glossary.md) | Approved shared vocabulary, 2026-08-05 | Concise definitions only. The controlling product or architecture contract wins if a summary is less specific. |
-| [`plans/phase-1-decisions-brief.md`](plans/phase-1-decisions-brief.md) | Historical drafting record; non-authoritative | Preserves design history and indexes each former open decision as resolved, deliberately deferred, or blocking. |
-| [`plans/phase-1-consistency-review.md`](plans/phase-1-consistency-review.md) | Accepted Phase 1 completion review; not an authority | Records the synchronization review, corrections, conflicts, deferrals, and completion checklist. |
+| [`history/phase-1-decisions-brief.md`](history/phase-1-decisions-brief.md) | Historical drafting record; non-authoritative | Preserves design history and indexes each former open decision as resolved, deliberately deferred, or blocking. |
+| [`history/phase-1-consistency-review.md`](history/phase-1-consistency-review.md) | Accepted Phase 1 completion review; not an authority | Records the synchronization review, corrections, conflicts, deferrals, and completion checklist. |
 
-No ADR is currently present or accepted under
-[`decisions/`](decisions/README.md).
+No ADR is currently present or accepted. The ADR directory should be created
+when the first consequential architecture decision is proposed.
 
 ## Concerns settled by Phase 1
 
@@ -69,7 +69,11 @@ The approved contracts settle:
 ## Later component specifications
 
 Phase 1 authorizes further specification, not implementation. Focused contracts
-must be approved in this dependency order:
+must be approved in this dependency order. Add substantive Phase 2 drafts under
+`docs/specifications/` as they are started; this map remains their status and
+dependency index, so the directory does not need a placeholder README. The
+order 6 test strategy belongs with those focused contracts unless its approved
+evidence-registry design later requires a separate documentation area.
 
 | Order | Focused specification | Requires | May unlock or run in parallel |
 | --- | --- | --- | --- |
@@ -102,6 +106,6 @@ wrapping, or speculative provider behavior.
 
 ## Architecture decision records
 
-[`docs/decisions/`](decisions/README.md) will contain short ADRs only for
-consequential choices whose alternatives and tradeoffs should remain visible in
-the repository history. Routine implementation choices do not require ADRs.
+When needed, `docs/decisions/` will contain short ADRs only for consequential
+choices whose alternatives and tradeoffs should remain visible in the
+repository history. Routine implementation choices do not require ADRs.

@@ -17,7 +17,7 @@ Production implementation is not yet authorized.
 product authority. The approved architecture contracts and the remaining
 pre-implementation specification sequence are indexed in
 [`docs/specification-map.md`](docs/specification-map.md). The original
-[`Phase 1 decisions brief`](docs/plans/phase-1-decisions-brief.md) is retained as
+[`Phase 1 decisions brief`](docs/history/phase-1-decisions-brief.md) is retained as
 non-authoritative design history. Current work is Phase 2 focused specification
 design; production implementation is not yet authorized.
 
@@ -44,10 +44,16 @@ for this implementation.
 
 ## Documentation
 
+Approved contracts and current design sequence:
+
 - [Product goals](docs/product/product-goals.md)
 - [System overview](docs/architecture/system-overview.md)
 - [Data, time, and event contract](docs/architecture/data-time-and-event-contract.md)
 - [Scanner State Engine lifecycle](docs/architecture/scanner-state-engine-lifecycle.md)
 - [Glossary](docs/glossary.md)
 - [Specification map](docs/specification-map.md)
-- [Phase 1 decisions brief](docs/plans/phase-1-decisions-brief.md)
+
+Non-authoritative Phase 1 history:
+
+- [Decisions brief](docs/history/phase-1-decisions-brief.md)
+- [Consistency review](docs/history/phase-1-consistency-review.md)

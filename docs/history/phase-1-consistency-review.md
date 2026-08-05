@@ -31,7 +31,7 @@ ADRs are approved.
 | [`glossary.md`](../glossary.md) | Approved shared vocabulary; summary only. |
 | [`specification-map.md`](../specification-map.md) | Approved Phase 1 specification index. |
 | [`phase-1-decisions-brief.md`](phase-1-decisions-brief.md) | Historical drafting record; non-authoritative. |
-| [`docs/decisions/`](../decisions/README.md) | No ADR is currently present or accepted. |
+| Architecture decision records | No ADR is currently present or accepted. |
 
 Targeted read-only predecessor evidence was also consulted. The
 `bootstrap-recovery-first-principles-architecture-review.md` investigation
