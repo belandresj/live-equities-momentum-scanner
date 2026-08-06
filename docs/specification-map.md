@@ -8,7 +8,7 @@ sequential roadmap.
 **Phase 2 roadmap approved:** 2026-08-05
 
 This map identifies the authoritative Phase 1 documents and the plain component
-sequence for Phase 2. It does not grant approval to a focused specification or
+sequence for Phase 2. It does not grant approval to a focused component contract or
 authorize implementation. The controlling work gates are in
 [`implementation-process.md`](implementation-process.md).
 
@@ -18,7 +18,8 @@ Authority descends in this order:
 
 1. owner-approved product specifications;
 2. owner-approved architecture specifications;
-3. owner-approved focused component specifications; and
+3. owner-approved focused component contracts, whether stored in one file or
+   as one indexed parent plus subordinate detail specs; and
 4. implementation assignments, plans, tests, and code.
 
 Within the approved architecture set, the
@@ -63,8 +64,8 @@ with Phase 1 architecture.
 
 | Document | Current status | Role |
 | --- | --- | --- |
-| [`implementation-process.md`](implementation-process.md) | Owner-approved operational process, 2026-08-05 | Operational gates from targeted research through final validation. |
-| [`specifications/focused-component-spec-template.md`](specifications/focused-component-spec-template.md) | Owner-approved mandatory template, 2026-08-05 | Required structure for each Phase 2 focused component contract. |
+| [`implementation-process.md`](implementation-process.md) | Owner-approved operational process, revised 2026-08-06 | Operational gates from targeted research through final validation, including delegated evidence-based advancement, risk-triggered review, and tiered verification. |
+| [`specifications/focused-component-spec-template.md`](specifications/focused-component-spec-template.md) | Owner-approved mandatory template, revised 2026-08-06 | Required compact/modular structure, single parent delivery ledger, context routing, proof allocation, and slice rules for each Phase 2 focused component contract. |
 
 ## Concerns already settled by Phase 1
 
@@ -89,23 +90,28 @@ Phase 1 already controls:
   accounting, independent availability, and bounded observability.
 
 Do not create `docs/specifications/core-domain-and-engine-boundaries.md` or an
-equivalent shared layer. Focused specs cite exact Phase 1 requirement IDs and
-define only component-specific ownership, interfaces, behavior, failures,
-accounting, evidence, boundedness, and primary proof.
+equivalent shared layer. Focused component contracts cite exact Phase 1
+requirement IDs and define only component-specific ownership, interfaces,
+behavior, failures, accounting, evidence, boundedness, and primary proof.
 
 ## Phase 2: focused component sequence
 
-These are real focused component specs, not labels for new shared architecture.
-Drafts belong under `docs/specifications/` and use the mandatory
-[`template`](specifications/focused-component-spec-template.md). Their status
-must remain explicit.
+These are real focused component contracts, not labels for new shared
+architecture. The path in this map is always the component's authoritative
+entry-point specification. A small contract may remain in that one file; a
+large contract may keep that parent compact and route cohesive low-level
+details to subordinate specs under a same-named directory, following the
+mandatory [`template`](specifications/focused-component-spec-template.md).
+Subordinate specs remain part of the same component authority and do not add
+sequence entries or independent approval gates. Contract status must remain
+explicit in the parent.
 
 | Sequence | Focused component specification | What it completes and why it is next |
 | --- | --- | --- |
 | 1 | [Reference data and exchange schedule/session binding](specifications/reference-data-and-session-binding.md) *(finally approved 2026-08-05 after repeated independent final review; S1–S3 and C1-R1–C1-R3 accepted; component not frozen)* | Establishes the immutable trading date, session bounds, eligible universe, required prior session, adjusted prior closes, and binding identity consumed by every live and replay run. |
-| 2 | `ScannerStateEngine`, canonical symbol state, and feature-boundary implementation details | Establishes the sole ordered mutation path, canonical aggregate state, committed watermark, and immutable publication mechanism. It defines direct typed seams and ordered handling for the Phase 1-known aggregate, trade, quote, timer, connection/control, hydration-result, checkpoint-load/write-result, and T/Q-acknowledgement input classes without implementing their later component behavior or introducing a generic bus. It uses component 1 and does not finalize later feature, checkpoint-content, T/Q-measurement, readiness, or public API schemas. |
-| 3 | Aggregate features, qualification, ranking, and accounting | Adds the Phase 1 formulas, correction-aware qualification, exact Day-%/symbol ordering, top-20 selection, independent availability, and exact population accounting to component 2's canonical path. |
-| 4 | Aggregate replay | Adds the offline historical downloader/compiler, versioned normalized artifact, deterministic source, and injected simulated clock that drive components 1–3. Its Massive REST aggregate row normalizer is the one reused by component 6; offline download mechanics do not own live hydration, recovery, or terminal-work accounting. This completes the deterministic aggregate-core milestone. Full T/Q replay remains deferred. |
+| 2 | [ScannerStateEngine, canonical symbol state, and feature-boundary implementation details](specifications/scanner-state-engine-and-canonical-state.md) *(finally approved 2026-08-05 after S1–S4 implementation, required independent reviews, corrections, and the separate read-only final component review; no acceptance item remains open)* | Establishes the sole ordered mutation path, canonical aggregate state, committed watermark, and immutable publication mechanism. Its compact parent routes authority/reuse plus one implementation detail document for each approved S1–S4 behavior/proof boundary. It defines direct typed seams and ordered handling for the Phase 1-known aggregate, trade, quote, timer, connection/control, hydration-result, checkpoint-load/write-result, and T/Q-acknowledgement input classes without implementing their later component behavior or introducing a generic bus. It uses component 1 and does not finalize later feature, checkpoint-content, T/Q-measurement, readiness, or public API schemas. |
+| 3 | [Aggregate features, qualification, ranking, and accounting](specifications/aggregate-features-qualification-ranking-and-accounting.md) *(finally accepted 2026-08-06 after C3-S1–S4, C3-R1/C3-R2, required focused reviews, complete verification, and the clean mandatory separate final component review; no acceptance item remains open)* | Adds the Phase 1 formulas, correction-aware qualification, exact Day-%/symbol ordering, top-20 selection, independent availability, and exact population accounting to component 2's canonical path. |
+| 4 | [Aggregate replay](specifications/aggregate-replay.md) *(Phase 1 boundary, modular document map, and version 2 reconnaissance scope owner-approved 2026-08-06; Component 3 dependency finally accepted, so approved reconnaissance and detailed-contract drafting may proceed; implementation remains unauthorized pending completed-contract approval)* | Adds the offline historical downloader/compiler, versioned normalized artifact, deterministic source, and injected simulated clock that drive components 1–3. Its Massive REST aggregate row normalizer is the one reused by component 6; offline download mechanics do not own live hydration, recovery, or terminal-work accounting. This completes the deterministic aggregate-core milestone. Full T/Q replay remains deferred. |
 | 5 | Massive live adapter | Adds one bounded Stocks WebSocket adapter for A/T/Q/control classification, provider normalization, causal positions, epochs, commands, and acknowledgements. Aggregate/control integrates first; T/Q consumption remains component 9. Any live observation is narrow, question-driven, and separately authorized after v2 reconnaissance. |
 | 6 | Aggregate REST hydration and recovery | Reuses component 4's Massive REST aggregate row normalizer and adds production pagination, request concurrency/retries, fresh hydration, checkpoint catch-up inputs, exact gap recovery, explicit terminal outcomes, ingress fencing, and REST/live reconciliation. It does not create a second REST aggregate mapping or replay path. |
 | 7 | Checkpoints and restart | Defines coherent contents at `T0`, validation, atomic storage, cadence, restart installation, and `[T0,R)` catch-up after aggregate, feature, and recovery state are known. Checkpoints remain required in version 1. |
@@ -114,22 +120,31 @@ must remain explicit.
 | 10 | Versioned snapshot API | Freezes the public read-only schema after aggregate fields, T/Q fields, accounting, availability, and readiness meanings are stable. Internal structures do not automatically become the API. |
 | 11 | Independent UI | Implements presentation and interaction against the approved versioned API and remains deployable without restarting the backend. |
 
-Implementation is sequential. A focused component spec may divide a large
-component into owner-approved sequential implementation slices without creating
-new component authorities. Keep at most one active implementation slice. Each
-slice delivers one coherent behavior and its allocated primary proof, then
-stops for owner review before the next slice. While component N is being
-implemented and proved slice by slice, specification work may advance for
-component N+1. Final N+1 contract/reuse/test/slice-plan approval and
-implementation normally wait until all N slices pass their proofs and final
-component review. This is intentional: checkpoint contents follow known
-feature/recovery state, the public API follows stable backend meanings, and the
-UI follows the approved API.
+Implementation is sequential. Document decomposition and implementation slicing
+are separate decisions: subordinate specs reduce contract context while slices
+divide delivery at coherent behavior and proof boundaries. A focused component
+contract may use either or both without creating new component authorities.
+Keep at most one active implementation slice. Each slice delivers one coherent
+behavior and its allocated primary proof, then passes a recorded delegated or
+manual acceptance gate before the next slice. While component N is being
+implemented and proved slice by slice, component N+1 may advance only through a
+compact Phase 1 skeleton and owner boundary/reconnaissance-scope approval.
+Version 2 reconnaissance, Sections 8–19, completed-contract approval, and N+1
+implementation wait until all N slices pass their proofs and final component
+review, unless the owner records an exact stable-interface exception. This is
+intentional: the skeleton captures durable authority and ownership early while
+checkpoint contents follow known feature/recovery state, the public API follows
+stable backend meanings, and the UI follows the approved API.
 
 One integration owner controls the concrete engine, normalized-event, snapshot,
 and API boundaries. A later component may extend an approved boundary only
-through its focused specification; it may not create a competing owner or
+through its focused component contract; it may not create a competing owner or
 silently reinterpret the earlier contract.
+
+Each component parent owns its authoritative slice-delivery ledger. This map
+records only coarse component sequence and completion and is updated when a
+component completes; subordinate specs do not duplicate mutable acceptance
+state.
 
 ## Vertical implementation milestones
 
@@ -143,7 +158,8 @@ silently reinterpret the earlier contract.
    + release/cutover evidence against the readiness and operations policy
    established in milestone 2.
 
-Each focused spec plans its evidence and primary proofs before implementation.
+Each focused component contract plans its evidence and primary proofs before
+implementation.
 There is no up-front global evidence registry or stand-alone test-strategy
 meta-spec. Final operations, authorized shadow observation, and cutover
 validation assemble the reviewed component and integration evidence under the

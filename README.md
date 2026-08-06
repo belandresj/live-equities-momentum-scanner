@@ -64,7 +64,7 @@ approved requirement establishes a concrete need.
 | [`docs/glossary.md`](docs/glossary.md) | Shared vocabulary; the controlling product or architecture contract wins when more specific. |
 | [`docs/specification-map.md`](docs/specification-map.md) | Current component sequence, document status, dependencies, and implementation milestones. |
 | [`docs/implementation-process.md`](docs/implementation-process.md) | Contract-first research, approval, predecessor-reuse, proof, slice, integration, and release workflow. |
-| [`docs/specifications/focused-component-spec-template.md`](docs/specifications/focused-component-spec-template.md) | Mandatory template for focused component specifications. |
+| [`docs/specifications/focused-component-spec-template.md`](docs/specifications/focused-component-spec-template.md) | Mandatory template and modular-layout rules for focused component contracts. |
 | [`docs/history/`](docs/history/) | Non-authoritative Phase 1 drafting and review history. |
 
 ## How work advances
@@ -73,12 +73,14 @@ Phase 1 product and architecture contracts are owner-approved. Current component
 status and the sequential implementation roadmap are maintained only in the
 [`specification map`](docs/specification-map.md).
 
-Focused specifications follow the contract-first
+Focused component contracts follow the contract-first
 [`implementation process`](docs/implementation-process.md): establish the Phase
 1-derived boundary, obtain approval for narrow version 2 reconnaissance,
 complete the component contract and proof allocation, then implement one
-owner-authorized slice at a time. Production implementation is not authorized
-merely because a specification draft exists.
+owner-authorized slice at a time. A contract may be one file or a compact
+indexed parent with cohesive subordinate detail specs; either layout remains
+one component authority and passes the same approval gates. Production
+implementation is not authorized merely because a specification draft exists.
 
 ## Predecessor evidence
 

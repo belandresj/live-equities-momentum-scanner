@@ -1,0 +1,803 @@
+package engine
+
+import (
+	"context"
+	"math"
+	"time"
+)
+
+const (
+	AggregateSchemaV1   = "normalized-second-aggregate-v1"
+	correctionHorizon   = 16 * time.Minute
+	sessionSeconds      = 16 * 60 * 60
+	maximumTailRecords  = 961
+	maximumContextBytes = 256
+)
+
+type AggregateSource string
+
+const (
+	AggregateSourceLive       AggregateSource = "live"
+	AggregateSourceHistorical AggregateSource = "historical"
+	AggregateSourceReplay     AggregateSource = "replay"
+)
+
+type ATSProvenance string
+
+const (
+	ATSLiveProviderAverage       ATSProvenance = "live_provider_average"
+	ATSRESTFloorVolumeOverTrades ATSProvenance = "rest_floor_volume_over_transactions"
+)
+
+type AggregateValues struct {
+	Open, High, Low, Close float64
+	Volume, VWAP           float64
+	AverageTradeSize       int64
+	ATSProvenance          ATSProvenance
+}
+
+type LivePosition struct {
+	ConnectionEpoch uint64
+	FrameSequence   uint64
+	ArrayIndex      uint32
+}
+
+type ReplayPosition struct {
+	ArtifactID    string
+	RecordOrdinal uint64
+}
+
+type HistoricalPosition struct {
+	Generation    uint64
+	RequestToken  string
+	RecordOrdinal uint64
+}
+
+// AggregateInput is one immutable-by-admission normalized aggregate fact.
+// Source-specific unused positions must be zero.
+type AggregateInput struct {
+	SchemaVersion, BindingIdentity string
+	Source                         AggregateSource
+	Symbol                         string
+	WindowStart, WindowEnd         time.Time
+	Values                         AggregateValues
+	DeliveryTime                   time.Time
+	Live                           LivePosition
+	Replay                         ReplayPosition
+	Historical                     HistoricalPosition
+}
+
+type DispositionReason string
+
+// AggregateDisposition is the immutable completion for one consumed aggregate.
+// It extends, rather than changes, the accepted S1 Disposition API.
+type AggregateDisposition struct {
+	EngineSequence         uint64
+	Code                   DispositionCode
+	Reason                 DispositionReason
+	SuppressionDisposition SuppressionDisposition
+}
+
+const (
+	ReasonNone                         DispositionReason = ""
+	ReasonSchema                       DispositionReason = "schema"
+	ReasonBinding                      DispositionReason = "binding"
+	ReasonRunSource                    DispositionReason = "run_source"
+	ReasonSymbol                       DispositionReason = "symbol"
+	ReasonWindow                       DispositionReason = "window"
+	ReasonStructural                   DispositionReason = "structural"
+	ReasonDeliveryEvidence             DispositionReason = "delivery_evidence"
+	ReasonSourcePosition               DispositionReason = "source_position"
+	ReasonLifecycle                    DispositionReason = "lifecycle"
+	ReasonStaleLiveEpoch               DispositionReason = "stale_live_epoch"
+	ReasonReplayArtifact               DispositionReason = "replay_artifact"
+	ReasonHistoricalContext            DispositionReason = "historical_context"
+	ReasonFutureEventTime              DispositionReason = "future_event_time"
+	ReasonTooLate                      DispositionReason = "too_late"
+	ReasonNonprecedent                 DispositionReason = "nonprecedent"
+	ReasonRepeatedPositionUnequal      DispositionReason = "repeated_position_unequal"
+	ReasonHistoricalLiveConflict       DispositionReason = "historical_live_conflict"
+	ReasonHistoricalHistoricalConflict DispositionReason = "historical_historical_conflict"
+	ReasonClockRegression              DispositionReason = "clock_regression"
+	ReasonPublication                  DispositionReason = "publication"
+	ReasonAccounting                   DispositionReason = "accounting"
+	ReasonTerminal                     DispositionReason = "terminal"
+)
+
+type frozenAggregateInput struct {
+	AggregateInput
+	historicalProof *frozenHistoricalProofContext
+	s2Proof         bool
+}
+
+func freezeAggregateInput(input AggregateInput) frozenAggregateInput {
+	return frozenAggregateInput{AggregateInput: input}
+}
+
+func boundedAggregateInput(input AggregateInput) bool {
+	return len(input.SchemaVersion) <= 64 && len(input.BindingIdentity) <= maximumContextBytes && len(input.Symbol) <= maximumSymbolBytes &&
+		len(input.Source) <= 32 && len(input.Values.ATSProvenance) <= 64 && len(input.Replay.ArtifactID) <= maximumContextBytes &&
+		len(input.Historical.RequestToken) <= maximumContextBytes
+}
+
+type aggregateIdentity struct {
+	symbol string
+	start  int64
+}
+
+type aggregateEvidence struct {
+	source       AggregateSource
+	deliveryTime time.Time
+	live         LivePosition
+	replay       ReplayPosition
+	historical   HistoricalPosition
+}
+
+type canonicalAggregate struct {
+	identity            aggregateIdentity
+	windowStart         time.Time
+	windowEnd           time.Time
+	values              AggregateValues
+	first               aggregateEvidence
+	authority           aggregateEvidence
+	greatestLiveSupport *LivePosition
+}
+
+type latestAggregateMark struct {
+	record canonicalAggregate
+}
+
+type committedAggregateMark struct {
+	start                  int64
+	windowStart, windowEnd time.Time
+	close                  float64
+}
+
+type slotBitmap [sessionSeconds / 64]uint64
+
+func (b *slotBitmap) set(slot int)   { b[slot/64] |= uint64(1) << uint(slot%64) }
+func (b *slotBitmap) clear(slot int) { b[slot/64] &^= uint64(1) << uint(slot%64) }
+func (b *slotBitmap) has(slot int) bool {
+	return b != nil && b[slot/64]&(uint64(1)<<uint(slot%64)) != 0
+}
+
+type symbolAggregateState struct {
+	tail               map[int64]*canonicalAggregate
+	presence           *slotBitmap
+	provenAbsent       *slotBitmap
+	historicalConflict *slotBitmap
+	latest             *latestAggregateMark
+	olderLatest        *canonicalAggregate
+	committedLatest    *committedAggregateMark
+	recomputations     uint64
+	lastConflict       *aggregateConflictEvidence
+	priceRange         *priceRangeFeatureState
+	activity           *activityFeatureState
+	qualification      *qualificationState
+}
+
+type invalidMarkEvidence struct {
+	windowStart time.Time
+}
+
+type aggregateConflictEvidence struct {
+	identity aggregateIdentity
+	current  aggregateEvidence
+	incoming aggregateEvidence
+}
+
+type aggregateAccounting struct {
+	consumed, inserted, revised, withdrawnConflict uint64
+	exactDuplicate, rejected, fenced, integrity    uint64
+}
+
+func (a aggregateAccounting) reconciles() bool {
+	return a.consumed == a.inserted+a.revised+a.withdrawnConflict+a.exactDuplicate+a.rejected+a.fenced+a.integrity
+}
+
+type historicalProofContext struct {
+	bindingID, token, symbol   string
+	generation                 uint64
+	intervalStart, intervalEnd time.Time
+	result                     *historicalProofResult
+}
+
+type frozenHistoricalProofContext struct {
+	bindingID, token, symbol   string
+	generation                 uint64
+	intervalStart, intervalEnd time.Time
+	resultCardinality          int
+	resultValid                bool
+	record                     *canonicalAggregate
+	conflicted                 bool
+}
+
+// historicalProofResult is package-private caller-side S2 proof setup. An
+// admission extracts and deep-copies only the target identity plus bounded
+// cardinality; neither map nor a pointer to this result enters the FIFO or
+// canonical state. Component 6 owns the future production active-result ledger.
+type historicalProofResult struct {
+	records   map[aggregateIdentity]canonicalAggregate
+	conflicts map[aggregateIdentity]struct{}
+}
+
+func (e *Engine) admitAggregateForProof(input AggregateInput) (AdmissionResult, <-chan AggregateDisposition) {
+	e.beginAdmission()
+	if !boundedAggregateInput(input) {
+		return e.finishNonAdmission(AdmissionNotAdmittedInvalid), nil
+	}
+	frozen := freezeAggregateInput(input)
+	frozen.s2Proof = true
+	return e.admitAggregate(context.Background(), &queueNode{kind: inputAggregate, aggregate: frozen})
+}
+
+func (e *Engine) admitHistoricalAggregateForProof(input AggregateInput, proof historicalProofContext) (AdmissionResult, <-chan AggregateDisposition) {
+	e.beginAdmission()
+	if !boundedAggregateInput(input) || len(proof.bindingID) > maximumContextBytes || len(proof.token) > maximumContextBytes || len(proof.symbol) > maximumSymbolBytes {
+		return e.finishNonAdmission(AdmissionNotAdmittedInvalid), nil
+	}
+	frozen := freezeAggregateInput(input)
+	frozen.historicalProof = freezeHistoricalProofContext(input, proof)
+	frozen.s2Proof = true
+	return e.admitAggregate(context.Background(), &queueNode{kind: inputAggregate, aggregate: frozen})
+}
+
+func freezeHistoricalProofContext(input AggregateInput, proof historicalProofContext) *frozenHistoricalProofContext {
+	frozen := &frozenHistoricalProofContext{
+		bindingID: proof.bindingID, token: proof.token, symbol: proof.symbol,
+		generation: proof.generation, intervalStart: proof.intervalStart, intervalEnd: proof.intervalEnd,
+	}
+	if proof.result == nil {
+		return frozen
+	}
+	frozen.resultValid = proof.result.records != nil && proof.result.conflicts != nil
+	maximumInt := int(^uint(0) >> 1)
+	if len(proof.result.records) > maximumInt-len(proof.result.conflicts) {
+		frozen.resultCardinality = maximumInt
+	} else {
+		frozen.resultCardinality = len(proof.result.records) + len(proof.result.conflicts)
+	}
+	identity := aggregateIdentity{symbol: input.Symbol, start: input.WindowStart.Unix()}
+	if record, ok := proof.result.records[identity]; ok {
+		copyRecord := record
+		if record.greatestLiveSupport != nil {
+			position := *record.greatestLiveSupport
+			copyRecord.greatestLiveSupport = &position
+		}
+		frozen.record = &copyRecord
+	}
+	_, frozen.conflicted = proof.result.conflicts[identity]
+	return frozen
+}
+
+func (e *Engine) applyAggregateLocked(input frozenAggregateInput, now time.Time) (DispositionCode, DispositionReason) {
+	e.state.aggregates.consumed++
+	code, reason := e.decideAggregateLocked(input, now)
+	e.updateInvalidMarkEvidenceLocked(input, now, code, reason)
+	switch code {
+	case DispositionAggregateInserted:
+		e.state.aggregates.inserted++
+	case DispositionAggregateRevised:
+		e.state.aggregates.revised++
+	case DispositionAggregateWithdrawn:
+		e.state.aggregates.withdrawnConflict++
+	case DispositionAggregateExactDuplicate:
+		e.state.aggregates.exactDuplicate++
+	case DispositionAggregateRejected:
+		e.state.aggregates.rejected++
+	case DispositionAggregateFenced:
+		e.state.aggregates.fenced++
+	case DispositionAggregateIntegrity:
+		e.state.aggregates.integrity++
+	}
+	return code, reason
+}
+
+func (e *Engine) updateInvalidMarkEvidenceLocked(input frozenAggregateInput, now time.Time, code DispositionCode, reason DispositionReason) {
+	if e.state.binding == nil {
+		return
+	}
+	index, ok := e.state.binding.index[input.Symbol]
+	if !ok {
+		return
+	}
+	if code == DispositionAggregateRejected && reason == ReasonStructural &&
+		input.BindingIdentity == e.state.binding.identity && validS2AggregateLifecycle(e.mode, e.state.lifecycle, input) &&
+		validAggregateWindow(input.AggregateInput, e.state.binding) && !input.WindowEnd.After(now) &&
+		!input.DeliveryTime.IsZero() && input.DeliveryTime == input.DeliveryTime.UTC() {
+		contextReason, _ := e.validateSourceContextLocked(input)
+		if contextReason != ReasonNone {
+			return
+		}
+		if e.state.aggregateEvaluator.invalidMarks == nil {
+			e.state.aggregateEvaluator.invalidMarks = make(map[int]invalidMarkEvidence)
+		}
+		if prior, exists := e.state.aggregateEvaluator.invalidMarks[index]; !exists || input.WindowStart.After(prior.windowStart) {
+			e.state.aggregateEvaluator.invalidMarks[index] = invalidMarkEvidence{windowStart: input.WindowStart}
+		}
+		return
+	}
+	if code == DispositionAggregateInserted || code == DispositionAggregateRevised {
+		if prior, exists := e.state.aggregateEvaluator.invalidMarks[index]; exists && !input.WindowStart.Before(prior.windowStart) {
+			delete(e.state.aggregateEvaluator.invalidMarks, index)
+		}
+	}
+}
+
+func (e *Engine) decideAggregateLocked(input frozenAggregateInput, now time.Time) (DispositionCode, DispositionReason) {
+	binding := e.state.binding
+	if binding == nil {
+		return DispositionAggregateRejected, ReasonLifecycle
+	}
+	if e.state.aggregateIntegrity {
+		return DispositionAggregateIntegrity, ReasonRepeatedPositionUnequal
+	}
+	if !validS2AggregateLifecycle(e.mode, e.state.lifecycle, input) {
+		return DispositionAggregateRejected, ReasonLifecycle
+	}
+	if input.SchemaVersion != AggregateSchemaV1 {
+		return DispositionAggregateRejected, ReasonSchema
+	}
+	if input.BindingIdentity != binding.identity {
+		return DispositionAggregateFenced, ReasonBinding
+	}
+	if (e.mode == RunModeLive && input.Source != AggregateSourceLive && input.Source != AggregateSourceHistorical) ||
+		(e.mode == RunModeReplay && input.Source != AggregateSourceReplay) {
+		return DispositionAggregateRejected, ReasonRunSource
+	}
+	index, ok := binding.index[input.Symbol]
+	if !ok {
+		return DispositionAggregateRejected, ReasonSymbol
+	}
+	if !validAggregateWindow(input.AggregateInput, binding) {
+		return DispositionAggregateRejected, ReasonWindow
+	}
+	if !validAggregateValues(input.Values) {
+		return DispositionAggregateRejected, ReasonStructural
+	}
+	if input.DeliveryTime.IsZero() || input.DeliveryTime != input.DeliveryTime.UTC() {
+		return DispositionAggregateRejected, ReasonDeliveryEvidence
+	}
+	if reason, fenced := e.validateSourceContextLocked(input); reason != ReasonNone {
+		if fenced {
+			return DispositionAggregateFenced, reason
+		}
+		return DispositionAggregateRejected, reason
+	}
+	if input.WindowEnd.After(now) {
+		return DispositionAggregateRejected, ReasonFutureEventTime
+	}
+	symbol := &binding.symbols[index]
+	state := symbol.aggregates
+	identityStart := input.WindowStart.Unix()
+	var existing *canonicalAggregate
+	if state != nil && state.tail != nil {
+		existing = state.tail[identityStart]
+	}
+	if existing == nil && state != nil && state.latest != nil && state.latest.record.identity.start == identityStart {
+		existing = &state.latest.record
+	}
+	if existing == nil && state != nil && state.olderLatest != nil && state.olderLatest.identity.start == identityStart {
+		existing = state.olderLatest
+	}
+	if existing == nil && input.Source == AggregateSourceHistorical && input.historicalProof != nil {
+		if input.historicalProof.record != nil {
+			copyRecord := *input.historicalProof.record
+			existing = &copyRecord
+		}
+		if input.historicalProof.conflicted {
+			return DispositionAggregateRejected, ReasonHistoricalHistoricalConflict
+		}
+	}
+	if state != nil && existing == nil && state.presence != nil && state.presence.has(sessionSlot(binding, input.WindowStart)) {
+		return DispositionAggregateFenced, ReasonHistoricalContext
+	}
+	if state != nil && existing == nil && input.Source == AggregateSourceHistorical && state.historicalConflict != nil && state.historicalConflict.has(sessionSlot(binding, input.WindowStart)) {
+		return DispositionAggregateRejected, ReasonHistoricalHistoricalConflict
+	}
+
+	if existing != nil && aggregateValuesEqual(existing.values, input.Values) {
+		if input.Source == AggregateSourceLive {
+			advanceLiveAuthority(existing, input)
+			e.state.liveEpoch = input.Live.ConnectionEpoch
+			if state != nil && state.latest != nil && state.latest.record.identity == existing.identity {
+				state.latest.record = *existing
+			}
+		}
+		if input.Source == AggregateSourceReplay {
+			e.state.replayArtifact = input.Replay.ArtifactID
+		}
+		return DispositionAggregateExactDuplicate, ReasonNone
+	}
+
+	if input.Source != AggregateSourceHistorical && now.Sub(input.WindowEnd) > correctionHorizon {
+		return DispositionAggregateRejected, ReasonTooLate
+	}
+
+	if existing != nil {
+		switch input.Source {
+		case AggregateSourceLive:
+			if existing.authority.source == AggregateSourceHistorical {
+				return e.installAggregateLocked(symbol, input, now, true)
+			}
+			comparison := compareLive(input.Live, existing.authority.live)
+			if comparison < 0 {
+				return DispositionAggregateRejected, ReasonNonprecedent
+			}
+			if comparison == 0 {
+				return e.integrityWithdrawLocked(symbol, existing), ReasonRepeatedPositionUnequal
+			}
+		case AggregateSourceReplay:
+			comparison := compareReplay(input.Replay, existing.authority.replay)
+			if comparison < 0 {
+				return DispositionAggregateRejected, ReasonNonprecedent
+			}
+			if comparison == 0 {
+				return e.integrityWithdrawLocked(symbol, existing), ReasonRepeatedPositionUnequal
+			}
+		case AggregateSourceHistorical:
+			if existing.authority.source == AggregateSourceLive {
+				if state != nil {
+					ensureHistoricalConflict(state).set(sessionSlot(e.state.binding, input.WindowStart))
+					if state.provenAbsent != nil {
+						state.provenAbsent.clear(sessionSlot(e.state.binding, input.WindowStart))
+					}
+					state.lastConflict = &aggregateConflictEvidence{identity: existing.identity, current: existing.authority, incoming: evidence(input)}
+				}
+				return DispositionAggregateRejected, ReasonHistoricalLiveConflict
+			}
+			return e.historicalWithdrawLocked(symbol, existing, input), ReasonHistoricalHistoricalConflict
+		}
+		return e.installAggregateLocked(symbol, input, now, true)
+	}
+	return e.installAggregateLocked(symbol, input, now, false)
+}
+
+func validS2AggregateLifecycle(mode RunMode, state lifecycle, input frozenAggregateInput) bool {
+	if !input.s2Proof {
+		return false
+	}
+	return (mode == RunModeLive && state == lifecycleAwaitingAggregateAck) ||
+		(mode == RunModeReplay && state == lifecycleInitializing)
+}
+
+func (e *Engine) validateSourceContextLocked(input frozenAggregateInput) (DispositionReason, bool) {
+	switch input.Source {
+	case AggregateSourceLive:
+		if input.Live.ConnectionEpoch == 0 || input.Live.FrameSequence == 0 || input.Replay != (ReplayPosition{}) || input.Historical != (HistoricalPosition{}) {
+			return ReasonSourcePosition, false
+		}
+		if e.state.liveEpoch != 0 && input.Live.ConnectionEpoch < e.state.liveEpoch {
+			return ReasonStaleLiveEpoch, true
+		}
+	case AggregateSourceReplay:
+		if input.Replay.ArtifactID == "" || input.Replay.RecordOrdinal == 0 || input.Live != (LivePosition{}) || input.Historical != (HistoricalPosition{}) {
+			return ReasonSourcePosition, false
+		}
+		if e.state.replayArtifact != "" && input.Replay.ArtifactID != e.state.replayArtifact {
+			return ReasonReplayArtifact, true
+		}
+	case AggregateSourceHistorical:
+		proof := input.historicalProof
+		if proof == nil || !proof.resultValid || input.Historical.Generation == 0 || input.Historical.RequestToken == "" || input.Historical.RecordOrdinal == 0 || input.Live != (LivePosition{}) || input.Replay != (ReplayPosition{}) {
+			return ReasonHistoricalContext, true
+		}
+		if proof.bindingID != input.BindingIdentity || proof.generation != input.Historical.Generation || proof.token != input.Historical.RequestToken || proof.symbol != input.Symbol ||
+			proof.intervalStart != proof.intervalStart.UTC() || proof.intervalEnd != proof.intervalEnd.UTC() || proof.intervalStart.Nanosecond() != 0 || proof.intervalEnd.Nanosecond() != 0 ||
+			proof.intervalStart.Before(e.state.binding.sessionStart) || proof.intervalEnd.After(e.state.binding.sessionEnd) || !proof.intervalStart.Before(proof.intervalEnd) ||
+			proof.resultCardinality > int(proof.intervalEnd.Sub(proof.intervalStart)/time.Second) || input.WindowStart.Before(proof.intervalStart) || !input.WindowStart.Before(proof.intervalEnd) {
+			return ReasonHistoricalContext, true
+		}
+	}
+	return ReasonNone, false
+}
+
+func validAggregateWindow(input AggregateInput, binding *installedBinding) bool {
+	return input.WindowStart == input.WindowStart.UTC() && input.WindowEnd == input.WindowEnd.UTC() &&
+		input.WindowStart.Nanosecond() == 0 && input.WindowEnd.Nanosecond() == 0 &&
+		input.WindowEnd.Sub(input.WindowStart) == time.Second &&
+		!input.WindowStart.Before(binding.sessionStart) && !input.WindowEnd.After(binding.sessionEnd)
+}
+
+func validAggregateValues(v AggregateValues) bool {
+	finitePositive := func(x float64) bool { return x > 0 && !math.IsNaN(x) && !math.IsInf(x, 0) }
+	finiteNonnegative := func(x float64) bool { return x >= 0 && !math.IsNaN(x) && !math.IsInf(x, 0) }
+	return finitePositive(v.Open) && finitePositive(v.High) && finitePositive(v.Low) && finitePositive(v.Close) &&
+		finiteNonnegative(v.Volume) && finitePositive(v.VWAP) && v.AverageTradeSize >= 0 &&
+		(v.ATSProvenance == ATSLiveProviderAverage || v.ATSProvenance == ATSRESTFloorVolumeOverTrades) &&
+		v.Low <= v.Open && v.Open <= v.High && v.Low <= v.Close && v.Close <= v.High
+}
+
+func aggregateValuesEqual(a, b AggregateValues) bool {
+	return a.Open == b.Open && a.High == b.High && a.Low == b.Low && a.Close == b.Close && a.Volume == b.Volume && a.VWAP == b.VWAP && a.AverageTradeSize == b.AverageTradeSize && a.ATSProvenance == b.ATSProvenance
+}
+
+func compareLive(a, b LivePosition) int {
+	if a.ConnectionEpoch != b.ConnectionEpoch {
+		if a.ConnectionEpoch < b.ConnectionEpoch {
+			return -1
+		}
+		return 1
+	}
+	if a.FrameSequence != b.FrameSequence {
+		if a.FrameSequence < b.FrameSequence {
+			return -1
+		}
+		return 1
+	}
+	if a.ArrayIndex < b.ArrayIndex {
+		return -1
+	}
+	if a.ArrayIndex > b.ArrayIndex {
+		return 1
+	}
+	return 0
+}
+
+func compareReplay(a, b ReplayPosition) int {
+	if a.ArtifactID != b.ArtifactID {
+		return -1
+	}
+	if a.RecordOrdinal < b.RecordOrdinal {
+		return -1
+	}
+	if a.RecordOrdinal > b.RecordOrdinal {
+		return 1
+	}
+	return 0
+}
+
+func evidence(input frozenAggregateInput) aggregateEvidence {
+	return aggregateEvidence{source: input.Source, deliveryTime: input.DeliveryTime, live: input.Live, replay: input.Replay, historical: input.Historical}
+}
+
+func advanceLiveAuthority(record *canonicalAggregate, input frozenAggregateInput) {
+	if record.greatestLiveSupport == nil || compareLive(input.Live, *record.greatestLiveSupport) > 0 {
+		position := input.Live
+		record.greatestLiveSupport = &position
+		record.authority = evidence(input)
+	}
+}
+
+func (e *Engine) installAggregateLocked(symbol *coreSymbol, input frozenAggregateInput, now time.Time, revision bool) (DispositionCode, DispositionReason) {
+	state := ensureAggregateState(symbol)
+	e.compactSymbolLocked(state, e.state.binding, now)
+	record := canonicalAggregate{identity: aggregateIdentity{symbol: input.Symbol, start: input.WindowStart.Unix()}, windowStart: input.WindowStart, windowEnd: input.WindowEnd, values: input.Values, first: evidence(input), authority: evidence(input)}
+	if old := state.tail[record.identity.start]; old != nil {
+		record.first = old.first
+		record.greatestLiveSupport = old.greatestLiveSupport
+	} else if state.latest != nil && state.latest.record.identity == record.identity {
+		record.first = state.latest.record.first
+		record.greatestLiveSupport = state.latest.record.greatestLiveSupport
+	}
+	if input.Source == AggregateSourceLive {
+		position := input.Live
+		record.greatestLiveSupport = &position
+	}
+	if state.provenAbsent != nil {
+		state.provenAbsent.clear(sessionSlot(e.state.binding, input.WindowStart))
+	}
+	if input.Source == AggregateSourceLive {
+		e.state.liveEpoch = input.Live.ConnectionEpoch
+		if state.historicalConflict != nil {
+			state.historicalConflict.clear(sessionSlot(e.state.binding, input.WindowStart))
+		}
+	}
+	if input.Source == AggregateSourceReplay {
+		e.state.replayArtifact = input.Replay.ArtifactID
+	}
+	if input.Source == AggregateSourceHistorical && now.Sub(input.WindowEnd) > correctionHorizon {
+		slot := sessionSlot(e.state.binding, input.WindowStart)
+		ensurePresence(state).set(slot)
+		foldQualificationAggregate(state, e.state.binding, record, now)
+		foldPriceRangeAggregate(state, e.state.binding, record)
+		foldActivityAggregate(state, e.state.binding, record, now)
+		if state.olderLatest == nil || record.windowStart.After(state.olderLatest.windowStart) {
+			copyRecord := record
+			state.olderLatest = &copyRecord
+		}
+		if e.state.committedT != nil && record.windowStart.Before(*e.state.committedT) &&
+			(state.committedLatest == nil || record.windowStart.After(state.committedLatest.windowStart)) {
+			state.committedLatest = committedMark(record)
+		}
+	} else {
+		copyRecord := record
+		state.tail[record.identity.start] = &copyRecord
+	}
+	if state.latest == nil || record.windowStart.After(state.latest.record.windowStart) || record.identity == state.latest.record.identity {
+		state.latest = &latestAggregateMark{record: record}
+	}
+	state.recomputations++
+	if revision {
+		return DispositionAggregateRevised, ReasonNone
+	}
+	return DispositionAggregateInserted, ReasonNone
+}
+
+func (e *Engine) integrityWithdrawLocked(symbol *coreSymbol, existing *canonicalAggregate) DispositionCode {
+	state := ensureAggregateState(symbol)
+	delete(state.tail, existing.identity.start)
+	if state.presence != nil {
+		state.presence.clear(sessionSlot(e.state.binding, existing.windowStart))
+	}
+	if state.latest != nil && state.latest.record.identity == existing.identity {
+		if state.olderLatest != nil && state.olderLatest.identity == existing.identity {
+			state.olderLatest = nil
+		}
+		recomputeLatest(state)
+	}
+	if state.committedLatest != nil && state.committedLatest.start == existing.identity.start {
+		state.committedLatest = nil
+	}
+	state.recomputations++
+	e.state.aggregateIntegrity = true
+	return DispositionAggregateIntegrity
+}
+
+func (e *Engine) historicalWithdrawLocked(symbol *coreSymbol, existing *canonicalAggregate, input frozenAggregateInput) DispositionCode {
+	state := ensureAggregateState(symbol)
+	delete(state.tail, existing.identity.start)
+	slot := sessionSlot(e.state.binding, existing.windowStart)
+	if state.presence != nil {
+		state.presence.clear(slot)
+	}
+	ensureHistoricalConflict(state).set(slot)
+	if state.provenAbsent != nil {
+		state.provenAbsent.clear(slot)
+	}
+	state.lastConflict = &aggregateConflictEvidence{identity: existing.identity, current: existing.authority, incoming: evidence(input)}
+	if state.latest != nil && state.latest.record.identity == existing.identity {
+		if state.olderLatest != nil && state.olderLatest.identity == existing.identity {
+			state.olderLatest = nil
+		}
+		recomputeLatest(state)
+	}
+	if state.committedLatest != nil && state.committedLatest.start == existing.identity.start {
+		state.committedLatest = nil
+	}
+	state.recomputations++
+	return DispositionAggregateWithdrawn
+}
+
+func ensureAggregateState(symbol *coreSymbol) *symbolAggregateState {
+	if symbol.aggregates == nil {
+		symbol.aggregates = &symbolAggregateState{tail: make(map[int64]*canonicalAggregate)}
+	}
+	return symbol.aggregates
+}
+
+func ensureProvenAbsent(state *symbolAggregateState) *slotBitmap {
+	if state.provenAbsent == nil {
+		state.provenAbsent = &slotBitmap{}
+	}
+	return state.provenAbsent
+}
+func ensurePresence(state *symbolAggregateState) *slotBitmap {
+	if state.presence == nil {
+		state.presence = &slotBitmap{}
+	}
+	return state.presence
+}
+
+func ensureHistoricalConflict(state *symbolAggregateState) *slotBitmap {
+	if state.historicalConflict == nil {
+		state.historicalConflict = &slotBitmap{}
+	}
+	return state.historicalConflict
+}
+
+func (e *Engine) compactSymbolLocked(state *symbolAggregateState, binding *installedBinding, now time.Time) {
+	for start, record := range state.tail {
+		if now.Sub(record.windowEnd) > correctionHorizon {
+			ensurePresence(state).set(sessionSlot(binding, record.windowStart))
+			foldQualificationAggregate(state, binding, *record, now)
+			foldPriceRangeAggregate(state, binding, *record)
+			foldActivityAggregate(state, binding, *record, now)
+			if state.olderLatest == nil || record.windowStart.After(state.olderLatest.windowStart) {
+				copyRecord := *record
+				state.olderLatest = &copyRecord
+			}
+			if e.state.committedT != nil && record.windowStart.Before(*e.state.committedT) &&
+				(state.committedLatest == nil || record.windowStart.After(state.committedLatest.windowStart)) {
+				state.committedLatest = committedMark(*record)
+			}
+			delete(state.tail, start)
+		}
+	}
+}
+
+func committedMark(record canonicalAggregate) *committedAggregateMark {
+	return &committedAggregateMark{start: record.identity.start, windowStart: record.windowStart, windowEnd: record.windowEnd, close: record.values.Close}
+}
+
+func recomputeLatest(state *symbolAggregateState) {
+	state.latest = nil
+	if state.olderLatest != nil {
+		state.latest = &latestAggregateMark{record: *state.olderLatest}
+	}
+	for _, record := range state.tail {
+		if state.latest == nil || record.windowStart.After(state.latest.record.windowStart) {
+			state.latest = &latestAggregateMark{record: *record}
+		}
+	}
+}
+
+func sessionSlot(binding *installedBinding, start time.Time) int {
+	return int(start.Sub(binding.sessionStart) / time.Second)
+}
+
+// exactAggregateCoverage is the sole C3 interpretation of installed interval
+// evidence. Bitmap allocation is deliberately irrelevant: each second must be
+// represented by a canonical presence bit/record or an explicitly installed
+// proven-absence bit, and a localized conflict overrides both.
+func exactAggregateCoverage(state *symbolAggregateState, binding *installedBinding, start, end time.Time) bool {
+	if state == nil || binding == nil || start != start.UTC() || end != end.UTC() ||
+		start.Nanosecond() != 0 || end.Nanosecond() != 0 || start.Before(binding.sessionStart) ||
+		end.After(binding.sessionEnd) || start.After(end) {
+		return false
+	}
+	for at := start; at.Before(end); at = at.Add(time.Second) {
+		slot := sessionSlot(binding, at)
+		if state.historicalConflict.has(slot) {
+			return false
+		}
+		if aggregatePresentAt(state, at.Unix()) || state.presence.has(slot) || state.provenAbsent.has(slot) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func aggregatePresentAt(state *symbolAggregateState, start int64) bool {
+	if state == nil {
+		return false
+	}
+	if state.tail[start] != nil || (state.latest != nil && state.latest.record.identity.start == start) ||
+		(state.olderLatest != nil && state.olderLatest.identity.start == start) {
+		return true
+	}
+	return false
+}
+
+// installExactCoverageForProof models only the bounded consequence of a
+// future Component 6 binding/generation/fence-validated coverage fact. It is
+// package-private and has no production caller or fact-producing behavior.
+func installExactCoverageForProof(state *symbolAggregateState, binding *installedBinding, start, end time.Time) bool {
+	if state == nil || binding == nil || start != start.UTC() || end != end.UTC() ||
+		start.Nanosecond() != 0 || end.Nanosecond() != 0 || start.Before(binding.sessionStart) ||
+		end.After(binding.sessionEnd) || start.After(end) {
+		return false
+	}
+	for at := start; at.Before(end); at = at.Add(time.Second) {
+		slot := sessionSlot(binding, at)
+		if state.historicalConflict.has(slot) || aggregatePresentAt(state, at.Unix()) || state.presence.has(slot) {
+			continue
+		}
+		ensureProvenAbsent(state).set(slot)
+	}
+	return true
+}
+
+func (e *Engine) historicalRegistrationAllowedForProof(symbol string, start, end time.Time) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.state.binding == nil || start != start.UTC() || end != end.UTC() || start.Nanosecond() != 0 || end.Nanosecond() != 0 ||
+		start.Before(e.state.binding.sessionStart) || end.After(e.state.binding.sessionEnd) || !start.Before(end) {
+		return false
+	}
+	index, ok := e.state.binding.index[symbol]
+	if !ok {
+		return false
+	}
+	state := e.state.binding.symbols[index].aggregates
+	if state == nil || state.presence == nil {
+		return true
+	}
+	for at := start; at.Before(end); at = at.Add(time.Second) {
+		if state.presence.has(sessionSlot(e.state.binding, at)) {
+			return false
+		}
+	}
+	return true
+}

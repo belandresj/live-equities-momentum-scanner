@@ -1,0 +1,401 @@
+package engine
+
+import (
+	"errors"
+	"math"
+	"time"
+)
+
+const privatePublicationSchemaV1 = "engine-private-publication-v1"
+
+type publicationKind uint8
+
+const (
+	publicationInitial publicationKind = iota + 1
+	publicationNormal
+	publicationUnavailableSentinel
+)
+
+type publicationDecision uint8
+
+const (
+	decisionNoExposedChange publicationDecision = iota + 1
+	decisionReplaced
+	decisionIntegrityFailure
+)
+
+// publicationFault is the narrow fixed package-private S4 proof seam. It is
+// neither configurable by production callers nor a callback/registration
+// mechanism, and it can model only the two contracted publication failures.
+type publicationFault uint8
+
+const (
+	publicationFaultNone publicationFault = iota
+	publicationFaultBuild
+	publicationFaultValidation
+)
+
+type publicationFingerprint struct {
+	bindingIdentity    string
+	lifecycle          lifecycle
+	exposedRevision    uint64
+	aggregateIntegrity bool
+	clockMonotonic     bool
+	globalFailure      bool
+	evaluationRevision uint64
+}
+
+type privatePublication struct {
+	kind                   publicationKind
+	schemaVersion          string
+	publicationID          uint64
+	bindingIdentity        string
+	tradingDate            string
+	mode                   RunMode
+	lifecycle              lifecycle
+	lifecycleReason        lifecycleReason
+	suppressionDisposition SuppressionDisposition
+	lastDisposition        DispositionCode
+	dispositionReason      DispositionReason
+	lastEngineSequence     uint64
+	watermark              *time.Time
+	generatedAt            time.Time
+	queueCapacity          int
+	requiredReserve        int
+	queueOccupancy         int
+	admission              admissionCounters
+	transitions            transitionCounters
+	publications           publicationCounters
+	aggregates             aggregateAccounting
+	aggregateIntegrity     bool
+	clockMonotonic         bool
+	currentMarketClaim     bool
+	aggregateEvaluation    aggregateEvaluationResult
+}
+
+// publicationView is a defensive package-private read projection. Component
+// 10 owns any eventual exported or serialized schema.
+type publicationView privatePublication
+
+func (e *Engine) installInitialPublication() {
+	initial := &privatePublication{
+		kind: publicationInitial, schemaVersion: privatePublicationSchemaV1,
+		mode: e.mode, lifecycle: lifecycleInitializing, clockMonotonic: true,
+	}
+	for _, reason := range []lifecycleReason{
+		lifecycleReasonSequenceExhaustion,
+		lifecycleReasonClockRegression,
+		lifecycleReasonCanonicalIntegrity,
+		lifecycleReasonPublicationIntegrity,
+		lifecycleReasonAccountingIntegrity,
+	} {
+		index, _ := sentinelIndex(reason)
+		e.sentinels[index] = newUnavailableSentinel(e.mode, reason)
+	}
+	e.storePublication(initial)
+}
+
+func sentinelIndex(reason lifecycleReason) (int, bool) {
+	switch reason {
+	case lifecycleReasonSequenceExhaustion:
+		return 0, true
+	case lifecycleReasonClockRegression:
+		return 1, true
+	case lifecycleReasonCanonicalIntegrity:
+		return 2, true
+	case lifecycleReasonPublicationIntegrity:
+		return 3, true
+	case lifecycleReasonAccountingIntegrity:
+		return 4, true
+	default:
+		return 4, false
+	}
+}
+
+func newUnavailableSentinel(mode RunMode, reason lifecycleReason) *privatePublication {
+	result := &privatePublication{
+		kind: publicationUnavailableSentinel, schemaVersion: privatePublicationSchemaV1,
+		mode: mode, lifecycle: lifecycleSuppressed, lifecycleReason: reason,
+		suppressionDisposition: suppressionDispositionFor(mode, reason), clockMonotonic: true,
+		aggregateEvaluation: aggregateEvaluationResult{mode: rankingSuppressed, reason: rankingReasonGlobalSuppression},
+	}
+	switch reason {
+	case lifecycleReasonSequenceExhaustion:
+		result.lastDisposition = DispositionSequenceExhausted
+	case lifecycleReasonClockRegression:
+		result.lastDisposition, result.dispositionReason = DispositionClockRegression, ReasonClockRegression
+		result.clockMonotonic = false
+	case lifecycleReasonCanonicalIntegrity:
+		result.lastDisposition, result.dispositionReason = DispositionAggregateIntegrity, ReasonRepeatedPositionUnequal
+		result.aggregateIntegrity = true
+	case lifecycleReasonPublicationIntegrity:
+		result.lastDisposition, result.dispositionReason = DispositionPublicationIntegrity, ReasonPublication
+	case lifecycleReasonAccountingIntegrity:
+		result.lastDisposition, result.dispositionReason = DispositionAccountingIntegrity, ReasonAccounting
+	}
+	return result
+}
+
+func (e *Engine) unavailableSentinelLocked() *privatePublication {
+	if e.state.latestTransition == nil || e.state.latestTransition.Next != lifecycleSuppressed {
+		return e.sentinels[4]
+	}
+	index, _ := sentinelIndex(e.state.latestTransition.Reason)
+	return e.sentinels[index]
+}
+
+// storePublication is the sole atomic-cell replacement path for initial,
+// normal, and unavailable publications.
+func (e *Engine) storePublication(value *privatePublication) { e.publication.Store(value) }
+
+func (e *Engine) observePublication() publicationView {
+	publication := e.publication.Load()
+	copyValue := publicationView(*publication)
+	copyValue.watermark = immutableTimePointer(publication.watermark)
+	copyValue.aggregateEvaluation = cloneAggregateEvaluation(publication.aggregateEvaluation)
+	return copyValue
+}
+
+func (e *Engine) publicationFingerprintLocked() publicationFingerprint {
+	result := publicationFingerprint{
+		lifecycle: e.state.lifecycle, exposedRevision: e.state.exposedRevision,
+		aggregateIntegrity: e.state.aggregateIntegrity,
+		clockMonotonic:     e.state.clockMonotonic, globalFailure: e.state.globalFailure,
+		evaluationRevision: e.state.evaluationRevision,
+	}
+	if e.state.binding != nil {
+		result.bindingIdentity = e.state.binding.identity
+	}
+	return result
+}
+
+func (e *Engine) finishTransitionLocked(node *queueNode, disposition transitionDisposition, before publicationFingerprint, forceUnavailable bool) transitionDisposition {
+	changed := before != e.publicationFingerprintLocked()
+	if disposition.Code == DispositionBindingInvalid && e.publication.Load().kind == publicationInitial {
+		changed = true
+	}
+	disposition = e.completePublicationDecisionLocked(node, disposition, changed, forceUnavailable, false)
+	e.broadcastLocked()
+	e.mu.Unlock()
+	return disposition
+}
+
+func (e *Engine) finishInternalTransitionLocked(sequence uint64, before publicationFingerprint, forceUnavailable bool) {
+	changed := before != e.publicationFingerprintLocked()
+	node := &queueNode{engineSequence: sequence, admissionTime: e.lastClock}
+	code := DispositionControlApplied
+	if forceUnavailable {
+		code = DispositionSequenceExhausted
+	}
+	e.completePublicationDecisionLocked(node,
+		transitionDisposition{EngineSequence: sequence, Code: code},
+		changed, forceUnavailable, true)
+}
+
+// completePublicationDecisionLocked is the one external/internal publication
+// decision path. The caller holds the sole owner lock; this function returns
+// only after counters and the cell/sentinel decision are final.
+func (e *Engine) completePublicationDecisionLocked(node *queueNode, disposition transitionDisposition, changed, forceUnavailable, internal bool) transitionDisposition {
+	prospectiveAdmission := e.counters
+	prospectiveTransitions := e.transitions
+	if internal {
+		prospectiveTransitions.completedInternal++
+	} else {
+		prospectiveAdmission.ownerInProgress--
+		prospectiveAdmission.completedExternal++
+		classifyCompletedTransition(&prospectiveTransitions, disposition.Code)
+	}
+	prospectivePublications := e.publications
+
+	decision := decisionNoExposedChange
+	if forceUnavailable {
+		decision = decisionIntegrityFailure
+	} else if changed {
+		decision = decisionReplaced
+	}
+
+	var candidate *privatePublication
+	if decision == decisionReplaced {
+		generatedAt := e.clock().UTC()
+		if e.hasClock && generatedAt.Before(e.lastClock) {
+			e.state.clockMonotonic = false
+			disposition.SuppressionDisposition = e.enterSuppressionLocked(lifecycleEventClockRegression, node, lifecycleReasonClockRegression)
+			disposition.Code, disposition.Reason = DispositionClockRegression, ReasonClockRegression
+			if !internal {
+				prospectiveTransitions = e.transitions
+				classifyCompletedTransition(&prospectiveTransitions, disposition.Code)
+			}
+			decision = decisionIntegrityFailure
+		} else {
+			e.lastClock = generatedAt
+			e.hasClock = true
+			if e.lastPubID == math.MaxUint64 {
+				disposition.Code, disposition.Reason = DispositionPublicationIntegrity, ReasonPublication
+				disposition.SuppressionDisposition = e.enterSuppressionLocked(lifecycleEventPublicationIntegrity, node, lifecycleReasonPublicationIntegrity)
+				if !internal {
+					prospectiveTransitions = e.transitions
+					classifyCompletedTransition(&prospectiveTransitions, disposition.Code)
+				}
+				decision = decisionIntegrityFailure
+			} else {
+				nextID := e.lastPubID + 1
+				prospectivePublications = advancePublicationCounters(prospectivePublications, decisionReplaced)
+				var err error
+				candidate, err = e.buildPublicationLocked(nextID, node.engineSequence, disposition, generatedAt,
+					prospectiveAdmission, prospectiveTransitions, prospectivePublications)
+				if err != nil || e.publicationFault == publicationFaultBuild ||
+					e.publicationFault == publicationFaultValidation || validatePublication(candidate) != nil {
+					disposition.Code, disposition.Reason = DispositionPublicationIntegrity, ReasonPublication
+					disposition.SuppressionDisposition = e.enterSuppressionLocked(lifecycleEventPublicationIntegrity, node, lifecycleReasonPublicationIntegrity)
+					if !internal {
+						prospectiveTransitions = e.transitions
+						classifyCompletedTransition(&prospectiveTransitions, disposition.Code)
+					}
+					decision = decisionIntegrityFailure
+					candidate = nil
+				}
+			}
+		}
+	}
+
+	if decision == decisionIntegrityFailure {
+		prospectivePublications = advancePublicationCounters(e.publications, decisionIntegrityFailure)
+	} else if decision == decisionNoExposedChange {
+		prospectivePublications = advancePublicationCounters(e.publications, decisionNoExposedChange)
+	}
+
+	if !prospectiveAccountingCoherent(e, prospectiveAdmission, prospectiveTransitions, prospectivePublications) {
+		disposition.Code, disposition.Reason = DispositionAccountingIntegrity, ReasonAccounting
+		if !internal {
+			prospectiveTransitions = e.transitions
+			classifyCompletedTransition(&prospectiveTransitions, disposition.Code)
+		}
+		prospectivePublications = advancePublicationCounters(e.publications, decisionIntegrityFailure)
+		disposition.SuppressionDisposition = e.enterSuppressionLocked(lifecycleEventAccountingIntegrity, node, lifecycleReasonAccountingIntegrity)
+		decision = decisionIntegrityFailure
+		candidate = nil
+	}
+
+	e.counters = prospectiveAdmission
+	e.transitions = prospectiveTransitions
+	e.publications = prospectivePublications
+	switch decision {
+	case decisionReplaced:
+		e.lastPubID = candidate.publicationID
+		e.storePublication(candidate)
+	case decisionIntegrityFailure:
+		e.storePublication(e.unavailableSentinelLocked())
+	}
+	e.publicationFault = publicationFaultNone
+	return disposition
+}
+
+func classifyCompletedTransition(counters *transitionCounters, code DispositionCode) {
+	counters.completedExternal++
+	switch code {
+	case DispositionAggregateInserted, DispositionAggregateRevised, DispositionAggregateWithdrawn:
+		counters.appliedMarket++
+	case DispositionBindingInstalled, DispositionControlApplied, DispositionTimerApplied:
+		counters.appliedNonmarket++
+	case DispositionAggregateExactDuplicate:
+		counters.exactDuplicate++
+	case DispositionAggregateFenced:
+		counters.fenced++
+	case DispositionClockRegression, DispositionAggregateIntegrity, DispositionPublicationIntegrity, DispositionAccountingIntegrity:
+		counters.integrityFailure++
+	default:
+		counters.rejected++
+	}
+}
+
+func advancePublicationCounters(counters publicationCounters, decision publicationDecision) publicationCounters {
+	counters.completedDecisions++
+	switch decision {
+	case decisionNoExposedChange:
+		counters.noExposedChange++
+	case decisionReplaced:
+		counters.publicationReplaced++
+	case decisionIntegrityFailure:
+		counters.publicationIntegrity++
+	}
+	return counters
+}
+
+func prospectiveAccountingCoherent(e *Engine, admission admissionCounters, transitions transitionCounters, publications publicationCounters) bool {
+	classified := admission.admittedExternal + admission.notAdmittedInvalid + admission.notAdmittedCanceled +
+		admission.notAdmittedClosed + admission.pressureShedOptional + admission.sequenceBudgetExhausted
+	return e.state.aggregates.reconciles() && transitions.reconciles() &&
+		admission.started == admission.inProgress+admission.resultsCommitted &&
+		admission.resultsCommitted == classified &&
+		admission.admittedExternal == uint64(len(e.queue))+admission.ownerInProgress+admission.completedExternal &&
+		publications.reconciles(transitions.completedExternal+transitions.completedInternal)
+}
+
+func (e *Engine) buildPublicationLocked(id, sequence uint64, disposition transitionDisposition, generatedAt time.Time,
+	admission admissionCounters, transitions transitionCounters, publications publicationCounters) (*privatePublication, error) {
+	if e.publicationFault == publicationFaultBuild {
+		return nil, errors.New("injected publication construction failure")
+	}
+	candidate := &privatePublication{
+		kind: publicationNormal, schemaVersion: privatePublicationSchemaV1, publicationID: id,
+		mode: e.mode, lifecycle: e.state.lifecycle, lastDisposition: disposition.Code,
+		dispositionReason: disposition.Reason, lastEngineSequence: sequence,
+		watermark: immutableTimePointer(e.state.committedT), generatedAt: generatedAt,
+		queueCapacity: e.capacity, requiredReserve: e.reserve, queueOccupancy: len(e.queue),
+		admission: admission, transitions: transitions, publications: publications,
+		aggregates: e.state.aggregates, aggregateIntegrity: e.state.aggregateIntegrity,
+		clockMonotonic:      e.state.clockMonotonic,
+		aggregateEvaluation: cloneAggregateEvaluation(e.state.aggregateEvaluator.current),
+	}
+	candidate.currentMarketClaim = candidate.aggregateEvaluation.mode == rankingQualifiedCurrent ||
+		candidate.aggregateEvaluation.mode == rankingDegradedBootstrap
+	if e.state.binding != nil {
+		candidate.bindingIdentity = e.state.binding.identity
+		candidate.tradingDate = e.state.binding.tradingDate
+	}
+	if e.state.latestTransition != nil {
+		candidate.lifecycleReason = e.state.latestTransition.Reason
+	}
+	candidate.suppressionDisposition = e.state.suppressionDisposition
+	if e.publicationFault == publicationFaultValidation {
+		candidate.publicationID = 0
+	}
+	return candidate, nil
+}
+
+func validatePublication(candidate *privatePublication) error {
+	if candidate == nil {
+		return errors.New("nil private publication")
+	}
+	classifiedAdmissions := candidate.admission.admittedExternal + candidate.admission.notAdmittedInvalid + candidate.admission.notAdmittedCanceled +
+		candidate.admission.notAdmittedClosed + candidate.admission.pressureShedOptional + candidate.admission.sequenceBudgetExhausted
+	if candidate.kind != publicationNormal || candidate.schemaVersion != privatePublicationSchemaV1 ||
+		candidate.publicationID == 0 || (candidate.mode != RunModeLive && candidate.mode != RunModeReplay) ||
+		candidate.generatedAt.IsZero() || candidate.generatedAt != candidate.generatedAt.UTC() ||
+		candidate.queueCapacity <= 1 || candidate.requiredReserve < 1 || candidate.requiredReserve >= candidate.queueCapacity ||
+		candidate.queueOccupancy < 0 || candidate.queueOccupancy > candidate.queueCapacity ||
+		candidate.admission.started != candidate.admission.inProgress+candidate.admission.resultsCommitted ||
+		candidate.admission.resultsCommitted != classifiedAdmissions ||
+		candidate.admission.admittedExternal != uint64(candidate.queueOccupancy)+candidate.admission.ownerInProgress+candidate.admission.completedExternal ||
+		candidate.transitions.completedExternal != candidate.admission.completedExternal ||
+		!candidate.transitions.reconciles() || !candidate.publications.reconciles(candidate.transitions.completedExternal+candidate.transitions.completedInternal) ||
+		!candidate.aggregates.reconciles() {
+		return errors.New("invalid private publication")
+	}
+	if candidate.watermark != nil && candidate.generatedAt.Before(*candidate.watermark) {
+		return errors.New("publication generated before committed watermark")
+	}
+	if candidate.watermark == nil {
+		if !candidate.aggregateEvaluation.at.IsZero() {
+			return errors.New("evaluation without committed watermark")
+		}
+	} else if !candidate.aggregateEvaluation.at.Equal(*candidate.watermark) {
+		return errors.New("evaluation watermark mismatch")
+	}
+	if (candidate.bindingIdentity == "") != (candidate.tradingDate == "") ||
+		candidate.currentMarketClaim != (candidate.aggregateEvaluation.mode == rankingQualifiedCurrent || candidate.aggregateEvaluation.mode == rankingDegradedBootstrap) ||
+		validateAggregateEvaluation(candidate.aggregateEvaluation) != nil {
+		return errors.New("invalid publication claim")
+	}
+	return nil
+}
