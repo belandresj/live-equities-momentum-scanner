@@ -1,0 +1,18 @@
+{
+  "schema_version": "nyse-schedule-provenance-v1",
+  "schedule_version": "nyse-2026-2027-reviewed-2026-07-29",
+  "source_url": "https://www.nyse.com/trade/hours-calendars",
+  "retrieved_and_reviewed_date": "2026-07-29",
+  "coverage_start": "2026-01-01",
+  "coverage_end": "2027-12-31",
+  "trading_day_row_count": 502,
+  "early_close_dates": [
+    "2026-11-27",
+    "2026-12-24",
+    "2027-11-26"
+  ],
+  "exceptional_closures": [],
+  "exceptional_closure_review": "NYSE source reviewed; no exceptional full-day closures are declared for this coverage interval.",
+  "artifact": "internal/session/nyse_trading_days.json",
+  "artifact_sha256": "3fb957d2c41f53e64883699d6324f378fd896755fa299a4bd209d1e60d190784"
+}
