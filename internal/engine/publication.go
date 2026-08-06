@@ -88,6 +88,7 @@ func (e *Engine) installInitialPublication() {
 		lifecycleReasonCanonicalIntegrity,
 		lifecycleReasonPublicationIntegrity,
 		lifecycleReasonAccountingIntegrity,
+		lifecycleReasonReplayFailure,
 	} {
 		index, _ := sentinelIndex(reason)
 		e.sentinels[index] = newUnavailableSentinel(e.mode, reason)
@@ -107,6 +108,8 @@ func sentinelIndex(reason lifecycleReason) (int, bool) {
 		return 3, true
 	case lifecycleReasonAccountingIntegrity:
 		return 4, true
+	case lifecycleReasonReplayFailure:
+		return 5, true
 	default:
 		return 4, false
 	}
@@ -132,6 +135,8 @@ func newUnavailableSentinel(mode RunMode, reason lifecycleReason) *privatePublic
 		result.lastDisposition, result.dispositionReason = DispositionPublicationIntegrity, ReasonPublication
 	case lifecycleReasonAccountingIntegrity:
 		result.lastDisposition, result.dispositionReason = DispositionAccountingIntegrity, ReasonAccounting
+	case lifecycleReasonReplayFailure:
+		result.lastDisposition, result.dispositionReason = DispositionReplayFailed, ReasonReplayEvidence
 	}
 	return result
 }
@@ -295,13 +300,13 @@ func classifyCompletedTransition(counters *transitionCounters, code DispositionC
 	switch code {
 	case DispositionAggregateInserted, DispositionAggregateRevised, DispositionAggregateWithdrawn:
 		counters.appliedMarket++
-	case DispositionBindingInstalled, DispositionControlApplied, DispositionTimerApplied:
+	case DispositionBindingInstalled, DispositionControlApplied, DispositionTimerApplied, DispositionReplayStarted, DispositionReplayEnded:
 		counters.appliedNonmarket++
 	case DispositionAggregateExactDuplicate:
 		counters.exactDuplicate++
 	case DispositionAggregateFenced:
 		counters.fenced++
-	case DispositionClockRegression, DispositionAggregateIntegrity, DispositionPublicationIntegrity, DispositionAccountingIntegrity:
+	case DispositionClockRegression, DispositionAggregateIntegrity, DispositionPublicationIntegrity, DispositionAccountingIntegrity, DispositionReplayFailed:
 		counters.integrityFailure++
 	default:
 		counters.rejected++

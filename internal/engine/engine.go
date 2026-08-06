@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/belandresj/live-equities-momentum-scanner/internal/reference"
+	"github.com/belandresj/live-equities-momentum-scanner/internal/replayartifact/playback"
 )
 
 // RunMode fixes the evidence model for an engine's lifetime.
@@ -68,6 +69,9 @@ const (
 	DispositionUnsupportedSchema       DispositionCode = "rejected_unsupported_schema"
 	DispositionIllegalLifecycle        DispositionCode = "rejected_illegal_lifecycle"
 	DispositionTerminal                DispositionCode = "rejected_terminal"
+	DispositionReplayStarted           DispositionCode = "replay_started"
+	DispositionReplayEnded             DispositionCode = "replay_ended"
+	DispositionReplayFailed            DispositionCode = "replay_failed"
 )
 
 // Disposition is an immutable completion value for one admitted input.
@@ -129,6 +133,9 @@ const (
 	lifecycleReasonPublicationIntegrity lifecycleReason = "publication_integrity"
 	lifecycleReasonAccountingIntegrity  lifecycleReason = "accounting_integrity"
 	lifecycleReasonClosed               lifecycleReason = "closed"
+	lifecycleReasonReplayStart          lifecycleReason = "replay_start"
+	lifecycleReasonReplayEnd            lifecycleReason = "replay_end"
+	lifecycleReasonReplayFailure        lifecycleReason = "replay_failure"
 )
 
 // SuppressionDisposition is the exhaustive recovery requirement attached to
@@ -155,6 +162,9 @@ const (
 	lifecycleEventPublicationIntegrity
 	lifecycleEventAccountingIntegrity
 	lifecycleEventClose
+	lifecycleEventReplayStart
+	lifecycleEventReplayEnd
+	lifecycleEventReplayFailure
 )
 
 type transitionRecord struct {
@@ -178,6 +188,10 @@ const (
 	inputTimer
 	inputIllegal
 	inputUnsupportedSchema
+	inputReplayStart
+	inputReplayGroup
+	inputReplayEnd
+	inputReplayFailure
 )
 
 type queueNode struct {
@@ -194,6 +208,10 @@ type queueNode struct {
 	completion          chan Disposition
 	aggregateCompletion chan AggregateDisposition
 	timerCompletion     chan TimerDisposition
+	replayStart         playback.StartEvidence
+	replayGroup         playback.GroupEvidence
+	replayEnd           playback.EndEvidence
+	replayFailure       ReplayFailureInput
 }
 
 type engineState struct {
@@ -212,6 +230,7 @@ type engineState struct {
 	latestTarget           *time.Time
 	latestTransition       *transitionRecord
 	suppressionDisposition SuppressionDisposition
+	replay                 replayState
 }
 
 type admissionCounters struct {
@@ -282,7 +301,7 @@ type Engine struct {
 	transitions  transitionCounters
 	publications publicationCounters
 	publication  atomic.Pointer[privatePublication]
-	sentinels    [5]*privatePublication
+	sentinels    [6]*privatePublication
 	lastPubID    uint64
 
 	// Test-only fault/pause points are package-private and have no production
@@ -411,7 +430,7 @@ func (e *Engine) admitNode(ctx context.Context, node *queueNode, optional bool) 
 			e.mu.Unlock()
 			return AdmissionSequenceBudgetExhausted
 		}
-		if node.kind == inputTimer && e.lastSystem == math.MaxUint64 {
+		if (node.kind == inputTimer || node.kind == inputReplayGroup) && e.lastSystem == math.MaxUint64 {
 			e.sealed = true
 			e.exhausted = true
 			e.commitNonAdmissionLocked(AdmissionSequenceBudgetExhausted)
@@ -438,7 +457,7 @@ func (e *Engine) admitNode(ctx context.Context, node *queueNode, optional bool) 
 			node.ordinal = e.lastReserved
 			if node.kind == inputAggregate {
 				node.aggregateCompletion = make(chan AggregateDisposition, 1)
-			} else if node.kind == inputTimer {
+			} else if node.kind == inputTimer || node.kind == inputReplayGroup {
 				if e.state.binding != nil {
 					node.bindingID = e.state.binding.identity
 				}
@@ -555,7 +574,7 @@ func (e *Engine) consume() {
 		if node.kind == inputAggregate {
 			node.aggregateCompletion <- AggregateDisposition{EngineSequence: disposition.EngineSequence, Code: disposition.Code, Reason: disposition.Reason, SuppressionDisposition: disposition.SuppressionDisposition}
 			close(node.aggregateCompletion)
-		} else if node.kind == inputTimer {
+		} else if node.kind == inputTimer || node.kind == inputReplayGroup {
 			node.timerCompletion <- TimerDisposition{EngineSequence: disposition.EngineSequence, SystemSequence: node.systemSequence, AdmissionTime: node.admissionTime, Code: disposition.Code, Reason: disposition.Reason, SuppressionDisposition: disposition.SuppressionDisposition}
 			close(node.timerCompletion)
 		} else {
@@ -635,10 +654,41 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		e.mu.Lock()
 		code, reason = e.applyTimerLocked(node)
 		e.mu.Unlock()
+	} else if node.kind == inputReplayStart {
+		e.mu.Lock()
+		code, reason = e.applyReplayStartLocked(node)
+		e.mu.Unlock()
+	} else if node.kind == inputReplayGroup {
+		e.mu.Lock()
+		code, reason = e.applyReplayGroupLocked(node)
+		e.mu.Unlock()
+	} else if node.kind == inputReplayEnd {
+		e.mu.Lock()
+		code, reason = e.applyReplayEndLocked(node)
+		e.mu.Unlock()
+	} else if node.kind == inputReplayFailure {
+		e.mu.Lock()
+		code, reason = e.applyReplayFailureLocked(node)
+		e.mu.Unlock()
 	} else if node.kind == inputIllegal {
 		code, reason = DispositionIllegalLifecycle, ReasonLifecycle
 	} else if node.kind == inputUnsupportedSchema {
 		code, reason = DispositionUnsupportedSchema, ReasonSchema
+	}
+	if code == DispositionReplayFailed {
+		e.mu.Lock()
+		if !e.state.globalFailure {
+			e.state.replay.terminal = true
+			if e.state.replay.failureReason == "" {
+				e.state.replay.failureReason = ReplayFailureEngine
+				e.state.replay.failureLogical = e.state.replay.lastGroup
+				if e.state.replay.nextOrdinal > 0 {
+					e.state.replay.failureOrdinal = e.state.replay.nextOrdinal - 1
+				}
+			}
+			e.enterSuppressionLocked(lifecycleEventReplayFailure, node, lifecycleReasonReplayFailure)
+		}
+		e.mu.Unlock()
 	}
 	// Future approved contributors may be inserted only here as explicit,
 	// statically named synchronous calls in fixed source order. Each call must
@@ -654,10 +704,10 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		e.enterSuppressionLocked(lifecycleEventAccountingIntegrity, node, lifecycleReasonAccountingIntegrity)
 	}
 	disposition := transitionDisposition{EngineSequence: node.engineSequence, Code: code, Reason: reason}
-	if code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity {
+	if code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed {
 		disposition.SuppressionDisposition = e.state.suppressionDisposition
 	}
-	forceUnavailable := code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity
+	forceUnavailable := code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed
 	return e.finishTransitionLocked(node, disposition, before, forceUnavailable)
 }
 

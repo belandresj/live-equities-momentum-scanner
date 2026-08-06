@@ -89,6 +89,7 @@ type aggregateEvaluationResult struct {
 	qualifiedDayInvalid uint64
 	rows                []aggregateRankingRow
 	invalidSupport      bool
+	tqIntentAvailable   bool
 }
 
 type aggregateEvaluatorState struct {
@@ -161,7 +162,7 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 	if e.state.binding == nil || e.state.globalFailure {
 		return true
 	}
-	changed := node.kind == inputTimer && code == DispositionTimerApplied
+	changed := (node.kind == inputTimer || node.kind == inputReplayGroup) && code == DispositionTimerApplied
 	changed = changed || (node.kind == inputAggregate && (code == DispositionAggregateInserted || code == DispositionAggregateRevised ||
 		code == DispositionAggregateWithdrawn || (code == DispositionAggregateRejected && (reason == ReasonHistoricalLiveConflict || reason == ReasonStructural))))
 	if !changed {
@@ -177,7 +178,7 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 		staged = e.stageAggregateEvaluationLocked(*e.state.committedT)
 	}
 	expected := time.Time{}
-	if node.kind == inputTimer && e.state.latestTarget != nil {
+	if (node.kind == inputTimer || node.kind == inputReplayGroup) && e.state.latestTarget != nil {
 		expected = *e.state.latestTarget
 	} else if e.state.committedT != nil {
 		expected = *e.state.committedT
@@ -235,7 +236,7 @@ func (e *Engine) stageAggregateEvaluationLocked(at time.Time) aggregateEvaluatio
 }
 
 func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggregateEvaluationResult {
-	result := aggregateEvaluationResult{at: at, mode: rankingUnavailable, reason: rankingReasonNoCommittedWatermark}
+	result := aggregateEvaluationResult{at: at, mode: rankingUnavailable, reason: rankingReasonNoCommittedWatermark, tqIntentAvailable: e.mode != RunModeReplay}
 	if e.state.binding == nil || at.IsZero() {
 		return result
 	}
@@ -378,7 +379,7 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 		result.mode, result.reason = rankingUnavailable, rankingReasonNoCommittedWatermark
 	case result.population.unknownDueFailureOrFence == 0 && qualificationComplete:
 		result.mode, result.reason = rankingQualifiedCurrent, ""
-		result.rows = sortedRankingRows(*qualified, true)
+		result.rows = sortedRankingRows(*qualified, e.mode != RunModeReplay)
 	case result.knownRankableCount > 0 && allUnresolvedBootstrap:
 		result.mode = rankingDegradedBootstrap
 		if result.population.unknownDueFailureOrFence != 0 {
@@ -474,7 +475,7 @@ func validateAggregateEvaluation(r aggregateEvaluationResult) error {
 			return errors.New("duplicate ranking row")
 		}
 		seen[row.symbol] = struct{}{}
-		if row.tqIntentEligible != (r.mode == rankingQualifiedCurrent) {
+		if row.tqIntentEligible != (r.mode == rankingQualifiedCurrent && r.tqIntentAvailable) {
 			return errors.New("invalid TQ intent eligibility")
 		}
 	}
@@ -541,7 +542,7 @@ func cloneAggregateEvaluation(r aggregateEvaluationResult) aggregateEvaluationRe
 	return r
 }
 func aggregateEvaluationEqual(a, b aggregateEvaluationResult) bool {
-	if a.at != b.at || a.mode != b.mode || a.reason != b.reason || a.population != b.population || a.qualification != b.qualification || a.features != b.features || a.uncertainty != b.uncertainty || a.totalPassers != b.totalPassers || a.knownRankableCount != b.knownRankableCount || a.dayInvalidRankable != b.dayInvalidRankable || a.qualifiedDayInvalid != b.qualifiedDayInvalid || a.invalidSupport != b.invalidSupport || len(a.rows) != len(b.rows) {
+	if a.at != b.at || a.mode != b.mode || a.reason != b.reason || a.population != b.population || a.qualification != b.qualification || a.features != b.features || a.uncertainty != b.uncertainty || a.totalPassers != b.totalPassers || a.knownRankableCount != b.knownRankableCount || a.dayInvalidRankable != b.dayInvalidRankable || a.qualifiedDayInvalid != b.qualifiedDayInvalid || a.invalidSupport != b.invalidSupport || a.tqIntentAvailable != b.tqIntentAvailable || len(a.rows) != len(b.rows) {
 		return false
 	}
 	for i := range a.rows {

@@ -55,9 +55,10 @@ func (e *Engine) candidateTargetSupportedLocked(target time.Time) bool {
 		completeRunSupport = applicableAcceptedAggregateEpoch && consumedThroughIngressFence &&
 			noPriorUnresolvedGlobalTransportGap && installedContributorPredicates
 	case RunModeReplay:
-		validatedReplayArtifact := false // Component 4 owns this evidence.
-		provedArtifactCoverageAndOrdering := false
-		completedLogicalDeliveryGroup := false
+		replay := e.state.replay
+		validatedReplayArtifact := replay.validated && replay.complete && !replay.terminal
+		provedArtifactCoverageAndOrdering := replay.coveredThrough != nil && !replay.coveredThrough.Before(target) && replay.nextOrdinal > 0
+		completedLogicalDeliveryGroup := !replay.lastGroup.IsZero() && !replay.lastGroup.Before(target)
 		completeRunSupport = validatedReplayArtifact && provedArtifactCoverageAndOrdering && completedLogicalDeliveryGroup
 	default:
 		return false
@@ -146,7 +147,9 @@ func (e *Engine) transitionLifecycleLocked(event lifecycleEvent, node *queueNode
 		if e.state.binding == nil {
 			return false
 		}
-		if !admissionTime.Before(e.state.binding.sessionEnd) {
+		replayEndGroup := e.mode == RunModeReplay && previous == lifecycleReplaying && node != nil &&
+			node.kind == inputReplayGroup && admissionTime.Equal(e.state.binding.sessionEnd)
+		if !admissionTime.Before(e.state.binding.sessionEnd) && !replayEndGroup {
 			next, reason = lifecycleEnded, lifecycleReasonSessionEnd
 		} else {
 			switch previous {
@@ -177,6 +180,21 @@ func (e *Engine) transitionLifecycleLocked(event lifecycleEvent, node *queueNode
 		next, reason = lifecycleSuppressed, lifecycleReasonAccountingIntegrity
 	case lifecycleEventClose:
 		next, reason = lifecycleEnded, lifecycleReasonClosed
+	case lifecycleEventReplayStart:
+		if e.mode != RunModeReplay || previous != lifecycleInitializing || !e.state.replay.validated {
+			return false
+		}
+		next, reason = lifecycleReplaying, lifecycleReasonReplayStart
+	case lifecycleEventReplayEnd:
+		if e.mode != RunModeReplay || previous != lifecycleReplaying || !e.state.replay.terminal {
+			return false
+		}
+		next, reason = lifecycleEnded, lifecycleReasonReplayEnd
+	case lifecycleEventReplayFailure:
+		if e.mode != RunModeReplay || previous == lifecycleEnded {
+			return false
+		}
+		next, reason = lifecycleSuppressed, lifecycleReasonReplayFailure
 	default:
 		return false
 	}

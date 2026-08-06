@@ -102,12 +102,14 @@ const (
 	ReasonPublication                  DispositionReason = "publication"
 	ReasonAccounting                   DispositionReason = "accounting"
 	ReasonTerminal                     DispositionReason = "terminal"
+	ReasonReplayEvidence               DispositionReason = "replay_evidence"
 )
 
 type frozenAggregateInput struct {
 	AggregateInput
 	historicalProof *frozenHistoricalProofContext
 	s2Proof         bool
+	replayProof     bool
 }
 
 func freezeAggregateInput(input AggregateInput) frozenAggregateInput {
@@ -290,6 +292,9 @@ func (e *Engine) applyAggregateLocked(input frozenAggregateInput, now time.Time)
 	case DispositionAggregateIntegrity:
 		e.state.aggregates.integrity++
 	}
+	if input.replayProof && replayAggregateDispositionAccepted(e.state.replay.complete, code) {
+		e.state.replay.nextOrdinal++
+	}
 	return code, reason
 }
 
@@ -334,6 +339,14 @@ func (e *Engine) decideAggregateLocked(input frozenAggregateInput, now time.Time
 	}
 	if !validS2AggregateLifecycle(e.mode, e.state.lifecycle, input) {
 		return DispositionAggregateRejected, ReasonLifecycle
+	}
+	if input.Source == AggregateSourceReplay && input.replayProof {
+		state := e.state.replay
+		if !state.validated || state.terminal || input.BindingIdentity != state.bindingID || input.Replay.ArtifactID != state.artifactID ||
+			input.Replay.RecordOrdinal != state.nextOrdinal || input.DeliveryTime != now || input.DeliveryTime.Before(state.nextGroup) || input.DeliveryTime.After(state.end) ||
+			(state.complete && (input.WindowEnd != input.DeliveryTime || input.WindowStart != input.DeliveryTime.Add(-time.Second))) {
+			return DispositionAggregateRejected, ReasonReplayEvidence
+		}
 	}
 	if input.SchemaVersion != AggregateSchemaV1 {
 		return DispositionAggregateRejected, ReasonSchema
@@ -454,11 +467,18 @@ func (e *Engine) decideAggregateLocked(input frozenAggregateInput, now time.Time
 }
 
 func validS2AggregateLifecycle(mode RunMode, state lifecycle, input frozenAggregateInput) bool {
-	if !input.s2Proof {
+	if !input.s2Proof && !input.replayProof {
 		return false
 	}
 	return (mode == RunModeLive && state == lifecycleAwaitingAggregateAck) ||
-		(mode == RunModeReplay && state == lifecycleInitializing)
+		(mode == RunModeReplay && ((input.s2Proof && state == lifecycleInitializing) || (input.replayProof && state == lifecycleReplaying)))
+}
+
+func replayAggregateDispositionAccepted(complete bool, code DispositionCode) bool {
+	if complete {
+		return code == DispositionAggregateInserted
+	}
+	return code == DispositionAggregateInserted || code == DispositionAggregateRevised || code == DispositionAggregateExactDuplicate
 }
 
 func (e *Engine) validateSourceContextLocked(input frozenAggregateInput) (DispositionReason, bool) {

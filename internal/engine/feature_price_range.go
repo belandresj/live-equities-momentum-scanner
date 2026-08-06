@@ -171,7 +171,7 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 	if e.state.binding == nil {
 		return nil
 	}
-	if node.kind == inputTimer && code == DispositionTimerApplied {
+	if (node.kind == inputTimer || node.kind == inputReplayGroup) && code == DispositionTimerApplied {
 		target := *e.state.latestTarget
 		maintenanceAt := target
 		if e.state.committedT != nil {
