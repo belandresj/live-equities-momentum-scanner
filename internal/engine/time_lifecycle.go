@@ -70,7 +70,7 @@ func (e *Engine) accountingCoherentLocked() bool {
 	counters := e.counters
 	classified := counters.admittedExternal + counters.notAdmittedInvalid + counters.notAdmittedCanceled +
 		counters.notAdmittedClosed + counters.pressureShedOptional + counters.sequenceBudgetExhausted
-	return e.state.aggregates.reconciles() &&
+	return e.state.aggregates.reconciles() && e.state.connectionAccounting.reconciles() &&
 		counters.started == counters.inProgress+counters.resultsCommitted &&
 		counters.resultsCommitted == classified &&
 		counters.admittedExternal == uint64(len(e.queue))+counters.ownerInProgress+counters.completedExternal
@@ -81,6 +81,8 @@ func suppressionDispositionFor(mode RunMode, reason lifecycleReason) Suppression
 		return SuppressionTerminalReplayFailure
 	}
 	switch reason {
+	case lifecycleReasonIngressIntegrity:
+		return SuppressionSameBindingRecoveryAllowed
 	case lifecycleReasonCanonicalIntegrity:
 		return SuppressionCleanReinitializationRequired
 	case lifecycleReasonClockRegression, lifecycleReasonSequenceExhaustion,
@@ -155,7 +157,11 @@ func (e *Engine) transitionLifecycleLocked(event lifecycleEvent, node *queueNode
 			switch previous {
 			case lifecycleAwaitingSession:
 				if !admissionTime.Before(e.state.binding.sessionStart) {
-					next, reason = lifecycleAwaitingAggregateAck, lifecycleReasonSessionStart
+					if e.state.liveEpochActive && e.state.aggregateAcknowledged {
+						next, reason = lifecycleHydrating, lifecycleReasonAggregateAckAtStart
+					} else {
+						next, reason = lifecycleAwaitingAggregateAck, lifecycleReasonSessionStart
+					}
 				}
 			case lifecycleAwaitingAggregateAck, lifecycleHydrating, lifecycleLive, lifecycleRecovering, lifecycleReplaying, lifecycleSuppressed:
 				// A quiet timer is a legal self-transition and cannot fabricate
@@ -195,6 +201,41 @@ func (e *Engine) transitionLifecycleLocked(event lifecycleEvent, node *queueNode
 			return false
 		}
 		next, reason = lifecycleSuppressed, lifecycleReasonReplayFailure
+	case lifecycleEventAggregateAck:
+		if !e.state.liveEpochActive {
+			return false
+		}
+		switch previous {
+		case lifecycleAwaitingSession:
+			// Pre-session acknowledgement is retained; the timer at S owns
+			// LIFE-T06 and the transition to hydrating.
+		case lifecycleAwaitingAggregateAck:
+			if admissionTime.Before(e.state.binding.sessionStart) || !admissionTime.Before(e.state.binding.sessionEnd) {
+				return false
+			}
+			next, reason = lifecycleHydrating, lifecycleReasonAggregateAck
+		case lifecycleHydrating, lifecycleLive, lifecycleRecovering:
+			// Duplicate/control diagnostic in hydrating/live, or LIFE-T18's
+			// recovery handoff. Component 6 installs the recovery substep.
+		default:
+			return false
+		}
+	case lifecycleEventAggregateLoss:
+		switch previous {
+		case lifecycleAwaitingSession, lifecycleAwaitingAggregateAck:
+		case lifecycleHydrating:
+			next, reason = lifecycleAwaitingAggregateAck, lifecycleReasonAggregateEpochLost
+		case lifecycleLive:
+			next, reason = lifecycleRecovering, lifecycleReasonAggregateEpochLost
+		case lifecycleRecovering:
+		default:
+			return false
+		}
+	case lifecycleEventIngressIntegrity:
+		if previous == lifecycleInitializing || previous == lifecycleReplaying || previous == lifecycleEnded {
+			return false
+		}
+		next, reason = lifecycleSuppressed, lifecycleReasonIngressIntegrity
 	default:
 		return false
 	}
@@ -214,9 +255,14 @@ func (e *Engine) transitionLifecycleLocked(event lifecycleEvent, node *queueNode
 	if e.state.binding != nil {
 		record.BindingIdentity = e.state.binding.identity
 	}
-	if node != nil && node.kind == inputAggregate {
-		record.Epoch = node.aggregate.Live.ConnectionEpoch
-		record.Generation = node.aggregate.Historical.Generation
+	if node != nil {
+		switch node.kind {
+		case inputAggregate:
+			record.Epoch = node.aggregate.Live.ConnectionEpoch
+			record.Generation = node.aggregate.Historical.Generation
+		case inputConnectionControl:
+			record.Epoch = node.connectionControl.ConnectionEpoch
+		}
 	}
 	e.state.lifecycle = next
 	e.state.latestTransition = record

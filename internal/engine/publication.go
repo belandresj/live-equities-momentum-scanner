@@ -43,6 +43,7 @@ type publicationFingerprint struct {
 	clockMonotonic     bool
 	globalFailure      bool
 	evaluationRevision uint64
+	controlRevision    uint64
 }
 
 type privatePublication struct {
@@ -67,6 +68,14 @@ type privatePublication struct {
 	transitions            transitionCounters
 	publications           publicationCounters
 	aggregates             aggregateAccounting
+	connectionControls     connectionControlAccounting
+	connectionEpoch        uint64
+	connectionActive       bool
+	aggregateAcknowledged  bool
+	aggregateAckPosition   LivePosition
+	latestControlKind      ConnectionControlKind
+	latestControlOutcome   ConnectionControlOutcome
+	latestControlReason    DispositionReason
 	aggregateIntegrity     bool
 	clockMonotonic         bool
 	currentMarketClaim     bool
@@ -89,6 +98,7 @@ func (e *Engine) installInitialPublication() {
 		lifecycleReasonPublicationIntegrity,
 		lifecycleReasonAccountingIntegrity,
 		lifecycleReasonReplayFailure,
+		lifecycleReasonIngressIntegrity,
 	} {
 		index, _ := sentinelIndex(reason)
 		e.sentinels[index] = newUnavailableSentinel(e.mode, reason)
@@ -110,6 +120,8 @@ func sentinelIndex(reason lifecycleReason) (int, bool) {
 		return 4, true
 	case lifecycleReasonReplayFailure:
 		return 5, true
+	case lifecycleReasonIngressIntegrity:
+		return 6, true
 	default:
 		return 4, false
 	}
@@ -137,6 +149,8 @@ func newUnavailableSentinel(mode RunMode, reason lifecycleReason) *privatePublic
 		result.lastDisposition, result.dispositionReason = DispositionAccountingIntegrity, ReasonAccounting
 	case lifecycleReasonReplayFailure:
 		result.lastDisposition, result.dispositionReason = DispositionReplayFailed, ReasonReplayEvidence
+	case lifecycleReasonIngressIntegrity:
+		result.lastDisposition, result.dispositionReason = DispositionIngressIntegrity, ReasonIngressIntegrity
 	}
 	return result
 }
@@ -167,6 +181,7 @@ func (e *Engine) publicationFingerprintLocked() publicationFingerprint {
 		aggregateIntegrity: e.state.aggregateIntegrity,
 		clockMonotonic:     e.state.clockMonotonic, globalFailure: e.state.globalFailure,
 		evaluationRevision: e.state.evaluationRevision,
+		controlRevision:    e.state.connectionControl.revision,
 	}
 	if e.state.binding != nil {
 		result.bindingIdentity = e.state.binding.identity
@@ -300,13 +315,14 @@ func classifyCompletedTransition(counters *transitionCounters, code DispositionC
 	switch code {
 	case DispositionAggregateInserted, DispositionAggregateRevised, DispositionAggregateWithdrawn:
 		counters.appliedMarket++
-	case DispositionBindingInstalled, DispositionControlApplied, DispositionTimerApplied, DispositionReplayStarted, DispositionReplayEnded:
+	case DispositionBindingInstalled, DispositionControlApplied, DispositionTimerApplied, DispositionReplayStarted, DispositionReplayEnded,
+		DispositionConnectionControlApplied, DispositionConnectionControlDeferred:
 		counters.appliedNonmarket++
 	case DispositionAggregateExactDuplicate:
 		counters.exactDuplicate++
-	case DispositionAggregateFenced:
+	case DispositionAggregateFenced, DispositionConnectionControlFenced:
 		counters.fenced++
-	case DispositionClockRegression, DispositionAggregateIntegrity, DispositionPublicationIntegrity, DispositionAccountingIntegrity, DispositionReplayFailed:
+	case DispositionClockRegression, DispositionAggregateIntegrity, DispositionPublicationIntegrity, DispositionAccountingIntegrity, DispositionReplayFailed, DispositionIngressIntegrity:
 		counters.integrityFailure++
 	default:
 		counters.rejected++
@@ -329,7 +345,7 @@ func advancePublicationCounters(counters publicationCounters, decision publicati
 func prospectiveAccountingCoherent(e *Engine, admission admissionCounters, transitions transitionCounters, publications publicationCounters) bool {
 	classified := admission.admittedExternal + admission.notAdmittedInvalid + admission.notAdmittedCanceled +
 		admission.notAdmittedClosed + admission.pressureShedOptional + admission.sequenceBudgetExhausted
-	return e.state.aggregates.reconciles() && transitions.reconciles() &&
+	return e.state.aggregates.reconciles() && e.state.connectionAccounting.reconciles() && transitions.reconciles() &&
 		admission.started == admission.inProgress+admission.resultsCommitted &&
 		admission.resultsCommitted == classified &&
 		admission.admittedExternal == uint64(len(e.queue))+admission.ownerInProgress+admission.completedExternal &&
@@ -349,6 +365,11 @@ func (e *Engine) buildPublicationLocked(id, sequence uint64, disposition transit
 		queueCapacity: e.capacity, requiredReserve: e.reserve, queueOccupancy: len(e.queue),
 		admission: admission, transitions: transitions, publications: publications,
 		aggregates: e.state.aggregates, aggregateIntegrity: e.state.aggregateIntegrity,
+		connectionControls: e.state.connectionAccounting, connectionEpoch: e.state.liveEpoch,
+		connectionActive: e.state.liveEpochActive, aggregateAcknowledged: e.state.aggregateAcknowledged,
+		aggregateAckPosition: e.state.aggregateAckPosition,
+		latestControlKind:    e.state.connectionControl.latestKind, latestControlOutcome: e.state.connectionControl.latestOutcome,
+		latestControlReason: e.state.connectionControl.latestReason,
 		clockMonotonic:      e.state.clockMonotonic,
 		aggregateEvaluation: cloneAggregateEvaluation(e.state.aggregateEvaluator.current),
 	}
@@ -384,7 +405,7 @@ func validatePublication(candidate *privatePublication) error {
 		candidate.admission.admittedExternal != uint64(candidate.queueOccupancy)+candidate.admission.ownerInProgress+candidate.admission.completedExternal ||
 		candidate.transitions.completedExternal != candidate.admission.completedExternal ||
 		!candidate.transitions.reconciles() || !candidate.publications.reconciles(candidate.transitions.completedExternal+candidate.transitions.completedInternal) ||
-		!candidate.aggregates.reconciles() {
+		!candidate.aggregates.reconciles() || !candidate.connectionControls.reconciles() {
 		return errors.New("invalid private publication")
 	}
 	if candidate.watermark != nil && candidate.generatedAt.Before(*candidate.watermark) {
@@ -401,6 +422,13 @@ func validatePublication(candidate *privatePublication) error {
 		candidate.currentMarketClaim != (candidate.aggregateEvaluation.mode == rankingQualifiedCurrent || candidate.aggregateEvaluation.mode == rankingDegradedBootstrap) ||
 		validateAggregateEvaluation(candidate.aggregateEvaluation) != nil {
 		return errors.New("invalid publication claim")
+	}
+	if (candidate.connectionActive && candidate.connectionEpoch == 0) ||
+		(candidate.aggregateAcknowledged && (!candidate.connectionActive || candidate.aggregateAckPosition.ConnectionEpoch != candidate.connectionEpoch || candidate.aggregateAckPosition.FrameSequence == 0)) ||
+		(!candidate.aggregateAcknowledged && candidate.aggregateAckPosition != (LivePosition{})) ||
+		(candidate.connectionControls.consumed == 0 && (candidate.latestControlKind != "" || candidate.latestControlOutcome != "")) ||
+		(candidate.connectionControls.consumed > 0 && (!validConnectionControlKind(candidate.latestControlKind) || !validConnectionControlOutcome(candidate.latestControlOutcome))) {
+		return errors.New("invalid connection/control publication")
 	}
 	return nil
 }

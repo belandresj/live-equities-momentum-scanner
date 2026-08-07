@@ -307,7 +307,7 @@ func (e *Engine) updateInvalidMarkEvidenceLocked(input frozenAggregateInput, now
 		return
 	}
 	if code == DispositionAggregateRejected && reason == ReasonStructural &&
-		input.BindingIdentity == e.state.binding.identity && validS2AggregateLifecycle(e.mode, e.state.lifecycle, input) &&
+		input.BindingIdentity == e.state.binding.identity && e.validAggregateLifecycleLocked(input) &&
 		validAggregateWindow(input.AggregateInput, e.state.binding) && !input.WindowEnd.After(now) &&
 		!input.DeliveryTime.IsZero() && input.DeliveryTime == input.DeliveryTime.UTC() {
 		contextReason, _ := e.validateSourceContextLocked(input)
@@ -337,7 +337,11 @@ func (e *Engine) decideAggregateLocked(input frozenAggregateInput, now time.Time
 	if e.state.aggregateIntegrity {
 		return DispositionAggregateIntegrity, ReasonRepeatedPositionUnequal
 	}
-	if !validS2AggregateLifecycle(e.mode, e.state.lifecycle, input) {
+	if !input.s2Proof && !input.replayProof && input.Source == AggregateSourceLive && e.state.liveEpoch != 0 &&
+		(!e.state.liveEpochActive || input.Live.ConnectionEpoch != e.state.liveEpoch) {
+		return DispositionAggregateFenced, ReasonStaleLiveEpoch
+	}
+	if !e.validAggregateLifecycleLocked(input) {
 		return DispositionAggregateRejected, ReasonLifecycle
 	}
 	if input.Source == AggregateSourceReplay && input.replayProof {
@@ -466,12 +470,13 @@ func (e *Engine) decideAggregateLocked(input frozenAggregateInput, now time.Time
 	return e.installAggregateLocked(symbol, input, now, false)
 }
 
-func validS2AggregateLifecycle(mode RunMode, state lifecycle, input frozenAggregateInput) bool {
-	if !input.s2Proof && !input.replayProof {
-		return false
+func (e *Engine) validAggregateLifecycleLocked(input frozenAggregateInput) bool {
+	if input.s2Proof || input.replayProof {
+		return (e.mode == RunModeLive && e.state.lifecycle == lifecycleAwaitingAggregateAck) ||
+			(e.mode == RunModeReplay && ((input.s2Proof && e.state.lifecycle == lifecycleInitializing) || (input.replayProof && e.state.lifecycle == lifecycleReplaying)))
 	}
-	return (mode == RunModeLive && state == lifecycleAwaitingAggregateAck) ||
-		(mode == RunModeReplay && ((input.s2Proof && state == lifecycleInitializing) || (input.replayProof && state == lifecycleReplaying)))
+	return e.mode == RunModeLive && input.Source == AggregateSourceLive && e.state.liveEpochActive && e.state.aggregateAcknowledged &&
+		(e.state.lifecycle == lifecycleHydrating || e.state.lifecycle == lifecycleLive || e.state.lifecycle == lifecycleRecovering)
 }
 
 func replayAggregateDispositionAccepted(complete bool, code DispositionCode) bool {
@@ -489,6 +494,12 @@ func (e *Engine) validateSourceContextLocked(input frozenAggregateInput) (Dispos
 		}
 		if e.state.liveEpoch != 0 && input.Live.ConnectionEpoch < e.state.liveEpoch {
 			return ReasonStaleLiveEpoch, true
+		}
+		if !input.s2Proof && input.Live.ConnectionEpoch != e.state.liveEpoch {
+			return ReasonStaleLiveEpoch, true
+		}
+		if !input.s2Proof && (!e.state.aggregateAcknowledged || compareLive(input.Live, e.state.aggregateAckPosition) <= 0) {
+			return ReasonAggregateBeforeAck, false
 		}
 	case AggregateSourceReplay:
 		if input.Replay.ArtifactID == "" || input.Replay.RecordOrdinal == 0 || input.Live != (LivePosition{}) || input.Historical != (HistoricalPosition{}) {

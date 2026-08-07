@@ -50,28 +50,33 @@ const (
 type DispositionCode string
 
 const (
-	DispositionBindingInstalled        DispositionCode = "binding_installed"
-	DispositionBindingInvalid          DispositionCode = "rejected_binding_invalid"
-	DispositionBindingAlreadyInstalled DispositionCode = "rejected_binding_already_installed"
-	DispositionControlApplied          DispositionCode = "control_applied"
-	DispositionSequenceExhausted       DispositionCode = "sequence_exhausted"
-	DispositionAggregateInserted       DispositionCode = "aggregate_inserted"
-	DispositionAggregateRevised        DispositionCode = "aggregate_revised"
-	DispositionAggregateWithdrawn      DispositionCode = "aggregate_withdrawn_conflict"
-	DispositionAggregateExactDuplicate DispositionCode = "aggregate_exact_duplicate"
-	DispositionAggregateRejected       DispositionCode = "aggregate_rejected"
-	DispositionAggregateFenced         DispositionCode = "aggregate_fenced"
-	DispositionAggregateIntegrity      DispositionCode = "aggregate_integrity_failure"
-	DispositionTimerApplied            DispositionCode = "timer_applied"
-	DispositionClockRegression         DispositionCode = "integrity_failure_clock_regression"
-	DispositionPublicationIntegrity    DispositionCode = "integrity_failure_publication"
-	DispositionAccountingIntegrity     DispositionCode = "integrity_failure_accounting"
-	DispositionUnsupportedSchema       DispositionCode = "rejected_unsupported_schema"
-	DispositionIllegalLifecycle        DispositionCode = "rejected_illegal_lifecycle"
-	DispositionTerminal                DispositionCode = "rejected_terminal"
-	DispositionReplayStarted           DispositionCode = "replay_started"
-	DispositionReplayEnded             DispositionCode = "replay_ended"
-	DispositionReplayFailed            DispositionCode = "replay_failed"
+	DispositionBindingInstalled          DispositionCode = "binding_installed"
+	DispositionBindingInvalid            DispositionCode = "rejected_binding_invalid"
+	DispositionBindingAlreadyInstalled   DispositionCode = "rejected_binding_already_installed"
+	DispositionControlApplied            DispositionCode = "control_applied"
+	DispositionSequenceExhausted         DispositionCode = "sequence_exhausted"
+	DispositionAggregateInserted         DispositionCode = "aggregate_inserted"
+	DispositionAggregateRevised          DispositionCode = "aggregate_revised"
+	DispositionAggregateWithdrawn        DispositionCode = "aggregate_withdrawn_conflict"
+	DispositionAggregateExactDuplicate   DispositionCode = "aggregate_exact_duplicate"
+	DispositionAggregateRejected         DispositionCode = "aggregate_rejected"
+	DispositionAggregateFenced           DispositionCode = "aggregate_fenced"
+	DispositionAggregateIntegrity        DispositionCode = "aggregate_integrity_failure"
+	DispositionTimerApplied              DispositionCode = "timer_applied"
+	DispositionClockRegression           DispositionCode = "integrity_failure_clock_regression"
+	DispositionPublicationIntegrity      DispositionCode = "integrity_failure_publication"
+	DispositionAccountingIntegrity       DispositionCode = "integrity_failure_accounting"
+	DispositionUnsupportedSchema         DispositionCode = "rejected_unsupported_schema"
+	DispositionIllegalLifecycle          DispositionCode = "rejected_illegal_lifecycle"
+	DispositionTerminal                  DispositionCode = "rejected_terminal"
+	DispositionReplayStarted             DispositionCode = "replay_started"
+	DispositionReplayEnded               DispositionCode = "replay_ended"
+	DispositionReplayFailed              DispositionCode = "replay_failed"
+	DispositionConnectionControlApplied  DispositionCode = "connection_control_applied"
+	DispositionConnectionControlDeferred DispositionCode = "connection_control_consumer_deferred"
+	DispositionConnectionControlRejected DispositionCode = "connection_control_rejected"
+	DispositionConnectionControlFenced   DispositionCode = "connection_control_fenced"
+	DispositionIngressIntegrity          DispositionCode = "ingress_integrity_failure"
 )
 
 // Disposition is an immutable completion value for one admitted input.
@@ -136,6 +141,10 @@ const (
 	lifecycleReasonReplayStart          lifecycleReason = "replay_start"
 	lifecycleReasonReplayEnd            lifecycleReason = "replay_end"
 	lifecycleReasonReplayFailure        lifecycleReason = "replay_failure"
+	lifecycleReasonAggregateAck         lifecycleReason = "aggregate_acknowledged"
+	lifecycleReasonAggregateAckAtStart  lifecycleReason = "aggregate_acknowledged_at_session_start"
+	lifecycleReasonAggregateEpochLost   lifecycleReason = "aggregate_epoch_lost"
+	lifecycleReasonIngressIntegrity     lifecycleReason = "ingress_integrity"
 )
 
 // SuppressionDisposition is the exhaustive recovery requirement attached to
@@ -165,6 +174,9 @@ const (
 	lifecycleEventReplayStart
 	lifecycleEventReplayEnd
 	lifecycleEventReplayFailure
+	lifecycleEventAggregateAck
+	lifecycleEventAggregateLoss
+	lifecycleEventIngressIntegrity
 )
 
 type transitionRecord struct {
@@ -192,6 +204,7 @@ const (
 	inputReplayGroup
 	inputReplayEnd
 	inputReplayFailure
+	inputConnectionControl
 )
 
 type queueNode struct {
@@ -212,6 +225,8 @@ type queueNode struct {
 	replayGroup         playback.GroupEvidence
 	replayEnd           playback.EndEvidence
 	replayFailure       ReplayFailureInput
+	connectionControl   frozenConnectionControlInput
+	controlCompletion   chan ConnectionControlDisposition
 }
 
 type engineState struct {
@@ -219,6 +234,13 @@ type engineState struct {
 	binding                *installedBinding
 	aggregates             aggregateAccounting
 	liveEpoch              uint64
+	liveEpochActive        bool
+	aggregateWriteToken    uint64
+	aggregateAcknowledged  bool
+	aggregateAckPosition   LivePosition
+	aggregateAckReceivedAt time.Time
+	connectionControl      connectionControlState
+	connectionAccounting   connectionControlAccounting
 	replayArtifact         string
 	aggregateIntegrity     bool
 	globalFailure          bool
@@ -301,7 +323,7 @@ type Engine struct {
 	transitions  transitionCounters
 	publications publicationCounters
 	publication  atomic.Pointer[privatePublication]
-	sentinels    [6]*privatePublication
+	sentinels    [7]*privatePublication
 	lastPubID    uint64
 
 	// Test-only fault/pause points are package-private and have no production
@@ -457,6 +479,8 @@ func (e *Engine) admitNode(ctx context.Context, node *queueNode, optional bool) 
 			node.ordinal = e.lastReserved
 			if node.kind == inputAggregate {
 				node.aggregateCompletion = make(chan AggregateDisposition, 1)
+			} else if node.kind == inputConnectionControl {
+				node.controlCompletion = make(chan ConnectionControlDisposition, 1)
 			} else if node.kind == inputTimer || node.kind == inputReplayGroup {
 				if e.state.binding != nil {
 					node.bindingID = e.state.binding.identity
@@ -574,6 +598,9 @@ func (e *Engine) consume() {
 		if node.kind == inputAggregate {
 			node.aggregateCompletion <- AggregateDisposition{EngineSequence: disposition.EngineSequence, Code: disposition.Code, Reason: disposition.Reason, SuppressionDisposition: disposition.SuppressionDisposition}
 			close(node.aggregateCompletion)
+		} else if node.kind == inputConnectionControl {
+			node.controlCompletion <- ConnectionControlDisposition{EngineSequence: disposition.EngineSequence, Code: disposition.Code, Reason: disposition.Reason, SuppressionDisposition: disposition.SuppressionDisposition}
+			close(node.controlCompletion)
 		} else if node.kind == inputTimer || node.kind == inputReplayGroup {
 			node.timerCompletion <- TimerDisposition{EngineSequence: disposition.EngineSequence, SystemSequence: node.systemSequence, AdmissionTime: node.admissionTime, Code: disposition.Code, Reason: disposition.Reason, SuppressionDisposition: disposition.SuppressionDisposition}
 			close(node.timerCompletion)
@@ -654,6 +681,10 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		e.mu.Lock()
 		code, reason = e.applyTimerLocked(node)
 		e.mu.Unlock()
+	} else if node.kind == inputConnectionControl {
+		e.mu.Lock()
+		code, reason = e.applyConnectionControlLocked(node)
+		e.mu.Unlock()
 	} else if node.kind == inputReplayStart {
 		e.mu.Lock()
 		code, reason = e.applyReplayStartLocked(node)
@@ -704,10 +735,10 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		e.enterSuppressionLocked(lifecycleEventAccountingIntegrity, node, lifecycleReasonAccountingIntegrity)
 	}
 	disposition := transitionDisposition{EngineSequence: node.engineSequence, Code: code, Reason: reason}
-	if code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed {
+	if code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed || code == DispositionIngressIntegrity {
 		disposition.SuppressionDisposition = e.state.suppressionDisposition
 	}
-	forceUnavailable := code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed
+	forceUnavailable := code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed || code == DispositionIngressIntegrity
 	return e.finishTransitionLocked(node, disposition, before, forceUnavailable)
 }
 
