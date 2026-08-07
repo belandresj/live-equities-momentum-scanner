@@ -47,6 +47,7 @@ type LiveAdapterConfig struct {
 	Endpoint   string
 	Credential string
 	Queue      LiveQueueConfig
+	Clock      func() time.Time
 }
 
 type OpenAggregateEpoch struct {
@@ -124,6 +125,7 @@ const (
 	DeliveryNormalizationDrop     DeliveryKind = "normalization_rejection"
 	DeliveryTerminal              DeliveryKind = "terminal"
 	DeliveryAggregateIngressFence DeliveryKind = "aggregate_ingress_fence"
+	DeliveryLiveCoverageFence     DeliveryKind = "live_coverage_fence"
 )
 
 type TerminalResult struct {
@@ -150,15 +152,17 @@ type AdapterDelivery struct {
 	Rejection                                LiveRejection
 	Terminal                                 TerminalResult
 	AggregateIngressFence                    AggregateIngressFenceFact
+	LiveCoverageFence                        LiveCoverageFenceFact
 	ExpectedStatusCount, ObservedStatusCount int
 }
 
 type EngineDeliveryResult struct {
-	Admission            engine.AdmissionResult
-	ControlDisposition   engine.ConnectionControlDisposition
-	AggregateDisposition engine.AggregateDisposition
-	HydrationDisposition engine.HydrationDisposition
-	ConsumerDeferred     bool
+	Admission               engine.AdmissionResult
+	ControlDisposition      engine.ConnectionControlDisposition
+	AggregateDisposition    engine.AggregateDisposition
+	HydrationDisposition    engine.HydrationDisposition
+	LiveCoverageDisposition engine.LiveCoverageFenceDisposition
+	ConsumerDeferred        bool
 }
 
 type AdapterAccounting struct {
@@ -233,6 +237,7 @@ type LiveAdapter struct {
 	credential string
 	queue      LiveQueueConfig
 	connector  liveConnector
+	clock      func() time.Time
 	nextEpoch  uint64
 	lastToken  uint64
 	active     *LiveAttempt
@@ -248,8 +253,14 @@ func NewLiveAdapter(binding reference.Binding, config LiveAdapterConfig) (*LiveA
 		!validateLiveQueueConfig(config.Queue) {
 		return nil, errAdapterConfig
 	}
-	return &LiveAdapter{binding: binding, endpoint: config.Endpoint, credential: config.Credential, queue: config.Queue, connector: coderConnector{}}, nil
+	clock := config.Clock
+	if clock == nil {
+		clock = func() time.Time { return time.Now().UTC() }
+	}
+	return &LiveAdapter{binding: binding, endpoint: config.Endpoint, credential: config.Credential, queue: config.Queue, connector: coderConnector{}, clock: clock}, nil
 }
+
+func (a *LiveAdapter) now() time.Time { return a.clock().UTC() }
 
 func (a *LiveAdapter) Start(ctx context.Context, command OpenAggregateEpoch) (*LiveAttempt, AdapterDelivery, error) {
 	a.mu.Lock()
@@ -274,10 +285,11 @@ func (a *LiveAdapter) Start(ctx context.Context, command OpenAggregateEpoch) (*L
 		durations: command.Durations, endpoint: a.endpoint, credential: a.credential,
 		connector: a.connector, queue: newLiveFrameQueue(a.queue), cleanupDone: make(chan struct{}), handshakeDone: make(chan struct{}), openCommandPending: true,
 	}
+	attempt.queue.now = a.now
 	attempt.ctx, attempt.cancel = context.WithCancel(ctx)
 	attempt.started = true
 	a.active = attempt
-	at := time.Now().UTC()
+	at := a.now()
 	delivery := controlDelivery(a.binding.Identity(), attempt.epoch, engine.ConnectionAttempt, command.CommandToken, engine.ControlSucceeded, engine.LivePosition{}, at)
 	go attempt.runHandshake()
 	return attempt, delivery, nil
@@ -423,13 +435,13 @@ func (a *LiveAttempt) performHandshake() ([]AdapterDelivery, error) {
 		Params string `json:"params"`
 	}{Action: "subscribe", Params: "A.*"})
 	if err := a.write(totalCtx, aggregatePayload); err != nil {
-		deliveries = append(deliveries, controlDelivery(a.binding.Identity(), a.epoch, engine.AggregateCommandWriteResult, a.openToken, engine.ControlFailed, engine.LivePosition{}, time.Now().UTC()))
+		deliveries = append(deliveries, controlDelivery(a.binding.Identity(), a.epoch, engine.AggregateCommandWriteResult, a.openToken, engine.ControlFailed, engine.LivePosition{}, a.adapter.now()))
 		a.accountOpenCommand(engine.ControlFailed, false)
 		a.triggerTerminal(TerminalWriter, TerminalWriteFailed, 0, false)
 		return deliveries, errCommandWrite
 	}
 	a.accountOpenWriteSucceeded()
-	deliveries = append(deliveries, controlDelivery(a.binding.Identity(), a.epoch, engine.AggregateCommandWriteResult, a.openToken, engine.ControlSucceeded, engine.LivePosition{}, time.Now().UTC()))
+	deliveries = append(deliveries, controlDelivery(a.binding.Identity(), a.epoch, engine.AggregateCommandWriteResult, a.openToken, engine.ControlSucceeded, engine.LivePosition{}, a.adapter.now()))
 	acknowledged, err := a.awaitHandshakeStatus(totalCtx, StatusContext{ConnectionEpoch: a.epoch, ExpectedPhase: StatusPhaseSuccess, CommandKind: CommandAggregateSubscribe, CommandToken: strconv.FormatUint(a.openToken, 10), ExpectedCount: 1}, engine.AggregateSubscriptionResult)
 	if err != nil {
 		if acknowledged.Kind != "" {
@@ -523,11 +535,11 @@ func (a *LiveAttempt) readWorker() {
 			return
 		}
 		if kind != socketMessageText && kind != socketMessageBinary {
-			a.queue.tryEnqueue(a.epoch, kind, time.Now().UTC(), nil)
+			a.queue.tryEnqueue(a.epoch, kind, a.adapter.now(), nil)
 			a.triggerTerminal(TerminalProtocol, TerminalUnsupportedMessage, 0, false)
 			return
 		}
-		receivedAt := time.Now().UTC()
+		receivedAt := a.adapter.now()
 		_, reason := a.queue.tryEnqueue(a.epoch, kind, receivedAt, data)
 		if reason != FrameAdmitted {
 			switch reason {
@@ -635,7 +647,7 @@ func (a *LiveAttempt) ChangeTQ(ctx context.Context, command ChangeTQCommand) (Ad
 	if command.Action == TQUnsubscribe {
 		kind = CommandTradeQuoteUnsubscribe
 	}
-	a.pending = &pendingCommand{kind: kind, token: command.CommandToken, expectedCount: 2 * len(command.Symbols), deadline: time.Now().UTC().Add(a.durations.HandshakeStep), writeDone: make(chan struct{})}
+	a.pending = &pendingCommand{kind: kind, token: command.CommandToken, expectedCount: 2 * len(command.Symbols), deadline: a.adapter.now().Add(a.durations.HandshakeStep), writeDone: make(chan struct{})}
 	a.workers.Add(1)
 	a.adapter.mu.Lock()
 	a.adapter.lastToken = command.CommandToken
@@ -671,7 +683,7 @@ func (a *LiveAttempt) ChangeTQ(ctx context.Context, command ChangeTQCommand) (Ad
 		a.adapter.accounting.CommandsPendingAck++
 	}
 	a.adapter.mu.Unlock()
-	delivery := controlDelivery(a.binding.Identity(), a.epoch, engineKind, command.CommandToken, outcome, engine.LivePosition{}, time.Now().UTC())
+	delivery := controlDelivery(a.binding.Identity(), a.epoch, engineKind, command.CommandToken, outcome, engine.LivePosition{}, a.adapter.now())
 	if err != nil {
 		return delivery, errCommandWrite
 	}
@@ -728,7 +740,7 @@ func (a *LiveAttempt) Close(command CloseEpochCommand) error {
 	a.adapter.accounting.CommandsAcknowledged++
 	a.adapter.mu.Unlock()
 	a.closeCommand = &CloseEpochCommand{BindingIdentity: command.BindingIdentity, ConnectionEpoch: command.ConnectionEpoch, CommandToken: command.CommandToken, Cause: command.Cause}
-	cause := &terminalCause{source: TerminalEngineClose, reason: TerminalCloseRequested, closeCause: command.Cause, at: time.Now().UTC()}
+	cause := &terminalCause{source: TerminalEngineClose, reason: TerminalCloseRequested, closeCause: command.Cause, at: a.adapter.now()}
 	a.beginTerminalLocked(cause)
 	a.mu.Unlock()
 	return nil
@@ -774,13 +786,13 @@ func (a *LiveAttempt) next(ctx context.Context) (AdapterDelivery, bool) {
 		}
 		var statusContext *StatusContext
 		if a.pending != nil {
-			if !time.Now().UTC().Before(a.pending.deadline) {
+			if !a.adapter.now().Before(a.pending.deadline) {
 				pending := a.pending
 				a.mu.Unlock()
 				if !a.detachAndAccountPending(pending, engine.ControlAmbiguous) {
 					continue
 				}
-				delivery := controlDelivery(a.binding.Identity(), a.epoch, engine.TradeQuoteSubscriptionResult, pending.token, engine.ControlAmbiguous, engine.LivePosition{}, time.Now().UTC())
+				delivery := controlDelivery(a.binding.Identity(), a.epoch, engine.TradeQuoteSubscriptionResult, pending.token, engine.ControlAmbiguous, engine.LivePosition{}, a.adapter.now())
 				delivery.ExpectedStatusCount = pending.expectedCount
 				return delivery, true
 			}
@@ -825,7 +837,7 @@ func (a *LiveAttempt) next(ctx context.Context) (AdapterDelivery, bool) {
 				pending := a.pending
 				a.mu.Unlock()
 				if pending != nil && a.detachAndAccountPending(pending, engine.ControlAmbiguous) {
-					delivery := controlDelivery(a.binding.Identity(), a.epoch, engine.TradeQuoteSubscriptionResult, pending.token, engine.ControlAmbiguous, engine.LivePosition{}, time.Now().UTC())
+					delivery := controlDelivery(a.binding.Identity(), a.epoch, engine.TradeQuoteSubscriptionResult, pending.token, engine.ControlAmbiguous, engine.LivePosition{}, a.adapter.now())
 					delivery.ExpectedStatusCount = pending.expectedCount
 					return delivery, true
 				}
@@ -838,6 +850,10 @@ func (a *LiveAttempt) next(ctx context.Context) (AdapterDelivery, bool) {
 		if frame.kind == queuedLiveIngressFence {
 			a.queue.complete(frame, false)
 			return AdapterDelivery{Kind: DeliveryAggregateIngressFence, AggregateIngressFence: frame.ingressFence}, true
+		}
+		if frame.kind == queuedLiveCoverageFence {
+			a.queue.complete(frame, false)
+			return AdapterDelivery{Kind: DeliveryLiveCoverageFence, LiveCoverageFence: frame.liveCoverageFence}, true
 		}
 		if terminal != nil && terminal.fenceAfter > 0 && frame.sequence > terminal.fenceAfter {
 			a.queue.complete(frame, true)
@@ -962,7 +978,7 @@ func (a *LiveAttempt) triggerTerminal(source TerminalSource, reason TerminalReas
 		a.mu.Unlock()
 		return
 	}
-	cause := &terminalCause{source: source, reason: reason, fenceAfter: fenceAfter, ingressIntegrity: ingress, at: time.Now().UTC()}
+	cause := &terminalCause{source: source, reason: reason, fenceAfter: fenceAfter, ingressIntegrity: ingress, at: a.adapter.now()}
 	a.beginTerminalLocked(cause)
 	a.mu.Unlock()
 }
@@ -1149,6 +1165,22 @@ func DeliverToEngine(ctx context.Context, state *engine.Engine, delivery Adapter
 		case <-ctx.Done():
 			return result, ctx.Err()
 		case result.HydrationDisposition = <-completion:
+			return result, nil
+		}
+	case DeliveryLiveCoverageFence:
+		input, err := EngineLiveCoverageFence(delivery.LiveCoverageFence)
+		if err != nil {
+			return EngineDeliveryResult{}, err
+		}
+		admission, completion := state.AdmitLiveCoverageFence(ctx, input)
+		result := EngineDeliveryResult{Admission: admission}
+		if admission != engine.AdmissionAdmitted || completion == nil {
+			return result, nil
+		}
+		select {
+		case <-ctx.Done():
+			return result, ctx.Err()
+		case result.LiveCoverageDisposition = <-completion:
 			return result, nil
 		}
 	case DeliveryTrade, DeliveryQuote, DeliveryNormalizationDrop:

@@ -30,6 +30,37 @@ type AggregateIngressFenceFact struct {
 	CapturedAt           time.Time
 }
 
+type LiveCoverageFenceFact struct {
+	Command              engine.LiveCoverageFenceCommand
+	State                engine.LiveCoverageFenceState
+	ThroughFrameSequence uint64
+	MarkerOrdinal        uint64
+	CapturedAt           time.Time
+}
+
+func EngineLiveCoverageFence(fact LiveCoverageFenceFact) (engine.LiveCoverageFenceInput, error) {
+	return engine.NewLiveCoverageFenceInput(fact.Command, fact.State, fact.ThroughFrameSequence, fact.MarkerOrdinal, fact.CapturedAt)
+}
+
+func (a *LiveAttempt) CaptureLiveCoverageFence(ctx context.Context, state *engine.Engine, command engine.LiveCoverageFenceCommand) error {
+	if ctx == nil || state == nil || command.BindingIdentity() != a.binding.Identity() || command.ConnectionEpoch() != a.epoch || command.CommandToken() == 0 {
+		return errCommand
+	}
+	a.mu.Lock()
+	valid := a.started && a.handshaken && !a.finished && a.terminal == nil
+	a.mu.Unlock()
+	if !valid {
+		return errCommand
+	}
+	if _, admitted := a.queue.enqueueLiveCoverageFence(ctx, LiveCoverageFenceFact{Command: command}); !admitted {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return errCommand
+	}
+	return nil
+}
+
 func EngineAggregateIngressFence(fact AggregateIngressFenceFact) (engine.AggregateIngressFenceInput, error) {
 	return engine.NewAggregateIngressFenceInput(fact.Command, fact.State, fact.ThroughFrameSequence, fact.MarkerOrdinal, fact.CapturedAt)
 }

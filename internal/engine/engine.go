@@ -79,6 +79,7 @@ const (
 	DispositionConnectionControlRejected DispositionCode = "connection_control_rejected"
 	DispositionConnectionControlFenced   DispositionCode = "connection_control_fenced"
 	DispositionIngressIntegrity          DispositionCode = "ingress_integrity_failure"
+	DispositionRecoveryExhausted         DispositionCode = "recovery_exhausted"
 )
 
 // Disposition is an immutable completion value for one admitted input.
@@ -219,39 +220,45 @@ const (
 	inputCheckpointProjection
 	inputCheckpointInstall
 	inputCheckpointTerminal
+	inputLiveCoverageFence
+	inputRecoveryExhaustion
 )
 
 type queueNode struct {
-	kind                  inputKind
-	binding               frozenBinding
-	bindingID             string
-	aggregate             frozenAggregateInput
-	admissionTime         time.Time
-	ordinal               uint64
-	engineSequence        uint64
-	systemSequence        uint64
-	clockRegression       bool
-	sealOnLink            bool
-	completion            chan Disposition
-	aggregateCompletion   chan AggregateDisposition
-	timerCompletion       chan TimerDisposition
-	replayStart           playback.StartEvidence
-	replayGroup           playback.GroupEvidence
-	replayEnd             playback.EndEvidence
-	replayFailure         ReplayFailureInput
-	connectionControl     frozenConnectionControlInput
-	controlCompletion     chan ConnectionControlDisposition
-	hydrationPlan         frozenHydrationPlanInput
-	hydrationChunk        frozenHydrationChunkInput
-	hydrationTerminal     frozenHydrationTerminalInput
-	hydrationCancel       frozenHydrationCancelInput
-	aggregateIngressFence frozenAggregateIngressFenceInput
-	hydrationPolicy       frozenHydrationPolicyActionInput
-	hydrationCompletion   chan HydrationDisposition
-	checkpointCandidate   checkpoint.Candidate
-	checkpointProjection  chan CheckpointProjectionResult
-	checkpointInstall     chan CheckpointInstallResult
-	checkpointTerminal    checkpoint.TerminalResult
+	kind                   inputKind
+	binding                frozenBinding
+	bindingID              string
+	aggregate              frozenAggregateInput
+	admissionTime          time.Time
+	ordinal                uint64
+	engineSequence         uint64
+	systemSequence         uint64
+	clockRegression        bool
+	sealOnLink             bool
+	completion             chan Disposition
+	aggregateCompletion    chan AggregateDisposition
+	timerCompletion        chan TimerDisposition
+	replayStart            playback.StartEvidence
+	replayGroup            playback.GroupEvidence
+	replayEnd              playback.EndEvidence
+	replayFailure          ReplayFailureInput
+	connectionControl      frozenConnectionControlInput
+	controlCompletion      chan ConnectionControlDisposition
+	hydrationPlan          frozenHydrationPlanInput
+	hydrationChunk         frozenHydrationChunkInput
+	hydrationTerminal      frozenHydrationTerminalInput
+	hydrationCancel        frozenHydrationCancelInput
+	aggregateIngressFence  frozenAggregateIngressFenceInput
+	hydrationPolicy        frozenHydrationPolicyActionInput
+	hydrationCompletion    chan HydrationDisposition
+	checkpointCandidate    checkpoint.Candidate
+	checkpointProjection   chan CheckpointProjectionResult
+	checkpointInstall      chan CheckpointInstallResult
+	checkpointTerminal     checkpoint.TerminalResult
+	liveCoverageFence      frozenLiveCoverageFenceInput
+	liveCoverageCompletion chan LiveCoverageFenceDisposition
+	signalLiveCoverage     bool
+	recoveryExhaustion     frozenRecoveryExhaustionInput
 }
 
 type engineState struct {
@@ -280,6 +287,7 @@ type engineState struct {
 	suppressionDisposition    SuppressionDisposition
 	replay                    replayState
 	hydration                 hydrationState
+	liveCoverage              liveCoverageState
 	checkpointSequence        uint64
 	installedCheckpoint       *InstalledCheckpointFact
 	checkpointLastSubmitted   *time.Time
@@ -523,6 +531,8 @@ func (e *Engine) admitNode(ctx context.Context, node *queueNode, optional bool) 
 				node.checkpointProjection = make(chan CheckpointProjectionResult, 1)
 			} else if node.kind == inputCheckpointInstall {
 				node.checkpointInstall = make(chan CheckpointInstallResult, 1)
+			} else if node.kind == inputLiveCoverageFence {
+				node.liveCoverageCompletion = make(chan LiveCoverageFenceDisposition, 1)
 			} else if node.kind == inputTimer || node.kind == inputReplayGroup {
 				if e.state.binding != nil {
 					node.bindingID = e.state.binding.identity
@@ -661,6 +671,11 @@ func (e *Engine) consume() {
 		} else if node.kind == inputCheckpointInstall {
 			node.checkpointInstall <- finalizeCheckpointInstall(disposition.checkpointInstall, disposition)
 			close(node.checkpointInstall)
+		} else if node.kind == inputLiveCoverageFence {
+			result := LiveCoverageFenceDisposition{EngineSequence: disposition.EngineSequence, Code: disposition.Code, Reason: disposition.Reason, SuppressionDisposition: disposition.SuppressionDisposition}
+			node.liveCoverageCompletion <- result
+			close(node.liveCoverageCompletion)
+			e.finishLiveCoverageCommand(node, result)
 		} else if node.kind == inputTimer || node.kind == inputReplayGroup {
 			node.timerCompletion <- TimerDisposition{EngineSequence: disposition.EngineSequence, SystemSequence: node.systemSequence, AdmissionTime: node.admissionTime, Code: disposition.Code, Reason: disposition.Reason, SuppressionDisposition: disposition.SuppressionDisposition}
 			close(node.timerCompletion)
@@ -781,6 +796,10 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		e.mu.Lock()
 		code, reason = e.applyConnectionControlLocked(node)
 		e.mu.Unlock()
+	} else if node.kind == inputRecoveryExhaustion {
+		e.mu.Lock()
+		code, reason = e.applyRecoveryExhaustionLocked(node)
+		e.mu.Unlock()
 	} else if node.kind == inputHydrationPlan {
 		e.mu.Lock()
 		var plan HydrationPlanResult
@@ -846,6 +865,10 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		nodeResult := e.state.hydration.generation.accounting
 		e.mu.Unlock()
 		stagedHydrationAccounting = nodeResult
+	} else if node.kind == inputLiveCoverageFence {
+		e.mu.Lock()
+		code, reason = e.applyLiveCoverageFenceLocked(node)
+		e.mu.Unlock()
 	} else if node.kind == inputReplayStart {
 		e.mu.Lock()
 		code, reason = e.applyReplayStartLocked(node)
@@ -925,10 +948,10 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		hydrationFenceCommand: stagedHydrationFenceCommand}
 	disposition.checkpointProjection = stagedCheckpointProjection
 	disposition.checkpointInstall = stagedCheckpointInstall
-	if code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed || code == DispositionIngressIntegrity || code == DispositionHydrationIntegrity {
+	if code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed || code == DispositionIngressIntegrity || code == DispositionHydrationIntegrity || code == DispositionRecoveryExhausted {
 		disposition.SuppressionDisposition = e.state.suppressionDisposition
 	}
-	forceUnavailable := code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed || code == DispositionIngressIntegrity || code == DispositionHydrationIntegrity
+	forceUnavailable := code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed || code == DispositionIngressIntegrity || code == DispositionHydrationIntegrity || code == DispositionRecoveryExhausted
 	final := e.finishTransitionLocked(node, disposition, before, forceUnavailable)
 	if final.SuppressionDisposition == "" && final.Code != DispositionPublicationIntegrity && final.Code != DispositionAccountingIntegrity && final.Code != DispositionClockRegression {
 		e.mu.Lock()

@@ -55,6 +55,7 @@ const (
 	queuedLiveRaw queuedLiveKind = iota + 1
 	queuedLiveTerminal
 	queuedLiveIngressFence
+	queuedLiveCoverageFence
 )
 
 type socketMessageType uint8
@@ -65,13 +66,14 @@ const (
 )
 
 type queuedLiveFrame struct {
-	epoch, sequence uint64
-	receivedAt      time.Time
-	messageType     socketMessageType
-	data            []byte
-	terminal        bool
-	kind            queuedLiveKind
-	ingressFence    AggregateIngressFenceFact
+	epoch, sequence   uint64
+	receivedAt        time.Time
+	messageType       socketMessageType
+	data              []byte
+	terminal          bool
+	kind              queuedLiveKind
+	ingressFence      AggregateIngressFenceFact
+	liveCoverageFence LiveCoverageFenceFact
 }
 
 type liveFrameQueue struct {
@@ -179,6 +181,43 @@ func (q *liveFrameQueue) enqueueIngressFence(ctx context.Context, fact Aggregate
 	}
 }
 
+func (q *liveFrameQueue) enqueueLiveCoverageFence(ctx context.Context, fact LiveCoverageFenceFact) (LiveCoverageFenceFact, bool) {
+	for {
+		if ctx == nil || ctx.Err() != nil {
+			return LiveCoverageFenceFact{}, false
+		}
+		q.mu.Lock()
+		if q.accounting.IngressFencesQueued+q.accounting.IngressFencesClassifying > 0 {
+			q.mu.Unlock()
+			return LiveCoverageFenceFact{}, false
+		}
+		if !q.gateOpen || q.nextFenceMarker == 0 {
+			q.mu.Unlock()
+			return LiveCoverageFenceFact{}, false
+		}
+		if q.accounting.FramesQueued < uint64(q.config.FrameSlots) {
+			fact.ThroughFrameSequence = q.greatestRaw
+			fact.MarkerOrdinal = q.nextFenceMarker
+			q.nextFenceMarker++
+			fact.CapturedAt = q.now()
+			fact.State = engine.LiveCoverageFenceComplete
+			q.frames = append(q.frames, queuedLiveFrame{epoch: fact.Command.ConnectionEpoch(), receivedAt: fact.CapturedAt, kind: queuedLiveCoverageFence, liveCoverageFence: fact})
+			q.accounting.IngressFencesStarted++
+			q.accounting.IngressFencesQueued++
+			q.notifyLocked()
+			q.mu.Unlock()
+			return fact, true
+		}
+		changed := q.changed
+		q.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return LiveCoverageFenceFact{}, false
+		case <-changed:
+		}
+	}
+}
+
 func (q *liveFrameQueue) canceledIngressFence(command engine.HydrationFenceCommand) (AggregateIngressFenceFact, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -208,6 +247,11 @@ func (q *liveFrameQueue) enqueueTerminal(ctx context.Context, epoch uint64, at t
 			for _, item := range q.frames {
 				if item.kind == queuedLiveIngressFence {
 					item.ingressFence.State = engine.AggregateIngressFenceCanceled
+					retained = append(retained, item)
+					continue
+				}
+				if item.kind == queuedLiveCoverageFence {
+					item.liveCoverageFence.State = engine.LiveCoverageFenceCanceled
 					retained = append(retained, item)
 					continue
 				}
@@ -252,6 +296,11 @@ func (q *liveFrameQueue) fenceQueuedAndEnqueueTerminal(epoch uint64, at time.Tim
 			retained = append(retained, frame)
 			continue
 		}
+		if frame.kind == queuedLiveCoverageFence {
+			frame.liveCoverageFence.State = engine.LiveCoverageFenceCanceled
+			retained = append(retained, frame)
+			continue
+		}
 		q.accounting.FramesQueued--
 		q.accounting.FramesFenced++
 	}
@@ -290,7 +339,7 @@ func (q *liveFrameQueue) pop(ctx context.Context) (queuedLiveFrame, bool) {
 			if frame.terminal {
 				q.accounting.TerminalMarkersQueued = 0
 				q.accounting.TerminalMarkersClassifying = 1
-			} else if frame.kind == queuedLiveIngressFence {
+			} else if frame.kind == queuedLiveIngressFence || frame.kind == queuedLiveCoverageFence {
 				q.accounting.IngressFencesQueued--
 				q.accounting.IngressFencesClassifying++
 			} else {
@@ -322,7 +371,7 @@ func (q *liveFrameQueue) complete(frame queuedLiveFrame, fenced bool) {
 	if frame.terminal {
 		q.accounting.TerminalMarkersClassifying = 0
 		q.accounting.TerminalMarkersDispositioned = 1
-	} else if frame.kind == queuedLiveIngressFence {
+	} else if frame.kind == queuedLiveIngressFence || frame.kind == queuedLiveCoverageFence {
 		q.accounting.IngressFencesClassifying--
 		q.accounting.IngressFencesDispositioned++
 	} else {

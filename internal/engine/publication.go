@@ -338,15 +338,17 @@ func classifyCompletedTransition(counters *transitionCounters, code DispositionC
 		DispositionConnectionControlApplied, DispositionConnectionControlDeferred, DispositionHydrationPlanApplied, DispositionHydrationChunkApplied,
 		DispositionAggregateIngressFenceApplied, DispositionCheckpointProjected, DispositionCheckpointInstalled, DispositionCheckpointTerminalApplied:
 		counters.appliedNonmarket++
+	case DispositionLiveCoverageFenceApplied:
+		counters.appliedNonmarket++
 	case DispositionHydrationPolicyApplied:
 		counters.appliedNonmarket++
 	case DispositionAggregateExactDuplicate:
 		counters.exactDuplicate++
-	case DispositionAggregateFenced, DispositionConnectionControlFenced, DispositionHydrationFenced, DispositionAggregateIngressFenceFenced, DispositionCheckpointTerminalFenced:
+	case DispositionAggregateFenced, DispositionConnectionControlFenced, DispositionHydrationFenced, DispositionAggregateIngressFenceFenced, DispositionCheckpointTerminalFenced, DispositionLiveCoverageFenceFenced:
 		counters.fenced++
 	case DispositionHydrationTerminalApplied:
 		counters.terminalWorkFact++
-	case DispositionClockRegression, DispositionAggregateIntegrity, DispositionPublicationIntegrity, DispositionAccountingIntegrity, DispositionReplayFailed, DispositionIngressIntegrity, DispositionHydrationIntegrity:
+	case DispositionClockRegression, DispositionAggregateIntegrity, DispositionPublicationIntegrity, DispositionAccountingIntegrity, DispositionReplayFailed, DispositionIngressIntegrity, DispositionHydrationIntegrity, DispositionRecoveryExhausted:
 		counters.integrityFailure++
 	default:
 		counters.rejected++

@@ -226,6 +226,47 @@ func TestPC5ENGINEConnectionControlLifecycle(t *testing.T) {
 	inspectC5EngineOwnership(t)
 }
 
+func TestC8RecoveryExhaustionRequiresEngineOwnedAttemptHistory(t *testing.T) {
+	binding := testBinding(t)
+	now := binding.SessionStart().Add(10 * time.Second)
+	e := aggregateEngine(t, binding, RunModeLive, &now)
+	defer closeAndWait(t, e)
+	foreign := binding.Identity()
+	if foreign[len(foreign)-1] == '0' {
+		foreign = foreign[:len(foreign)-1] + "1"
+	} else {
+		foreign = foreign[:len(foreign)-1] + "0"
+	}
+
+	admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionAttempt, 1, LivePosition{}, now, 1, ControlSucceeded))
+	for name, input := range map[string]RecoveryExhaustionInput{
+		"active epoch":    {SchemaVersion: RecoveryExhaustionSchemaV1, BindingIdentity: binding.Identity(), Attempts: 1},
+		"foreign binding": {SchemaVersion: RecoveryExhaustionSchemaV1, BindingIdentity: foreign, Attempts: 1},
+	} {
+		admission, completion := e.AdmitRecoveryExhaustion(context.Background(), input)
+		if admission != AdmissionAdmitted || completion == nil {
+			t.Fatalf("%s admission=%s", name, admission)
+		}
+		if got := <-completion; got.Code != DispositionConnectionControlRejected || e.state.lifecycle == lifecycleSuppressed {
+			t.Fatalf("%s exhaustion=%+v lifecycle=%s", name, got, e.state.lifecycle)
+		}
+	}
+	admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionLost, 1, LivePosition{ConnectionEpoch: 1, FrameSequence: 1}, now, 0, ControlFailed))
+	wrongCount := RecoveryExhaustionInput{SchemaVersion: RecoveryExhaustionSchemaV1, BindingIdentity: binding.Identity(), Attempts: 2}
+	_, wrongCompletion := e.AdmitRecoveryExhaustion(context.Background(), wrongCount)
+	if got := <-wrongCompletion; got.Code != DispositionConnectionControlRejected || e.state.lifecycle == lifecycleSuppressed {
+		t.Fatalf("wrong-count exhaustion=%+v lifecycle=%s", got, e.state.lifecycle)
+	}
+	exact := RecoveryExhaustionInput{SchemaVersion: RecoveryExhaustionSchemaV1, BindingIdentity: binding.Identity(), Attempts: 1}
+	_, completion := e.AdmitRecoveryExhaustion(context.Background(), exact)
+	got := <-completion
+	view := e.ObserveOperational()
+	if got.Code != DispositionRecoveryExhausted || got.Reason != ReasonRecoveryExhausted || got.SuppressionDisposition != SuppressionSameBindingRecoveryAllowed ||
+		view.Lifecycle != string(lifecycleSuppressed) || view.LifecycleReason != string(lifecycleReasonRecoveryExhausted) {
+		t.Fatalf("exact exhaustion=%+v view=%+v", got, view)
+	}
+}
+
 func controlFact(binding string, kind ConnectionControlKind, epoch uint64, position LivePosition, at time.Time, token uint64, outcome ConnectionControlOutcome) ConnectionControlInput {
 	return ConnectionControlInput{SchemaVersion: ConnectionControlSchemaV1, BindingIdentity: binding, Kind: kind,
 		ConnectionEpoch: epoch, Position: position, ReceiptTime: at.UTC(), CommandToken: token, Outcome: outcome}

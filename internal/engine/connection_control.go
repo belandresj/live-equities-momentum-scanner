@@ -6,6 +6,7 @@ import (
 )
 
 const ConnectionControlSchemaV1 = "engine-connection-control-v1"
+const RecoveryExhaustionSchemaV1 = "engine-recovery-exhaustion-v1"
 
 // ConnectionControlKind is the closed Component 5 fact family admitted by the
 // engine. Transport-specific status parsing remains outside this package.
@@ -52,6 +53,16 @@ type ConnectionControlDisposition struct {
 	SuppressionDisposition SuppressionDisposition
 }
 
+// RecoveryExhaustionInput is Component 8's bounded policy fact. The engine
+// accepts it only when its own ordered connection facts prove that exactly the
+// stated number of attempts ended without an active epoch or hydration.
+type RecoveryExhaustionInput struct {
+	SchemaVersion, BindingIdentity string
+	Attempts                       uint64
+}
+
+type frozenRecoveryExhaustionInput struct{ RecoveryExhaustionInput }
+
 const (
 	ReasonControlKind        DispositionReason = "control_kind"
 	ReasonControlOutcome     DispositionReason = "control_outcome"
@@ -59,6 +70,7 @@ const (
 	ReasonControlSequence    DispositionReason = "control_sequence"
 	ReasonAggregateBeforeAck DispositionReason = "aggregate_at_or_before_ack"
 	ReasonIngressIntegrity   DispositionReason = "ingress_integrity"
+	ReasonRecoveryExhausted  DispositionReason = "recovery_exhausted"
 )
 
 type frozenConnectionControlInput struct{ ConnectionControlInput }
@@ -71,6 +83,7 @@ type connectionControlState struct {
 	latestPosition   LivePosition
 	greatestPosition LivePosition
 	revision         uint64
+	recoveryAttempts uint64
 }
 
 type connectionControlAccounting struct {
@@ -92,6 +105,14 @@ func (e *Engine) AdmitConnectionControl(ctx context.Context, input ConnectionCon
 		return result, nil
 	}
 	return result, node.controlCompletion
+}
+
+func (e *Engine) AdmitRecoveryExhaustion(ctx context.Context, input RecoveryExhaustionInput) (AdmissionResult, <-chan Disposition) {
+	e.beginAdmission()
+	if ctx == nil || input.SchemaVersion != RecoveryExhaustionSchemaV1 || !validIdentityShape(input.BindingIdentity) || input.Attempts == 0 {
+		return e.finishNonAdmission(AdmissionNotAdmittedInvalid), nil
+	}
+	return e.admit(ctx, &queueNode{kind: inputRecoveryExhaustion, recoveryExhaustion: frozenRecoveryExhaustionInput{input}}, false)
 }
 
 func boundedConnectionControlInput(input ConnectionControlInput) bool {
@@ -180,6 +201,7 @@ func (e *Engine) decideConnectionControlLocked(node *queueNode, input Connection
 		e.state.liveEpochActive = true
 		e.state.connectionControl.greatestPosition = LivePosition{}
 		e.clearAggregateAcknowledgementLocked()
+		e.state.connectionControl.recoveryAttempts++
 		return DispositionConnectionControlApplied, ReasonNone
 	}
 
@@ -273,6 +295,20 @@ func (e *Engine) decideConnectionControlLocked(node *queueNode, input Connection
 	default:
 		return DispositionConnectionControlRejected, ReasonControlKind
 	}
+}
+
+func (e *Engine) applyRecoveryExhaustionLocked(node *queueNode) (DispositionCode, DispositionReason) {
+	input := node.recoveryExhaustion.RecoveryExhaustionInput
+	control := &e.state.connectionControl
+	validLifecycle := e.state.lifecycle == lifecycleAwaitingSession || e.state.lifecycle == lifecycleAwaitingAggregateAck || e.state.lifecycle == lifecycleRecovering
+	if e.mode != RunModeLive || e.state.binding == nil || input.BindingIdentity != e.state.binding.identity ||
+		!validLifecycle || e.state.liveEpochActive || e.state.hydration.generation.active ||
+		control.latestKind != ConnectionLost || control.latestOutcome != ControlFailed ||
+		control.recoveryAttempts == 0 || input.Attempts != control.recoveryAttempts {
+		return DispositionConnectionControlRejected, ReasonHistoricalContext
+	}
+	e.enterSuppressionLocked(lifecycleEventIngressIntegrity, node, lifecycleReasonRecoveryExhausted)
+	return DispositionRecoveryExhausted, ReasonRecoveryExhausted
 }
 
 func (e *Engine) clearAggregateAcknowledgementLocked() {

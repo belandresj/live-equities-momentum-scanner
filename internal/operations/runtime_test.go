@@ -1,0 +1,487 @@
+package operations
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+
+	"github.com/belandresj/live-equities-momentum-scanner/internal/engine"
+	"github.com/belandresj/live-equities-momentum-scanner/internal/massive"
+	"github.com/belandresj/live-equities-momentum-scanner/internal/reference"
+	"github.com/belandresj/live-equities-momentum-scanner/internal/session"
+)
+
+// TestC8RUNTIME01LifecycleReadinessShutdown is P-C8-RUNTIME's compact S1
+// trace. The engine owns every lifecycle/readiness input; operations only
+// derives a defensive process view and bounds shutdown.
+func TestC8RUNTIME01LifecycleReadinessShutdown(t *testing.T) {
+	binding := operationsBinding(t)
+	now := binding.SessionStart().Add(10 * time.Second)
+	config := DefaultConfig()
+	startup, cancelStartup := context.WithTimeout(context.Background(), time.Second)
+	defer cancelStartup()
+	runtime, err := New(startup, binding, config, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := runtime.Status(); !got.ProcessLive || got.BackendReady || got.Reason != ReasonLifecycle {
+		t.Fatalf("process live fabricated readiness: %+v", got)
+	}
+	owner := runtime.Engine()
+	ackAt := now.Add(-config.EvaluationDelay)
+	applyControl(t, owner, binding, engine.ConnectionAttempt, 1, 1, engine.LivePosition{}, ackAt)
+	applyControl(t, owner, binding, engine.AggregateCommandWriteResult, 1, 2, engine.LivePosition{}, ackAt)
+	applyControl(t, owner, binding, engine.AggregateSubscriptionResult, 1, 2, engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 1}, ackAt)
+	completeHydration(t, owner, binding, engine.HydrationFreshBootstrap, 1, now)
+	if got := runtime.Status(); !got.BackendReady || !got.RankingCurrent || got.Reason != ReasonNone || got.TQAvailable {
+		t.Fatalf("current aggregate state not ready or TQ became a gate: %+v", got)
+	}
+	applyControl(t, owner, binding, engine.ConnectionLost, 1, 0, engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 2}, now)
+	if got := runtime.Status(); got.BackendReady || got.RankingCurrent || got.Reason != ReasonLifecycle || got.Lifecycle != "recovering" {
+		t.Fatalf("disconnect remained ready: %+v", got)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := runtime.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := runtime.Status(); got.ProcessLive || got.BackendReady || got.Reason != ReasonRuntimeUnavailable {
+		t.Fatalf("joined runtime reported live: %+v", got)
+	}
+}
+
+func TestC8RUNTIME01CheckpointPrePlanCannotReportReady(t *testing.T) {
+	binding := operationsBinding(t)
+	now := binding.SessionStart().Add(20 * time.Minute).UTC()
+	watermark := now.Add(-4 * time.Second).Truncate(time.Second)
+	view := engine.OperationalView{
+		BindingIdentity: binding.Identity(), RunMode: engine.RunModeLive,
+		Lifecycle: "hydrating", CurrentMarketClaim: true, Watermark: &watermark,
+		InstalledCheckpoint: true,
+		Connection:          engine.OperationalConnection{Epoch: 1, AckFrame: 1, Active: true, Acknowledged: true},
+		Hydration:           engine.OperationalHydration{Generation: 0, FenceReconciled: false},
+	}
+	status := deriveStatus(true, binding, DefaultConfig(), now, view)
+	if status.BackendReady || status.Reason != ReasonFencePending || !status.RankingCurrent {
+		t.Fatalf("current checkpoint became ready before catch-up plan/fence: %+v", status)
+	}
+}
+
+// TestC8RUNTIME02HealthyLifetimeOutlivesRecoveryDeadline proves the bounded
+// establishment context is not the lifetime of a healthy live connection.
+func TestC8RUNTIME02HealthyLifetimeOutlivesRecoveryDeadline(t *testing.T) {
+	binding := operationsBinding(t)
+	base := binding.SessionStart().Add(20 * time.Minute)
+	startedClock := time.Now()
+	clock := func() time.Time { return base.Add(time.Since(startedClock)).UTC() }
+	config := DefaultConfig()
+	config.EvaluationDelay = 50 * time.Millisecond
+	config.ReadinessTolerance = time.Second
+	config.SampleCadence = 20 * time.Millisecond
+	config.RecoveryAttemptDeadline = 2 * time.Second
+	ctx := context.Background()
+	run, err := New(ctx, binding, config, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	close(release)
+	websocketServer := capacityWebSocketServer(t, release, nil)
+	defer websocketServer.Close()
+	adapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{Endpoint: "ws" + strings.TrimPrefix(websocketServer.URL, "http"), Credential: "fixture", Queue: massive.LiveQueueConfig{FrameSlots: 8, MaxFrameBytes: 4096, TotalFrameBytes: 16384}, Clock: clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hydrationServer := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(writer, `{"status":"OK","ticker":"AAA","adjusted":false,"results":[]}`)
+	}))
+	defer hydrationServer.Close()
+	hydrator, err := massive.NewHydrationWorker(hydrationServer.URL, func() (string, error) { return "fixture", nil }, hydrationServer.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	components := LiveComponents{Adapter: adapter, Hydrator: hydrator, Workers: 1, RowsPerChunk: 1, MaximumResponseBytes: 1 << 20, MaximumNormalizedRecords: 57_600, MaximumResidentRecords: 57_600, Durations: capacityDurations()}
+	joined := make(chan error, 1)
+	go func() { joined <- run.RunLive(ctx, components) }()
+	deadline := time.After(3 * time.Second)
+	for !run.Status().BackendReady {
+		select {
+		case err := <-joined:
+			t.Fatalf("live composition ended before ready: %v", err)
+		case <-deadline:
+			t.Fatalf("live composition did not become ready: %+v", run.Status())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	time.Sleep(config.RecoveryAttemptDeadline + 100*time.Millisecond)
+	if got := run.Status(); !got.BackendReady || got.Lifecycle != "live" {
+		t.Fatalf("healthy connection inherited establishment deadline: %+v", got)
+	}
+	shutdown, cancelShutdown := context.WithTimeout(context.Background(), config.ShutdownDeadline)
+	defer cancelShutdown()
+	if err := run.Shutdown(shutdown); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-joined:
+		if err == nil || !errors.Is(err, context.Canceled) {
+			t.Fatalf("runtime-owned live cancellation=%v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Shutdown returned before the live composition joined")
+	}
+}
+
+// TestC8RUNTIME03InitialRetryAndExhaustion proves establishment retries keep
+// bootstrap semantics until a live baseline exists, and terminal exhaustion
+// becomes an engine-owned suppression fact rather than a supervisor-only error.
+func TestC8RUNTIME03InitialRetryAndExhaustion(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		succeedOn int32
+		wantReady bool
+	}{
+		{name: "initial handshake retry remains fresh bootstrap", succeedOn: 2, wantReady: true},
+		{name: "bounded establishment exhaustion suppresses", succeedOn: 0, wantReady: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			binding := operationsBinding(t)
+			base := binding.SessionStart().Add(20 * time.Minute)
+			startedClock := time.Now()
+			clock := func() time.Time { return base.Add(time.Since(startedClock)).UTC() }
+			config := DefaultConfig()
+			config.RecoveryAttempts = 2
+			config.EvaluationDelay = 20 * time.Millisecond
+			config.SampleCadence = 10 * time.Millisecond
+			config.RecoveryAttemptDeadline = 3 * time.Second
+			config.ShutdownDeadline = 2 * time.Second
+			run, err := New(context.Background(), binding, config, clock)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var connections atomic.Int32
+			websocketServer := retryWebSocketServer(t, &connections, tc.succeedOn)
+			defer websocketServer.Close()
+			adapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{Endpoint: "ws" + strings.TrimPrefix(websocketServer.URL, "http"), Credential: "fixture", Queue: massive.LiveQueueConfig{FrameSlots: 8, MaxFrameBytes: 4096, TotalFrameBytes: 16384}, Clock: clock})
+			if err != nil {
+				t.Fatal(err)
+			}
+			hydrationServer := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				fmt.Fprint(writer, `{"status":"OK","ticker":"AAA","adjusted":false,"results":[]}`)
+			}))
+			defer hydrationServer.Close()
+			hydrator, err := massive.NewHydrationWorker(hydrationServer.URL, func() (string, error) { return "fixture", nil }, hydrationServer.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			components := LiveComponents{Adapter: adapter, Hydrator: hydrator, Workers: 1, RowsPerChunk: 1, MaximumResponseBytes: 1 << 20, MaximumNormalizedRecords: 57_600, MaximumResidentRecords: 57_600, Durations: capacityDurations()}
+			joined := make(chan error, 1)
+			go func() { joined <- run.RunLive(context.Background(), components) }()
+
+			deadline := time.After(8 * time.Second)
+			if tc.wantReady {
+				for !run.Status().BackendReady {
+					select {
+					case err := <-joined:
+						t.Fatalf("retry ended before ready: %v", err)
+					case <-deadline:
+						t.Fatalf("retry did not become ready: %+v", run.Status())
+					case <-time.After(10 * time.Millisecond):
+					}
+				}
+				view := run.Engine().ObserveOperational()
+				if connections.Load() != 2 || view.Hydration.Purpose != engine.HydrationFreshBootstrap || view.Lifecycle != "live" {
+					t.Fatalf("retry connections=%d view=%+v", connections.Load(), view)
+				}
+			} else {
+				select {
+				case err := <-joined:
+					if err == nil || !strings.Contains(err.Error(), "recovery attempts exhausted") {
+						t.Fatalf("exhaustion error=%v", err)
+					}
+				case <-deadline:
+					t.Fatalf("exhaustion did not terminate: %+v", run.Status())
+				}
+				view := run.Engine().ObserveOperational()
+				if connections.Load() != 2 || view.Lifecycle != "suppressed" || view.LifecycleReason != "recovery_exhausted" || view.Suppression != engine.SuppressionSameBindingRecoveryAllowed {
+					t.Fatalf("exhaustion connections=%d view=%+v", connections.Load(), view)
+				}
+			}
+			shutdown, cancelShutdown := context.WithTimeout(context.Background(), config.ShutdownDeadline)
+			defer cancelShutdown()
+			if err := run.Shutdown(shutdown); err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantReady {
+				select {
+				case err := <-joined:
+					if !errors.Is(err, context.Canceled) {
+						t.Fatalf("ready retry shutdown=%v", err)
+					}
+				default:
+					t.Fatal("Shutdown did not join retry composition")
+				}
+			}
+		})
+	}
+}
+
+func TestC8RUNTIME04SuccessfulRecoveryResetsBudget(t *testing.T) {
+	binding := operationsBinding(t)
+	base := binding.SessionStart().Add(20 * time.Minute)
+	startedClock := time.Now()
+	clock := func() time.Time { return base.Add(time.Since(startedClock)).UTC() }
+	config := DefaultConfig()
+	config.RecoveryAttempts = 2
+	config.EvaluationDelay = 20 * time.Millisecond
+	config.SampleCadence = 10 * time.Millisecond
+	config.RecoveryAttemptDeadline = 3 * time.Second
+	config.ShutdownDeadline = 2 * time.Second
+	run, err := New(context.Background(), binding, config, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var connections atomic.Int32
+	var failNew atomic.Bool
+	disconnect := make(chan struct{})
+	websocketServer := recoverableWebSocketServer(t, &connections, &failNew, disconnect)
+	defer websocketServer.Close()
+	adapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{Endpoint: "ws" + strings.TrimPrefix(websocketServer.URL, "http"), Credential: "fixture", Queue: massive.LiveQueueConfig{FrameSlots: 8, MaxFrameBytes: 4096, TotalFrameBytes: 16384}, Clock: clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hydrationServer := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(writer, `{"status":"OK","ticker":"AAA","adjusted":false,"results":[]}`)
+	}))
+	defer hydrationServer.Close()
+	hydrator, err := massive.NewHydrationWorker(hydrationServer.URL, func() (string, error) { return "fixture", nil }, hydrationServer.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	components := LiveComponents{Adapter: adapter, Hydrator: hydrator, Workers: 1, RowsPerChunk: 1, MaximumResponseBytes: 1 << 20, MaximumNormalizedRecords: 57_600, MaximumResidentRecords: 57_600, Durations: capacityDurations()}
+	joined := make(chan error, 1)
+	go func() { joined <- run.RunLive(context.Background(), components) }()
+	waitForOperational(t, run, joined, 1, true)
+	for recoveredEpoch := int32(2); recoveredEpoch <= 3; recoveredEpoch++ {
+		disconnect <- struct{}{}
+		waitForOperational(t, run, joined, recoveredEpoch-1, false)
+		waitForOperational(t, run, joined, recoveredEpoch, true)
+		view := run.Engine().ObserveOperational()
+		if view.Connection.RecoveryAttempts != 0 || view.Lifecycle != "live" || view.Hydration.Purpose != engine.HydrationGapRecovery {
+			t.Fatalf("epoch %d did not reset consecutive budget: %+v", recoveredEpoch, view)
+		}
+	}
+	failNew.Store(true)
+	disconnect <- struct{}{}
+	select {
+	case err := <-joined:
+		if err == nil || !strings.Contains(err.Error(), "recovery attempts exhausted") {
+			t.Fatalf("post-live recovery exhaustion=%v", err)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatalf("post-live recovery did not exhaust: %+v", run.Status())
+	}
+	view := run.Engine().ObserveOperational()
+	if connections.Load() != 5 || view.Connection.RecoveryAttempts != 2 || view.Lifecycle != "suppressed" || view.LifecycleReason != "recovery_exhausted" {
+		t.Fatalf("post-live exhaustion connections=%d view=%+v", connections.Load(), view)
+	}
+	shutdown, cancelShutdown := context.WithTimeout(context.Background(), config.ShutdownDeadline)
+	defer cancelShutdown()
+	if err := run.Shutdown(shutdown); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestC8RUNTIME05ShutdownTimeoutDoesNotClaimJoined(t *testing.T) {
+	binding := operationsBinding(t)
+	config := DefaultConfig()
+	config.ShutdownDeadline = 20 * time.Millisecond
+	now := binding.SessionStart().Add(10 * time.Second)
+	run, err := New(context.Background(), binding, config, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, finish, err := run.beginLive(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline, cancel := context.WithTimeout(context.Background(), config.ShutdownDeadline)
+	err = run.Shutdown(deadline)
+	cancel()
+	if err == nil || !strings.Contains(err.Error(), "live composition shutdown deadline exceeded") || run.joined.Load() {
+		t.Fatalf("shutdown timeout err=%v joined=%t", err, run.joined.Load())
+	}
+	finish()
+	retry, cancelRetry := context.WithTimeout(context.Background(), time.Second)
+	defer cancelRetry()
+	if err := run.Shutdown(retry); err != nil || !run.joined.Load() {
+		t.Fatalf("shutdown retry err=%v joined=%t", err, run.joined.Load())
+	}
+}
+
+func waitForOperational(t *testing.T, run *Runtime, joined <-chan error, minimumConnections int32, ready bool) {
+	t.Helper()
+	deadline := time.After(8 * time.Second)
+	for {
+		status := run.Status()
+		if status.BackendReady == ready {
+			if run.Engine().ObserveOperational().Connection.Epoch >= uint64(minimumConnections) {
+				return
+			}
+		}
+		select {
+		case err := <-joined:
+			t.Fatalf("live composition ended while waiting for ready=%t: %v", ready, err)
+		case <-deadline:
+			t.Fatalf("timed out waiting for ready=%t connections>=%d: %+v", ready, minimumConnections, status)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func retryWebSocketServer(t *testing.T, connections *atomic.Int32, succeedOn int32) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, err := websocket.Accept(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer connection.CloseNow()
+		attempt := connections.Add(1)
+		if succeedOn == 0 || attempt < succeedOn {
+			return
+		}
+		ctx := request.Context()
+		write := func(value string) bool { return connection.Write(ctx, websocket.MessageText, []byte(value)) == nil }
+		if !write(`[{"ev":"status","status":"connected"}]`) {
+			return
+		}
+		if _, _, err := connection.Read(ctx); err != nil || !write(`[{"ev":"status","status":"auth_success"}]`) {
+			return
+		}
+		if _, _, err := connection.Read(ctx); err != nil || !write(`[{"ev":"status","status":"success"}]`) {
+			return
+		}
+		<-ctx.Done()
+	}))
+}
+
+func recoverableWebSocketServer(t *testing.T, connections *atomic.Int32, failNew *atomic.Bool, disconnect <-chan struct{}) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, err := websocket.Accept(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer connection.CloseNow()
+		connections.Add(1)
+		if failNew.Load() {
+			return
+		}
+		ctx := request.Context()
+		write := func(value string) bool { return connection.Write(ctx, websocket.MessageText, []byte(value)) == nil }
+		if !write(`[{"ev":"status","status":"connected"}]`) {
+			return
+		}
+		if _, _, err := connection.Read(ctx); err != nil || !write(`[{"ev":"status","status":"auth_success"}]`) {
+			return
+		}
+		if _, _, err := connection.Read(ctx); err != nil || !write(`[{"ev":"status","status":"success"}]`) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+		case <-disconnect:
+		}
+	}))
+}
+
+func applyControl(t *testing.T, owner *engine.Engine, binding reference.Binding, kind engine.ConnectionControlKind, epoch, token uint64, position engine.LivePosition, at time.Time) {
+	t.Helper()
+	outcome := engine.ControlSucceeded
+	if kind == engine.ConnectionLost {
+		outcome = engine.ControlFailed
+	}
+	admission, completion := owner.AdmitConnectionControl(context.Background(), engine.ConnectionControlInput{SchemaVersion: engine.ConnectionControlSchemaV1, BindingIdentity: binding.Identity(), Kind: kind, ConnectionEpoch: epoch, CommandToken: token, Position: position, ReceiptTime: at, Outcome: outcome})
+	if admission != engine.AdmissionAdmitted || completion == nil {
+		t.Fatalf("control %s admission=%s", kind, admission)
+	}
+	if got := <-completion; got.Code != engine.DispositionConnectionControlApplied {
+		t.Fatalf("control %s disposition=%+v", kind, got)
+	}
+}
+
+func completeHydration(t *testing.T, owner *engine.Engine, binding reference.Binding, purpose engine.HydrationPurpose, epoch uint64, at time.Time) {
+	t.Helper()
+	budgets := engine.HydrationPlanBudgets{Workers: 1, RowsPerChunk: 1, MaximumResponseBytes: 1024, MaximumNormalizedRecords: 100, MaximumResidentRecords: 10}
+	admission, completion := owner.AdmitHydrationPlan(context.Background(), engine.HydrationPlanInput{SchemaVersion: engine.HydrationPlanSchemaV1, BindingIdentity: binding.Identity(), Purpose: purpose, ConnectionEpoch: epoch, Budgets: budgets})
+	if admission != engine.AdmissionAdmitted || completion == nil {
+		t.Fatal("hydration plan")
+	}
+	planResult := <-completion
+	var fence engine.HydrationFenceCommand
+	for _, token := range planResult.Plan.Requests() {
+		terminal, err := engine.NewHydrationTerminalInput(token, token.ResultID(), engine.HydrationCompletedEmpty, engine.HydrationReasonNone, 1, 1, 10, 0, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, terminalCompletion := owner.AdmitHydrationTerminal(context.Background(), terminal)
+		fence = (<-terminalCompletion).FenceCommand
+	}
+	fenceInput, err := engine.NewAggregateIngressFenceInput(fence, engine.AggregateIngressFenceComplete, 1, 1, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, fenceCompletion := owner.AdmitAggregateIngressFence(context.Background(), fenceInput)
+	if got := <-fenceCompletion; got.Code != engine.DispositionAggregateIngressFenceApplied {
+		t.Fatalf("fence=%+v", got)
+	}
+}
+
+func operationsBinding(t *testing.T) reference.Binding {
+	t.Helper()
+	schedule, err := session.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := schedule.ForTradingDate("2026-08-07")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v3/reference/tickers":
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "OK", "count": 1, "results": []map[string]any{{"ticker": "AAA", "active": true, "market": "stocks", "locale": "us", "type": "CS"}}})
+		case strings.HasPrefix(r.URL.Path, "/v2/aggs/grouped/locale/us/market/stocks/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "OK", "adjusted": true, "resultsCount": 1, "results": []map[string]any{{"T": "AAA", "c": 10.0, "t": facts.PriorRegularClose.UnixMilli()}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	now := facts.SessionStart.Add(time.Hour)
+	universe, err := (&reference.Resolver{BaseURL: server.URL, APIKey: "test", DataDir: filepath.Join(t.TempDir(), "reference"), HTTPClient: server.Client(), Schedule: schedule, Now: func() time.Time { return now }, Sleep: func(context.Context, time.Duration) error { return nil }}).Resolve(context.Background(), facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priors, err := (&reference.PriorCloseResolver{BaseURL: server.URL, APIKey: "test", DataDir: filepath.Join(t.TempDir(), "reference"), HTTPClient: server.Client(), Schedule: schedule, Now: func() time.Time { return now }, Sleep: func(context.Context, time.Duration) error { return nil }}).Resolve(context.Background(), facts, universe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := reference.AssembleBinding(facts, universe, priors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return binding
+}

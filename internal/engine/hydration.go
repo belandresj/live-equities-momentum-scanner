@@ -1009,6 +1009,7 @@ func (e *Engine) applyAggregateIngressFenceLocked(node *queueNode) (DispositionC
 	if !e.transitionLifecycleLocked(lifecycleEventHydrationComplete, node, lifecycleReasonHydrationComplete) {
 		return DispositionAggregateIngressFenceRejected, ReasonLifecycle
 	}
+	e.state.connectionControl.recoveryAttempts = 0
 	e.state.hydration.revision++
 	return DispositionAggregateIngressFenceApplied, ReasonNone
 }
