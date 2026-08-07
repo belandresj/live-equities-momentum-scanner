@@ -108,10 +108,44 @@ is explicitly created; this preparation task does not start implementation.
 | Item | State | Evidence and required review | Recorded at | Next action |
 | --- | --- | --- | --- | --- |
 | Component contract | `contract_approved` | Owner approved the complete four-document contract as written on 2026-08-07, including the exact V2 whitelist, fixtures/evidence, eight proofs, three slices, required reviews, and `advancement_mode: delegated` | 2026-08-07; governance commit records the approval | Begin `C7-S1` only when the future C7-C11 goal is explicitly created and launched |
-| `C7-S1` | `pending` | `P-C7-STATE`, `P-C7-INSTALL`; narrow ownership/atomic-install review required | 2026-08-07 | Wait for explicit future goal launch |
+| `C7-S1` | `accepted` | `P-C7-STATE` and `P-C7-INSTALL` pass; engine/checkpoint race, repository build/test/vet, and diff checks pass; required sole-owner/as-of-`T0`/semantic-completeness/restored-authority/atomic-install review is clean after two focused correction and re-review rounds | 2026-08-07; delegated C7-C11 program gate | Begin approved `C7-S2` |
 | `C7-S2` | `pending` | `P-C7-CODEC`, `P-C7-STORE`, `P-C7-CADENCE`; narrow persistence/atomicity/concurrency review required | 2026-08-07 | Wait for accepted `C7-S1` |
 | `C7-S3` | `pending` | `P-C7-LIVE`, `P-C7-REPLAY`, `P-C7-OBJECTIVE`; narrow cross-component identity/restart-equivalence review required | 2026-08-07 | Wait for accepted `C7-S2` |
 | Final component review | `pending` | Mandatory separate read-only review after `C7-S1`–`C7-S3` pass | 2026-08-07 | Wait for all slices |
+
+### C7-S1 acceptance record
+
+`C7-S1` adds one detached semantic checkpoint image and two closed typed engine
+inputs. The existing FIFO consumer projects Components 1–3 exactly at a
+committed/evaluated `T0`, or rejects without a writable request; installation
+deep-copies and validates one candidate, rebuilds the ordinary evaluator in a
+scratch graph, and performs one whole-state owner apply or none. Restored
+aggregates carry installation origin without dead-process causal positions, so
+the first valid new-run correction has ordinary Component 2 authority.
+
+`P-C7-STATE` distinguishes committed state from forward state across
+correction-horizon compaction, presence/absence/conflict, older and committed
+marks, folded/mutable/invalid Activity including real `ATS=0`, provisional and
+dirty qualification, the final latch, invalid-mark/coverage support, detached
+mutation, standard JSON finiteness, and identical continuation. `P-C7-INSTALL`
+rejects binding/schema/mode/time/sequence/count/value/provenance/price/Activity/
+qualification/coverage contradictions without partial mutation; it also proves
+candidate detachment, duplicate stability, new-run correction authority, one
+whole-state apply, and that late accounting/publication failures cannot return
+stale success. The required independent review initially found finite Activity,
+Activity cross-field validation, final-completion, and proof-coverage gaps; all
+were corrected in scope and the same reviewer returned a clean final focused
+re-review.
+
+Verification passed with `go test -race ./internal/engine ./internal/checkpoint`,
+`go build ./...`, `go test ./...`, `go vet ./...`, focused uncached `TestC7`
+proof runs, and `git diff --check`. Inspection confirms one checkpoint whole-
+state apply and no filesystem, codec/store, new goroutine, provider, CLI,
+live/replay composition, or timing implementation. Those deferred behaviors
+remain allocated to `C7-S2`/`C7-S3`; the reviewed semantic image and typed seam
+leave `C7-S2` valid as approved. There is no deviation, failed assumption,
+success-invalidating inspection-only claim, escalation condition, or
+substantive drift-audit `yes`.
 
 ## 1. Outcome and user consequence
 

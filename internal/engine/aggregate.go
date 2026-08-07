@@ -130,6 +130,7 @@ type aggregateIdentity struct {
 
 type aggregateEvidence struct {
 	source       AggregateSource
+	restored     bool
 	deliveryTime time.Time
 	live         LivePosition
 	replay       ReplayPosition
@@ -436,7 +437,7 @@ func (e *Engine) decideAggregateLocked(input frozenAggregateInput, now time.Time
 	if existing != nil {
 		switch input.Source {
 		case AggregateSourceLive:
-			if existing.authority.source == AggregateSourceHistorical {
+			if existing.authority.restored || existing.authority.source == AggregateSourceHistorical {
 				return e.installAggregateLocked(symbol, input, now, true)
 			}
 			comparison := compareLive(input.Live, existing.authority.live)
@@ -447,6 +448,9 @@ func (e *Engine) decideAggregateLocked(input frozenAggregateInput, now time.Time
 				return e.integrityWithdrawLocked(symbol, existing), ReasonRepeatedPositionUnequal
 			}
 		case AggregateSourceReplay:
+			if existing.authority.restored {
+				return e.installAggregateLocked(symbol, input, now, true)
+			}
 			comparison := compareReplay(input.Replay, existing.authority.replay)
 			if comparison < 0 {
 				return DispositionAggregateRejected, ReasonNonprecedent

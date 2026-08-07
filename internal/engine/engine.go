@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/belandresj/live-equities-momentum-scanner/internal/checkpoint"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/reference"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/replayartifact/playback"
 )
@@ -214,6 +215,8 @@ const (
 	inputHydrationCancelProof
 	inputAggregateIngressFence
 	inputHydrationPolicyAction
+	inputCheckpointProjection
+	inputCheckpointInstall
 )
 
 type queueNode struct {
@@ -243,6 +246,9 @@ type queueNode struct {
 	aggregateIngressFence frozenAggregateIngressFenceInput
 	hydrationPolicy       frozenHydrationPolicyActionInput
 	hydrationCompletion   chan HydrationDisposition
+	checkpointCandidate   checkpoint.Candidate
+	checkpointProjection  chan CheckpointProjectionResult
+	checkpointInstall     chan CheckpointInstallResult
 }
 
 type engineState struct {
@@ -271,6 +277,8 @@ type engineState struct {
 	suppressionDisposition  SuppressionDisposition
 	replay                  replayState
 	hydration               hydrationState
+	checkpointSequence      uint64
+	installedCheckpoint     *InstalledCheckpointFact
 }
 
 type admissionCounters struct {
@@ -501,6 +509,10 @@ func (e *Engine) admitNode(ctx context.Context, node *queueNode, optional bool) 
 				node.controlCompletion = make(chan ConnectionControlDisposition, 1)
 			} else if hydrationInputKind(node.kind) {
 				node.hydrationCompletion = make(chan HydrationDisposition, 1)
+			} else if node.kind == inputCheckpointProjection {
+				node.checkpointProjection = make(chan CheckpointProjectionResult, 1)
+			} else if node.kind == inputCheckpointInstall {
+				node.checkpointInstall = make(chan CheckpointInstallResult, 1)
 			} else if node.kind == inputTimer || node.kind == inputReplayGroup {
 				if e.state.binding != nil {
 					node.bindingID = e.state.binding.identity
@@ -633,6 +645,12 @@ func (e *Engine) consume() {
 				FenceCommand: disposition.hydrationFenceCommand,
 			}
 			close(node.hydrationCompletion)
+		} else if node.kind == inputCheckpointProjection {
+			node.checkpointProjection <- finalizeCheckpointProjection(disposition.checkpointProjection, disposition)
+			close(node.checkpointProjection)
+		} else if node.kind == inputCheckpointInstall {
+			node.checkpointInstall <- finalizeCheckpointInstall(disposition.checkpointInstall, disposition)
+			close(node.checkpointInstall)
 		} else if node.kind == inputTimer || node.kind == inputReplayGroup {
 			node.timerCompletion <- TimerDisposition{EngineSequence: disposition.EngineSequence, SystemSequence: node.systemSequence, AdmissionTime: node.admissionTime, Code: disposition.Code, Reason: disposition.Reason, SuppressionDisposition: disposition.SuppressionDisposition}
 			close(node.timerCompletion)
@@ -652,6 +670,8 @@ type transitionDisposition struct {
 	hydrationRows          HydrationRowAccounting
 	hydrationAccounting    HydrationAccounting
 	hydrationFenceCommand  HydrationFenceCommand
+	checkpointProjection   CheckpointProjectionResult
+	checkpointInstall      CheckpointInstallResult
 }
 
 func (e *Engine) transition(node *queueNode) transitionDisposition {
@@ -661,10 +681,13 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 	var stagedHydrationRows HydrationRowAccounting
 	var stagedHydrationAccounting HydrationAccounting
 	var stagedHydrationFenceCommand HydrationFenceCommand
+	var stagedCheckpointProjection CheckpointProjectionResult
+	var stagedCheckpointInstall CheckpointInstallResult
 	e.mu.Lock()
 	before := e.publicationFingerprintLocked()
 	if e.state.lifecycle == lifecycleEnded {
 		disposition := transitionDisposition{EngineSequence: node.engineSequence, Code: DispositionTerminal, Reason: ReasonTerminal}
+		setCheckpointTerminalResult(node, &disposition, CheckpointReasonProjectionIneligible)
 		return e.finishTransitionLocked(node, disposition, before, false)
 	}
 	if e.state.globalFailure {
@@ -677,12 +700,14 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 			return e.finishTransitionLocked(node, disposition, before, false)
 		}
 		disposition := transitionDisposition{EngineSequence: node.engineSequence, Code: DispositionTerminal, Reason: ReasonTerminal, SuppressionDisposition: e.state.suppressionDisposition}
+		setCheckpointTerminalResult(node, &disposition, CheckpointReasonProjectionIneligible)
 		return e.finishTransitionLocked(node, disposition, before, false)
 	}
 	if node.clockRegression {
 		e.state.clockMonotonic = false
 		dispositionValue := e.enterSuppressionLocked(lifecycleEventClockRegression, node, lifecycleReasonClockRegression)
 		disposition := transitionDisposition{EngineSequence: node.engineSequence, Code: DispositionClockRegression, Reason: ReasonClockRegression, SuppressionDisposition: dispositionValue}
+		setCheckpointTerminalResult(node, &disposition, CheckpointReasonProjectionInvariant)
 		return e.finishTransitionLocked(node, disposition, before, true)
 	}
 	e.mu.Unlock()
@@ -827,6 +852,27 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		e.mu.Lock()
 		code, reason = e.applyReplayFailureLocked(node)
 		e.mu.Unlock()
+	} else if node.kind == inputCheckpointProjection {
+		e.mu.Lock()
+		stagedCheckpointProjection = e.projectCheckpointLocked(node.admissionTime)
+		if stagedCheckpointProjection.Disposition == CheckpointProjected {
+			code, reason = DispositionCheckpointProjected, ReasonNone
+		} else {
+			code, reason = DispositionCheckpointRejected, ReasonStructural
+		}
+		e.mu.Unlock()
+	} else if node.kind == inputCheckpointInstall {
+		e.mu.Lock()
+		stagedCheckpointInstall = e.installCheckpointLocked(node.checkpointCandidate)
+		switch stagedCheckpointInstall.Disposition {
+		case CheckpointInstalled:
+			code, reason = DispositionCheckpointInstalled, ReasonNone
+		case CheckpointIncompatible:
+			code, reason = DispositionCheckpointIncompatible, ReasonBinding
+		default:
+			code, reason = DispositionCheckpointInvalid, ReasonStructural
+		}
+		e.mu.Unlock()
 	} else if node.kind == inputIllegal {
 		code, reason = DispositionIllegalLifecycle, ReasonLifecycle
 	} else if node.kind == inputUnsupportedSchema {
@@ -863,6 +909,8 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 	disposition := transitionDisposition{EngineSequence: node.engineSequence, Code: code, Reason: reason,
 		hydrationPlan: stagedHydrationPlan, hydrationRows: stagedHydrationRows, hydrationAccounting: stagedHydrationAccounting,
 		hydrationFenceCommand: stagedHydrationFenceCommand}
+	disposition.checkpointProjection = stagedCheckpointProjection
+	disposition.checkpointInstall = stagedCheckpointInstall
 	if code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed || code == DispositionIngressIntegrity || code == DispositionHydrationIntegrity {
 		disposition.SuppressionDisposition = e.state.suppressionDisposition
 	}
