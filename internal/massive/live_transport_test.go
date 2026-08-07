@@ -206,11 +206,11 @@ func TestPC5TransportOneAttemptHandshakeHeartbeatAndContainment(t *testing.T) {
 	}
 	binaryStart := adapter.binding.SessionStart().Add(10 * time.Second)
 	socket.send(socketMessageBinary, "["+aggregateLiveJSON("AAA", binaryStart, `"v":1,"z":1`)+"]")
-	if binary, ok := attempt.Next(context.Background()); !ok || binary.Kind != DeliveryAggregate {
+	if binary, ok := attempt.nextForProof(context.Background()); !ok || binary.Kind != DeliveryAggregate {
 		t.Fatalf("ordinary binary read = %+v %v", binary, ok)
 	}
 	socket.failRead()
-	terminal, ok := attempt.Next(context.Background())
+	terminal, ok := attempt.nextForProof(context.Background())
 	if !ok || terminal.Kind != DeliveryTerminal || terminal.Terminal.Source != TerminalReader || terminal.Terminal.Reason != TerminalReadFailed {
 		t.Fatalf("terminal = %+v %v", terminal, ok)
 	}
@@ -235,7 +235,7 @@ func TestPC5TransportOneAttemptHandshakeHeartbeatAndContainment(t *testing.T) {
 		if err == nil || strings.Contains(fmt.Sprintf("%v %+v", err, facts), "CREDENTIAL-MUST-NOT-ESCAPE") {
 			t.Fatalf("auth failure = %v %+v", err, facts)
 		}
-		terminal, ok := failedAttempt.Next(context.Background())
+		terminal, ok := failedAttempt.nextForProof(context.Background())
 		if !ok || terminal.Terminal.Reason != TerminalStatusAmbiguous {
 			t.Fatalf("auth terminal = %+v", terminal)
 		}
@@ -246,7 +246,7 @@ func TestPC5TransportOneAttemptHandshakeHeartbeatAndContainment(t *testing.T) {
 		if _, err := dialAttempt.Handshake(context.Background()); !errors.Is(err, errTransportFailed) {
 			t.Fatalf("dial failure = %v", err)
 		}
-		terminal, ok = dialAttempt.Next(context.Background())
+		terminal, ok = dialAttempt.nextForProof(context.Background())
 		if !ok || terminal.Terminal.Reason != TerminalDialFailed {
 			t.Fatalf("dial terminal = %+v", terminal)
 		}
@@ -265,7 +265,7 @@ func TestPC5TransportOneAttemptHandshakeHeartbeatAndContainment(t *testing.T) {
 		heartbeatSocket.mu.Unlock()
 		heartbeatAttempt, _, _ := startHandshake(t, heartbeatAdapter, command)
 		startedAt := time.Now()
-		terminal, ok := heartbeatAttempt.Next(context.Background())
+		terminal, ok := heartbeatAttempt.nextForProof(context.Background())
 		elapsed := time.Since(startedAt)
 		if !ok || terminal.Terminal.Source != TerminalHeartbeat || terminal.Terminal.Reason != TerminalHeartbeatFailureUnclassified || elapsed > 200*time.Millisecond {
 			t.Fatalf("heartbeat/close = %+v elapsed=%s", terminal, elapsed)
@@ -313,7 +313,7 @@ func TestPC5TransportOneAttemptHandshakeHeartbeatAndContainment(t *testing.T) {
 		if !racingSocket.isClosed() {
 			t.Fatal("socket returned after terminal cleanup was not closed")
 		}
-		terminal, ok := racingAttempt.Next(context.Background())
+		terminal, ok := racingAttempt.nextForProof(context.Background())
 		if !ok || terminal.Terminal.Source != TerminalEngineClose || terminal.Terminal.CloseCause != CloseControlledStop || !racingAdapter.Accounting().Reconciles() {
 			t.Fatalf("racing terminal/accounting = %+v %v %+v", terminal, ok, racingAdapter.Accounting())
 		}
@@ -333,7 +333,7 @@ func TestPC5TransportOneAttemptHandshakeHeartbeatAndContainment(t *testing.T) {
 		if len(facts) == 1 {
 			terminal, ok = facts[0], true
 		} else {
-			terminal, ok = unsupportedAttempt.Next(context.Background())
+			terminal, ok = unsupportedAttempt.nextForProof(context.Background())
 		}
 		if !ok || terminal.Terminal.Reason != TerminalUnsupportedMessage {
 			t.Fatalf("unsupported terminal = %+v", terminal)
@@ -347,7 +347,7 @@ func TestPC5TransportOneAttemptHandshakeHeartbeatAndContainment(t *testing.T) {
 		if _, err := deadlineAttempt.Handshake(context.Background()); !errors.Is(err, errTransportFailed) {
 			t.Fatalf("deadline = %v", err)
 		}
-		terminal, ok = deadlineAttempt.Next(context.Background())
+		terminal, ok = deadlineAttempt.nextForProof(context.Background())
 		if !ok || terminal.Terminal.Reason != TerminalHandshakeDeadline {
 			t.Fatalf("deadline terminal = %+v", terminal)
 		}
@@ -360,7 +360,7 @@ func TestPC5TransportOneAttemptHandshakeHeartbeatAndContainment(t *testing.T) {
 		if _, err := totalAttempt.Handshake(context.Background()); !errors.Is(err, errTransportFailed) {
 			t.Fatalf("whole-handshake deadline = %v", err)
 		}
-		if terminal, ok := totalAttempt.Next(context.Background()); !ok || terminal.Terminal.Reason != TerminalHandshakeDeadline {
+		if terminal, ok := totalAttempt.nextForProof(context.Background()); !ok || terminal.Terminal.Reason != TerminalHandshakeDeadline {
 			t.Fatalf("whole-handshake terminal = %+v %v", terminal, ok)
 		}
 	})
@@ -379,7 +379,7 @@ func TestPC5TransportOneAttemptHandshakeHeartbeatAndContainment(t *testing.T) {
 		if err := idleAttempt.Wait(waitCtx); err != nil {
 			t.Fatalf("unawaited handshake did not terminate: %v", err)
 		}
-		if terminal, ok := idleAttempt.Next(context.Background()); !ok || terminal.Kind != DeliveryTerminal || !idleAdapter.Accounting().Reconciles() {
+		if terminal, ok := idleAttempt.nextForProof(context.Background()); !ok || terminal.Kind != DeliveryTerminal || !idleAdapter.Accounting().Reconciles() {
 			t.Fatalf("unawaited terminal/accounting = %+v %v %+v", terminal, ok, idleAdapter.Accounting())
 		}
 	})
@@ -391,15 +391,15 @@ func TestPC5TransportOneAttemptHandshakeHeartbeatAndContainment(t *testing.T) {
 		prefixAttempt, _, _ := startHandshake(t, prefixAdapter, command)
 		start := prefixAdapter.binding.SessionStart().Add(10 * time.Second)
 		prefixSocket.send(socketMessageText, "["+aggregateLiveJSON("AAA", start, `"v":1,"z":1`)+`,{"ev":"unknown"}]`)
-		first, ok := prefixAttempt.Next(context.Background())
+		first, ok := prefixAttempt.nextForProof(context.Background())
 		if !ok || first.Kind != DeliveryAggregate || first.Position.ArrayIndex != 0 {
 			t.Fatalf("causal prefix = %+v %v", first, ok)
 		}
-		ingress, ok := prefixAttempt.Next(context.Background())
+		ingress, ok := prefixAttempt.nextForProof(context.Background())
 		if !ok || ingress.Control.Kind != engine.IngressIntegrityFailure || ingress.Position.ArrayIndex != 1 {
 			t.Fatalf("ingress fact = %+v %v", ingress, ok)
 		}
-		terminal, ok := prefixAttempt.Next(context.Background())
+		terminal, ok := prefixAttempt.nextForProof(context.Background())
 		if !ok || terminal.Kind != DeliveryTerminal || !prefixAdapter.Accounting().Reconciles() || !prefixAttempt.QueueAccounting().Reconciles() {
 			t.Fatalf("prefix terminal/accounting = %+v %v adapter=%+v queue=%+v", terminal, ok, prefixAdapter.Accounting(), prefixAttempt.QueueAccounting())
 		}
@@ -430,7 +430,7 @@ func TestPC5CommandWriteAcknowledgementLinearization(t *testing.T) {
 	socket.send(socketMessageText, `[{"ev":"status","status":"success"},{"ev":"status","status":"success"},{"ev":"status","status":"success"},{"ev":"status","status":"success"}]`)
 	ackResult := make(chan AdapterDelivery, 1)
 	go func() {
-		ack, _ := attempt.Next(context.Background())
+		ack, _ := attempt.nextForProof(context.Background())
 		ackResult <- ack
 	}()
 	select {
@@ -495,7 +495,7 @@ func TestPC5CommandWriteAcknowledgementLinearization(t *testing.T) {
 				t.Fatalf("write %d = %+v %v", test.token, write, err)
 			}
 			socket.send(socketMessageText, test.data)
-			ack, ok := attempt.Next(context.Background())
+			ack, ok := attempt.nextForProof(context.Background())
 			if !ok || ack.Control.Outcome != engine.ControlAmbiguous || ack.ExpectedStatusCount != 2 || ack.ObservedStatusCount != test.want {
 				t.Fatalf("ambiguous count %d = %+v", test.token, ack)
 			}
@@ -522,7 +522,7 @@ func TestPC5CommandWriteAcknowledgementLinearization(t *testing.T) {
 		if accounting := adapter.Accounting(); accounting.CommandsFailed != 1 || !accounting.Reconciles() {
 			t.Fatalf("write failure accounting = %+v", accounting)
 		}
-		ack, ok := attempt.Next(context.Background())
+		ack, ok := attempt.nextForProof(context.Background())
 		if !ok || ack.Control.Outcome != engine.ControlAmbiguous {
 			t.Fatalf("ack after failed write = %+v", ack)
 		}
@@ -536,7 +536,7 @@ func TestPC5CommandWriteAcknowledgementLinearization(t *testing.T) {
 	if _, err := attempt.ChangeTQ(context.Background(), ChangeTQCommand{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: 6, Action: TQSubscribe, Symbols: []string{"AAA"}}); err != nil {
 		t.Fatal(err)
 	}
-	timedOut, ok := attempt.Next(context.Background())
+	timedOut, ok := attempt.nextForProof(context.Background())
 	if !ok || timedOut.Control.Outcome != engine.ControlAmbiguous || timedOut.Control.Position != (engine.LivePosition{}) {
 		t.Fatalf("ack deadline fabricated success/position = %+v", timedOut)
 	}
@@ -545,7 +545,7 @@ func TestPC5CommandWriteAcknowledgementLinearization(t *testing.T) {
 		t.Fatal(err)
 	}
 	socket.failRead()
-	if terminal, ok := attempt.Next(context.Background()); !ok || terminal.Kind != DeliveryTerminal || terminal.Control.Outcome != engine.ControlFailed || terminal.Terminal.PendingCommandToken != 7 || terminal.Terminal.PendingExpectedStatusCount != 2 || terminal.Terminal.PendingCommandOutcome != engine.ControlAmbiguous {
+	if terminal, ok := attempt.nextForProof(context.Background()); !ok || terminal.Kind != DeliveryTerminal || terminal.Control.Outcome != engine.ControlFailed || terminal.Terminal.PendingCommandToken != 7 || terminal.Terminal.PendingExpectedStatusCount != 2 || terminal.Terminal.PendingCommandOutcome != engine.ControlAmbiguous {
 		t.Fatalf("loss while pending = %+v %v", terminal, ok)
 	}
 	if accounting := adapter.Accounting(); !accounting.Reconciles() || accounting.CommandsStarted != 7 || accounting.CommandsPendingWrite != 0 || accounting.CommandsPendingAck != 0 {
@@ -573,7 +573,7 @@ func TestPC5CommandWriteAcknowledgementLinearization(t *testing.T) {
 		}
 		ackDone := make(chan deliveryResult, 1)
 		go func() {
-			delivery, ok := raceAttempt.Next(context.Background())
+			delivery, ok := raceAttempt.nextForProof(context.Background())
 			ackDone <- deliveryResult{delivery: delivery, ok: ok}
 		}()
 		deadline := time.Now().Add(200 * time.Millisecond)
@@ -597,7 +597,7 @@ func TestPC5CommandWriteAcknowledgementLinearization(t *testing.T) {
 		if !ok || ack.Control.Outcome != engine.ControlSucceeded {
 			t.Fatalf("race acknowledgement = %+v %v", ack, ok)
 		}
-		if terminal, ok := raceAttempt.Next(context.Background()); !ok || terminal.Kind != DeliveryTerminal || !raceAdapter.Accounting().Reconciles() {
+		if terminal, ok := raceAttempt.nextForProof(context.Background()); !ok || terminal.Kind != DeliveryTerminal || !raceAdapter.Accounting().Reconciles() {
 			t.Fatalf("race terminal/accounting = %+v %v %+v", terminal, ok, raceAdapter.Accounting())
 		}
 		accounting := raceAdapter.Accounting()
@@ -713,6 +713,247 @@ func TestPC5BoundRawFIFOAccountingAndDrain(t *testing.T) {
 	})
 }
 
+// TestC6FENCE01RawFrameMarkerEngineFIFOLinearization is P-C6-FENCE. It proves
+// the zero-payload marker is ordered after every prior raw frame without
+// consuming a raw sequence, and survives terminal cleanup as canceled evidence
+// ahead of the pre-existing C5 terminal marker.
+func TestC6FENCE01RawFrameMarkerEngineFIFOLinearization(t *testing.T) {
+	queue := newLiveFrameQueue(LiveQueueConfig{FrameSlots: 1, MaxFrameBytes: 32, TotalFrameBytes: 32})
+	at := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	first, reason := queue.tryEnqueue(7, socketMessageText, at, []byte("[]"))
+	if reason != FrameAdmitted {
+		t.Fatal(reason)
+	}
+	type fenceAdmission struct {
+		fact AggregateIngressFenceFact
+		ok   bool
+	}
+	fenceDone := make(chan fenceAdmission, 1)
+	go func() {
+		fact, ok := queue.enqueueIngressFence(context.Background(), AggregateIngressFenceFact{})
+		fenceDone <- fenceAdmission{fact, ok}
+	}()
+	select {
+	case <-fenceDone:
+		t.Fatal("full configured queue admitted fence marker")
+	case <-time.After(2 * time.Millisecond):
+	}
+	frame, _ := queue.pop(context.Background())
+	if frame.kind != queuedLiveRaw {
+		t.Fatalf("first item = %+v", frame)
+	}
+	admittedFence := <-fenceDone
+	fact, ok := admittedFence.fact, admittedFence.ok
+	if !ok || fact.ThroughFrameSequence != first.sequence || fact.MarkerOrdinal != 1 || queue.next != first.sequence+1 {
+		t.Fatalf("marker identity/order = %+v rawNext=%d first=%d", fact, queue.next, first.sequence)
+	}
+	queue.complete(frame, false)
+	marker, _ := queue.pop(context.Background())
+	if marker.kind != queuedLiveIngressFence || marker.ingressFence.ThroughFrameSequence != first.sequence {
+		t.Fatalf("marker = %+v", marker)
+	}
+	queue.complete(marker, false)
+	secondFact, secondOK := queue.enqueueIngressFence(context.Background(), AggregateIngressFenceFact{})
+	if !secondOK || secondFact.MarkerOrdinal != 2 {
+		t.Fatalf("later-generation marker = %+v ok=%v", secondFact, secondOK)
+	}
+	secondMarker, _ := queue.pop(context.Background())
+	queue.complete(secondMarker, false)
+	if !queue.snapshot().Reconciles() {
+		t.Fatalf("accounting = %+v", queue.snapshot())
+	}
+
+	loss := newLiveFrameQueue(LiveQueueConfig{FrameSlots: 1, MaxFrameBytes: 32, TotalFrameBytes: 32})
+	_, _ = loss.enqueueIngressFence(context.Background(), AggregateIngressFenceFact{})
+	terminal, admitted := loss.enqueueTerminal(context.Background(), 7, at)
+	if !admitted {
+		t.Fatal("terminal not admitted")
+	}
+	queuedFence, _ := loss.pop(context.Background())
+	if queuedFence.kind != queuedLiveIngressFence || queuedFence.ingressFence.State != engine.AggregateIngressFenceCanceled {
+		t.Fatalf("loss fence = %+v", queuedFence)
+	}
+	loss.complete(queuedFence, false)
+	queuedTerminal, _ := loss.pop(context.Background())
+	if !queuedTerminal.terminal || queuedTerminal.sequence != terminal.sequence {
+		t.Fatalf("terminal coexistence = %+v", queuedTerminal)
+	}
+	loss.complete(queuedTerminal, false)
+	if !loss.snapshot().Reconciles() {
+		t.Fatalf("loss accounting = %+v", loss.snapshot())
+	}
+
+	t.Run("canceled full capture synchronously cancels engine generation", func(t *testing.T) {
+		binding := component4TestBinding(t, []string{"AAA"})
+		now := binding.SessionStart().Add(2 * time.Second)
+		delay := time.Duration(0)
+		state, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return now }, Capacity: 16, RequiredReserve: 4, EvaluationDelay: &delay})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			state.Close()
+			wait, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_ = state.Wait(wait)
+		}()
+		admission, installed := state.AdmitBinding(context.Background(), engine.BindingInstall{SchemaVersion: engine.BindingInstallSchemaV1, BindingIdentity: binding.Identity(), Binding: binding})
+		if admission != engine.AdmissionAdmitted || (<-installed).Code != engine.DispositionBindingInstalled {
+			t.Fatal("binding install")
+		}
+		admitControl := func(kind engine.ConnectionControlKind, position engine.LivePosition, token uint64) {
+			input := engine.ConnectionControlInput{SchemaVersion: engine.ConnectionControlSchemaV1, BindingIdentity: binding.Identity(), Kind: kind,
+				ConnectionEpoch: 1, Position: position, ReceiptTime: now, CommandToken: token, Outcome: engine.ControlSucceeded}
+			got, completion := state.AdmitConnectionControl(context.Background(), input)
+			if got != engine.AdmissionAdmitted {
+				t.Fatal(got)
+			}
+			if disposition := <-completion; disposition.Code != engine.DispositionConnectionControlApplied {
+				t.Fatalf("%s = %+v", kind, disposition)
+			}
+		}
+		admitControl(engine.ConnectionAttempt, engine.LivePosition{}, 1)
+		admitControl(engine.ConnectionEstablished, engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 1}, 1)
+		admitControl(engine.AuthenticationResult, engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 2}, 1)
+		admitControl(engine.AggregateCommandWriteResult, engine.LivePosition{}, 2)
+		admitControl(engine.AggregateSubscriptionResult, engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 3}, 2)
+		planAdmission, planCompletion := state.AdmitHydrationPlan(context.Background(), engine.HydrationPlanInput{SchemaVersion: engine.HydrationPlanSchemaV1,
+			BindingIdentity: binding.Identity(), Purpose: engine.HydrationFreshBootstrap, ConnectionEpoch: 1,
+			Budgets: engine.HydrationPlanBudgets{Workers: 1, RowsPerChunk: 100, MaximumResponseBytes: 1 << 20, MaximumNormalizedRecords: 100_000, MaximumResidentRecords: 100_000}})
+		if planAdmission != engine.AdmissionAdmitted {
+			t.Fatal(planAdmission)
+		}
+		plan := <-planCompletion
+		token := plan.Plan.Requests()[0]
+		terminal, _ := engine.NewHydrationTerminalInput(token, token.ResultID(), engine.HydrationCompletedEmpty, engine.HydrationReasonNone, 1, 1, 10, 0, 0, 0)
+		_, terminalCompletion := state.AdmitHydrationTerminal(context.Background(), terminal)
+		terminalResult := <-terminalCompletion
+		command, err := CaptureAggregateIngressFenceCommandFromEngine(terminalResult.FenceCommand)
+		if err != nil {
+			t.Fatal(err)
+		}
+		attempt := &LiveAttempt{binding: binding, epoch: 1, started: true, handshaken: true,
+			queue: newLiveFrameQueue(LiveQueueConfig{FrameSlots: 1, MaxFrameBytes: 32, TotalFrameBytes: 32})}
+		_, _ = attempt.queue.tryEnqueue(1, socketMessageText, now, []byte("[]"))
+		captureCtx, cancelCapture := context.WithCancel(context.Background())
+		cancelCapture()
+		if err := attempt.CaptureAggregateIngressFence(captureCtx, state, command); !errors.Is(err, context.Canceled) {
+			t.Fatalf("capture cancel = %v", err)
+		}
+		late, _ := engine.NewAggregateIngressFenceInput(terminalResult.FenceCommand, engine.AggregateIngressFenceComplete, 3, 1, now)
+		_, lateCompletion := state.AdmitAggregateIngressFence(context.Background(), late)
+		if got := <-lateCompletion; got.Code != engine.DispositionAggregateIngressFenceFenced {
+			t.Fatalf("canceled generation accepted late completion: %+v", got)
+		}
+	})
+
+	t.Run("concurrent delivery preserves raw-before-fence engine order", func(t *testing.T) {
+		binding := component4TestBinding(t, []string{"AAA"})
+		now := binding.SessionStart().Add(30 * time.Second)
+		delay := time.Duration(0)
+		state, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 8, EvaluationDelay: &delay})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			state.Close()
+			wait, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_ = state.Wait(wait)
+		}()
+		admission, installed := state.AdmitBinding(context.Background(), engine.BindingInstall{SchemaVersion: engine.BindingInstallSchemaV1, BindingIdentity: binding.Identity(), Binding: binding})
+		if admission != engine.AdmissionAdmitted || (<-installed).Code != engine.DispositionBindingInstalled {
+			t.Fatal("binding install")
+		}
+
+		socket := newFakeLiveSocket()
+		enqueueHandshake(socket)
+		adapter, open := testLiveAdapterForBinding(t, socket, binding)
+		attempt, started, err := adapter.Start(context.Background(), open)
+		if err != nil {
+			t.Fatal(err)
+		}
+		type unsafePublicDrain interface {
+			Next(context.Context) (AdapterDelivery, bool)
+		}
+		if _, exposed := any(attempt).(unsafePublicDrain); exposed {
+			t.Fatal("unsafe public dequeue path remains exposed")
+		}
+		if result, err := DeliverToEngine(context.Background(), state, started); err != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
+			t.Fatalf("start=%+v %v", result, err)
+		}
+		handshake, err := attempt.Handshake(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, delivery := range handshake {
+			if result, err := DeliverToEngine(context.Background(), state, delivery); err != nil || (result.ControlDisposition.Code != engine.DispositionConnectionControlApplied && result.ControlDisposition.Code != engine.DispositionConnectionControlDeferred) {
+				t.Fatalf("handshake=%+v %v", result, err)
+			}
+		}
+		planAdmission, planCompletion := state.AdmitHydrationPlan(context.Background(), engine.HydrationPlanInput{SchemaVersion: engine.HydrationPlanSchemaV1, BindingIdentity: binding.Identity(), Purpose: engine.HydrationFreshBootstrap, ConnectionEpoch: attempt.Epoch(), Budgets: engine.HydrationPlanBudgets{Workers: 1, RowsPerChunk: 100, MaximumResponseBytes: 1 << 20, MaximumNormalizedRecords: 100_000, MaximumResidentRecords: 100_000}})
+		if planAdmission != engine.AdmissionAdmitted {
+			t.Fatal(planAdmission)
+		}
+		plan := <-planCompletion
+		if len(plan.Plan.Requests()) != 1 {
+			t.Fatalf("plan=%+v", plan)
+		}
+		token := plan.Plan.Requests()[0]
+		terminal, err := engine.NewHydrationTerminalInput(token, token.ResultID(), engine.HydrationCompletedEmpty, engine.HydrationReasonNone, 1, 1, 10, 0, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, terminalCompletion := state.AdmitHydrationTerminal(context.Background(), terminal)
+		terminalResult := <-terminalCompletion
+		command, err := CaptureAggregateIngressFenceCommandFromEngine(terminalResult.FenceCommand)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		socket.send(socketMessageText, "["+aggregateLiveJSON("AAA", binding.SessionStart().Add(10*time.Second), `"dv":"1000.5"`)+"]")
+		waitForQueuedFrames(t, attempt, 1)
+		if err := attempt.CaptureAggregateIngressFence(context.Background(), state, command); err != nil {
+			t.Fatal(err)
+		}
+		now = time.Now().UTC()
+		type delivered struct {
+			result EngineDeliveryResult
+			ok     bool
+			err    error
+		}
+		results := make(chan delivered, 2)
+		for range 2 {
+			go func() {
+				result, ok, err := attempt.DeliverNextToEngine(context.Background(), state)
+				results <- delivered{result, ok, err}
+			}()
+		}
+		firstResult, secondResult := <-results, <-results
+		if firstResult.err != nil || secondResult.err != nil || !firstResult.ok || !secondResult.ok {
+			t.Fatalf("deliveries=%+v %+v", firstResult, secondResult)
+		}
+		var aggregateSequence, fenceSequence uint64
+		for _, got := range []delivered{firstResult, secondResult} {
+			if got.result.AggregateDisposition.EngineSequence != 0 {
+				aggregateSequence = got.result.AggregateDisposition.EngineSequence
+			}
+			if got.result.HydrationDisposition.EngineSequence != 0 {
+				fenceSequence = got.result.HydrationDisposition.EngineSequence
+			}
+		}
+		if aggregateSequence == 0 || fenceSequence <= aggregateSequence {
+			t.Fatalf("engine order aggregate=%d fence=%d", aggregateSequence, fenceSequence)
+		}
+		if err := attempt.Close(CloseEpochCommand{BindingIdentity: binding.Identity(), ConnectionEpoch: attempt.Epoch(), CommandToken: 2, Cause: CloseControlledStop}); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := attempt.nextForProof(context.Background()); !ok {
+			t.Fatal("terminal missing")
+		}
+	})
+}
+
 func TestPC5ReconnectFirstCauseMarkerAndExplicitGreaterEpoch(t *testing.T) {
 	firstSocket, secondSocket := newFakeLiveSocket(), newFakeLiveSocket()
 	enqueueHandshake(firstSocket)
@@ -733,11 +974,11 @@ func TestPC5ReconnectFirstCauseMarkerAndExplicitGreaterEpoch(t *testing.T) {
 	if !firstSocket.isClosed() || first.QueueAccounting().FramesFenced != 1 {
 		t.Fatalf("first cleanup did not close/fence: closed=%v accounting=%+v", firstSocket.isClosed(), first.QueueAccounting())
 	}
-	terminal, ok := first.Next(context.Background())
+	terminal, ok := first.nextForProof(context.Background())
 	if !ok || terminal.Terminal.Source != TerminalHeartbeat || terminal.Terminal.Reason != TerminalHeartbeatFailureUnclassified {
 		t.Fatalf("first cause = %+v", terminal)
 	}
-	if _, ok := first.Next(context.Background()); ok {
+	if _, ok := first.nextForProof(context.Background()); ok {
 		t.Fatal("duplicate terminal outcome")
 	}
 	open.CommandToken = 2
@@ -755,14 +996,14 @@ func TestPC5ReconnectFirstCauseMarkerAndExplicitGreaterEpoch(t *testing.T) {
 	if err := second.Close(closeCommand); err != nil {
 		t.Fatal(err)
 	}
-	if closed, ok := second.Next(context.Background()); !ok || closed.Terminal.Source != TerminalEngineClose || closed.Terminal.CloseCause != CloseControlledStop {
+	if closed, ok := second.nextForProof(context.Background()); !ok || closed.Terminal.Source != TerminalEngineClose || closed.Terminal.CloseCause != CloseControlledStop {
 		t.Fatalf("controlled close = %+v", closed)
 	}
 	if err := second.Close(closeCommand); err != nil {
 		t.Fatalf("post-terminal idempotent close = %v", err)
 	}
 	firstSocket.send(socketMessageText, `[{"ev":"A"}]`)
-	if _, ok := first.Next(context.Background()); ok {
+	if _, ok := first.nextForProof(context.Background()); ok {
 		t.Fatal("late old-reader input escaped after terminal/reopen")
 	}
 
@@ -788,7 +1029,7 @@ func TestPC5ReconnectFirstCauseMarkerAndExplicitGreaterEpoch(t *testing.T) {
 		t.Fatalf("root-cancel cleanup: %v", err)
 	}
 	waitCancel()
-	rootTerminal, ok := third.Next(context.Background())
+	rootTerminal, ok := third.nextForProof(context.Background())
 	if !ok || rootTerminal.Terminal.Reason != TerminalContextCanceled || third.QueueAccounting().FramesFenced != 8 || !thirdSocket.isClosed() {
 		t.Fatalf("root cancellation = terminal=%+v accounting=%+v closed=%v", rootTerminal, third.QueueAccounting(), thirdSocket.isClosed())
 	}
@@ -812,7 +1053,7 @@ func TestPC5ReconnectFirstCauseMarkerAndExplicitGreaterEpoch(t *testing.T) {
 		callers.Add(1)
 		go func() {
 			defer callers.Done()
-			delivery, ok := orderedAttempt.Next(context.Background())
+			delivery, ok := orderedAttempt.nextForProof(context.Background())
 			if ok {
 				positions <- callerPosition{caller: 1, position: delivery.Position}
 			}
@@ -821,7 +1062,7 @@ func TestPC5ReconnectFirstCauseMarkerAndExplicitGreaterEpoch(t *testing.T) {
 		callers.Add(1)
 		go func() {
 			defer callers.Done()
-			delivery, ok := orderedAttempt.Next(context.Background())
+			delivery, ok := orderedAttempt.nextForProof(context.Background())
 			if ok {
 				positions <- callerPosition{caller: 2, position: delivery.Position}
 			}
@@ -840,7 +1081,7 @@ func TestPC5ReconnectFirstCauseMarkerAndExplicitGreaterEpoch(t *testing.T) {
 		if err := orderedAttempt.Close(CloseEpochCommand{BindingIdentity: command.BindingIdentity, ConnectionEpoch: orderedAttempt.Epoch(), CommandToken: 2, Cause: CloseControlledStop}); err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := orderedAttempt.Next(context.Background()); !ok {
+		if _, ok := orderedAttempt.nextForProof(context.Background()); !ok {
 			t.Fatal("ordered attempt terminal missing")
 		}
 	})
@@ -856,7 +1097,7 @@ func TestPC5ReconnectFirstCauseMarkerAndExplicitGreaterEpoch(t *testing.T) {
 		}
 		nextDone := make(chan nextResult, 1)
 		go func() {
-			delivery, ok := failedAttempt.Next(context.Background())
+			delivery, ok := failedAttempt.nextForProof(context.Background())
 			nextDone <- nextResult{delivery: delivery, ok: ok}
 		}()
 		waitForNextDrainOwner(t, failedAttempt)
@@ -969,14 +1210,14 @@ func TestPC5LiveOfflineComponentsOneThroughFiveCanonicalPath(t *testing.T) {
 	}
 	aggregate := aggregateLiveJSON("AAA", binding.SessionStart().Add(10*time.Second), `"dv":"1000.5"`)
 	socket.send(socketMessageText, `[{"ev":"status","status":"failed","message":"ignored"},{"ev":"status","status":"failed"},`+aggregate+`]`)
-	status, ok := attempt.Next(context.Background())
+	status, ok := attempt.nextForProof(context.Background())
 	if !ok || status.Control.Kind != engine.TradeQuoteSubscriptionResult || status.Control.Outcome != engine.ControlFailed {
 		t.Fatalf("mixed TQ status = %+v", status)
 	}
 	if result, err := DeliverToEngine(context.Background(), state, status); err != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlDeferred {
 		t.Fatalf("mixed TQ engine = %+v err=%v", result, err)
 	}
-	liveAggregate, ok := attempt.Next(context.Background())
+	liveAggregate, ok := attempt.nextForProof(context.Background())
 	if !ok || liveAggregate.Kind != DeliveryAggregate || liveAggregate.Position.ArrayIndex != 2 {
 		t.Fatalf("mixed aggregate = %+v", liveAggregate)
 	}
@@ -991,7 +1232,7 @@ func TestPC5LiveOfflineComponentsOneThroughFiveCanonicalPath(t *testing.T) {
 	if err := attempt.Close(CloseEpochCommand{BindingIdentity: binding.Identity(), ConnectionEpoch: attempt.Epoch(), CommandToken: 3, Cause: CloseControlledStop}); err != nil {
 		t.Fatal(err)
 	}
-	terminal, ok := attempt.Next(context.Background())
+	terminal, ok := attempt.nextForProof(context.Background())
 	if !ok || terminal.Kind != DeliveryTerminal {
 		t.Fatalf("terminal = %+v", terminal)
 	}
@@ -1031,7 +1272,7 @@ func TestPC5LiveOfflineComponentsOneThroughFiveCanonicalPath(t *testing.T) {
 	if err := newAttempt.Close(CloseEpochCommand{BindingIdentity: binding.Identity(), ConnectionEpoch: newAttempt.Epoch(), CommandToken: 5, Cause: CloseControlledStop}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := newAttempt.Next(context.Background()); !ok {
+	if _, ok := newAttempt.nextForProof(context.Background()); !ok {
 		t.Fatal("new epoch terminal missing")
 	}
 }

@@ -293,7 +293,7 @@ func proveAggregateCoverage(t *testing.T, e *Engine, symbol string, start, end t
 	defer e.mu.Unlock()
 	index := e.state.binding.index[symbol]
 	state := ensureAggregateState(&e.state.binding.symbols[index])
-	if !installExactCoverageForProof(state, e.state.binding, start, end) {
+	if !installExactCoverage(state, e.state.binding, start, end) {
 		t.Fatalf("could not install exact coverage %s [%s,%s)", symbol, start, end)
 	}
 }

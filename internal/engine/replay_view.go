@@ -18,16 +18,18 @@ type ReplayDeterministicView struct {
 }
 
 type ReplayCanonicalSymbol struct {
-	Symbol               string
-	PriorStatus          reference.PriorCloseStatus
-	PriorClose           float64
-	Records              []ReplayCanonicalRecord
-	LatestWindowStart    time.Time
-	CommittedWindowStart time.Time
-	PresentSlots         uint64
-	ProvenAbsentSlots    uint64
-	Features             ReplayFeatureView
-	Qualification        ReplayQualificationView
+	Symbol                string
+	PriorStatus           reference.PriorCloseStatus
+	PriorClose            float64
+	Records               []ReplayCanonicalRecord
+	LatestWindowStart     time.Time
+	LatestValues          AggregateValues
+	LatestAuthoritySource AggregateSource
+	CommittedWindowStart  time.Time
+	PresentSlots          uint64
+	ProvenAbsentSlots     uint64
+	Features              ReplayFeatureView
+	Qualification         ReplayQualificationView
 }
 
 type ReplayCanonicalRecord struct {
@@ -189,6 +191,8 @@ func replayCanonicalSymbolView(symbol coreSymbol) ReplayCanonicalSymbol {
 	}
 	if state.latest != nil {
 		result.LatestWindowStart = state.latest.record.windowStart
+		result.LatestValues = state.latest.record.values
+		result.LatestAuthoritySource = state.latest.record.authority.source
 	}
 	if state.committedLatest != nil {
 		result.CommittedWindowStart = state.committedLatest.windowStart

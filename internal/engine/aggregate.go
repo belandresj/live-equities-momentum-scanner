@@ -110,6 +110,7 @@ type frozenAggregateInput struct {
 	historicalProof *frozenHistoricalProofContext
 	s2Proof         bool
 	replayProof     bool
+	c6Historical    bool
 }
 
 func freezeAggregateInput(input AggregateInput) frozenAggregateInput {
@@ -217,7 +218,8 @@ type frozenHistoricalProofContext struct {
 // historicalProofResult is package-private caller-side S2 proof setup. An
 // admission extracts and deep-copies only the target identity plus bounded
 // cardinality; neither map nor a pointer to this result enters the FIFO or
-// canonical state. Component 6 owns the future production active-result ledger.
+// canonical state. Component 6's hydration generation owns the production
+// active-result ledger that authorizes this path.
 type historicalProofResult struct {
 	records   map[aggregateIdentity]canonicalAggregate
 	conflicts map[aggregateIdentity]struct{}
@@ -471,6 +473,9 @@ func (e *Engine) decideAggregateLocked(input frozenAggregateInput, now time.Time
 }
 
 func (e *Engine) validAggregateLifecycleLocked(input frozenAggregateInput) bool {
+	if input.c6Historical {
+		return e.mode == RunModeLive && (e.state.lifecycle == lifecycleHydrating || e.state.lifecycle == lifecycleRecovering)
+	}
 	if input.s2Proof || input.replayProof {
 		return (e.mode == RunModeLive && e.state.lifecycle == lifecycleAwaitingAggregateAck) ||
 			(e.mode == RunModeReplay && ((input.s2Proof && e.state.lifecycle == lifecycleInitializing) || (input.replayProof && e.state.lifecycle == lifecycleReplaying)))
@@ -719,6 +724,9 @@ func ensureHistoricalConflict(state *symbolAggregateState) *slotBitmap {
 
 func (e *Engine) compactSymbolLocked(state *symbolAggregateState, binding *installedBinding, now time.Time) {
 	for start, record := range state.tail {
+		if e.hydrationPinsIdentityLocked(record.identity.symbol, record.windowStart) {
+			continue
+		}
 		if now.Sub(record.windowEnd) > correctionHorizon {
 			ensurePresence(state).set(sessionSlot(binding, record.windowStart))
 			foldQualificationAggregate(state, binding, *record, now)
@@ -791,10 +799,10 @@ func aggregatePresentAt(state *symbolAggregateState, start int64) bool {
 	return false
 }
 
-// installExactCoverageForProof models only the bounded consequence of a
-// future Component 6 binding/generation/fence-validated coverage fact. It is
-// package-private and has no production caller or fact-producing behavior.
-func installExactCoverageForProof(state *symbolAggregateState, binding *installedBinding, start, end time.Time) bool {
+// installExactCoverage applies only the bounded consequence of a Component 6
+// binding/generation/fence-validated coverage fact. It creates absence bits,
+// never synthetic aggregate records or marks.
+func installExactCoverage(state *symbolAggregateState, binding *installedBinding, start, end time.Time) bool {
 	if state == nil || binding == nil || start != start.UTC() || end != end.UTC() ||
 		start.Nanosecond() != 0 || end.Nanosecond() != 0 || start.Before(binding.sessionStart) ||
 		end.After(binding.sessionEnd) || start.After(end) {

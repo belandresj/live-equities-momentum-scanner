@@ -157,6 +157,11 @@ func TestPC5ENGINEConnectionControlLifecycle(t *testing.T) {
 				admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionAttempt, 1, LivePosition{}, now, 1, ControlSucceeded))
 				e.mu.Lock()
 				e.state.lifecycle = lifecycle(tc.state)
+				if lifecycle(tc.state) == lifecycleLive {
+					supported := start.Add(5 * time.Second)
+					e.state.committedT = &supported
+					e.state.aggregateEvaluator.current = e.stageAggregateEvaluationLocked(supported)
+				}
 				e.mu.Unlock()
 				loss := controlFact(binding.Identity(), ConnectionLost, 1, LivePosition{ConnectionEpoch: 1, FrameSequence: 1}, now, 0, ControlFailed)
 				if got := admitConnectionControl(t, e, loss); got.Code != DispositionConnectionControlApplied || string(e.observeTimeLifecycle().Lifecycle) != tc.want {

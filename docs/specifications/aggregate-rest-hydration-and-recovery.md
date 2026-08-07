@@ -1,8 +1,9 @@
 # Aggregate REST hydration and recovery
 
-**Status:** Owner-approved completed Component 6 focused contract; `C6-S1` is
-owner-authorized for early implementation concurrently with Component 5, while
-`C6-S2`–`C6-S4` remain pending
+**Status:** Finally accepted 2026-08-07 after delegated acceptance of
+`C6-S1`–`C6-S4`, complete final-tier verification, and clean mandatory
+independent final review with focused re-review; no Component 6 acceptance item
+remains open
 
 **Owner boundary approval:** Pre-approved 2026-08-06 by the owner in the
 initiating Component 6 task, subject to the exact Sections 1–7 boundary,
@@ -40,8 +41,9 @@ review once each slice is authorized. The owner expressly pre-authorizes the
 implementer to write the compact `C6-S1` acceptance record and change its sole
 parent-ledger state to `accepted` without another owner message when every S1
 proof, required verification, narrow independent review, walkthrough, and
-drift check is clean. Acceptance must stop before `C6-S2` under the current
-exception.
+drift check is clean. Component 5 has since passed final review, so an accepted
+S1 activates `C6-S2` through the normal approved delegated sequence without a
+new owner message.
 
 **Controlling Phase 1 requirements:** `PG-RANK-02`, `PG-RANK-05`,
 `PG-FEATURE-05`, `PG-AVAIL-01`, `PG-AVAIL-02`, `PG-OPS-01`, `PG-OPS-02`,
@@ -120,11 +122,216 @@ were owner-approved as one completed Component 6 contract on 2026-08-06.
 | Item | State | Evidence and required review | Recorded at | Next action |
 | --- | --- | --- | --- | --- |
 | Component contract | `approved` | Owner-approved complete modular contract, behavior-only V2 whitelist, eleven proofs, four slices, required reviews, C5 capture-marker extension, delegated advancement, and exact early-S1 exception | 2026-08-06 | Preserve the approved contract and exception bounds |
-| `C6-S1` | `authorized` | Owner-approved early implementation concurrent with C5; requirements `C6-REST-01`, `C6-WORKER-01`, and `C6-BOUND-01`; proofs `P-C6-REST`, `P-C6-WORKER`, and `P-C6-BOUND`; required external-trust review | 2026-08-06 | Implement S1 only; on a completely clean delegated gate, record the compact evidence here and mark `accepted` without another owner message, then stop before S2 |
-| `C6-S2` | `pending` | Approved slice, but not covered by the early-implementation exception | 2026-08-06 | Wait for accepted S1 and Component 5 final review or another explicit owner exception |
-| `C6-S3` | `pending` | Approved slice; requires accepted S1/S2 and finally accepted C5 raw-FIFO implementation | 2026-08-06 | Wait for dependencies |
-| `C6-S4` | `pending` | Approved slice; requires accepted S1–S3 and Components 1–5 | 2026-08-06 | Wait for dependencies |
-| Final component review | `pending` | Mandatory separate read-only review after all four slices pass | 2026-08-06 | Wait for S1–S4 acceptance |
+| `C6-S1` | `accepted` | `C6-REST-01`, `C6-WORKER-01`, and `C6-BOUND-01`; all three primary proofs, unchanged C4 mapper/downloader/compiler/artifact proofs, repository build/test/vet, focused worker race, formatting/source/scope/secret inspections, clean drift audit, and required `gpt-5.6-sol` medium external-trust focused re-review all clean | 2026-08-07 | Complete |
+| `C6-S2` | `accepted` | `C6-PLAN-01`, `C6-LEDGER-01`, and `C6-MERGE-01`; all three primary proofs, affected Components 2–4 and accepted S1 regressions, repository build/test/vet, engine/Massive race, formatting/source/scope inspections, clean drift audit, and required `gpt-5.6-sol` medium sole-owner focused re-review all clean | 2026-08-07 | Complete |
+| `C6-S3` | `accepted` | `C6-FENCE-01`, `C6-START-01`, and `C6-NOPRINT-01`; all three primary proofs, affected Components 2/3/5 and accepted S1/S2 regressions, repository build/test/vet, adapter/engine race, formatting/source/scope inspections, clean drift audit, and required `gpt-5.6-sol` medium fence/lifecycle focused re-review all clean | 2026-08-07 | Complete |
+| `C6-S4` | `accepted` | `C6-RECOVER-01` and `C6-INTEGRATION-01`; both primary proofs, complete eleven-proof C6 ledger, affected C2–C5 regressions, repository build/test/vet, full engine/Massive race, formatting/source/scope inspections, clean drift audit, and required `gpt-5.6-sol` medium recovery/interface focused re-review all clean | 2026-08-07 | Complete |
+| Final component review | `accepted` | Complete eleven-proof ledger, repository build/test/vet, full engine/Massive race, formatting/source/dependency/scope/drift inspections, and separate `gpt-5.6-sol` medium final review plus focused cancellation re-review all clean | 2026-08-07 | Complete; specification map synchronized |
+
+**C6-S1 acceptance record:** One private strict Massive second-aggregate
+acquisition core now serves both the accepted offline downloader and the new
+production hydration worker. The worker copies immutable work identity, seals
+the complete provider result before emitting contiguous copied chunks, and
+returns exactly one provider value, empty, failed, or canceled terminal per
+accepted item. Plan-wide response-byte, normalized-row, resident-row, chunk,
+interval, work-item, and `1..8` worker bounds are validated before I/O; worker
+and blocked-admission cancellation join all goroutines. A still-open engine
+input receives exactly one canceled terminal; only explicit closed-input
+evidence retains an unadmitted terminal as bounded cleanup, while unexpected
+open-input rejection is a distinct admission-integrity failure.
+
+`P-C6-REST`, `P-C6-WORKER`, and `P-C6-BOUND` pass together with the affected
+Component 4 mapper, downloader, compiler, artifact, and aggregate-replay
+proofs. Repository build/tests/vet, the focused hydration-worker race run,
+formatting, diff, dependency, secret-containment, sole-decoder/mapper/client,
+and ownership/scope inspections are clean. The required independent
+`gpt-5.6-sol` medium external-trust review found blocked terminal admission and
+missing second-page-failure proof coverage; the implementation added the
+cancellation-aware terminal path and both regressions, and the same reviewer
+reported the focused re-review clean with no remaining blocking or nonblocking
+finding. Success is limited to strict offline fake-provider evidence; provider
+availability/current schema, engine applicability/fencing, canonical coverage,
+deployed capacity, and cross-generation policy remain unproved exactly as
+deferred.
+
+Construction prevents a second mapper/page decoder, mutable caller aliases,
+worker engine-state authority, partial-page success, detached workers, and
+credential-bearing facts. Success is strict complete acquisition, copied
+chunks, then a reconciled value/empty terminal. Any later page/row/envelope or
+budget failure discards the complete buffer and emits no chunks; cancellation
+stops further chunks and yields an admitted canceled terminal, or explicit
+unadmitted cleanup only after engine input closes. There is no contract,
+dependency, interface, document-map,
+whitelist, or slice-boundary deviation, no failed assumption or
+success-invalidating inspection-only claim, and every implementation drift
+question remains `no`. With Component 5 finally accepted, the approved S2
+dependencies and assignment remain valid; the clean delegated gate accepts S1
+and activates S2 without another owner decision.
+
+**C6-S2 acceptance record:** The sole `ScannerStateEngine` now derives exact
+fresh, future-checkpoint, and gap plan intervals from its installed binding,
+acknowledgement, and retained engine state; allocates one positive generation
+and immutable sorted request token for every valid-prior-close symbol; and
+owns one finite active ledger. Massive S1 facts convert through a narrow
+provider-independent seam into defensively copied engine chunk and terminal
+inputs. The one FIFO validates token/result/chunk/row sequence, routes every
+historical row through Component 2's existing fill-only canonical merge and
+Component 3's ordinary contributor/evaluator, keeps provider terminal success
+distinct from canonical coverage, and maintains exact open/five-terminal-bin
+and per-row accounting after every input.
+
+`P-C6-PLAN`, `P-C6-LEDGER`, and `P-C6-MERGE` pass with all affected existing
+engine, Component 3, C4, and C6-S1 proofs. Repository build/tests/vet, focused
+engine and Massive race runs, formatting, diff/dependency, ownership, bounds,
+whitelist, and scope inspections are clean. The required independent
+`gpt-5.6-sol` medium sole-owner review found that integrity suppression could
+strand open work and that impossible terminal counts could reach provider
+success. The implementation now terminally fences every remaining open item
+before integrity suppression and strictly reconciles state-specific page,
+attempt, byte, interval-row, normalized-row, and emitted-count evidence. The
+same reviewer reports the focused re-review clean with no remaining blocking
+or nonblocking finding.
+
+Construction prevents caller-selected intervals/IDs, rank-dependent planning,
+partial plan registration, caller aliases, a second engine/FIFO/canonical map/
+evaluator/publication path, and Massive identity authority. Invalid plans
+install nothing; stale and late facts fence without mutation; sequence or
+terminal contradictions fence every open item once before suppression; live
+authority wins unequal history; unequal historical evidence has no arrival-
+order winner; provider completion cannot convert conflict/rejection into usable
+coverage. C5 ingress fencing, lifecycle exit, final no-print consequence,
+checkpoint activation/storage, gap retry/recovery policy, deployed capacity,
+readiness/runtime orchestration, and provider-current/live evidence remain
+unproved exactly as deferred. There is no contract, dependency, interface,
+document-map, whitelist, or slice-boundary deviation, no failed assumption or
+success-invalidating inspection-only claim, and every implementation drift
+question remains `no`. The accepted S1/S2 facts and finally accepted C5 raw
+FIFO leave the approved S3 assignment unchanged; the clean delegated gate
+accepts S2 and activates S3 without another owner decision.
+
+**C6-S3 acceptance record:** The accepted C5 raw FIFO now carries a distinct
+zero-payload aggregate-ingress capture marker behind every previously admitted
+raw frame without consuming a live frame sequence or aliasing the epoch
+terminal marker. The only production drain serializes dequeue, Component 2
+admission, and disposition completion, so a marker cannot overtake a
+pre-capture aggregate or ambiguity. Capture waits cancellation-aware under raw
+slot pressure; cancellation or epoch loss sends an ordered canceled fence,
+deactivates the generation, and fences any later completion. The engine
+accepts only the exact current binding/epoch/generation/token and a
+nonregressing through-frame after every request is terminal, then installs the
+bounded coverage consequence and leaves `hydrating` in the same transition.
+
+`P-C6-FENCE`, `P-C6-START`, and `P-C6-NOPRINT` pass with all affected C2/C3/C5
+and accepted C6-S1/S2 proofs. Repository build/tests/vet, adapter and engine
+race runs, formatting, diff/dependency, sole-owner, no-polling, no-deferred,
+and scope inspections are clean. The required independent `gpt-5.6-sol`
+medium review found optional cross-FIFO ordering, missing capture-cancellation
+consequence, timer-manufactured support beyond the captured boundary, and
+ambiguous full-slot marker semantics. Production direct dequeue was removed;
+capture failure now closes the generation synchronously; timers remain pinned
+to captured `T`; marker admission and accounting now prove bounded waiting,
+sequential markers, and terminal coexistence. The same reviewer reports the
+focused re-review clean with no remaining blocking or nonblocking finding.
+
+Construction prevents marker/terminal aliasing, fabricated raw sequence gaps,
+marker overtaking, terminal-only finalization, stale identity completion,
+queue-empty success, quiet-timer no-print extension, synthetic marks, and an
+indefinite hydration stage after capture failure. Successful exact empty
+coverage may establish no-print only through the reconciled fence; failed,
+canceled, conflicted, prefix-incomplete, or lost evidence remains unknown, and
+a later accepted live print clears no-print through the ordinary evaluator.
+Checkpoint validation/storage, same-process gap recovery and retry action,
+deployed currentness/readiness/orchestration, live-provider behavior, C9 T/Q,
+and public API remain unproved exactly as deferred. There is no contract,
+dependency, interface, document-map, whitelist, or slice-boundary deviation,
+no failed assumption or success-invalidating inspection-only claim, and every
+implementation drift question remains `no`. The approved S4 recovery and
+integration assignment remains unchanged, so the clean delegated gate accepts
+S3 and activates S4 without another owner decision.
+
+**C6-S4 acceptance record:** On live aggregate loss, the sole engine now
+retains exact committed `T_supported`, makes the current evaluation and T/Q
+intent noncurrent in the same publication, preserves accepted canonical facts,
+and cancels the active generation exactly once. A greater acknowledged epoch
+plans the complete valid-prior population over exact `[T_supported,R)` with no
+fixed backward overlap. Old epochs, generations, terminals, policies, and
+fences cannot mutate the new attempt. Closed immutable retry, exhaust, cancel,
+and stop policy facts are accepted only for one exact active decision point;
+there is no autonomous retry count, delay, backoff, or exhaustion choice.
+
+`P-C6-RECOVER` and `P-C6-INTEGRATION` pass with all nine preceding Component 6
+proofs and affected C2–C5 regressions. The integration uses the accepted fake
+C5 socket handshake/acknowledgement, strict C6 fake HTTP acquisition and C4
+mapper, S1 worker conversions, Component 2 FIFO/merge, a pre-capture live frame
+overlapping historical identity, the real C5 marker, and Component 3's ordinary
+evaluator/publication. It proves live revision authority and exact
+qualified-current population, qualification, ranking, current-market, and
+publication results. Repository build/tests/vet, full engine/Massive race,
+formatting, diff/dependency, ownership, whitelist, no-deferred, and source
+inspections are clean.
+
+The required independent `gpt-5.6-sol` medium recovery/interface review found
+pre-validation stop sealing, engine-inferred exhaustion without a policy fact,
+an integration proof that omitted evaluator/category results, and blank
+explicit-exhaustion disposition fields. Stop now seals only after ordered
+identity/state validation; unresolved fenced recovery publishes an explicit
+policy-wait state and remains noncurrent until a policy fact; the integration
+asserts overlapping live-over-history authority and the full ordinary
+evaluation; and exhaustion publishes its exact disposition/reason. The same
+reviewer reports the focused re-review clean with no remaining blocking or
+nonblocking finding.
+
+Construction prevents loss-boundary drift, a recovery watermark/evaluator,
+old-generation promotion, repeated policy decisions, stale stop sealing,
+successful-work exhaustion, inferred retry/exhaustion, unobservable inactive
+recovery, double terminal accounting, and historical overwrite of live
+authority. Failed local evidence stays explicit; an unresolved complete fence
+waits visibly for policy; explicit exhaustion suppresses with its fixed
+same-binding recovery disposition; successful terminal work plus the real
+fence returns through the ordinary evaluator. Fake socket/HTTP evidence does
+not prove live-provider behavior, deployed latency/capacity, checkpoint
+storage/validation, Component 8 policy values/readiness/orchestration, C9 T/Q
+coverage, API/UI, or cutover. There is no contract, dependency, interface,
+document-map, whitelist, or slice-boundary deviation, no failed assumption or
+success-invalidating inspection-only claim, and every implementation drift
+question remains `no`. The clean delegated gate accepts S4 and activates the
+mandatory separate final component review.
+
+**Final Component 6 acceptance record:** All eleven allocated primary proofs
+pass on one source snapshot: strict shared REST acquisition, sealed worker
+terminality/bounds, engine-owned plan/ledger/merge, raw ingress fencing,
+startup/no-print lifecycle, exact same-process recovery, and the offline
+Components 1–6 socket-plus-HTTP path. Repository build and all ordinary tests,
+vet, full engine/Massive race detection, formatting, diff, dependency,
+secret-containment, whitelist, sole-owner, mapper, boundedness, no-polling,
+no-deferred, and drift inspections are clean. Work accounting reconciles one
+open or five terminal bins; row and raw-queue accounting reconcile; one
+current policy action decides unresolved recovery; no late fact can promote or
+double-terminal an old identity.
+
+The mandatory separate `gpt-5.6-sol` medium final reviewer found one cross-
+slice cancellation defect: provider-work cancellation also canceled the
+terminal-admission context, allowing cleanup-only evidence while engine input
+remained open. The worker now separates work and admission lifetimes, retries
+one canceled terminal after an interrupted terminal admission, treats only
+explicit input closure as unadmitted cleanup, and records unexpected open-input
+rejection as admission integrity. The same reviewer repeated the focused proof
+and race boundary and reports no remaining finding; the final delegated gate
+is satisfied.
+
+The complete success path is one immutable binding, one strict C4 mapper and
+private REST client, copied sealed worker facts, one Component 2 FIFO and
+generation ledger, the existing historical fill-only merge with live
+authority, one causal C5 raw marker, and one Component 3 evaluator/publication.
+Failures remain bounded failed/canceled/fenced/unknown or explicit suppression;
+they do not fabricate marks, absence, currentness, retry policy, or recovery
+success. Residual limitations are exactly contracted: offline fake providers
+only; no live-provider/schema-currentness claim, deployed capacity/latency,
+checkpoint implementation, Component 8 policy values/readiness/runtime
+orchestration, C9 T/Q coverage, API/UI, or cutover. There is no deviation,
+failed assumption, success-invalidating inspection-only claim, or drift-audit
+`yes`. Component 6 is finally accepted and the coarse specification-map status
+is mechanically synchronized.
 
 ## 1. Outcome and user consequence
 

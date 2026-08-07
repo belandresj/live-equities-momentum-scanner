@@ -147,6 +147,10 @@ func (e *Engine) recordConnectionControlLocked(input ConnectionControlInput, cod
 		(state.greatestPosition.ConnectionEpoch == 0 || compareLive(input.Position, state.greatestPosition) > 0) {
 		state.greatestPosition = input.Position
 	}
+	if causallyAccepted && input.Position.ConnectionEpoch == e.state.liveEpoch && input.Position.FrameSequence > 0 &&
+		(e.state.greatestIngressPosition.ConnectionEpoch == 0 || compareLive(input.Position, e.state.greatestIngressPosition) > 0) {
+		e.state.greatestIngressPosition = input.Position
+	}
 	state.revision++
 }
 
@@ -172,6 +176,7 @@ func (e *Engine) decideConnectionControlLocked(node *queueNode, input Connection
 			return DispositionConnectionControlRejected, ReasonLifecycle
 		}
 		e.state.liveEpoch = input.ConnectionEpoch
+		e.state.greatestIngressPosition = LivePosition{ConnectionEpoch: input.ConnectionEpoch}
 		e.state.liveEpochActive = true
 		e.state.connectionControl.greatestPosition = LivePosition{}
 		e.clearAggregateAcknowledgementLocked()
@@ -225,6 +230,25 @@ func (e *Engine) decideConnectionControlLocked(node *queueNode, input Connection
 		if !lifecycleAllowsAggregateLoss(e.state.lifecycle) {
 			return DispositionConnectionControlRejected, ReasonLifecycle
 		}
+		wasLive := e.state.lifecycle == lifecycleLive
+		if wasLive {
+			if e.state.committedT == nil {
+				return DispositionIngressIntegrity, ReasonIngressIntegrity
+			}
+			e.state.hydration.supportedT = immutableTime(*e.state.committedT)
+			stale := cloneAggregateEvaluation(e.state.aggregateEvaluator.current)
+			stale.mode, stale.reason, stale.rows, stale.tqIntentAvailable = rankingStale, "", nil, false
+			e.state.aggregateEvaluator.current = stale
+			e.state.evaluationRevision++
+			e.state.exposedRevision++
+		}
+		if (e.state.lifecycle == lifecycleHydrating || e.state.lifecycle == lifecycleRecovering) && e.state.hydration.generation.active {
+			if !e.cancelHydrationGenerationLocked(false) {
+				return DispositionAccountingIntegrity, ReasonAccounting
+			}
+			e.state.hydration.generation.active = false
+		}
+		e.state.hydration.fenceReconciled = false
 		e.state.liveEpochActive = false
 		e.clearAggregateAcknowledgementLocked()
 		if !e.transitionLifecycleLocked(lifecycleEventAggregateLoss, node, lifecycleReasonAggregateEpochLost) {
@@ -232,6 +256,13 @@ func (e *Engine) decideConnectionControlLocked(node *queueNode, input Connection
 		}
 		return DispositionConnectionControlApplied, ReasonNone
 	case IngressIntegrityFailure:
+		if e.state.hydration.generation.active {
+			if !e.cancelHydrationGenerationLocked(true) {
+				return DispositionAccountingIntegrity, ReasonAccounting
+			}
+			e.state.hydration.generation.active = false
+		}
+		e.state.hydration.fenceReconciled = false
 		e.state.liveEpochActive = false
 		e.clearAggregateAcknowledgementLocked()
 		disposition := e.enterSuppressionLocked(lifecycleEventIngressIntegrity, node, lifecycleReasonIngressIntegrity)

@@ -109,6 +109,13 @@ func (r DownloadResult) Accounting() DownloadAccounting { return r.accounting }
 type CredentialSource func() (string, error)
 
 type OfflineDownloader struct {
+	acquisition *aggregateRESTClient
+}
+
+// aggregateRESTClient is the one Massive second-aggregate request, envelope,
+// pagination, and normalization path shared by offline compilation and
+// production hydration. It owns only bounded request-local state.
+type aggregateRESTClient struct {
 	base       *url.URL
 	credential CredentialSource
 	client     *http.Client
@@ -117,13 +124,23 @@ type OfflineDownloader struct {
 }
 
 func NewOfflineDownloader(baseURL string, credential CredentialSource, client *http.Client) (*OfflineDownloader, error) {
+	acquisition, err := newAggregateRESTClient(baseURL, credential, client)
+	if err != nil {
+		return nil, err
+	}
+	return &OfflineDownloader{acquisition: acquisition}, nil
+}
+
+func newAggregateRESTClient(baseURL string, credential CredentialSource, client *http.Client) (*aggregateRESTClient, error) {
 	base, err := url.Parse(baseURL)
 	if err != nil || base.Scheme != "https" || base.Host == "" || (base.Path != "" && base.Path != "/") ||
 		base.User != nil || base.RawQuery != "" || base.Fragment != "" || credential == nil || client == nil {
 		return nil, errors.New("invalid offline Massive downloader configuration")
 	}
 	base.Path = ""
-	return &OfflineDownloader{base: base, credential: credential, client: client, sleep: sleepWithContext, now: time.Now}, nil
+	return &aggregateRESTClient{
+		base: base, credential: credential, client: client, sleep: sleepWithContext, now: time.Now,
+	}, nil
 }
 
 func (d *OfflineDownloader) Download(ctx context.Context, plan DownloadPlan) DownloadResult {
@@ -142,7 +159,7 @@ func (d *OfflineDownloader) Download(ctx context.Context, plan DownloadPlan) Dow
 		result.accounting.CanceledSymbols = int64(len(symbols))
 		return result
 	}
-	token, err := d.credential()
+	token, err := d.acquisition.credential()
 	if err != nil || token == "" || strings.ContainsAny(token, "\r\n") {
 		for index, symbol := range symbols {
 			result.outcomes[index] = SymbolOutcome{Symbol: symbol, State: SymbolFailed, Reason: DownloadReasonRequestConstruction}
@@ -165,7 +182,10 @@ func (d *OfflineDownloader) Download(ctx context.Context, plan DownloadPlan) Dow
 					result.outcomes[index] = SymbolOutcome{Symbol: symbols[index], State: SymbolCanceled, Reason: DownloadReasonCanceled}
 					continue
 				}
-				result.outcomes[index], perSymbolRecords[index] = d.downloadSymbol(ctx, token, symbols[index], plan, &wireBytes, &normalizedRecords)
+				values, outcome := d.acquisition.acquire(ctx, token, symbols[index], aggregateRESTRequest{
+					start: plan.Start, end: plan.End, maximumNormalizedRecords: plan.MaximumNormalizedRecords,
+				}, &wireBytes, &normalizedRecords, nil)
+				result.outcomes[index], perSymbolRecords[index] = outcome, values
 			}
 		}()
 	}
@@ -241,20 +261,26 @@ func failedPlanResult(result DownloadResult, symbols []string) DownloadResult {
 	return result
 }
 
-func (d *OfflineDownloader) downloadSymbol(ctx context.Context, token, symbol string, plan DownloadPlan, wireBytes *responseBudget, records *atomic.Int64) (SymbolOutcome, []RESTSecondAggregate) {
-	values, outcome := d.downloadSymbolRecords(ctx, token, symbol, plan, wireBytes, records)
-	return outcome, values
+type aggregateRESTRequest struct {
+	start, end               time.Time
+	maximumNormalizedRecords int64
 }
 
-func (d *OfflineDownloader) downloadSymbolRecords(ctx context.Context, token, symbol string, plan DownloadPlan, wireBytes *responseBudget, records *atomic.Int64) ([]RESTSecondAggregate, SymbolOutcome) {
+func (d *aggregateRESTClient) acquire(ctx context.Context, token, symbol string, request aggregateRESTRequest, wireBytes *responseBudget, records *atomic.Int64, resident *residentRecordBudget) ([]RESTSecondAggregate, SymbolOutcome) {
 	outcome := SymbolOutcome{Symbol: symbol, State: SymbolFailed}
-	endpointPath := fmt.Sprintf("/v2/aggs/ticker/%s/range/1/second/%d/%d", url.PathEscape(symbol), plan.Start.UnixMilli(), plan.End.Add(-time.Millisecond).UnixMilli())
+	endpointPath := fmt.Sprintf("/v2/aggs/ticker/%s/range/1/second/%d/%d", url.PathEscape(symbol), request.start.UnixMilli(), request.end.Add(-time.Millisecond).UnixMilli())
 	current := *d.base
 	current.Path = endpointPath
 	setFixedAggregateQuery(&current)
 	seenPages := make(map[string]struct{}, OfflinePageLimit)
 	seenIdentities := make(map[int64]struct{})
 	values := make([]RESTSecondAggregate, 0)
+	keepResident := false
+	defer func() {
+		if resident != nil && !keepResident {
+			resident.release(int64(len(values)))
+		}
+	}()
 	for pageNumber := 0; pageNumber < OfflinePageLimit; pageNumber++ {
 		pageKey := current.String()
 		if _, duplicate := seenPages[pageKey]; duplicate {
@@ -279,7 +305,7 @@ func (d *OfflineDownloader) downloadSymbolRecords(ctx context.Context, token, sy
 				outcome.Reason = downloadReasonForNormalization(rejection)
 				return nil, outcome
 			}
-			if value.WindowStart.Before(plan.Start) || !value.WindowStart.Before(plan.End) || value.WindowEnd.After(plan.End) {
+			if value.WindowStart.Before(request.start) || !value.WindowStart.Before(request.end) || value.WindowEnd.After(request.end) {
 				outcome.Reason = DownloadReasonSymbolIntervalOrder
 				return nil, outcome
 			}
@@ -289,7 +315,11 @@ func (d *OfflineDownloader) downloadSymbolRecords(ctx context.Context, token, sy
 				return nil, outcome
 			}
 			seenIdentities[key] = struct{}{}
-			if records != nil && records.Add(1) > plan.MaximumNormalizedRecords {
+			if records != nil && records.Add(1) > request.maximumNormalizedRecords {
+				outcome.Reason = DownloadReasonPlanBudget
+				return nil, outcome
+			}
+			if resident != nil && !resident.reserve() {
 				outcome.Reason = DownloadReasonPlanBudget
 				return nil, outcome
 			}
@@ -299,6 +329,7 @@ func (d *OfflineDownloader) downloadSymbolRecords(ctx context.Context, token, sy
 			outcome.State = SymbolComplete
 			outcome.Reason = DownloadReasonNone
 			outcome.Records = int64(len(values))
+			keepResident = true
 			return values, outcome
 		}
 		if pageNumber+1 >= OfflinePageLimit {
@@ -321,7 +352,7 @@ type restPage struct {
 	nextURL string
 }
 
-func (d *OfflineDownloader) fetchPage(ctx context.Context, token string, pageURL *url.URL, symbol string, budget *responseBudget) (restPage, int64, int, DownloadReason) {
+func (d *aggregateRESTClient) fetchPage(ctx context.Context, token string, pageURL *url.URL, symbol string, budget *responseBudget) (restPage, int64, int, DownloadReason) {
 	var bytesRead int64
 	var retryDelay time.Duration
 	for attempt := 1; attempt <= OfflineAttemptLimit; attempt++ {
@@ -399,7 +430,7 @@ func (d *OfflineDownloader) fetchPage(ctx context.Context, token string, pageURL
 	return restPage{}, bytesRead, OfflineAttemptLimit, DownloadReasonHTTPRetryExhausted
 }
 
-func (d *OfflineDownloader) validateContinuation(raw, endpointPath string) (*url.URL, DownloadReason) {
+func (d *aggregateRESTClient) validateContinuation(raw, endpointPath string) (*url.URL, DownloadReason) {
 	next, err := url.Parse(raw)
 	if err != nil || next.Scheme != d.base.Scheme || next.Host != d.base.Host || next.Path != endpointPath || next.User != nil || next.Fragment != "" {
 		return nil, DownloadReasonRedirectContinuation

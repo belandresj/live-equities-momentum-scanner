@@ -10,6 +10,12 @@ func (e *Engine) applyTimerLocked(node *queueNode) (DispositionCode, Disposition
 	if !e.transitionLifecycleLocked(lifecycleEventTimer, node, "") {
 		return DispositionIllegalLifecycle, ReasonLifecycle
 	}
+	if e.state.lifecycle == lifecycleEnded && e.state.hydration.generation.active {
+		if !e.cancelHydrationGenerationLocked(false) {
+			return DispositionAccountingIntegrity, ReasonAccounting
+		}
+		e.state.hydration.generation.active = false
+	}
 	e.state.latestTarget = immutableTime(target)
 	return DispositionTimerApplied, ReasonNone
 }
@@ -48,10 +54,11 @@ func (e *Engine) candidateTargetSupportedLocked(target time.Time) bool {
 	completeRunSupport := false
 	switch e.mode {
 	case RunModeLive:
-		applicableAcceptedAggregateEpoch := e.state.liveEpoch != 0
-		consumedThroughIngressFence := false // no S3 fact can prove this
-		noPriorUnresolvedGlobalTransportGap := false
-		installedContributorPredicates := false
+		applicableAcceptedAggregateEpoch := e.state.liveEpochActive && e.state.aggregateAcknowledged && e.state.liveEpoch != 0
+		consumedThroughIngressFence := e.state.hydration.fenceReconciled && e.state.hydration.fenceEpoch == e.state.liveEpoch &&
+			e.state.hydration.fenceThrough >= e.state.aggregateAckPosition.FrameSequence
+		noPriorUnresolvedGlobalTransportGap := !e.state.aggregateIntegrity
+		installedContributorPredicates := e.state.hydration.supportedThrough != nil && !e.state.hydration.supportedThrough.Before(target)
 		completeRunSupport = applicableAcceptedAggregateEpoch && consumedThroughIngressFence &&
 			noPriorUnresolvedGlobalTransportGap && installedContributorPredicates
 	case RunModeReplay:
@@ -82,6 +89,8 @@ func suppressionDispositionFor(mode RunMode, reason lifecycleReason) Suppression
 	}
 	switch reason {
 	case lifecycleReasonIngressIntegrity:
+		return SuppressionSameBindingRecoveryAllowed
+	case lifecycleReasonRecoveryExhausted:
 		return SuppressionSameBindingRecoveryAllowed
 	case lifecycleReasonCanonicalIntegrity:
 		return SuppressionCleanReinitializationRequired
@@ -235,7 +244,15 @@ func (e *Engine) transitionLifecycleLocked(event lifecycleEvent, node *queueNode
 		if previous == lifecycleInitializing || previous == lifecycleReplaying || previous == lifecycleEnded {
 			return false
 		}
-		next, reason = lifecycleSuppressed, lifecycleReasonIngressIntegrity
+		next = lifecycleSuppressed
+		if reason == "" {
+			reason = lifecycleReasonIngressIntegrity
+		}
+	case lifecycleEventHydrationComplete:
+		if (previous != lifecycleHydrating && previous != lifecycleRecovering) || e.mode != RunModeLive {
+			return false
+		}
+		next, reason = lifecycleLive, lifecycleReasonHydrationComplete
 	default:
 		return false
 	}
@@ -262,6 +279,14 @@ func (e *Engine) transitionLifecycleLocked(event lifecycleEvent, node *queueNode
 			record.Generation = node.aggregate.Historical.Generation
 		case inputConnectionControl:
 			record.Epoch = node.connectionControl.ConnectionEpoch
+		case inputHydrationPlan:
+			record.Epoch = node.hydrationPlan.ConnectionEpoch
+		case inputHydrationChunk:
+			record.Epoch = node.hydrationChunk.token.connectionEpoch
+			record.Generation = node.hydrationChunk.token.generation
+		case inputHydrationTerminal:
+			record.Epoch = node.hydrationTerminal.token.connectionEpoch
+			record.Generation = node.hydrationTerminal.token.generation
 		}
 	}
 	e.state.lifecycle = next

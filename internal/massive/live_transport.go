@@ -117,12 +117,13 @@ const (
 type DeliveryKind string
 
 const (
-	DeliveryControl           DeliveryKind = "control"
-	DeliveryAggregate         DeliveryKind = "aggregate"
-	DeliveryTrade             DeliveryKind = "trade_consumer_deferred"
-	DeliveryQuote             DeliveryKind = "quote_consumer_deferred"
-	DeliveryNormalizationDrop DeliveryKind = "normalization_rejection"
-	DeliveryTerminal          DeliveryKind = "terminal"
+	DeliveryControl               DeliveryKind = "control"
+	DeliveryAggregate             DeliveryKind = "aggregate"
+	DeliveryTrade                 DeliveryKind = "trade_consumer_deferred"
+	DeliveryQuote                 DeliveryKind = "quote_consumer_deferred"
+	DeliveryNormalizationDrop     DeliveryKind = "normalization_rejection"
+	DeliveryTerminal              DeliveryKind = "terminal"
+	DeliveryAggregateIngressFence DeliveryKind = "aggregate_ingress_fence"
 )
 
 type TerminalResult struct {
@@ -148,6 +149,7 @@ type AdapterDelivery struct {
 	Quote                                    NormalizedQuote
 	Rejection                                LiveRejection
 	Terminal                                 TerminalResult
+	AggregateIngressFence                    AggregateIngressFenceFact
 	ExpectedStatusCount, ObservedStatusCount int
 }
 
@@ -155,6 +157,7 @@ type EngineDeliveryResult struct {
 	Admission            engine.AdmissionResult
 	ControlDisposition   engine.ConnectionControlDisposition
 	AggregateDisposition engine.AggregateDisposition
+	HydrationDisposition engine.HydrationDisposition
 	ConsumerDeferred     bool
 }
 
@@ -303,6 +306,7 @@ type terminalCause struct {
 type LiveAttempt struct {
 	mu         sync.Mutex
 	nextMu     sync.Mutex
+	deliveryMu sync.Mutex
 	adapter    *LiveAdapter
 	binding    reference.Binding
 	epoch      uint64
@@ -330,6 +334,7 @@ type LiveAttempt struct {
 	closeCommand                  *CloseEpochCommand
 	terminalDelivery              AdapterDelivery
 	terminalReturned              bool
+	captureToken                  uint64
 	handshakeDone                 chan struct{}
 	handshakeDeliveries           []AdapterDelivery
 	handshakeErr                  error
@@ -733,8 +738,11 @@ func validCloseCause(cause CloseCause) bool {
 	return cause == CloseSessionEnd || cause == CloseControlledStop || cause == CloseSuperseded || cause == CloseIntegrityLoss
 }
 
-func (a *LiveAttempt) Next(ctx context.Context) (AdapterDelivery, bool) {
-	if ctx == nil {
+// next is deliberately package-private. Production delivery must use
+// DeliverNextToEngine so dequeue, engine admission, and completion are one
+// serialized causal operation.
+func (a *LiveAttempt) next(ctx context.Context) (AdapterDelivery, bool) {
+	if ctx == nil || ctx.Err() != nil {
 		return AdapterDelivery{}, false
 	}
 	a.nextMu.Lock()
@@ -827,6 +835,10 @@ func (a *LiveAttempt) Next(ctx context.Context) (AdapterDelivery, bool) {
 		if frame.terminal {
 			return a.finishTerminal(frame), true
 		}
+		if frame.kind == queuedLiveIngressFence {
+			a.queue.complete(frame, false)
+			return AdapterDelivery{Kind: DeliveryAggregateIngressFence, AggregateIngressFence: frame.ingressFence}, true
+		}
 		if terminal != nil && terminal.fenceAfter > 0 && frame.sequence > terminal.fenceAfter {
 			a.queue.complete(frame, true)
 			continue
@@ -836,6 +848,26 @@ func (a *LiveAttempt) Next(ctx context.Context) (AdapterDelivery, bool) {
 		a.currentFrameCompleted = false
 	}
 }
+
+// DeliverNextToEngine linearizes dequeue, engine admission, and completion so
+// concurrent callers cannot admit a later raw item ahead of an earlier fence.
+func (a *LiveAttempt) DeliverNextToEngine(ctx context.Context, state *engine.Engine) (EngineDeliveryResult, bool, error) {
+	a.deliveryMu.Lock()
+	defer a.deliveryMu.Unlock()
+	delivery, ok := a.next(ctx)
+	if !ok {
+		return EngineDeliveryResult{}, false, nil
+	}
+	// Once dequeue succeeds, ownership has transferred. A separate internal
+	// lifetime guarantees admission and completion; caller cancellation may
+	// stop waiting for the next item but cannot drop this causal predecessor.
+	result, err := DeliverToEngine(context.Background(), state, delivery)
+	return result, true, err
+}
+
+// nextForProof preserves the accepted C5 adapter-boundary tests without
+// exposing an unsafe production dequeue API.
+func (a *LiveAttempt) nextForProof(ctx context.Context) (AdapterDelivery, bool) { return a.next(ctx) }
 
 func (a *LiveAttempt) mapResult(result LiveResult, frame queuedLiveFrame) (AdapterDelivery, bool) {
 	a.mu.Lock()
@@ -1101,6 +1133,22 @@ func DeliverToEngine(ctx context.Context, state *engine.Engine, delivery Adapter
 		case <-ctx.Done():
 			return result, ctx.Err()
 		case result.AggregateDisposition = <-completion:
+			return result, nil
+		}
+	case DeliveryAggregateIngressFence:
+		input, err := EngineAggregateIngressFence(delivery.AggregateIngressFence)
+		if err != nil {
+			return EngineDeliveryResult{}, err
+		}
+		admission, completion := state.AdmitAggregateIngressFence(ctx, input)
+		result := EngineDeliveryResult{Admission: admission}
+		if admission != engine.AdmissionAdmitted || completion == nil {
+			return result, nil
+		}
+		select {
+		case <-ctx.Done():
+			return result, ctx.Err()
+		case result.HydrationDisposition = <-completion:
 			return result, nil
 		}
 	case DeliveryTrade, DeliveryQuote, DeliveryNormalizationDrop:

@@ -227,7 +227,7 @@ func testOfflineDownloader(t *testing.T, server *httptest.Server) *OfflineDownlo
 	if err != nil {
 		t.Fatal(err)
 	}
-	downloader.sleep = func(context.Context, time.Duration) error { return nil }
+	downloader.acquisition.sleep = func(context.Context, time.Duration) error { return nil }
 	return downloader
 }
 

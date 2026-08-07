@@ -279,7 +279,7 @@ func evaluatorProofEngine(at time.Time, specs []evaluatorSymbol) *Engine {
 			if spec.qualification == qualificationUnresolved {
 				coverageStart = coverageStart.Add(time.Second)
 			}
-			installExactCoverageForProof(binding.symbols[i].aggregates, binding, coverageStart, at)
+			installExactCoverage(binding.symbols[i].aggregates, binding, coverageStart, at)
 		}
 	}
 	engine := &Engine{state: &engineState{binding: binding, lifecycle: lifecycleLive, committedT: immutableTime(at), clockMonotonic: true}}

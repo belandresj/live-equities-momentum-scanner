@@ -62,7 +62,7 @@ func TestC3QUAL01ExactGateBoundaryMatrix(t *testing.T) {
 			}
 			state.tail[window.Unix()] = qualificationRecord("AAA", window, 10, 500, 10, 25, provenance)
 		}
-		installExactCoverageForProof(state, bindingState, start, proofEnd)
+		installExactCoverage(state, bindingState, start, proofEnd)
 		return state
 	}
 	for _, test := range []struct {

@@ -99,8 +99,8 @@ type aggregateEvaluatorState struct {
 }
 
 // aggregateCoverageConsequence is engine-private consequence state only.
-// Component 6 owns the future validated fact type and the only production path
-// that may populate it.
+// Component 6's validated fence fact is the only production path that may
+// populate it.
 type uncertaintyOrigin uint8
 
 const (
@@ -163,6 +163,7 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 		return true
 	}
 	changed := (node.kind == inputTimer || node.kind == inputReplayGroup) && code == DispositionTimerApplied
+	changed = changed || (node.kind == inputAggregateIngressFence && code == DispositionAggregateIngressFenceApplied)
 	changed = changed || (node.kind == inputAggregate && (code == DispositionAggregateInserted || code == DispositionAggregateRevised ||
 		code == DispositionAggregateWithdrawn || (code == DispositionAggregateRejected && (reason == ReasonHistoricalLiveConflict || reason == ReasonStructural))))
 	if !changed {
@@ -178,7 +179,7 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 		staged = e.stageAggregateEvaluationLocked(*e.state.committedT)
 	}
 	expected := time.Time{}
-	if (node.kind == inputTimer || node.kind == inputReplayGroup) && e.state.latestTarget != nil {
+	if (node.kind == inputTimer || node.kind == inputReplayGroup || node.kind == inputAggregateIngressFence) && e.state.latestTarget != nil {
 		expected = *e.state.latestTarget
 	} else if e.state.committedT != nil {
 		expected = *e.state.committedT

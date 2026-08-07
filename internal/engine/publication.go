@@ -44,42 +44,55 @@ type publicationFingerprint struct {
 	globalFailure      bool
 	evaluationRevision uint64
 	controlRevision    uint64
+	hydrationRevision  uint64
 }
 
 type privatePublication struct {
-	kind                   publicationKind
-	schemaVersion          string
-	publicationID          uint64
-	bindingIdentity        string
-	tradingDate            string
-	mode                   RunMode
-	lifecycle              lifecycle
-	lifecycleReason        lifecycleReason
-	suppressionDisposition SuppressionDisposition
-	lastDisposition        DispositionCode
-	dispositionReason      DispositionReason
-	lastEngineSequence     uint64
-	watermark              *time.Time
-	generatedAt            time.Time
-	queueCapacity          int
-	requiredReserve        int
-	queueOccupancy         int
-	admission              admissionCounters
-	transitions            transitionCounters
-	publications           publicationCounters
-	aggregates             aggregateAccounting
-	connectionControls     connectionControlAccounting
-	connectionEpoch        uint64
-	connectionActive       bool
-	aggregateAcknowledged  bool
-	aggregateAckPosition   LivePosition
-	latestControlKind      ConnectionControlKind
-	latestControlOutcome   ConnectionControlOutcome
-	latestControlReason    DispositionReason
-	aggregateIntegrity     bool
-	clockMonotonic         bool
-	currentMarketClaim     bool
-	aggregateEvaluation    aggregateEvaluationResult
+	kind                                                                    publicationKind
+	schemaVersion                                                           string
+	publicationID                                                           uint64
+	bindingIdentity                                                         string
+	tradingDate                                                             string
+	mode                                                                    RunMode
+	lifecycle                                                               lifecycle
+	lifecycleReason                                                         lifecycleReason
+	suppressionDisposition                                                  SuppressionDisposition
+	lastDisposition                                                         DispositionCode
+	dispositionReason                                                       DispositionReason
+	lastEngineSequence                                                      uint64
+	watermark                                                               *time.Time
+	generatedAt                                                             time.Time
+	queueCapacity                                                           int
+	requiredReserve                                                         int
+	queueOccupancy                                                          int
+	admission                                                               admissionCounters
+	transitions                                                             transitionCounters
+	publications                                                            publicationCounters
+	aggregates                                                              aggregateAccounting
+	connectionControls                                                      connectionControlAccounting
+	connectionEpoch                                                         uint64
+	connectionActive                                                        bool
+	aggregateAcknowledged                                                   bool
+	aggregateAckPosition                                                    LivePosition
+	latestControlKind                                                       ConnectionControlKind
+	latestControlOutcome                                                    ConnectionControlOutcome
+	latestControlReason                                                     DispositionReason
+	aggregateIntegrity                                                      bool
+	clockMonotonic                                                          bool
+	currentMarketClaim                                                      bool
+	aggregateEvaluation                                                     aggregateEvaluationResult
+	hydrationPurpose                                                        HydrationPurpose
+	hydrationGeneration                                                     uint64
+	hydrationStart                                                          time.Time
+	hydrationEnd                                                            time.Time
+	hydrationAccounting                                                     HydrationAccounting
+	hydrationRows                                                           HydrationRowAccounting
+	hydrationFenceReconciled                                                bool
+	hydrationFenceEpoch, hydrationFenceThrough, hydrationFenceMarkerOrdinal uint64
+	hydrationSupportedThrough                                               *time.Time
+	hydrationPolicyAction                                                   HydrationPolicyAction
+	hydrationPolicyToken                                                    uint64
+	hydrationPolicyWaiting                                                  bool
 }
 
 // publicationView is a defensive package-private read projection. Component
@@ -99,6 +112,7 @@ func (e *Engine) installInitialPublication() {
 		lifecycleReasonAccountingIntegrity,
 		lifecycleReasonReplayFailure,
 		lifecycleReasonIngressIntegrity,
+		lifecycleReasonRecoveryExhausted,
 	} {
 		index, _ := sentinelIndex(reason)
 		e.sentinels[index] = newUnavailableSentinel(e.mode, reason)
@@ -122,6 +136,8 @@ func sentinelIndex(reason lifecycleReason) (int, bool) {
 		return 5, true
 	case lifecycleReasonIngressIntegrity:
 		return 6, true
+	case lifecycleReasonRecoveryExhausted:
+		return 7, true
 	default:
 		return 4, false
 	}
@@ -151,6 +167,8 @@ func newUnavailableSentinel(mode RunMode, reason lifecycleReason) *privatePublic
 		result.lastDisposition, result.dispositionReason = DispositionReplayFailed, ReasonReplayEvidence
 	case lifecycleReasonIngressIntegrity:
 		result.lastDisposition, result.dispositionReason = DispositionIngressIntegrity, ReasonIngressIntegrity
+	case lifecycleReasonRecoveryExhausted:
+		result.lastDisposition, result.dispositionReason = DispositionIngressIntegrity, ReasonAggregateIngressFence
 	}
 	return result
 }
@@ -182,6 +200,7 @@ func (e *Engine) publicationFingerprintLocked() publicationFingerprint {
 		clockMonotonic:     e.state.clockMonotonic, globalFailure: e.state.globalFailure,
 		evaluationRevision: e.state.evaluationRevision,
 		controlRevision:    e.state.connectionControl.revision,
+		hydrationRevision:  e.state.hydration.revision,
 	}
 	if e.state.binding != nil {
 		result.bindingIdentity = e.state.binding.identity
@@ -316,13 +335,18 @@ func classifyCompletedTransition(counters *transitionCounters, code DispositionC
 	case DispositionAggregateInserted, DispositionAggregateRevised, DispositionAggregateWithdrawn:
 		counters.appliedMarket++
 	case DispositionBindingInstalled, DispositionControlApplied, DispositionTimerApplied, DispositionReplayStarted, DispositionReplayEnded,
-		DispositionConnectionControlApplied, DispositionConnectionControlDeferred:
+		DispositionConnectionControlApplied, DispositionConnectionControlDeferred, DispositionHydrationPlanApplied, DispositionHydrationChunkApplied,
+		DispositionAggregateIngressFenceApplied:
+		counters.appliedNonmarket++
+	case DispositionHydrationPolicyApplied:
 		counters.appliedNonmarket++
 	case DispositionAggregateExactDuplicate:
 		counters.exactDuplicate++
-	case DispositionAggregateFenced, DispositionConnectionControlFenced:
+	case DispositionAggregateFenced, DispositionConnectionControlFenced, DispositionHydrationFenced, DispositionAggregateIngressFenceFenced:
 		counters.fenced++
-	case DispositionClockRegression, DispositionAggregateIntegrity, DispositionPublicationIntegrity, DispositionAccountingIntegrity, DispositionReplayFailed, DispositionIngressIntegrity:
+	case DispositionHydrationTerminalApplied:
+		counters.terminalWorkFact++
+	case DispositionClockRegression, DispositionAggregateIntegrity, DispositionPublicationIntegrity, DispositionAccountingIntegrity, DispositionReplayFailed, DispositionIngressIntegrity, DispositionHydrationIntegrity:
 		counters.integrityFailure++
 	default:
 		counters.rejected++
@@ -372,6 +396,18 @@ func (e *Engine) buildPublicationLocked(id, sequence uint64, disposition transit
 		latestControlReason: e.state.connectionControl.latestReason,
 		clockMonotonic:      e.state.clockMonotonic,
 		aggregateEvaluation: cloneAggregateEvaluation(e.state.aggregateEvaluator.current),
+		hydrationPurpose:    e.state.hydration.generation.purpose,
+		hydrationGeneration: e.state.hydration.generation.generation,
+		hydrationStart:      e.state.hydration.generation.start, hydrationEnd: e.state.hydration.generation.end,
+		hydrationAccounting:      e.state.hydration.generation.accounting,
+		hydrationRows:            e.state.hydration.generation.rowAccounting,
+		hydrationFenceReconciled: e.state.hydration.fenceReconciled,
+		hydrationFenceEpoch:      e.state.hydration.fenceEpoch, hydrationFenceThrough: e.state.hydration.fenceThrough,
+		hydrationFenceMarkerOrdinal: e.state.hydration.fenceMarkerOrdinal,
+		hydrationSupportedThrough:   immutableTimePointer(e.state.hydration.supportedThrough),
+		hydrationPolicyAction:       e.state.hydration.policyAction,
+		hydrationPolicyToken:        e.state.hydration.lastPolicyToken,
+		hydrationPolicyWaiting:      e.state.hydration.policyWaiting,
 	}
 	candidate.currentMarketClaim = candidate.aggregateEvaluation.mode == rankingQualifiedCurrent ||
 		candidate.aggregateEvaluation.mode == rankingDegradedBootstrap
@@ -405,11 +441,20 @@ func validatePublication(candidate *privatePublication) error {
 		candidate.admission.admittedExternal != uint64(candidate.queueOccupancy)+candidate.admission.ownerInProgress+candidate.admission.completedExternal ||
 		candidate.transitions.completedExternal != candidate.admission.completedExternal ||
 		!candidate.transitions.reconciles() || !candidate.publications.reconciles(candidate.transitions.completedExternal+candidate.transitions.completedInternal) ||
-		!candidate.aggregates.reconciles() || !candidate.connectionControls.reconciles() {
+		!candidate.aggregates.reconciles() || !candidate.connectionControls.reconciles() ||
+		(candidate.hydrationGeneration > 0 && (!validHydrationPurpose(candidate.hydrationPurpose) ||
+			candidate.hydrationStart.After(candidate.hydrationEnd) || !candidate.hydrationAccounting.reconciles() || !candidate.hydrationRows.reconciles())) {
 		return errors.New("invalid private publication")
 	}
 	if candidate.watermark != nil && candidate.generatedAt.Before(*candidate.watermark) {
 		return errors.New("publication generated before committed watermark")
+	}
+	if candidate.hydrationFenceReconciled && (candidate.hydrationFenceEpoch == 0 || candidate.hydrationFenceMarkerOrdinal == 0 || candidate.hydrationSupportedThrough == nil) {
+		return errors.New("invalid private hydration fence")
+	}
+	if (candidate.hydrationPolicyAction == "") != (candidate.hydrationPolicyToken == 0) ||
+		(candidate.hydrationPolicyAction != "" && !validHydrationPolicyAction(candidate.hydrationPolicyAction)) {
+		return errors.New("invalid private hydration policy state")
 	}
 	if candidate.watermark == nil {
 		if !candidate.aggregateEvaluation.at.IsZero() {

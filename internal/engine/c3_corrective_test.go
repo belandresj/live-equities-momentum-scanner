@@ -169,7 +169,7 @@ func TestC3R1ExactCoverageConsequences(t *testing.T) {
 		e.mu.Unlock()
 		t.Fatalf("unknown sparse consequences price=%+v activity=%+v qualification=%+v", price, activity, qualification)
 	}
-	if !installExactCoverageForProof(state, e.state.binding, start, now) || !exactAggregateCoverage(state, e.state.binding, start, now) ||
+	if !installExactCoverage(state, e.state.binding, start, now) || !exactAggregateCoverage(state, e.state.binding, start, now) ||
 		!state.provenAbsent.has(sessionSlot(e.state.binding, start.Add(time.Second))) {
 		e.mu.Unlock()
 		t.Fatal("exact coverage did not install localized proven absence")

@@ -382,7 +382,7 @@ func resetActivityTestState(state *symbolAggregateState, binding *installedBindi
 	state.latest, state.olderLatest = nil, nil
 	state.priceRange = nil
 	state.activity = nil
-	installExactCoverageForProof(state, binding, binding.sessionStart, binding.sessionEnd)
+	installExactCoverage(state, binding, binding.sessionStart, binding.sessionEnd)
 }
 
 func installActivityTestRecord(state *symbolAggregateState, window time.Time, values AggregateValues) {

@@ -145,6 +145,8 @@ const (
 	lifecycleReasonAggregateAckAtStart  lifecycleReason = "aggregate_acknowledged_at_session_start"
 	lifecycleReasonAggregateEpochLost   lifecycleReason = "aggregate_epoch_lost"
 	lifecycleReasonIngressIntegrity     lifecycleReason = "ingress_integrity"
+	lifecycleReasonHydrationComplete    lifecycleReason = "hydration_complete"
+	lifecycleReasonRecoveryExhausted    lifecycleReason = "recovery_exhausted"
 )
 
 // SuppressionDisposition is the exhaustive recovery requirement attached to
@@ -177,6 +179,7 @@ const (
 	lifecycleEventAggregateAck
 	lifecycleEventAggregateLoss
 	lifecycleEventIngressIntegrity
+	lifecycleEventHydrationComplete
 )
 
 type transitionRecord struct {
@@ -205,54 +208,69 @@ const (
 	inputReplayEnd
 	inputReplayFailure
 	inputConnectionControl
+	inputHydrationPlan
+	inputHydrationChunk
+	inputHydrationTerminal
+	inputHydrationCancelProof
+	inputAggregateIngressFence
+	inputHydrationPolicyAction
 )
 
 type queueNode struct {
-	kind                inputKind
-	binding             frozenBinding
-	bindingID           string
-	aggregate           frozenAggregateInput
-	admissionTime       time.Time
-	ordinal             uint64
-	engineSequence      uint64
-	systemSequence      uint64
-	clockRegression     bool
-	sealOnLink          bool
-	completion          chan Disposition
-	aggregateCompletion chan AggregateDisposition
-	timerCompletion     chan TimerDisposition
-	replayStart         playback.StartEvidence
-	replayGroup         playback.GroupEvidence
-	replayEnd           playback.EndEvidence
-	replayFailure       ReplayFailureInput
-	connectionControl   frozenConnectionControlInput
-	controlCompletion   chan ConnectionControlDisposition
+	kind                  inputKind
+	binding               frozenBinding
+	bindingID             string
+	aggregate             frozenAggregateInput
+	admissionTime         time.Time
+	ordinal               uint64
+	engineSequence        uint64
+	systemSequence        uint64
+	clockRegression       bool
+	sealOnLink            bool
+	completion            chan Disposition
+	aggregateCompletion   chan AggregateDisposition
+	timerCompletion       chan TimerDisposition
+	replayStart           playback.StartEvidence
+	replayGroup           playback.GroupEvidence
+	replayEnd             playback.EndEvidence
+	replayFailure         ReplayFailureInput
+	connectionControl     frozenConnectionControlInput
+	controlCompletion     chan ConnectionControlDisposition
+	hydrationPlan         frozenHydrationPlanInput
+	hydrationChunk        frozenHydrationChunkInput
+	hydrationTerminal     frozenHydrationTerminalInput
+	hydrationCancel       frozenHydrationCancelInput
+	aggregateIngressFence frozenAggregateIngressFenceInput
+	hydrationPolicy       frozenHydrationPolicyActionInput
+	hydrationCompletion   chan HydrationDisposition
 }
 
 type engineState struct {
-	lifecycle              lifecycle
-	binding                *installedBinding
-	aggregates             aggregateAccounting
-	liveEpoch              uint64
-	liveEpochActive        bool
-	aggregateWriteToken    uint64
-	aggregateAcknowledged  bool
-	aggregateAckPosition   LivePosition
-	aggregateAckReceivedAt time.Time
-	connectionControl      connectionControlState
-	connectionAccounting   connectionControlAccounting
-	replayArtifact         string
-	aggregateIntegrity     bool
-	globalFailure          bool
-	exposedRevision        uint64
-	evaluationRevision     uint64
-	aggregateEvaluator     aggregateEvaluatorState
-	clockMonotonic         bool
-	committedT             *time.Time
-	latestTarget           *time.Time
-	latestTransition       *transitionRecord
-	suppressionDisposition SuppressionDisposition
-	replay                 replayState
+	lifecycle               lifecycle
+	binding                 *installedBinding
+	aggregates              aggregateAccounting
+	liveEpoch               uint64
+	liveEpochActive         bool
+	aggregateWriteToken     uint64
+	aggregateAcknowledged   bool
+	aggregateAckPosition    LivePosition
+	aggregateAckReceivedAt  time.Time
+	greatestIngressPosition LivePosition
+	connectionControl       connectionControlState
+	connectionAccounting    connectionControlAccounting
+	replayArtifact          string
+	aggregateIntegrity      bool
+	globalFailure           bool
+	exposedRevision         uint64
+	evaluationRevision      uint64
+	aggregateEvaluator      aggregateEvaluatorState
+	clockMonotonic          bool
+	committedT              *time.Time
+	latestTarget            *time.Time
+	latestTransition        *transitionRecord
+	suppressionDisposition  SuppressionDisposition
+	replay                  replayState
+	hydration               hydrationState
 }
 
 type admissionCounters struct {
@@ -323,7 +341,7 @@ type Engine struct {
 	transitions  transitionCounters
 	publications publicationCounters
 	publication  atomic.Pointer[privatePublication]
-	sentinels    [7]*privatePublication
+	sentinels    [8]*privatePublication
 	lastPubID    uint64
 
 	// Test-only fault/pause points are package-private and have no production
@@ -366,7 +384,7 @@ func (e *Engine) AdmitBinding(ctx context.Context, input BindingInstall) (Admiss
 
 // AdmitAggregate transfers one normalized aggregate value into the same S1
 // FIFO. Historical acceptance additionally requires the package-private S2
-// proof context; Component 6 owns the future production token ledger.
+// proof context or Component 6's production hydration token ledger.
 func (e *Engine) AdmitAggregate(ctx context.Context, input AggregateInput) (AdmissionResult, <-chan AggregateDisposition) {
 	e.beginAdmission()
 	if ctx == nil || !boundedAggregateInput(input) {
@@ -481,6 +499,8 @@ func (e *Engine) admitNode(ctx context.Context, node *queueNode, optional bool) 
 				node.aggregateCompletion = make(chan AggregateDisposition, 1)
 			} else if node.kind == inputConnectionControl {
 				node.controlCompletion = make(chan ConnectionControlDisposition, 1)
+			} else if hydrationInputKind(node.kind) {
+				node.hydrationCompletion = make(chan HydrationDisposition, 1)
 			} else if node.kind == inputTimer || node.kind == inputReplayGroup {
 				if e.state.binding != nil {
 					node.bindingID = e.state.binding.identity
@@ -574,6 +594,10 @@ func (e *Engine) consume() {
 				e.applyExhaustionLocked()
 			} else if !e.state.globalFailure && e.state.lifecycle != lifecycleEnded {
 				before := e.publicationFingerprintLocked()
+				if e.state.hydration.generation.active {
+					e.cancelHydrationGenerationLocked(false)
+					e.state.hydration.generation.active = false
+				}
 				e.transitionLifecycleLocked(lifecycleEventClose, nil, lifecycleReasonClosed)
 				e.finishInternalTransitionLocked(e.nextSequence-1, before, false)
 			}
@@ -601,6 +625,14 @@ func (e *Engine) consume() {
 		} else if node.kind == inputConnectionControl {
 			node.controlCompletion <- ConnectionControlDisposition{EngineSequence: disposition.EngineSequence, Code: disposition.Code, Reason: disposition.Reason, SuppressionDisposition: disposition.SuppressionDisposition}
 			close(node.controlCompletion)
+		} else if hydrationInputKind(node.kind) {
+			node.hydrationCompletion <- HydrationDisposition{
+				EngineSequence: disposition.EngineSequence, Code: disposition.Code, Reason: disposition.Reason,
+				SuppressionDisposition: disposition.SuppressionDisposition, Plan: disposition.hydrationPlan,
+				Rows: disposition.hydrationRows, Accounting: disposition.hydrationAccounting,
+				FenceCommand: disposition.hydrationFenceCommand,
+			}
+			close(node.hydrationCompletion)
 		} else if node.kind == inputTimer || node.kind == inputReplayGroup {
 			node.timerCompletion <- TimerDisposition{EngineSequence: disposition.EngineSequence, SystemSequence: node.systemSequence, AdmissionTime: node.admissionTime, Code: disposition.Code, Reason: disposition.Reason, SuppressionDisposition: disposition.SuppressionDisposition}
 			close(node.timerCompletion)
@@ -616,11 +648,19 @@ type transitionDisposition struct {
 	Code                   DispositionCode
 	Reason                 DispositionReason
 	SuppressionDisposition SuppressionDisposition
+	hydrationPlan          HydrationPlanResult
+	hydrationRows          HydrationRowAccounting
+	hydrationAccounting    HydrationAccounting
+	hydrationFenceCommand  HydrationFenceCommand
 }
 
 func (e *Engine) transition(node *queueNode) transitionDisposition {
 	code := DispositionIllegalLifecycle
 	reason := ReasonLifecycle
+	var stagedHydrationPlan HydrationPlanResult
+	var stagedHydrationRows HydrationRowAccounting
+	var stagedHydrationAccounting HydrationAccounting
+	var stagedHydrationFenceCommand HydrationFenceCommand
 	e.mu.Lock()
 	before := e.publicationFingerprintLocked()
 	if e.state.lifecycle == lifecycleEnded {
@@ -628,6 +668,14 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		return e.finishTransitionLocked(node, disposition, before, false)
 	}
 	if e.state.globalFailure {
+		if hydrationInputKind(node.kind) {
+			disposition := transitionDisposition{
+				EngineSequence: node.engineSequence, Code: DispositionHydrationFenced, Reason: ReasonHistoricalContext,
+				SuppressionDisposition: e.state.suppressionDisposition,
+				hydrationAccounting:    e.state.hydration.generation.accounting,
+			}
+			return e.finishTransitionLocked(node, disposition, before, false)
+		}
 		disposition := transitionDisposition{EngineSequence: node.engineSequence, Code: DispositionTerminal, Reason: ReasonTerminal, SuppressionDisposition: e.state.suppressionDisposition}
 		return e.finishTransitionLocked(node, disposition, before, false)
 	}
@@ -642,6 +690,10 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		code, reason = DispositionControlApplied, ReasonNone
 	} else if node.kind == inputStop {
 		e.mu.Lock()
+		if e.state.hydration.generation.active {
+			e.cancelHydrationGenerationLocked(false)
+			e.state.hydration.generation.active = false
+		}
 		e.transitionLifecycleLocked(lifecycleEventStop, node, lifecycleReasonControlledStop)
 		e.mu.Unlock()
 		code, reason = DispositionControlApplied, ReasonNone
@@ -670,8 +722,17 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 	} else if node.kind == inputAggregate {
 		e.mu.Lock()
 		code, reason = e.applyAggregateLocked(node.aggregate, node.admissionTime)
+		if node.aggregate.Source == AggregateSourceLive && node.aggregate.Live.ConnectionEpoch == e.state.liveEpoch && node.aggregate.Live.FrameSequence > 0 &&
+			(e.state.greatestIngressPosition.ConnectionEpoch == 0 || compareLive(node.aggregate.Live, e.state.greatestIngressPosition) > 0) {
+			e.state.greatestIngressPosition = node.aggregate.Live
+		}
 		if code == DispositionAggregateInserted || code == DispositionAggregateRevised || code == DispositionAggregateWithdrawn {
 			e.state.exposedRevision++
+		}
+		if node.aggregate.Source == AggregateSourceLive && (code == DispositionAggregateInserted || code == DispositionAggregateRevised) {
+			if index, ok := e.state.binding.index[node.aggregate.Symbol]; ok && e.state.aggregateEvaluator.coverage[index] == coverageNoPrintThroughT {
+				delete(e.state.aggregateEvaluator.coverage, index)
+			}
 		}
 		if code == DispositionAggregateIntegrity {
 			e.enterSuppressionLocked(lifecycleEventCanonicalIntegrity, node, lifecycleReasonCanonicalIntegrity)
@@ -685,6 +746,71 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		e.mu.Lock()
 		code, reason = e.applyConnectionControlLocked(node)
 		e.mu.Unlock()
+	} else if node.kind == inputHydrationPlan {
+		e.mu.Lock()
+		var plan HydrationPlanResult
+		code, reason, plan = e.applyHydrationPlanLocked(node)
+		if code == DispositionHydrationIntegrity {
+			if !e.cancelHydrationGenerationLocked(true) {
+				reason = ReasonAccounting
+			}
+			e.enterSuppressionLocked(lifecycleEventAccountingIntegrity, node, lifecycleReasonAccountingIntegrity)
+		}
+		nodeResult := e.state.hydration.generation.accounting
+		e.mu.Unlock()
+		stagedHydrationPlan, stagedHydrationAccounting = plan, nodeResult
+	} else if node.kind == inputHydrationChunk {
+		e.mu.Lock()
+		var rows HydrationRowAccounting
+		code, reason, rows = e.applyHydrationChunkLocked(node)
+		if code == DispositionHydrationIntegrity {
+			if !e.cancelHydrationGenerationLocked(true) {
+				reason = ReasonAccounting
+			}
+			e.enterSuppressionLocked(lifecycleEventAccountingIntegrity, node, lifecycleReasonAccountingIntegrity)
+		}
+		nodeRows, nodeResult := rows, e.state.hydration.generation.accounting
+		e.mu.Unlock()
+		stagedHydrationRows, stagedHydrationAccounting = nodeRows, nodeResult
+	} else if node.kind == inputHydrationTerminal {
+		e.mu.Lock()
+		code, reason = e.applyHydrationTerminalLocked(node)
+		if code == DispositionHydrationIntegrity {
+			if !e.cancelHydrationGenerationLocked(true) {
+				reason = ReasonAccounting
+			}
+			e.enterSuppressionLocked(lifecycleEventAccountingIntegrity, node, lifecycleReasonAccountingIntegrity)
+		}
+		nodeResult := e.state.hydration.generation.accounting
+		if code == DispositionHydrationTerminalApplied {
+			stagedHydrationFenceCommand = e.state.hydration.generation.fenceCommand
+		}
+		e.mu.Unlock()
+		stagedHydrationAccounting = nodeResult
+	} else if node.kind == inputAggregateIngressFence {
+		e.mu.Lock()
+		code, reason = e.applyAggregateIngressFenceLocked(node)
+		nodeResult := e.state.hydration.generation.accounting
+		e.mu.Unlock()
+		stagedHydrationAccounting = nodeResult
+	} else if node.kind == inputHydrationPolicyAction {
+		e.mu.Lock()
+		code, reason = e.applyHydrationPolicyActionLocked(node)
+		nodeResult := e.state.hydration.generation.accounting
+		e.mu.Unlock()
+		stagedHydrationAccounting = nodeResult
+	} else if node.kind == inputHydrationCancelProof {
+		e.mu.Lock()
+		code, reason = e.applyHydrationCancelProofLocked(node)
+		if code == DispositionHydrationIntegrity {
+			if !e.cancelHydrationGenerationLocked(true) {
+				reason = ReasonAccounting
+			}
+			e.enterSuppressionLocked(lifecycleEventAccountingIntegrity, node, lifecycleReasonAccountingIntegrity)
+		}
+		nodeResult := e.state.hydration.generation.accounting
+		e.mu.Unlock()
+		stagedHydrationAccounting = nodeResult
 	} else if node.kind == inputReplayStart {
 		e.mu.Lock()
 		code, reason = e.applyReplayStartLocked(node)
@@ -734,11 +860,13 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		code, reason = DispositionAccountingIntegrity, ReasonAccounting
 		e.enterSuppressionLocked(lifecycleEventAccountingIntegrity, node, lifecycleReasonAccountingIntegrity)
 	}
-	disposition := transitionDisposition{EngineSequence: node.engineSequence, Code: code, Reason: reason}
-	if code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed || code == DispositionIngressIntegrity {
+	disposition := transitionDisposition{EngineSequence: node.engineSequence, Code: code, Reason: reason,
+		hydrationPlan: stagedHydrationPlan, hydrationRows: stagedHydrationRows, hydrationAccounting: stagedHydrationAccounting,
+		hydrationFenceCommand: stagedHydrationFenceCommand}
+	if code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed || code == DispositionIngressIntegrity || code == DispositionHydrationIntegrity {
 		disposition.SuppressionDisposition = e.state.suppressionDisposition
 	}
-	forceUnavailable := code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed || code == DispositionIngressIntegrity
+	forceUnavailable := code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed || code == DispositionIngressIntegrity || code == DispositionHydrationIntegrity
 	return e.finishTransitionLocked(node, disposition, before, forceUnavailable)
 }
 
