@@ -28,11 +28,12 @@ type Clock func() time.Time
 // Config contains the S1 construction parameters. Capacity and RequiredReserve
 // intentionally have no production defaults.
 type Config struct {
-	Mode            RunMode
-	Clock           Clock
-	Capacity        int
-	RequiredReserve int
-	EvaluationDelay *time.Duration
+	Mode                RunMode
+	Clock               Clock
+	Capacity            int
+	RequiredReserve     int
+	EvaluationDelay     *time.Duration
+	CheckpointSubmitter *checkpoint.Writer
 }
 
 // AdmissionResult is the exhaustive result of one admission call.
@@ -217,6 +218,7 @@ const (
 	inputHydrationPolicyAction
 	inputCheckpointProjection
 	inputCheckpointInstall
+	inputCheckpointTerminal
 )
 
 type queueNode struct {
@@ -249,36 +251,42 @@ type queueNode struct {
 	checkpointCandidate   checkpoint.Candidate
 	checkpointProjection  chan CheckpointProjectionResult
 	checkpointInstall     chan CheckpointInstallResult
+	checkpointTerminal    checkpoint.TerminalResult
 }
 
 type engineState struct {
-	lifecycle               lifecycle
-	binding                 *installedBinding
-	aggregates              aggregateAccounting
-	liveEpoch               uint64
-	liveEpochActive         bool
-	aggregateWriteToken     uint64
-	aggregateAcknowledged   bool
-	aggregateAckPosition    LivePosition
-	aggregateAckReceivedAt  time.Time
-	greatestIngressPosition LivePosition
-	connectionControl       connectionControlState
-	connectionAccounting    connectionControlAccounting
-	replayArtifact          string
-	aggregateIntegrity      bool
-	globalFailure           bool
-	exposedRevision         uint64
-	evaluationRevision      uint64
-	aggregateEvaluator      aggregateEvaluatorState
-	clockMonotonic          bool
-	committedT              *time.Time
-	latestTarget            *time.Time
-	latestTransition        *transitionRecord
-	suppressionDisposition  SuppressionDisposition
-	replay                  replayState
-	hydration               hydrationState
-	checkpointSequence      uint64
-	installedCheckpoint     *InstalledCheckpointFact
+	lifecycle                 lifecycle
+	binding                   *installedBinding
+	aggregates                aggregateAccounting
+	liveEpoch                 uint64
+	liveEpochActive           bool
+	aggregateWriteToken       uint64
+	aggregateAcknowledged     bool
+	aggregateAckPosition      LivePosition
+	aggregateAckReceivedAt    time.Time
+	greatestIngressPosition   LivePosition
+	connectionControl         connectionControlState
+	connectionAccounting      connectionControlAccounting
+	replayArtifact            string
+	aggregateIntegrity        bool
+	globalFailure             bool
+	exposedRevision           uint64
+	evaluationRevision        uint64
+	aggregateEvaluator        aggregateEvaluatorState
+	clockMonotonic            bool
+	committedT                *time.Time
+	latestTarget              *time.Time
+	latestTransition          *transitionRecord
+	suppressionDisposition    SuppressionDisposition
+	replay                    replayState
+	hydration                 hydrationState
+	checkpointSequence        uint64
+	installedCheckpoint       *InstalledCheckpointFact
+	checkpointLastSubmitted   *time.Time
+	checkpointLastAttempted   *time.Time
+	checkpointRequestSequence uint64
+	checkpointOutstanding     map[uint64]checkpoint.Request
+	checkpointOperations      CheckpointOperations
 }
 
 type admissionCounters struct {
@@ -354,11 +362,12 @@ type Engine struct {
 
 	// Test-only fault/pause points are package-private and have no production
 	// constructor or exported mutation path.
-	buildCandidate   func(frozenBinding) (*installedBinding, error)
-	beforeConsume    func(*queueNode)
-	terminal         *Disposition
-	publicationFault publicationFault
-	evaluationFault  bool
+	buildCandidate      func(frozenBinding) (*installedBinding, error)
+	beforeConsume       func(*queueNode)
+	terminal            *Disposition
+	publicationFault    publicationFault
+	evaluationFault     bool
+	checkpointSubmitter *checkpoint.Writer
 }
 
 // New constructs an unbound engine shell and starts its sole consumer.
@@ -371,6 +380,7 @@ func New(config Config) (*Engine, error) {
 		mode: config.Mode, clock: config.Clock, capacity: config.Capacity, reserve: config.RequiredReserve, delay: *config.EvaluationDelay,
 		queue: make([]*queueNode, 0, config.Capacity), changed: make(chan struct{}), done: make(chan struct{}),
 		nextSequence: 1, state: &engineState{lifecycle: lifecycleInitializing, clockMonotonic: true},
+		checkpointSubmitter: config.CheckpointSubmitter,
 	}
 	e.buildCandidate = buildInstalledBinding
 	e.installInitialPublication()
@@ -873,6 +883,10 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 			code, reason = DispositionCheckpointInvalid, ReasonStructural
 		}
 		e.mu.Unlock()
+	} else if node.kind == inputCheckpointTerminal {
+		e.mu.Lock()
+		code, reason = e.applyCheckpointTerminalLocked(node.checkpointTerminal)
+		e.mu.Unlock()
 	} else if node.kind == inputIllegal {
 		code, reason = DispositionIllegalLifecycle, ReasonLifecycle
 	} else if node.kind == inputUnsupportedSchema {
@@ -915,7 +929,13 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		disposition.SuppressionDisposition = e.state.suppressionDisposition
 	}
 	forceUnavailable := code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed || code == DispositionIngressIntegrity || code == DispositionHydrationIntegrity
-	return e.finishTransitionLocked(node, disposition, before, forceUnavailable)
+	final := e.finishTransitionLocked(node, disposition, before, forceUnavailable)
+	if final.SuppressionDisposition == "" && final.Code != DispositionPublicationIntegrity && final.Code != DispositionAccountingIntegrity && final.Code != DispositionClockRegression {
+		e.mu.Lock()
+		e.maybeSubmitCheckpointLocked(node.admissionTime)
+		e.mu.Unlock()
+	}
+	return final
 }
 
 func (e *Engine) applyExhaustionLocked() {

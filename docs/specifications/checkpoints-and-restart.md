@@ -109,7 +109,7 @@ is explicitly created; this preparation task does not start implementation.
 | --- | --- | --- | --- | --- |
 | Component contract | `contract_approved` | Owner approved the complete four-document contract as written on 2026-08-07, including the exact V2 whitelist, fixtures/evidence, eight proofs, three slices, required reviews, and `advancement_mode: delegated` | 2026-08-07; governance commit records the approval | Begin `C7-S1` only when the future C7-C11 goal is explicitly created and launched |
 | `C7-S1` | `accepted` | `P-C7-STATE` and `P-C7-INSTALL` pass; engine/checkpoint race, repository build/test/vet, and diff checks pass; required sole-owner/as-of-`T0`/semantic-completeness/restored-authority/atomic-install review is clean after two focused correction and re-review rounds | 2026-08-07; delegated C7-C11 program gate | Begin approved `C7-S2` |
-| `C7-S2` | `pending` | `P-C7-CODEC`, `P-C7-STORE`, `P-C7-CADENCE`; narrow persistence/atomicity/concurrency review required | 2026-08-07 | Wait for accepted `C7-S1` |
+| `C7-S2` | `accepted` | `P-C7-CODEC`, `P-C7-STORE`, and `P-C7-CADENCE` pass; checkpoint/engine race and repository build/test/vet/diff checks pass; required decoder/filesystem/path/cancellation/writer-concurrency/accounting review is clean after focused correction and re-review | 2026-08-07; delegated C7-C11 program gate | Begin approved `C7-S3` |
 | `C7-S3` | `pending` | `P-C7-LIVE`, `P-C7-REPLAY`, `P-C7-OBJECTIVE`; narrow cross-component identity/restart-equivalence review required | 2026-08-07 | Wait for accepted `C7-S2` |
 | Final component review | `pending` | Mandatory separate read-only review after `C7-S1`–`C7-S3` pass | 2026-08-07 | Wait for all slices |
 
@@ -146,6 +146,46 @@ remain allocated to `C7-S2`/`C7-S3`; the reviewed semantic image and typed seam
 leave `C7-S2` valid as approved. There is no deviation, failed assumption,
 success-invalidating inspection-only claim, escalation condition, or
 substantive drift-audit `yes`.
+
+### C7-S2 acceptance record
+
+`C7-S2` adds the strict `scanner-checkpoint-v1` standard-library JSON codec,
+one private manifest-authorized latest/previous local store, one sequential
+writer with one replaceable pending request, and the narrow engine-owned
+30-second committed-time cadence/result seam. Decode streams exact raw payload
+bytes through private `0600` spooling, SHA-256, duplicate/unknown/trailing and
+structural-path checks, context-aware semantic preflight, and one detached
+decode without co-retaining the full artifact and graph. The store publishes
+only reopened/revalidated immutable generations through the approved temp,
+sync, close, rename, directory-sync, manifest, and bounded-cleanup sequence.
+
+`P-C7-CODEC` proves deterministic payload bytes and raw digest, cancellation,
+strict corruption and semantic rejection, exact required fixed-array presence
+and length, dynamic cardinality preflight, a complete S1 image round trip, and
+a literal 100,000-symbol combined-largest-valid allocation trace. That trace
+includes maximum valid extrema, Activity references/mutable/targets and 57,600
+contributions, qualification bars, proofs, and dirty state; 57,601 distinct
+gate bars are structurally bounded but semantically impossible in the 57,600-
+second session and are explicitly rejected. `P-C7-STORE` proves manifest-only
+authority, latest-to-previous fallback, private path/file/link constraints,
+every durability-step consequence, cancellation, and 256/16 bounded cleanup.
+`P-C7-CADENCE` proves exact aligned versus nonaligned eligibility, ordinary
+committed-time progress while persistence is paused, one-writing/one-pending
+coalescing, bounded undrained shutdown, and terminal identity/accounting with
+invalid, wrong, stale, and duplicate results fenced before consumption.
+
+The required independent review initially found cadence arithmetic, fixed-array
+truncation/defaulting, terminal-consumption, incremental-allocation, shutdown,
+cleanup, permission, semantic-preflight, cancellation, and proof-shape gaps.
+All findings were corrected in scope; the final focused re-review is clean.
+Verification passed with checkpoint/engine race tests, repository build and
+tests, `go vet ./...`, focused uncached proofs including the 85-second literal-
+maximum codec run, and `git diff --check`. Inspection confirms exactly one C7
+writer goroutine, standard-library-only dependencies, filesystem ownership
+confined to the C7 codec/store/writer, and no provider, CLI, readiness,
+live/replay composition, or objective benchmark. `C7-S3` remains valid as
+approved. There is no deviation, failed assumption, success-invalidating
+inspection-only claim, escalation condition, or substantive drift-audit `yes`.
 
 ## 1. Outcome and user consequence
 
