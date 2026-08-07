@@ -82,7 +82,18 @@ type Values struct {
 
 // Evidence values have private validity fields so ordinary callers cannot
 // construct successful replay facts. Zero values are always rejected.
-type StartEvidence struct{ evidence evidence }
+type StartAuthority uint8
+
+const (
+	ArtifactInterval StartAuthority = iota
+	FreshSession
+	InstalledCheckpoint
+)
+
+type StartEvidence struct {
+	evidence  evidence
+	authority StartAuthority
+}
 type RecordEvidence struct {
 	evidence evidence
 	record   record
@@ -105,13 +116,20 @@ type evidence struct {
 	totalRecords    uint64
 }
 
-func (e StartEvidence) Valid() bool             { return e.evidence.valid }
-func (e StartEvidence) Complete() bool          { return e.evidence.complete }
-func (e StartEvidence) ArtifactID() string      { return e.evidence.artifactID }
-func (e StartEvidence) BindingID() string       { return e.evidence.bindingID }
-func (e StartEvidence) Start() time.Time        { return e.evidence.start }
-func (e StartEvidence) End() time.Time          { return e.evidence.end }
-func (e StartEvidence) TotalRecords() uint64    { return e.evidence.totalRecords }
+func (e StartEvidence) Valid() bool               { return e.evidence.valid }
+func (e StartEvidence) Complete() bool            { return e.evidence.complete }
+func (e StartEvidence) ArtifactID() string        { return e.evidence.artifactID }
+func (e StartEvidence) BindingID() string         { return e.evidence.bindingID }
+func (e StartEvidence) Start() time.Time          { return e.evidence.start }
+func (e StartEvidence) End() time.Time            { return e.evidence.end }
+func (e StartEvidence) TotalRecords() uint64      { return e.evidence.totalRecords }
+func (e StartEvidence) Authority() StartAuthority { return e.authority }
+func (e StartEvidence) WithAuthority(authority StartAuthority) StartEvidence {
+	if authority <= InstalledCheckpoint {
+		e.authority = authority
+	}
+	return e
+}
 func (e RecordEvidence) Valid() bool            { return e.evidence.valid }
 func (e RecordEvidence) Complete() bool         { return e.evidence.complete }
 func (e RecordEvidence) ArtifactID() string     { return e.evidence.artifactID }

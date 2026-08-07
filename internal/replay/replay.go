@@ -103,18 +103,19 @@ type Result struct {
 }
 
 type Source struct {
-	handle        *replayartifact.Handle
-	artifactID    string
-	engine        *engine.Engine
-	clock         *SimulatedClock
-	pace          Pace
-	cursor        *playback.Cursor
-	start         playback.StartEvidence
-	nextGroup     time.Time
-	accounting    Accounting
-	terminal      bool
-	failureReason Reason
-	pacer         wallPacer
+	handle         *replayartifact.Handle
+	artifactID     string
+	engine         *engine.Engine
+	clock          *SimulatedClock
+	pace           Pace
+	startAuthority playback.StartAuthority
+	cursor         *playback.Cursor
+	start          playback.StartEvidence
+	nextGroup      time.Time
+	accounting     Accounting
+	terminal       bool
+	failureReason  Reason
+	pacer          wallPacer
 }
 
 type wallPacer struct {
@@ -132,6 +133,43 @@ func NewSource(handle *replayartifact.Handle, owner *engine.Engine, clock *Simul
 	return &Source{handle: handle, artifactID: handle.Metadata().ArtifactID, engine: owner, clock: clock, pace: pace, pacer: p}, nil
 }
 
+// NewCheckpointSource binds an already-installed semantic baseline to one
+// ordinary Component 4 continuation. Artifact record delivery may begin later
+// because an interval can be empty, but the artifact interval identity itself
+// must begin exactly at the installed cutoff; earlier repeats and later gaps
+// never reach the replay engine.
+func NewCheckpointSource(handle *replayartifact.Handle, owner *engine.Engine, clock *SimulatedClock, pace Pace, installed engine.InstalledCheckpointFact) (*Source, error) {
+	if installed.BindingIdentity == "" || installed.T0.IsZero() || handle == nil {
+		return nil, errors.New("checkpoint replay requires an installed cutoff")
+	}
+	metadata := handle.Metadata()
+	if metadata.BindingIdentity != installed.BindingIdentity || metadata.ReplayStart != installed.T0 {
+		return nil, errors.New("checkpoint replay cutoff mismatch")
+	}
+	source, err := NewSource(handle, owner, clock, pace)
+	if err == nil {
+		source.startAuthority = playback.InstalledCheckpoint
+	}
+	return source, err
+}
+
+// NewCompleteFallbackSource is the only C7 fallback after checkpoint rejection:
+// the ordinary C4 artifact must itself prove complete input from session start.
+func NewCompleteFallbackSource(handle *replayartifact.Handle, owner *engine.Engine, clock *SimulatedClock, pace Pace) (*Source, error) {
+	if handle == nil {
+		return nil, errors.New("fresh replay fallback requires an artifact")
+	}
+	metadata := handle.Metadata()
+	if metadata.Mode != replayartifact.CompleteFinalBars || metadata.ReplayStart != metadata.SessionStart {
+		return nil, errors.New("fresh replay fallback requires complete input from session start")
+	}
+	source, err := NewSource(handle, owner, clock, pace)
+	if err == nil {
+		source.startAuthority = playback.FreshSession
+	}
+	return source, err
+}
+
 func (s *Source) Start(ctx context.Context) error {
 	if s == nil || ctx == nil || s.cursor != nil || s.terminal {
 		return errors.New("replay start is unavailable")
@@ -146,6 +184,7 @@ func (s *Source) Start(ctx context.Context) error {
 		s.failPlayback(err)
 		return err
 	}
+	start = start.WithAuthority(s.startAuthority)
 	s.cursor, s.start, s.nextGroup = cursor, start, start.Start()
 	s.accounting.ArtifactRecords = start.TotalRecords()
 	s.accounting.UnreadRecords = start.TotalRecords()

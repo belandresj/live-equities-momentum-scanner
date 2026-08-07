@@ -576,6 +576,9 @@ func (e *Engine) installCheckpointLocked(candidate checkpoint.Candidate) Checkpo
 	scratch.state.aggregateEvaluator.current = cloneAggregateEvaluation(staged)
 	scratch.state.installedCheckpoint = &fact
 	scratch.state.checkpointSequence = image.Sequence
+	if e.mode == RunModeLive {
+		scratch.state.hydration.checkpointT0 = immutableTime(image.T0)
+	}
 	// Sole atomic apply point: the prior bound fresh graph remains untouched on
 	// every return above.
 	scratch.state.latestTransition = e.state.latestTransition

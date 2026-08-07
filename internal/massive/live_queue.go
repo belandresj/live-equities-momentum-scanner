@@ -84,6 +84,7 @@ type liveFrameQueue struct {
 	lastReceipt     time.Time
 	greatestRaw     uint64
 	nextFenceMarker uint64
+	now             func() time.Time
 	gateOpen        bool
 	accounting      LiveQueueAccounting
 }
@@ -95,7 +96,7 @@ func validateLiveQueueConfig(config LiveQueueConfig) bool {
 }
 
 func newLiveFrameQueue(config LiveQueueConfig) *liveFrameQueue {
-	return &liveFrameQueue{config: config, frames: make([]queuedLiveFrame, 0, config.FrameSlots+2), changed: make(chan struct{}), gateOpen: true, next: 1, nextFenceMarker: 1}
+	return &liveFrameQueue{config: config, frames: make([]queuedLiveFrame, 0, config.FrameSlots+2), changed: make(chan struct{}), gateOpen: true, next: 1, nextFenceMarker: 1, now: func() time.Time { return time.Now().UTC() }}
 }
 
 func (q *liveFrameQueue) notifyLocked() {
@@ -158,7 +159,7 @@ func (q *liveFrameQueue) enqueueIngressFence(ctx context.Context, fact Aggregate
 			fact.ThroughFrameSequence = q.greatestRaw
 			fact.MarkerOrdinal = q.nextFenceMarker
 			q.nextFenceMarker++
-			fact.CapturedAt = time.Now().UTC()
+			fact.CapturedAt = q.now()
 			fact.State = engine.AggregateIngressFenceComplete
 			q.frames = append(q.frames, queuedLiveFrame{epoch: fact.Command.ConnectionEpoch(), receivedAt: fact.CapturedAt,
 				kind: queuedLiveIngressFence, ingressFence: fact})
@@ -185,7 +186,7 @@ func (q *liveFrameQueue) canceledIngressFence(command engine.HydrationFenceComma
 		return AggregateIngressFenceFact{}, false
 	}
 	fact := AggregateIngressFenceFact{Command: command, State: engine.AggregateIngressFenceCanceled,
-		ThroughFrameSequence: q.greatestRaw, MarkerOrdinal: q.nextFenceMarker, CapturedAt: time.Now().UTC()}
+		ThroughFrameSequence: q.greatestRaw, MarkerOrdinal: q.nextFenceMarker, CapturedAt: q.now()}
 	q.nextFenceMarker++
 	return fact, true
 }

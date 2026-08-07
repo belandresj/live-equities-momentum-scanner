@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -241,14 +242,24 @@ func component4TestBinding(t *testing.T, symbols []string) reference.Binding {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch {
 		case request.URL.Path == "/v3/reference/tickers":
-			records := make([]map[string]any, len(symbols))
-			for index, symbol := range symbols {
+			offset, _ := strconv.Atoi(request.URL.Query().Get("cursor"))
+			end := min(offset+1000, len(symbols))
+			records := make([]map[string]any, end-offset)
+			for index, symbol := range symbols[offset:end] {
 				records[index] = map[string]any{"ticker": symbol, "active": true, "market": "stocks", "locale": "us", "type": "CS"}
 			}
-			json.NewEncoder(writer).Encode(map[string]any{"status": "OK", "count": len(records), "results": records})
+			response := map[string]any{"status": "OK", "count": len(records), "results": records}
+			if end < len(symbols) {
+				query := request.URL.Query()
+				query.Del("apiKey")
+				query.Set("cursor", strconv.Itoa(end))
+				response["next_url"] = server.URL + request.URL.Path + "?" + query.Encode()
+			}
+			json.NewEncoder(writer).Encode(response)
 		case strings.HasPrefix(request.URL.Path, "/v2/aggs/grouped/locale/us/market/stocks/"):
 			rows := make([]map[string]any, len(symbols))
 			for index, symbol := range symbols {

@@ -51,6 +51,58 @@ type LoadResult struct {
 	Candidates  [2]CandidateLoadDisposition
 }
 
+type CandidateAuthority uint8
+
+const (
+	CandidateLatest CandidateAuthority = iota
+	CandidatePrevious
+)
+
+// LoadCandidate decodes exactly one manifest-authorized generation. The
+// coordinator asks for previous only after latest fails storage or engine
+// validation, so two large detached graphs are never retained together.
+func (s *Store) LoadCandidate(ctx context.Context, authority CandidateAuthority) LoadResult {
+	if ctx == nil {
+		return LoadResult{Disposition: LoadCanceled}
+	}
+	operation, cancel := context.WithTimeout(ctx, s.deadline)
+	defer cancel()
+	manifestData, err := readSafeFile(filepath.Join(s.directory, "manifest.json"), ManifestByteLimit)
+	if err != nil {
+		return LoadResult{Disposition: LoadUnavailable}
+	}
+	var manifest Manifest
+	if strictJSON(manifestData, &manifest) != nil || !validManifest(manifest) {
+		return LoadResult{Disposition: LoadUnavailable}
+	}
+	if authority != CandidateLatest && authority != CandidatePrevious {
+		return LoadResult{Disposition: LoadInvalid}
+	}
+	entry := manifest.Latest
+	disposition := LoadedLatest
+	if authority == CandidatePrevious {
+		entry, disposition = manifest.Previous, LoadedPrevious
+	}
+	if entry == nil {
+		return LoadResult{Disposition: LoadUnavailable}
+	}
+	candidate, loadErr := s.loadEntry(operation, *entry)
+	result := LoadResult{Entry: *entry, LatestError: loadErr}
+	if loadErr == nil {
+		result.Disposition, result.Candidate = disposition, candidate
+		return result
+	}
+	switch {
+	case errors.Is(loadErr, ErrCanceled):
+		result.Disposition = LoadCanceled
+	case errors.Is(loadErr, ErrIncompatible):
+		result.Disposition = LoadIncompatible
+	default:
+		result.Disposition = LoadInvalid
+	}
+	return result
+}
+
 type CandidateLoadDisposition string
 
 const (
@@ -152,6 +204,8 @@ func (s *Store) Load(ctx context.Context) LoadResult {
 	if ctx == nil {
 		return LoadResult{Disposition: LoadCanceled}
 	}
+	operation, cancel := context.WithTimeout(ctx, s.deadline)
+	defer cancel()
 	manifestData, err := readSafeFile(filepath.Join(s.directory, "manifest.json"), ManifestByteLimit)
 	if err != nil {
 		return LoadResult{Disposition: LoadUnavailable}
@@ -168,7 +222,7 @@ func (s *Store) Load(ctx context.Context) LoadResult {
 		if entry == nil {
 			continue
 		}
-		candidate, err := s.loadEntry(ctx, *entry)
+		candidate, err := s.loadEntry(operation, *entry)
 		if err == nil {
 			outcomes[index] = CandidateLoaded
 			if index == 0 {

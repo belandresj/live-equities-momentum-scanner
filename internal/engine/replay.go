@@ -137,9 +137,17 @@ func (e *Engine) applyReplayStartLocked(node *queueNode) (DispositionCode, Dispo
 		v.Start() != v.Start().UTC() || v.End() != v.End().UTC() || v.Start().Nanosecond() != 0 || v.End().Nanosecond() != 0 {
 		return DispositionReplayFailed, ReasonReplayEvidence
 	}
+	checkpointContinuation := e.state.installedCheckpoint != nil
+	if checkpointContinuation {
+		if v.Authority() != playback.InstalledCheckpoint || e.state.installedCheckpoint.BindingIdentity != e.state.binding.identity || e.state.installedCheckpoint.T0 != v.Start() {
+			return DispositionReplayFailed, ReasonReplayEvidence
+		}
+	} else if v.Authority() == playback.InstalledCheckpoint || v.Authority() == playback.FreshSession && v.Start() != e.state.binding.sessionStart {
+		return DispositionReplayFailed, ReasonReplayEvidence
+	}
 	e.state.replay = replayState{validated: true, complete: v.Complete(), artifactID: v.ArtifactID(), bindingID: v.BindingID(), start: v.Start(), end: v.End(), totalRecords: v.TotalRecords(), nextOrdinal: 1, nextGroup: v.Start()}
 	e.state.replayArtifact = v.ArtifactID()
-	if v.Complete() {
+	if v.Complete() && !checkpointContinuation {
 		if e.state.aggregateEvaluator.coverage == nil {
 			e.state.aggregateEvaluator.coverage = make(map[int]aggregateCoverageConsequence, len(e.state.binding.symbols))
 		}

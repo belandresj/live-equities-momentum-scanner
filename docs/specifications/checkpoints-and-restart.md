@@ -1,8 +1,9 @@
 # Checkpoints and restart
 
-**Status:** Component 7 contract revised under the Version 1 Release Program;
-`C7-S1`/`C7-S2` evidence accepted and reopenable, preserved `C7-S3` correction
-work active
+**Status:** Component 7 finally accepted under the Version 1 Release Program;
+`C7-S1` through `C7-S3`, all eight primary proofs, cumulative verification,
+and the mandatory final read-only review are clean and reopenable by later V1
+integration evidence
 
 **Owner boundary and reconnaissance approval:** Pre-approved 2026-08-07 by the
 owner in the initiating Component 7 task, subject to the exact Sections 1–7
@@ -92,19 +93,20 @@ and then continues. Models do not guess among details or load unrelated
 dependency material.
 
 **Contract-wide coverage and acceptance:** Sections 1–7 retain the fixed Phase
-1 boundary. The details own the current eight-requirement/proof/slice plan.
-Those lower-level allocations are current execution guidance, not frozen
-authority, and can be corrected under the V1 program.
+1 boundary. All eight requirements and primary proofs pass. The corrected S3
+objective and focused re-review are clean, so Component 7 is finally accepted.
+This remains accepted evidence rather than a frozen design and may be reopened
+by later V1 integration evidence.
 
 ## Authoritative delivery-state ledger
 
 | Item | State | Evidence and required review | Recorded at | Next action |
 | --- | --- | --- | --- | --- |
-| Component contract | `revised_active` | Owner revised the contract through the V1 Release Program after the S3 performance proof exposed an unsuitable inherited local-operation gate and excessive proof cost | 2026-08-07 | Correct and finish `C7-S3`; reopen S1/S2 mechanics only if evidence implicates them |
-| `C7-S1` | `accepted_reopenable` | `P-C7-STATE` and `P-C7-INSTALL` pass; existing semantic/ownership review remains valid | 2026-08-07 | Preserve unless S3 evidence identifies a state/install defect |
-| `C7-S2` | `accepted_reopenable` | `P-C7-CODEC`, `P-C7-STORE`, and `P-C7-CADENCE` pass for correctness/boundedness. Current S3 evidence shows local load is slow enough to justify codec/decoder correction but does not invalidate durability semantics. | 2026-08-07 | Optimize or replace mechanics if useful to V1 end-to-end behavior; retain valid persistence proofs |
-| `C7-S3` | `correction_active` | `P-C7-LIVE`/`P-C7-REPLAY` work is preserved. The current 5,500-symbol performance run used a 4,393,853-byte artifact: projection 62.8 ms, encode 11.3 ms, write 9.92 s, load 9.82 s, install 63.3 ms, catch-up 12.64 s, and end-to-end restart 22.53 s. It failed only the non-product 5-second load/install gate after a 339.48-second proof command. | 2026-08-07 | Apply the corrected 6,000-symbol objective, per-trial deadlines, short-test separation, and meaningful fresh-control comparison |
-| Final component review | `pending` | Mandatory separate read-only review after `C7-S1`–`C7-S3` pass | 2026-08-07 | Wait for all slices |
+| Component contract | `accepted_reopenable` | All eight requirements/proofs pass under the corrected V1 contract; no fixed-authority conflict remains | 2026-08-07 | Advance sequentially to C8; reopen only if later evidence invalidates a claim |
+| `C7-S1` | `accepted_reopenable` | `P-C7-STATE` and `P-C7-INSTALL` pass; S3 preserved their semantic/ownership evidence | 2026-08-07 | Complete |
+| `C7-S2` | `accepted_reopenable` | `P-C7-CODEC`, `P-C7-STORE`, and `P-C7-CADENCE` pass. S3 added bounded lazy latest/previous selection without changing durability semantics; the isolated 100,000-symbol maximum-shape proof passes. | 2026-08-07 | Complete |
+| `C7-S3` | `accepted_reopenable` | `P-C7-LIVE` and `P-C7-REPLAY` pass, including engine-owned replay cutoff/fallback authority. The exact preflighted 6,000-symbol/961-correction artifact is 1,674,157 bytes (`425f997f4ed161a0faf3a3c44cf0e2b5d577af55ae5c0ec5111898e5edd4c03c`). Three separately bounded trials produced checkpoint median/max 10.286/10.290 seconds versus 36.641 seconds fresh median: 71.9% faster and below 60 seconds on every trial. | 2026-08-07 | Complete |
+| Final component review | `accepted` | `gpt-5.6-sol` medium found four blockers: caller-authorized replay prefix, under-shaped objective/preflight, incomplete trial deadlines, and eager unbounded fallback loading. All received direct corrections and focused regressions; the same reviewer found the affected boundaries clean. Ordinary verification and focused race pass. One parallel multi-package race run produced a non-reproducing fake-provider failure; the exact race test and full Massive race package rerun passed. | 2026-08-07 | Complete |
 
 ### C7-S1 acceptance record
 
@@ -179,6 +181,40 @@ confined to the C7 codec/store/writer, and no provider, CLI, readiness,
 live/replay composition, or objective benchmark. `C7-S3` remains valid as
 approved. There is no deviation, failed assumption, success-invalidating
 inspection-only claim, escalation condition, or substantive drift-audit `yes`.
+
+### C7-S3 acceptance record
+
+`C7-S3` composes one compatible manifest-authorized checkpoint with the real
+C5 acknowledgement and C6 `[T0,R)` worker/ledger/fence path, and separately
+continues the ordinary C4 runner from an engine-owned cutoff. Latest and
+previous candidates are decoded one at a time under the store deadline; the
+previous generation is opened only after latest storage or engine rejection.
+Replay start authority distinguishes an explicitly scoped C4 artifact interval
+from fresh-session recovery and checkpoint continuation: fresh recovery
+requires `start == S`, while continuation requires the target engine's own
+binding and installed `T0`. A foreign or forged public fact cannot authorize a
+missing prefix.
+
+The corrected objective preflights and byte-compares the exact timed artifact:
+6,000 sorted symbols, 961 correction-tail records, every restart-required state
+family, 1,674,157 bytes, SHA-256
+`425f997f4ed161a0faf3a3c44cf0e2b5d577af55ae5c0ec5111898e5edd4c03c`,
+6,000 checkpoint requests/3,000 normalized records, and an equivalent
+6,000-request/180,000-record fresh control. Separate two-minute contexts bound
+each checkpoint and fresh trial through binding, install, handshake, hydration,
+fence, projection, close, and engine wait. Checkpoint restart measured 10.159,
+10.290, and 10.286 seconds; fresh recovery measured 36.498, 36.641, and 36.668
+seconds. The checkpoint median is 71.9% faster than fresh and the maximum is
+below the 60-second setting.
+
+The first final review found four consequential false-success/boundedness
+defects; all were corrected and the focused re-review was clean. Full short
+verification, the isolated maximum-shape proof, and focused race verification
+pass. A single provider-failed terminal appeared only in one parallel
+multi-package race run and did not reproduce in either the exact race test or
+the complete Massive race package rerun; no semantic claim relies on that
+failed run. Market-hours validation remains pending and is not a C7 or private
+V1 RC prerequisite.
 
 ## 1. Outcome and user consequence
 
