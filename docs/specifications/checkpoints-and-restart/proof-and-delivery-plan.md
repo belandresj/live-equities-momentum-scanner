@@ -3,7 +3,7 @@
 **Parent contract:** [checkpoints-and-restart.md](../checkpoints-and-restart.md)
 **Normative responsibility:** Exact reconnaissance/reuse ledger, complete
 requirement/proof allocation, sequential slice plan, independent-review
-triggers, unattended goal-orchestration protocol, discretion, completed-
+triggers, V1 correction/orchestration protocol, discretion, completed-
 contract checklist, and drift audit
 **Controlling requirements:** All Phase 1 and Component 7 requirements routed
 by the parent
@@ -53,7 +53,7 @@ architecture.
 | `C7-CADENCE-01` | `P-C7-CADENCE`: engine/writer concurrency and terminal-accounting trace | Session-aligned 30-second committed-time eligibility never blocks evaluation; one writing plus one pending is the maximum; replacement terminals the old pending request; stale/duplicate/late results cannot become current success. Counterexample: writer backlog aliases engine state, drops a request from accounting, or file success advances `T`. | Under paused writer and advancing/correcting engine, `submitted=in_progress+pending+terminal`, occupancy bounds hold, ordinary `T` advances, views stay immutable, and end/cancel terminates or fences every result. Does not prove wall latency. | V2 coalescing technique; Component 2 admission/accounting proof style | `C7-S2` |
 | `C7-LIVE-01` | `P-C7-LIVE`: Components 1–7 checkpoint-restart equivalence trace | Valid install at `T0`, new C5 ack `R`, exact C6 `[T0,R)` value/empty work, overlapping live correction, fence, and ordinary C3 evaluator equal uninterrupted processing; T/Q/old epochs are absent. Counterexample: load alone claims current, catch-up begins at `T0+1s`, history overwrites prefix, empty fabricates a bar, or dead epoch rejects live correction. | Canonical identities, coverage classes, feature/qualification state, population counters, rows, lifecycle, and publication match the uninterrupted oracle after catch-up; T/Q state is empty. No live-provider/SLA/readiness claim. | Accepted C1–C6 fake socket/HTTP/engine seams; new C7 checkpoint fixture | `C7-S3` |
 | `C7-REPLAY-01` | `P-C7-REPLAY`: checkpointed versus full replay differential at two playback paces | Exact artifact cutoff and ordinary C4 delivery reproduce full replay; repeated/pre-`T0` or gapped continuation cannot pass. Counterexample: checkpoint plus duplicated prefix double-counts Activity/qualification while final ranking appears plausible. | Full-from-`S` and checkpoint-from-`T0` outputs/counters equal at logical checkpoints and end at both paces; bad cutoff rejects and complete-from-`S` fallback succeeds. Does not prove live epochs, latency, or T/Q. | Accepted C4 artifact/runner fixtures plus C7 state fixture; no V2 reuse | `C7-S3` |
-| `C7-OBJECTIVE-01` | `P-C7-OBJECTIVE`: recorded segmented five-run reference benchmark with fresh control | Compatible local load/install is <=5s and 5,500-symbol/30-second-gap restart is <=60s and faster than fresh control. Counterexample: benchmark silently omits success-bearing state, mocks C6 work, uses a tiny universe, or reports only a best run. | Fixture/cardinalities/bytes/host and five projection-through-catch-up segments are recorded; every run meets both targets and checkpoint median beats fresh median. Does not prove live-provider or 100,000-symbol deployed capacity. | V2 timing/cadence/5,500-symbol evidence; product 130s rejection; actual C7 implementation | `C7-S3` |
+| `C7-OBJECTIVE-01` | `P-C7-OBJECTIVE`: validated, individually bounded three-trial 6,000-symbol reference benchmark with equivalent fresh controls | Under the current program-selected settings, every checkpoint trial is <=60s end to end and checkpoint median is at least 20% faster than fresh recovery under the same binding, `R`, provider fixture, worker limits, and host. Recorded measured evidence may revise those settings, but restart must remain materially faster than equivalent fresh recovery and below the product's rejected approximately 130-second precedent. Counterexample: a tiny/mismatched fixture, mocked C6 work, unbounded trial, or local segment threshold masquerades as the product recovery claim. | Fixture schema/hash/bytes/cardinalities/corrections/state families/planned work/host and every segment are validated before timing and recorded; local load/install is diagnostic, not a five-second gate. Does not prove live-provider or 100,000-symbol deployed capacity. | Current S3 run: 4.39 MB, load 9.82s, install 63ms, catch-up 12.64s, end-to-end 22.53s; product 130s rejection; owner V1 correction | `C7-S3` |
 
 No secondary proof layer duplicates these claims. `P-C7-LIVE` is intentionally
 cross-component rather than a second install proof: it establishes C5/C6
@@ -70,15 +70,15 @@ review or roll back independently.
 | Slice | Coherent outcome | Requirement IDs and primary proofs | Dependencies / entry state | Allowed ownership or packages | Approved V2 whitelist | Acceptance record | Explicitly deferred behavior |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `C7-S1` | A bound engine can project one complete immutable semantic image at committed `T0`, validate/install it all-or-nothing in a fresh engine, regenerate the ordinary evaluation, and accept valid new-run correction authority | `C7-STATE-01` / `P-C7-STATE`; `C7-INSTALL-01` / `P-C7-INSTALL` | Finally accepted C1–C6; completed C7 approval; no C7 code | `internal/engine` and a C7-private semantic model under `internal/checkpoint` if needed; no filesystem, goroutine, CLI, or provider code | V2 scanner checkpoint source and named scanner tests only | Exact state coverage/diff; install mutation results; owner/apply inspection; affected engine tests and race; repository compile/test/vet; construction/success/failure walkthrough; required review result; next-slice validity | On-disk codec/store/writer/cadence; live/replay composition; timing target |
-| `C7-S2` | The S1 image has one strict bounded JSON codec and private latest/previous local store; one asynchronous writer obeys cadence, coalescing, exact request accounting, and failure containment without blocking engine progress | `C7-CODEC-01` / `P-C7-CODEC`; `C7-STORE-01` / `P-C7-STORE`; `C7-CADENCE-01` / `P-C7-CADENCE` | Accepted `C7-S1`; its semantic schema/install interface is fixed | C7-owned codec/store/writer packages plus the narrow `internal/engine` request/result/cadence seam; standard library only | V2 Massive checkpoint source and named Massive checkpoint tests only | Golden/corrupt/maximum-shape results; exact-step authority table; queue/accounting trace; codec/store/engine tests and race; repository build/test/vet; path/dependency/ownership inspection; required review; next-slice validity | Live C5/C6 restart composition; replay runner continuation; objective benchmark |
-| `C7-S3` | Compatible latest/previous checkpoint selection drives real C6 `[T0,R)` startup and optional C4 replay continuation with uninterrupted-state equivalence, and the recorded reference objective passes | `C7-LIVE-01` / `P-C7-LIVE`; `C7-REPLAY-01` / `P-C7-REPLAY`; `C7-OBJECTIVE-01` / `P-C7-OBJECTIVE` | Accepted `C7-S1`/`S2`; accepted C4/C5/C6 interfaces remain unchanged | Narrow engine/C4 replay-runner/C5-C6 fake-boundary wiring and C7 integration/benchmark artifacts; no production runtime/readiness code | None | Full live/replay differential outputs; segmented benchmark/control; complete C7 proofs and affected C1–C6 regressions; repository build/test/vet/race/diff; required review; final-review readiness | Component 8 production config/readiness/capacity/shutdown; C9 T/Q; live-provider cutover |
+| `C7-S2` | The S1 image has one strict bounded persisted codec and private latest/previous local store; one asynchronous writer obeys cadence, coalescing, exact request accounting, and failure containment without blocking engine progress | `C7-CODEC-01` / `P-C7-CODEC`; `C7-STORE-01` / `P-C7-STORE`; `C7-CADENCE-01` / `P-C7-CADENCE` | Accepted `C7-S1`; semantic completeness/install authority remains fixed, while codec mechanics are reopenable | C7-owned codec/store/writer packages plus the narrow `internal/engine` request/result/cadence seam; current standard-library JSON may be optimized/replaced under the V1 correction loop | Current recorded V2 Massive checkpoint sources/tests; expand only after recording the new in-boundary source and proof | Preserve golden/corrupt/durability/queue correctness; rerun only affected codec/store proofs and race if S3 correction changes mechanics; keep the 100,000-symbol case outside short tests | Live C5/C6 restart composition; replay runner continuation; corrected objective benchmark |
+| `C7-S3` | Compatible latest/previous checkpoint selection drives real C6 `[T0,R)` startup and optional C4 replay continuation with uninterrupted-state equivalence, and the corrected 6,000-symbol reference objective passes | `C7-LIVE-01` / `P-C7-LIVE`; `C7-REPLAY-01` / `P-C7-REPLAY`; `C7-OBJECTIVE-01` / `P-C7-OBJECTIVE` | Accepted/reopenable `C7-S1`/`S2`; accepted C4/C5/C6 meanings remain unchanged | Narrow engine/C4 replay-runner/C5-C6 fake-boundary wiring and C7 integration/benchmark artifacts; any codec correction stays inside C7; no C8 runtime/readiness code | None unless a recorded C7 codec correction requires an in-boundary whitelist revision | Live/replay differential outputs; validated three-trial 6,000-symbol benchmark and equivalent fresh controls with per-trial deadlines; affected regressions/short suite/race; narrow identity/fence review; final-review readiness | C8 production config/readiness/capacity/shutdown; C9 T/Q; live-provider validation |
 
-Each slice uses the repository slice-acceptance tier. Race detection is required
-for all three: S1 changes mutable-owner/install isolation, S2 changes queues and
-writer synchronization, and S3 composes concurrent live/recovery paths. S3's
-acceptance reruns the complete eight-proof C7 ledger because it is the first
-real persisted-to-live/replay vertical path. Final review then uses the final-
-component tier and a separate reviewer.
+Each slice uses the repository slice-acceptance tier. Historical S1/S2 race and
+review evidence remains valid unless a correction touches its boundary. S3
+runs its three allocated proofs, affected regressions, short repository check,
+and implicated race paths; it does not rerun every expensive C7 proof after
+each correction. The complete current ledger runs once after S3 stabilizes for
+final component review.
 
 ### 16.1 Required independent reviews
 
@@ -87,85 +87,68 @@ component tier and a separate reviewer.
 - `C7-S2`: narrow untrusted-decoder, filesystem publication/durability,
   path-safety, cancellation, writer-concurrency, and request-accounting review
   before S3.
-- `C7-S3`: narrow C4/C5/C6 identity/cutoff/fence, uninterrupted-equivalence,
-  benchmark-validity, and deferred-operations-boundary review before final.
+- `C7-S3`: narrow C4/C5/C6 identity/cutoff/fence and uninterrupted-equivalence
+  review before final. Benchmark premises/results are part of the primary proof
+  record, not a second broad review.
 - Final: mandatory separate read-only complete-component review.
 
 Use `gpt-5.6-sol` with medium reasoning as required by `AGENTS.md`. Send in-scope
 findings to the active implementer, then use the same reviewer for focused
-re-review when practical. A reviewer supplies evidence; it cannot approve a
-contract change, whitelist expansion, revised proof, or slice boundary.
+re-review when practical. A reviewer supplies evidence; it does not edit,
+stage, commit, or expand scope. Under the V1 program the orchestrator may revise
+the lower-level contract, whitelist, proof, or slice and records that correction.
 
-### 16.2 C7-C11 single-goal unattended execution protocol
+### 16.2 Version 1 single-goal execution protocol
 
-The owner approved this completed contract, whitelist, proof allocation,
-slices, reviews, and `advancement_mode: delegated` on 2026-08-07. One future
-goal orchestrator may begin at `C7-S1` and execute the sequential C7-C11
-program without clean-gate owner messages under the standing authority in
-`AGENTS.md` and the implementation process:
+The owner revised this contract and replaced the former unattended authority
+with the [Version 1 Release Program](../../v1-release-program.md). A future goal
+resumes from `C7-S3` and may revise C7 lower-level decisions without another
+owner message:
 
-1. Treat the parent delivery ledger as durable workflow state and resume from
-   the first nonaccepted eligible item.
-2. Keep at most one write-capable implementation subagent active. Give it only
-   the current slice's routed contract/dependencies, whitelist, assignment,
-   proofs, verification, prohibitions, and stop conditions.
-3. After the writer is quiescent, use separate read-only subagents for the
-   required narrow review and final component review; follow the model/effort
-   policy above.
-4. Return unambiguous in-scope findings to the implementer, rerun affected
-   proofs/verification, and obtain focused re-review.
-5. The orchestrator—not the reviewer—performs the conformance walkthrough and
-   evaluates the objective delegated gate. When completely clean, it updates
-   the parent ledger to `accepted` and immediately starts the next approved
-   slice.
-6. After all slices pass, run final-component verification/review. If clean,
-   record C7 final acceptance and mechanically synchronize
-   `docs/specification-map.md`.
-7. Continue through C8-C11 in order. Each future skeleton and completed
-   contract receives its separate mandatory independent review and clean
-   focused re-review before the orchestrator records approval. Preserve the
-   exact one-component lookahead and V2-reconnaissance ordering.
-8. The orchestrator alone stages exact paths and makes separate local commits
-   after every clean skeleton approval, completed-contract approval, accepted
-   slice, final component acceptance, and distinct vertical milestone, and only
-   after all writers and reviewers are quiescent. It never pushes, rebases,
-   amends, rewrites history, deletes branches, or uses a destructive reset.
+1. Preserve the existing dirty S3 code and the measured failed-proof record in
+   the parent ledger.
+2. Classify each failure and revise the lowest unsuitable contract, whitelist,
+   fixture, benchmark, proof, slice, or implementation decision.
+3. Reopen S1/S2 only when the new evidence implicates their behavior; preserve
+   unaffected correctness, durability, and review evidence.
+4. Keep at most one write-capable implementation worker. Reviewers are read-
+   only and run only after the writer is quiescent.
+5. During correction, run the failed proof and direct regressions only. After
+   S3 stabilizes, run its complete acceptance tier once, then one final C7
+   read-only review and focused finding re-review if needed.
+6. Record final C7 acceptance, synchronize the specification map, and continue
+   sequentially through the owner-approved C8-C11 boundary plans.
+7. Complete each future contract just in time, using at most two slices unless
+   a distinct consequential boundary requires a third. Contract review is
+   risk-triggered; final component review is always required once.
+8. Stage exact paths and make local commits at coherent correction/planning
+   milestones, accepted slices, final components, and vertical milestones only
+   while all workers/reviewers are quiescent. Never push or rewrite history.
 
-For C7, this protocol delegates only evidence-based slice and final acceptance;
-it may not amend the approved contract, behavior, scope, document map,
-dependency interface, V2 whitelist, proof allocation, slice boundary, or a
-manual/failed/ambiguous gate. The separate standing owner decision permits the
-orchestrator to approve clean independently reviewed C8-C11 skeletons and
-completed contracts before implementation; it does not permit post-approval
-substantive changes.
-
-The exact program manual stops and standing C8-C11 product decisions are the
-ones in
-[`AGENTS.md`](../../../AGENTS.md#c7-through-c11-unattended-program-authority)
-and the
-[`implementation process`](../../implementation-process.md#28-c7-through-c11-unattended-program).
-They include indispensable live evidence, unsupported capacity claims, public
-deployment/cutover, post-approval substantive changes, unresolved failed or
-ambiguous gates, authority drift, and unsafe Git state. Routine implementation
-choices, correctable test failures, clean transitions, and unambiguous in-scope
-review corrections do not stop the goal.
+The zero-interruption and containment policy in
+[`v1-release-program.md`](../../v1-release-program.md#3-zero-interruption-execution-policy)
+controls. Failed/ambiguous proofs, benchmark misses, review findings,
+post-approval contract changes, whitelist changes, and accepted implementation
+defects are correction inputs, not owner gates.
 
 ## 17. Implementation discretion
 
-Implementers may choose private helper/type names, exact C7-private package/file
-layout within the slice boundary, scratch-builder representation, zero-value
-sharing, streaming buffer sizes inside the approved byte/heap bounds, error
-wrapping, diagnostic record layout, fault-injection hooks, and test-fixture
-builders. Equivalent standard-library mechanisms are allowed if they preserve
-strict duplicate/unknown rejection, checksum coverage, the exact publication
-protocol, and all proof observables.
+Implementers may choose private helper/type names, C7-private package/file
+layout, scratch-builder representation, zero-value sharing, buffer sizes inside
+hard bounds, error wrapping, diagnostics, fault-injection hooks, and fixture
+builders. The V1 correction loop also permits optimizing or replacing the
+current JSON/decoder mechanics, revising the V2 whitelist, benchmark fixture,
+proof allocation, and slice boundary when measured evidence requires it.
 
-The following are fixed: complete semantic rather than private-struct payload;
-exact as-of-`T0` clipping; no persisted old causal positions/TQ/runtime state;
-ordinary evaluator regeneration; JSON v1 envelope with raw-payload SHA-256;
-latest/previous manifest authority; exact atomic write stages; one writer plus
-one replaceable pending slot; 30-second committed-time cadence; no forced final
-checkpoint; targets and reference fixture; and three-slice allocation.
+The following semantic outcomes are fixed: complete restart-required state at
+one exact `T0`; no persisted old causal positions/TQ/runtime state; ordinary
+evaluator regeneration; whole-candidate validation/install or none;
+latest/previous complete fallback or fresh recovery; nonblocking bounded
+persistence; exact `[T0,R)`/replay continuation; 30-second cadence unless later
+evidence selects another cadence consistent with `PG-OPS-01`; and honest
+fallback. JSON, decoder passes, local segment timing, fixture construction,
+proof mechanics, and the historical three-slice delivery plan are lower-level
+decisions.
 
 **Prohibited changes**
 
@@ -175,31 +158,29 @@ checkpoint; targets and reference fixture; and three-slice allocation.
   cached ranking output, or old live/historical/replay source-position restore.
 - No change to C1 binding, C2 merge/correction, C3 formula/qualification/
   accounting, C4 artifact/order, C5 epoch/fence, or C6 plan/terminal semantics.
-- No V2 source outside the exact whitelist, predecessor dependency, version 1,
-  live credentials/provider request, database, remote storage, journal, generic
-  codec/plugin/event framework, public API/UI, or Component 8/9 policy.
-- No silent fixture reduction, target waiver, semantic truncation, or proof/
-  slice reassignment under delegated advancement.
+- No unrecorded V2 source, predecessor dependency, older Version 1 source, live
+  credentials/provider request, database, remote storage, journal, generic
+  plugin/event framework, public API/UI, or Component 8/9 policy.
+- No silent fixture reduction, target waiver, semantic truncation, mismatched
+  fresh control, or unbounded performance trial. Recorded proof/slice/
+  whitelist revisions are permitted by the V1 program.
 
-**Stop/escalation conditions**
+**Correction and containment conditions**
 
-- Exact current C2/C3 state cannot be projected at `T0` without changing an
-  approved dependency interface or retaining new success-bearing state.
-- A complete semantic image cannot fit the approved bounded codec approach or
-  meet the objective without changing format/bounds/target.
-- Target filesystem semantics cannot implement the approved durability claim,
-  or a fault result makes manifest authority ambiguous beyond the specified
-  post-rename case.
-- C4/C6 exact continuation interfaces conflict with the approved cutoff or
-  restored-authority rules.
-- Any proof fails in a way requiring a behavior, whitelist, fixture premise,
-  primary proof, slice boundary, or operations-policy change.
+- Projection/install, codec/format, filesystem, C4/C6 continuation, fixture,
+  benchmark, proof, slice, whitelist, or implementation evidence that fails
+  while Phase 1 meaning remains satisfiable enters the V1 correction loop.
+- Apparent tension with fixed Phase 1 meaning uses the program's authority
+  order, strict compatible intersection, simplest design, and honest fallback.
+- Credentials/live observation and destructive/external action remain deferred;
+  user/Git overlap and tool/reviewer limits use the program's automatic
+  containment and fallback rules.
 
 ## 18. Completed-contract acceptance checklist
 
 - [x] The parent map lists the complete four-document contract and exclusive responsibilities.
 - [x] The parent owns the sole mutable delivery ledger; details copy no status.
-- [x] Proposed `delegated` advancement and all required reviews are explicit.
+- [x] V1 delegated correction/acceptance and risk-based review are explicit.
 - [x] The modular layout routes the three real trust/delivery boundaries.
 - [x] The parent-size exception is explained; each detail remains within its cohesive routing target.
 - [x] Sections 1–19, all eight requirements/proofs, and all three slices have one authoritative home.
@@ -216,21 +197,23 @@ checkpoint; targets and reference fixture; and three-slice allocation.
 - [x] Construction guarantees and runtime validation are distinguished.
 - [x] Every requirement/proof is allocated once to `C7-S1`–`C7-S3`.
 - [x] Every slice is coherent, sequential, reviewable, and honest about deferred behavior.
-- [x] Implementation discretion, prohibitions, and stop conditions support bounded assignments and unattended delegated gates.
+- [x] Implementation discretion, prohibitions, correction triggers, and the zero-interruption/containment link support bounded assignments.
 - [x] The drift audit below has no substantive `yes`.
-- [x] Owner approved the completed contract as written on 2026-08-07, including the exact V2 whitelist, fixtures/evidence, proofs, slices, reviews, and `advancement_mode: delegated`.
+- [x] Owner revised the contract under the Version 1 Release Program on 2026-08-07; fixed Phase 1 meaning is preserved and lower-level delivery decisions are explicitly revisable.
 
 ## 19. Drift audit
 
 | Question | Yes/No | Evidence or owner resolution |
 | --- | --- | --- |
-| Did this introduce a new product rule? | No | It fixes the delegated representation/cadence/target required by `PG-OPS-01`; currentness/readiness/capacity remain C8. |
+| Did this introduce a new product rule? | No | The corrected benchmark measures the existing `PG-OPS-01` restart outcome; it removes a non-product five-second gate and leaves C8 readiness/capacity ownership unchanged. |
 | Did this introduce another mutable state owner, watermark, or evaluator? | No | Engine projects/installs; detached codec/store/writer own only immutable bytes/files/results; ordinary C3 evaluator regenerates output. |
 | Did this make aggregate ranking/readiness depend on T/Q? | No | T/Q is explicitly prohibited from payload and starts empty after live restart. |
 | Did this change session, event-time, half-open-window, correction, or committed-watermark semantics? | No | Artifact state is clipped to existing `[S,T0)` and continuation starts exactly at `T0`; restored provenance removes only dead-process ordering authority. |
-| Did this add behavior without component-local evidence or explicit approval? | No | Every edge is tied to Phase 1/C2–C6 invariants or exact scoped V2 evidence; target becomes owner-approved with this contract. |
+| Did this add behavior without component-local evidence or explicit approval? | No | Phase 1/C2-C6 invariants, the exact failed S3 measurement, and the owner V1 correction support the revised proof/threshold. |
 | Did this duplicate an existing responsibility or Phase 1 contract? | No | C7 owns only projection/schema/install/storage/cadence/restart composition; dependency semantics remain cited. |
-| Did this add machinery without an approved need? | No | One semantic image, codec, manifest, sequential writer, and pending slot are the minimum complete path; alternatives are evaluated in Section 13. |
+| Did this add machinery without an approved need? | No | The revision adds no runtime machinery; it permits measured simplification/replacement of expensive lower-level mechanics. |
 | Did version 2 drive the Phase 1 boundary instead of informing the detailed contract? | No | The preapproved Sections 1–7 preceded inspection; V2's conflicting seal/schema/owner/readiness behavior is rejected. |
 
-Any later substantive `yes` requires owner review before advancement.
+Any later lower-level substantive `yes` enters the V1 correction loop. Apparent
+tension with fixed Phase 1 meaning uses the program's authority order, strict
+compatible intersection, simplest design, and honest fallback.

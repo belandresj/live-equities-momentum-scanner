@@ -1,7 +1,7 @@
 # Live Equities Momentum Scanner
 
-Live Equities Momentum Scanner is a planned production-grade, real-time U.S.
-equities scanner for a discretionary momentum trader. It ranks qualified stocks
+Live Equities Momentum Scanner is an in-progress real-time U.S. equities
+scanner for a discretionary momentum trader. It ranks qualified stocks
 by return from the adjusted previous regular-session close, presents
 aggregate-derived session context, and provides trade- and quote-derived
 measurements for the displayed top 20.
@@ -64,6 +64,8 @@ approved requirement establishes a concrete need.
 | [`docs/glossary.md`](docs/glossary.md) | Shared vocabulary; the controlling product or architecture contract wins when more specific. |
 | [`docs/specification-map.md`](docs/specification-map.md) | Current component sequence, document status, dependencies, and implementation milestones. |
 | [`docs/implementation-process.md`](docs/implementation-process.md) | Contract-first research, approval, predecessor-reuse, proof, slice, integration, and release workflow. |
+| [`docs/v1-release-program.md`](docs/v1-release-program.md) | Owner-approved C7-C11 authority, fixed/revisable decisions, zero-interruption correction and containment, capability/proof matrix, test tiers, and private V1 RC completion. |
+| [`docs/market-hours-validation.md`](docs/market-hours-validation.md) | Separately authorized post-RC live-provider observation procedure; pending by default. |
 | [`docs/specifications/focused-component-spec-template.md`](docs/specifications/focused-component-spec-template.md) | Mandatory template and modular-layout rules for focused component contracts. |
 | [`docs/history/`](docs/history/) | Non-authoritative Phase 1 drafting and review history. |
 
@@ -75,30 +77,28 @@ status and the sequential implementation roadmap are maintained only in the
 
 Focused component contracts follow the contract-first
 [`implementation process`](docs/implementation-process.md): establish the Phase
-1-derived boundary, obtain approval for narrow version 2 reconnaissance,
-complete the component contract and proof allocation, then implement one
-owner-authorized slice at a time. A contract may be one file or a compact
-indexed parent with cohesive subordinate detail specs; either layout remains
-one component authority and passes the same approval gates. Production
-implementation is not authorized merely because a specification draft exists.
+1-derived boundary, record a narrow Version 2 reconnaissance scope, complete
+the component contract/proof allocation, and implement one sequential slice at
+a time. A contract may be one file or a compact indexed parent with cohesive
+details; either remains one component authority. Under the V1 program, lower-
+level C7-C11 decisions remain revisable when evidence exposes a defect.
 
-### Authorized C7-through-C11 local program
+### Authorized Version 1 Release Program
 
-The owner approved the completed Component 7 checkpoint contract on
-2026-08-07 and granted standing, conditional authority for one sequential
-unattended C7-through-C11 program on `codex/c7-c11-program`. Components 8-11
-still require separate Phase 1 skeleton and completed-contract gates, but the
-future goal orchestrator may record each gate without another owner message
-only after mandatory independent review, correction/re-review as needed,
-complete proof allocation, a clean drift audit, and conformance to the approved
-product, architecture, dependency, and program decisions. The exact delegation,
-manual stops, single-writer rule, and local-commit policy are in
-[`AGENTS.md`](AGENTS.md#c7-through-c11-unattended-program-authority) and the
-[`implementation process`](docs/implementation-process.md#28-c7-through-c11-unattended-program).
+The owner replaced the former C7-C11 unattended authority on 2026-08-07 with
+the [`Version 1 Release Program`](docs/v1-release-program.md). It permits a
+future goal on `codex/c7-c11-program` to correct C7, complete C7-C11
+sequentially, and revise lower-level contracts, fixtures, proofs, thresholds,
+slices, whitelists, reviews, and accepted implementation decisions without
+another owner message. The approved Phase 1 market semantics and architecture
+remain fixed. C7-C11 have no planned owner-response gate: lower-level failures
+are corrected, excluded external/live work is deferred, and user/Git/tool
+friction uses recorded containment and fallback while the goal continues.
 
-The target is a completely reviewed and locally verified private release
-candidate through Component 11. This program does not authorize credentialed
-live-provider observation, a public capacity claim, public deployment,
+The target is a reviewed and locally verified private release candidate through
+Component 11. Deterministic replay and fake-provider evidence may finish it
+while the market is closed. The program does not authorize credentialed live-
+provider observation, a public capacity claim, public deployment,
 authentication/TLS/hosting, production cutover, pushing, or history rewriting.
 Chrome desktop is the required UI target, and Component 11 is a high-fidelity
 adaptation of the useful V2 scanner UI without V2 browser-owned calculations,

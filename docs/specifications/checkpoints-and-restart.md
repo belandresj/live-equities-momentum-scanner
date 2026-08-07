@@ -1,7 +1,8 @@
 # Checkpoints and restart
 
-**Status:** Completed Component 7 contract approved for sequential slice
-implementation; implementation has not begun
+**Status:** Component 7 contract revised under the Version 1 Release Program;
+`C7-S1`/`C7-S2` evidence accepted and reopenable, preserved `C7-S3` correction
+work active
 
 **Owner boundary and reconnaissance approval:** Pre-approved 2026-08-07 by the
 owner in the initiating Component 7 task, subject to the exact Sections 1–7
@@ -10,37 +11,28 @@ boundary, document map, and reconnaissance limits below
 **Owner stable-interface exception:** None was needed. Component 6 passed final
 component review on 2026-08-07 before version 2 reconnaissance began.
 
-**Owner contract/reuse/test/slice-plan approval:** Approved 2026-08-07 as
-written, including the exact V2 whitelist, fixtures/evidence, eight primary
-proofs, three slices, required independent reviews, and
-`advancement_mode: delegated`
+**Owner contract/reuse/test/slice-plan revision:** Revised 2026-08-07 through
+the Version 1 Release Program. The eight semantic requirements remain, while
+the V2 whitelist, fixtures, codec/mechanics, proof allocation, benchmark,
+slice boundaries, reviews, and accepted lower-level decisions are revisable
+when evidence requires correction.
 
-**Advancement mode:** `delegated` for every slice and the final component gate;
-no manual gate is designated
+**Advancement mode:** V1 continuous correction/acceptance. Correctable failures
+reopen the affected item and continue; this component has no owner-response
+state.
 
-**C7-C11 program authority:** The same 2026-08-07 owner decision authorizes the
-standing unattended program recorded in
-[`AGENTS.md`](../../AGENTS.md#c7-through-c11-unattended-program-authority), the
-[`implementation process`](../implementation-process.md#28-c7-through-c11-unattended-program),
-and the [specification map](../specification-map.md#c7-c11-standing-program-decisions).
-For C7, this adds no behavior, whitelist, proof, slice, target, or review change.
-The current local host is the benchmark reference, and C7 makes no capacity
-claim beyond its recorded evidence.
+**V1 program authority:** The owner-approved
+[`Version 1 Release Program`](../v1-release-program.md) replaces the former
+C7-C11 unattended authority. It explicitly permits correction of this C7
+contract, document map, whitelist, fixtures, codec/mechanics, proofs, slices,
+thresholds, reviews, and accepted S1/S2 implementation decisions while Phase 1
+checkpoint coherence and restart semantics remain fixed. The current local
+host is the benchmark reference; C7 makes no broader capacity claim.
 
-**Standing downstream decisions:** C8 uses conservative evidence-backed
-thresholds and avoids false-ready results; C9 has no Tape Rate attention
-threshold, uses continuous warm-up and current-rank-order restoration, permits
-complete T/Q shedding, and protects aggregates first; C10 is a private
-versioned read-only loopback HTTP API with explicit field status, publication
-identity, and an explicit CORS allow-list, with public auth/TLS/hosting/cutover
-deferred; C11 targets Chrome desktop and narrowly inspects the V2 UI
-specification, code, assets, and focused tests for a high-fidelity adaptation.
-The adaptation preserves useful layout, visual character, density, and
-interactions subject to current semantics, accessibility, independent
-deployment, and C10, and rejects browser-owned calculations/readiness, obsolete
-state semantics, and backend coupling. No credentialed live-provider
-observation is authorized, and program completion is a locally verified
-private release candidate rather than live validation or production deployment.
+**Standing downstream decisions:** The minimum C8-C11 scope and deferrals are
+owned by the V1 program and their component boundary plans. No credentialed
+live-provider observation is authorized. Program completion is a locally
+verified private release candidate, not live validation or deployment.
 
 **Controlling Phase 1 requirements:** `PG-OPS-01`, `PG-OPS-02`,
 `PG-REPLAY-01`, `PG-OBS-03`, `ARCH-OWN-01`, `ARCH-OWN-02`,
@@ -73,15 +65,16 @@ supplies the installed-`T0`/`[T0,R)` interface.
 ## Contract document map
 
 The modular layout separates the coherent engine-owned state boundary from the
-external durable-storage boundary and from end-to-end proof/delivery. All files
-listed here form one Component 7 contract and pass the same approval gates.
+external durable-storage boundary and end-to-end proof/delivery. All files
+listed here form one Component 7 contract. Their responsibilities may be
+revised through the V1 correction loop when evidence requires it.
 
 | Document | Exclusive normative responsibility | Requirement/proof/slice coverage | Read for | Depends on |
 | --- | --- | --- | --- | --- |
 | This parent | Outcome, single ownership boundary, explicit non-scope, cross-cutting invariants, Sections 1–7, routing, approvals, and sole delivery ledger | All controlling Phase 1 IDs; Sections 1–7 | Every Component 7 task | Components 1–6 interfaces named above |
 | [Checkpoint state and installation](checkpoints-and-restart/checkpoint-state-and-installation.md) | Exact coherent projection, schema semantics, compatibility/validation, atomic install, live/replay restart handoff, and engine-owned checkpoint facts | Sections 9–14; `C7-STATE-01`, `C7-INSTALL-01`, `C7-LIVE-01`, `C7-REPLAY-01`; `P-C7-STATE`, `P-C7-INSTALL`, `P-C7-LIVE`, `P-C7-REPLAY`; `C7-S1`, `C7-S3` | Projection, semantic validation, installation, or restart-state work | Parent; Components 1–4 and 6 |
 | [Codec, storage, and cadence](checkpoints-and-restart/codec-storage-and-cadence.md) | Bounded encoding/decoding, durable atomic storage and discovery, asynchronous write-result identity, cadence, final-checkpoint policy, and restart objective | Sections 9–14; `C7-CODEC-01`, `C7-STORE-01`, `C7-CADENCE-01`, `C7-OBJECTIVE-01`; `P-C7-CODEC`, `P-C7-STORE`, `P-C7-CADENCE`, `P-C7-OBJECTIVE`; `C7-S2`, `C7-S3` | Codec, filesystem, persistence failure, cadence, or restart-target work | Parent; preceding state/install detail; Components 1–3 |
-| [Proof and delivery plan](checkpoints-and-restart/proof-and-delivery-plan.md) | Exact reconnaissance/reuse ledger, complete requirement/proof allocation, sequential slice plan, independent-review triggers, unattended goal-orchestration protocol, discretion, completed-contract checklist, and drift audit | Sections 8 and 15–19; all eight Component 7 requirements/proofs; `C7-S1`–`C7-S3` | Completed-contract approval, assignments, acceptance, and final review | Parent and both preceding details; Components 1–6 |
+| [Proof and delivery plan](checkpoints-and-restart/proof-and-delivery-plan.md) | Exact reconnaissance/reuse ledger, current requirement/proof allocation, sequential slice plan, risk-based review, V1 correction/orchestration protocol, discretion, checklist, and drift audit | Sections 8 and 15–19; all eight Component 7 requirements/proofs; `C7-S1`–`C7-S3` | Contract revisions, assignments, correction, acceptance, and final review | Parent and both preceding details; Components 1–6 |
 
 **Layout:** Modular contract with this parent and the three routed detail specs
 above. Projection/install, external durable storage, and end-to-end restart
@@ -94,23 +87,23 @@ requirements, trust/proof ledgers, and delivery material are routed out rather
 than extending it.
 
 **Routing rule:** Any requirement, evidence decision, proof, slice, or task not
-unambiguously routed by this table stops for a parent-map correction. Models do
-not guess among detail specs or load unrelated dependency details.
+unambiguously routed by this table requires a recorded parent-map correction
+and then continues. Models do not guess among details or load unrelated
+dependency material.
 
-**Contract-wide coverage and acceptance:** Sections 1–7 below remain the
-approved boundary. The routed details now own the exact eight-requirement,
-eight-primary-proof, three-slice contract and the completed-contract checklist.
-The owner-approved set authorizes its sequential slices only after a future goal
-is explicitly created; this preparation task does not start implementation.
+**Contract-wide coverage and acceptance:** Sections 1–7 retain the fixed Phase
+1 boundary. The details own the current eight-requirement/proof/slice plan.
+Those lower-level allocations are current execution guidance, not frozen
+authority, and can be corrected under the V1 program.
 
 ## Authoritative delivery-state ledger
 
 | Item | State | Evidence and required review | Recorded at | Next action |
 | --- | --- | --- | --- | --- |
-| Component contract | `contract_approved` | Owner approved the complete four-document contract as written on 2026-08-07, including the exact V2 whitelist, fixtures/evidence, eight proofs, three slices, required reviews, and `advancement_mode: delegated` | 2026-08-07; governance commit records the approval | Begin `C7-S1` only when the future C7-C11 goal is explicitly created and launched |
-| `C7-S1` | `accepted` | `P-C7-STATE` and `P-C7-INSTALL` pass; engine/checkpoint race, repository build/test/vet, and diff checks pass; required sole-owner/as-of-`T0`/semantic-completeness/restored-authority/atomic-install review is clean after two focused correction and re-review rounds | 2026-08-07; delegated C7-C11 program gate | Begin approved `C7-S2` |
-| `C7-S2` | `accepted` | `P-C7-CODEC`, `P-C7-STORE`, and `P-C7-CADENCE` pass; checkpoint/engine race and repository build/test/vet/diff checks pass; required decoder/filesystem/path/cancellation/writer-concurrency/accounting review is clean after focused correction and re-review | 2026-08-07; delegated C7-C11 program gate | Begin approved `C7-S3` |
-| `C7-S3` | `pending` | `P-C7-LIVE`, `P-C7-REPLAY`, `P-C7-OBJECTIVE`; narrow cross-component identity/restart-equivalence review required | 2026-08-07 | Wait for accepted `C7-S2` |
+| Component contract | `revised_active` | Owner revised the contract through the V1 Release Program after the S3 performance proof exposed an unsuitable inherited local-operation gate and excessive proof cost | 2026-08-07 | Correct and finish `C7-S3`; reopen S1/S2 mechanics only if evidence implicates them |
+| `C7-S1` | `accepted_reopenable` | `P-C7-STATE` and `P-C7-INSTALL` pass; existing semantic/ownership review remains valid | 2026-08-07 | Preserve unless S3 evidence identifies a state/install defect |
+| `C7-S2` | `accepted_reopenable` | `P-C7-CODEC`, `P-C7-STORE`, and `P-C7-CADENCE` pass for correctness/boundedness. Current S3 evidence shows local load is slow enough to justify codec/decoder correction but does not invalidate durability semantics. | 2026-08-07 | Optimize or replace mechanics if useful to V1 end-to-end behavior; retain valid persistence proofs |
+| `C7-S3` | `correction_active` | `P-C7-LIVE`/`P-C7-REPLAY` work is preserved. The current 5,500-symbol performance run used a 4,393,853-byte artifact: projection 62.8 ms, encode 11.3 ms, write 9.92 s, load 9.82 s, install 63.3 ms, catch-up 12.64 s, and end-to-end restart 22.53 s. It failed only the non-product 5-second load/install gate after a 339.48-second proof command. | 2026-08-07 | Apply the corrected 6,000-symbol objective, per-trial deadlines, short-test separation, and meaningful fresh-control comparison |
 | Final component review | `pending` | Mandatory separate read-only review after `C7-S1`–`C7-S3` pass | 2026-08-07 | Wait for all slices |
 
 ### C7-S1 acceptance record
@@ -307,11 +300,9 @@ These are component-local representation, storage, boundedness, and proof
 questions. They do not reopen Phase 1 time, state, feature, ranking, recovery,
 or lifecycle semantics.
 
-All eight questions are resolved by the detailed state/install and
-codec/storage/cadence contracts and the Section 8 evidence ledger. No evidence
-question remains open before completed-contract review; a later implementation
-finding that invalidates one of those resolutions triggers the Section 17
-owner-escalation gate rather than implementer discretion.
+All eight questions have current resolutions in the detailed contract. A later
+implementation finding may invalidate one: revise the affected lower-level
+resolution through the V1 correction loop and continue.
 
 ## 6. Approved and completed version 2 reconnaissance scope
 
@@ -331,11 +322,11 @@ review. Exact findings, hashes, and reuse decisions are routed to
 | Checkpoint cadence/configuration declarations plus focused size, latency, or restart measurements if present | What empirical premise did V2 use, and is it strong enough to inform a new cadence/restart target or only identify a benchmark gap? | Readiness thresholds, operations orchestration, production logs, credentials, live observations, and broad performance suites. |
 | Optional replay-from-checkpoint tests/fixtures, only if directly present in checkpoint or replay packages | Does V2 contain useful evidence for exact artifact continuation at `T0` without live transport claims? | General replay downloader/compiler/source code already owned by Component 4. |
 
-Reconnaissance will record exact paths/functions/tests/fixtures, commit and file
-hashes where provenance matters, behavior strength, coupling to remove, reuse
-decision, and required proof in the routed proof/delivery detail. Discovery
-that requires an unrelated source area, new product rule, changed dependency
-interface, or broader orchestration inspection stops for owner review.
+Reconnaissance records exact paths/functions/tests/fixtures, provenance where
+relevant, behavior strength, coupling to remove, reuse decision, and required
+proof. Additional C7 source scope must be recorded before inspection and remain
+inside the fixed boundary. Apparent fixed product/architecture tension follows
+the V1 program's authority-order and strict-compatible-interpretation rule.
 
 ### 6.1 Initial proof and slicing boundaries
 
@@ -379,8 +370,9 @@ than replaces the preceding owner/path.
 document map, and reconnaissance scope above. Component 6 passed final review
 before that scope was exercised.
 
-**Detailed-contract gate:** Passed by explicit owner approval on 2026-08-07.
-Sections 8–19 are complete in the routed details, and the exact V2 whitelist,
-proof allocation, three-slice plan, required reviews, and delegated advancement
-are fixed. No implementation begins during this preparation task; the future
-C7-C11 goal starts at `C7-S1`.
+**Detailed-contract gate:** Revised by explicit owner authority on 2026-08-07.
+Sections 8–19 remain complete current guidance, but V2 whitelist, proof
+allocation, fixture, codec/mechanics, slice plan, reviews, and advancement are
+agent-revisable when evidence requires correction. Fixed Phase 1 checkpoint
+coherence, invalid-artifact rejection, continuation, and honest fallback are
+unchanged.

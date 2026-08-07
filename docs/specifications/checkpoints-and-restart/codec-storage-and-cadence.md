@@ -18,9 +18,9 @@ Components 1–3 as routed by the parent
 
 ## 9. Detailed semantic inputs, outputs, and owned state
 
-### 9.1 Version 1 format
+### 9.1 Current Version 1 format
 
-The artifact is a standard-library JSON envelope named
+The accepted S2 implementation currently uses a standard-library JSON envelope named
 `scanner-checkpoint-v1`. It contains a fixed header, the raw JSON semantic
 payload, and a lowercase SHA-256 digest of the exact payload bytes. On-disk
 payloads use structs and deterministically ordered slices only; maps and
@@ -39,7 +39,11 @@ object graph.
 
 There is no in-place schema migration. Unknown schema or manifest versions are
 `incompatible`, not corrupt, and selection proceeds to the previous candidate
-or fresh initialization.
+or fresh initialization. JSON and the current decoder are lower-level V1
+delivery choices, not Phase 1 requirements. They may be optimized or replaced
+through the V1 correction loop if the replacement preserves complete semantic
+state, strict bounded validation, invalid-artifact containment,
+latest/previous fallback, and deterministic compatibility behavior.
 
 ### 9.2 Storage and manifest
 
@@ -117,7 +121,7 @@ canonical/evaluator state, lifecycle, or checkpoint selection.
 | Manifest candidates | 2 |
 | Manifest bytes | 64 KiB |
 | Absolute artifact bytes | Configured positive limit, hard ceiling 4 GiB; no C7 production default |
-| Symbol records | Exact binding population, maximum 100,000 |
+| Symbol records | Exact binding population; 6,000 normal V1 reference, 100,000 structural-admission ceiling only |
 | Symbol bytes | Component 1 maximum 64 |
 | Semantic structure lengths | Exact Component 2/3 bounds in the state/install detail |
 | Writer concurrency | 1 in progress |
@@ -141,28 +145,41 @@ semantic completeness.
 | `C7-CODEC-01` | Encode and incrementally decode the complete semantic image with deterministic ordering, strict fixed schema, exact structural bounds, checksum, cancellation, and no partial candidate on any syntax/integrity/semantic-preflight failure. | `ARCH-FLOW-01`–`04`, `DTE-REJECT-01`; V2 strict JSON/digest/limited-reader and maximum-shape behavior adapted to the new complete schema |
 | `C7-STORE-01` | Select only manifest-authorized latest/previous local immutable generations and publish a new generation through the exact temporary-file/validation/rename/sync protocol while retaining the previous complete candidate under every injected write step. | `PG-OPS-01`, `ARCH-OWN-02`, `DTE-CHECKPOINT-03`, `LIFE-INIT-05`; V2 store and exact-step fault tests adapted |
 | `C7-CADENCE-01` | In live operation, when committed/evaluated `T` reaches the next session-aligned 30-second checkpoint boundary, project and submit without blocking ordinary evaluation. Bound external views to one writing plus one replaceable pending; every request gets one terminal result. | `ARCH-FLOW-01`–`04`, `LIFE-LIVE-04`, `LIFE-END-02`; V2 30-second cadence and one coalescing slot |
-| `C7-OBJECTIVE-01` | The C7 release evidence must meet both targets on the recorded implementation host: compatible local discovery/decode/semantic validation/install in at most 5 seconds for the approved reference artifact, and end-to-end checkpoint restart to ordinary live evaluation in at most 60 seconds for the 5,500-symbol, checkpoint-age-30-seconds, fault-free offline C5/C6 fixture. | `PG-OPS-01`; 30-second V2 cadence, 5-second V2 local-operation budget, V2 5,500-symbol precedent, and the product rejection of ~130 seconds fresh reconstruction |
+| `C7-OBJECTIVE-01` | On the recorded local host, a validated 6,000-symbol, checkpoint-age-30-seconds fixture must restart through real discovery/decode/semantic validation/install, C5 acknowledgement, C6 `[T0,R)` work/fence, and ordinary evaluation within the current 60-second setting on every measured trial. Its median must be at least 20% faster than equivalent fresh recovery for the same binding, `R`, provider fixture, worker limits, and trial conditions. Local load/install is segmented diagnostic evidence, not an independent five-second release gate. These program-selected settings are revisable only from recorded measured evidence; any replacement must remain materially faster than equivalent fresh recovery and below the product's rejected approximately 130-second precedent. | `PG-OPS-01`; the product rejects approximately 130-second normal fresh reconstruction; current S3 evidence completes restart in 22.53 seconds while the inherited five-second load premise fails; owner V1 correction requires meaningful same-host improvement |
 
 The objective is a component release target, not a live-provider SLA or
-100,000-symbol capacity claim. Record OS/architecture/CPU, Go version, artifact
-bytes and state cardinalities, five runs, median, maximum, projection/encode/
-write/load/install/catch-up segments, and fresh-from-`S` control time. All five
-runs must satisfy the 5-second local target and 60-second end-to-end target; the
-checkpoint path must also be faster than the control median. Component 8 must
-repeat/adjust deployed configuration from capacity evidence without changing
-C7 semantics.
+100,000-symbol capacity claim. Before timing, validate and record OS/
+architecture/CPU, Go version, fixture schema/hash/bytes, exact 6,000 symbols,
+checkpoint age, correction count, required canonical-state families, planned
+requests/records, worker/configuration bounds, and fresh-control equivalence.
+Use one unmeasured warm-up if needed and three measured trials. Each measured
+checkpoint and fresh trial has its own two-minute deadline; the complete
+command has an explicit timeout no greater than 15 minutes.
 
-The approved reference fixture has exactly 5,500 sorted binding symbols with
+Record median/maximum and projection, encode, write, load, install,
+acknowledgement, catch-up/fence, end-to-end, and fresh-control segments. Every
+checkpoint trial must satisfy the current 60-second end-to-end setting, and
+checkpoint median must be at most 80% of fresh median. Local load/install time
+is a correction/optimization input: if it causes the end-to-end or comparison
+gate to fail, optimize/replace the decoder or codec and rerun the narrow proof.
+
+The corrected reference fixture has exactly 6,000 sorted binding symbols with
 valid prior-close facts, a semantic record for every symbol, and every
 success-bearing state family exercised by `P-C7-STATE`. It includes at least
 one maximum-bound correction tail, price/range state, Activity folded-target
 state, qualification proof/dirty state, each slot-evidence class, final latch,
 and invalid/localized consequence; remaining records may use explicit empty
-sparse state. Its C6 continuation plans all 5,500 symbols over exactly 30 whole
+sparse state. Its C6 continuation plans all 6,000 symbols over exactly 30 whole
 seconds and uses the accepted fake acquisition/mapping/ledger/fence paths, not
 a mocked completion. This is a correctness-and-orchestration reference shape,
 not a claim about production print density; exact artifact cardinalities make
 that limitation auditable.
+
+The 100,000-symbol largest-valid structural admission/allocation case remains
+isolated inside `P-C7-CODEC`. It is skipped by `testing.Short()`, has an
+explicit deadline, runs only by an acceptance/capacity command after codec
+changes, and is never repeatedly materialized across the ordinary suite or the
+6,000-symbol restart proof.
 
 ### 10.1 Cadence and end behavior
 
@@ -190,7 +207,7 @@ does not make filesystem latency part of the engine's end transition.
 | Manifest candidate | Exact safe basename, regular private file, manifest size/digest/binding/`T0`/sequence match, and full decode pass | Skip latest; try previous; unsafe directory fails persistence only | Modification time or orphan file is selected despite never-published manifest authority |
 | Published write | Reopened generation validates, manifest rename is complete, and outcome names exact durability step | Old manifest remains authority before rename; post-rename ambiguity is explicit and loader revalidates | A partial generation replaces latest or a failed write deletes the only prior usable artifact |
 | Writer result | Exact outstanding request/binding identity and first terminal disposition | Fence duplicate/stale/unknown/ended result | Completion for an older coalesced request is reported as the newest checkpoint |
-| Objective evidence | Exact reference fixture/config/host and all required segments/runs are recorded | Failed target blocks delegated slice acceptance; no tuning by silently reducing semantic state | A tiny sparse artifact or mocked catch-up is presented as proof of normal restart |
+| Objective evidence | Validated 6,000-symbol fixture/config/host, three individually bounded measured trials, equivalent fresh controls, all segments, and the current 60-second/20%-improvement settings—or a recorded measured replacement that satisfies `C7-OBJECTIVE-01`'s materially-faster-than-fresh and below-130-second bounds | A failed attempt enters the V1 correction loop; semantic state cannot be silently reduced to tune the result | A tiny sparse artifact, mismatched fresh control, unbounded trial, or mocked catch-up is presented as proof of normal restart |
 
 ## 11. Failure and terminal behavior
 
@@ -239,9 +256,11 @@ local operations facts; none is ranking time/currentness by itself.
   capacity-one pending slot are sufficient. No database, remote storage,
   journal, generic codec registry, background scanner, or retry framework is
   introduced.
-- JSON is retained because V2 provides direct strict-streaming/failure evidence
-  and the standard library suffices. A custom binary format would add an
-  unevidenced parser and migration surface before capacity evidence demands it.
+- JSON is the current accepted implementation because V2 supplied strict-
+  validation/failure evidence and the standard library sufficed for S2
+  correctness. It is not frozen: measured V1 evidence may justify a simpler
+  decode path or another bounded format, provided persisted trust and fallback
+  proofs are preserved or corrected.
 - Latest plus previous gives one corruption/write fallback without unbounded
   generations. Orphans are never discovery candidates.
 - V2's strict JSON, checksum, bounded reader, immutable generation/manifest,
@@ -264,4 +283,4 @@ local operations facts; none is ranking time/currentness by itself.
 | Cancellation during streaming write/load | V2 cancellation regression | No partial authority/candidate; one canceled terminal | `P-C7-CODEC`, `P-C7-STORE` |
 | Writer slower than two cadence boundaries | V2 coalescing evidence; finite-work invariant | Keep in-progress, replace only pending, terminally supersede old pending | `P-C7-CADENCE` |
 | Stop while write is pending/in progress | Lifecycle invariant | No forced final projection or unbounded wait; cancellation/late result is contained | `P-C7-CADENCE` |
-| Reference checkpoint age and restart timing | V2 30-second cadence/5-second operation/5,500-symbol evidence; `PG-OPS-01` | Record complete segmented benchmark; fail acceptance above target | `P-C7-OBJECTIVE` |
+| Reference checkpoint age and restart timing | Current 4.39 MB run: load 9.82 s, install 63 ms, catch-up 12.64 s, end-to-end 22.53 s; `PG-OPS-01`; owner V1 correction | Validate the 6,000-symbol fixture before timing; use bounded trials and equivalent fresh controls; meet the current 60-second/20%-improvement settings—or a recorded measured replacement that satisfies `C7-OBJECTIVE-01`'s materially-faster-than-fresh and below-130-second bounds; treat local segments as diagnostics | `P-C7-OBJECTIVE` |

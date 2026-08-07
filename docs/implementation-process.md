@@ -4,273 +4,103 @@
 
 **Approved:** 2026-08-05
 
-**Revised:** 2026-08-07
+**Revised:** 2026-08-07 for the Version 1 Release Program
 
-**Scope:** The controlling operational process for component research,
-specification, predecessor reuse, proof allocation, implementation assignment,
-implementation, integration, and final validation.
+**Scope:** Component research, contracts, predecessor reuse, proof allocation,
+implementation assignments, correction, acceptance, integration, and private
+V1 release validation.
 
-This document controls how work advances after Phase 1. It does not redefine
-scanner behavior. The owner-approved product and architecture contracts remain
-authoritative; if this process or a focused component contract appears to
-conflict with them, stop and resolve the conflict with the owner.
+This process does not redefine scanner behavior. The product and architecture
+contracts remain authoritative. For C7-C11, the owner-approved
+[`Version 1 Release Program`](v1-release-program.md) makes lower-level delivery
+decisions revisable and requires uninterrupted correction through the private
+V1 RC outcome.
 
-## 1. Contract-first rules
+## 1. Authority and correction model
 
-Before drafting a focused component contract, the assigned agent must:
-
-1. read `AGENTS.md`, `README.md`, `docs/specification-map.md`, every relevant
-   approved Phase 1 authority, and approved dependency specifications;
-2. enumerate the exact Phase 1 requirement IDs governing the component;
-3. state the component's ownership and explicit non-scope;
-4. prefer the simplest design that satisfies all cited requirements;
-5. introduce no new product rule, competing state owner, watermark, evaluator,
-   T/Q-to-ranking dependency, changed time-window meaning, speculative edge
-   case, or duplicated responsibility;
-6. choose the initial single-file or modular layout and create a short Phase 1
-   contract skeleton without inspecting version 2; the skeleton states the
-   outcome, controlling IDs, ownership/non-scope, settled semantic boundary and
-   invariants, unresolved evidence questions, proposed version 2
-   reconnaissance scope, and the proposed document map when modular;
-7. stop for owner boundary approval before opening version 2 code, tests, or
-   fixtures, except that the C8-C11 standing program delegation in Section 2.8
-   allows its orchestrator to record a clean independently reviewed skeleton
-   approval;
-8. after approval, inspect only the approved relevant version 2 sources and use
-   the findings to complete the focused component contract;
-9. confirm the approved document layout still fits the reconnaissance findings,
-   stopping for the applicable approval authority before changing its map or
-   evidence routing; under Section 2.8, a pre-completed-contract C8-C11 draft
-   may be corrected and independently re-reviewed within the standing
-   delegation, but a post-approval change is manual;
-10. define one bounded implementation slice or a sequential slice plan that
-   assigns every requirement and primary proof exactly once; and
-11. stop for owner contract/reuse/test/slice-plan approval before an
-    implementation assignment is prepared or authorized, except that the
-    Section 2.8 orchestrator may record the corresponding C8-C11 approval after
-    its mandatory completed-contract review gate passes cleanly.
-
-Phase 1 already controls the shared domain through the product goals, system
-overview, data/time/event contract, and `ScannerStateEngine` lifecycle. A
-focused contract cites their exact requirement IDs and defines only its own
-ownership, interfaces, behavior, failure and terminal outcomes, accounting,
-evidence, and primary proof. Do not create a shared core-domain spec, repeat a
-Phase 1 contract in new words, or add a contract layer merely to rename an
-existing interface.
-
-Simplicity is a first-class acceptance criterion:
-
-- minimize mutable owners, state representations, and handoffs;
-- add no abstraction that has only a hypothetical use;
-- add no database, service split, generic event bus, plugin system, or
-  generalized framework unless an approved requirement needs it;
-- add no edge-case machinery without component-local evidence;
-- reuse behavior or code only when it is narrower and safer than implementing
-  the approved contract directly; and
-- prefer one understandable complete data path over isolated infrastructure.
-
-### 1.1 Focused contract layout and context routing
-
-A focused component contract may use either of two document layouts:
-
-1. a single specification file for a contract that remains efficient to load,
-   edit, review, and implement; or
-2. one compact parent specification plus cohesive subordinate detail specs for
-   a contract whose concerns can be routed independently.
-
-Within the single-file layout, a cohesive one-slice component with small
-evidence, trust, and proof ledgers may use the compact grouped-section form
-defined by the mandatory template. Compact form changes presentation only: it
-keeps both approval stages, exact requirements, evidence/reuse decisions,
-trust-boundary claims, proof allocation, implementation assignment, acceptance,
-and drift audit.
-
-Document decomposition is not implementation slicing. Decomposition reduces
-the normative context needed for a particular contract task. Slicing divides
-implementation into sequential observable behaviors and primary proofs. A
-component may need either, both, or neither.
-
-Use the modular layout when the detailed contract has multiple stable semantic,
-trust, proof, or delivery concerns and ordinary work repeatedly requires loading
-large unrelated sections. Context size and edit latency are valid reasons to
-stop extending a monolith once cohesive boundaries exist. Do not split at
-arbitrary line, heading, or token counts, and do not create tiny fragments that
-force every task to reopen the whole set.
-
-File size is a routing alarm, not a semantic shard boundary. Reassess the
-document map before approval when a mandatory parent is likely to exceed about
-2,500 words or any one normative detail is likely to exceed about 5,000 words.
-Exceeding those targets is permitted only when the material is one genuinely
-inseparable concern and the approval record explains why every routed task
-needs it. Otherwise split at the smallest real semantic, trust, proof, or
-delivery boundaries. Never create `part-1`/`part-2` files or divide a document
-only to satisfy a word target.
-
-A component with multiple implementation slices or large reconnaissance,
-trust-boundary, edge-case, or proof ledgers should normally use the modular
-layout because those concerns can be routed to distinct drafting and
-implementation tasks. Keep it single-file only when those details are compact
-and repeatedly need to be reasoned about together.
-
-The parent remains at the path recorded in `specification-map.md` and is the
-only entry point a caller must know. Subordinate specs live under a directory
-with the parent's filename stem. The parent contains:
-
-- component status and both owner-approval records;
-- one authoritative delivery-state ledger containing advancement mode, slice
-  state, evidence/review result, and current component state;
-- the high-level outcome and user/operator consequence;
-- the single ownership boundary, dependencies, and explicit non-scope;
-- the cross-cutting Phase 1 semantic invariants;
-- a normative document map stating what each subordinate spec exclusively
-  controls, its requirement/proof/slice coverage, when it must be read, and its
-  dependencies; and
-- compact contract-wide coverage and acceptance state, linked to detailed
-  ledgers rather than duplicated from them.
-
-Each subordinate spec owns one cohesive detail boundary and begins by naming
-its parent, normative responsibility, controlling requirement IDs, component
-requirements, declared document dependencies, and allocated slices. Detail
-specs may live directly under the component directory or in nested concern
-directories when that makes a real subconcern independently routable. Prefer a
-shallow layout; directory depth does not create authority or approval gates,
-and every nested file remains listed explicitly in the parent document map. A
-detail spec is part of the parent's component contract. It is not a new
-component, another architecture layer, an independently approved authority, or
-a second owner of cross-cutting state.
-
-Across the complete set, every normative decision, component requirement,
-evidence/reuse decision, primary proof, and implementation-slice allocation has
-one authoritative home. Parent summaries are navigational and link to that
-home. Cross-document dependencies must be explicit and acyclic; a detail spec
-may not silently reinterpret its parent or another detail spec. Missing routes,
-duplicate normative ownership, broken links, or contradictory meanings block
-approval.
-
-Mutable delivery status has exactly one authoritative home: the parent ledger.
-Subordinate specs name their allocated slices and link to that ledger but do not
-copy slice state, acceptance dates, proof results, reviewer results, or next-
-step authorization. The specification map records only coarse component
-sequence and completion; update it mechanically when a component completes,
-not after every slice.
-
-Context loading follows the parent map. For localized drafting, review, or
-implementation, read the parent, the routed detail specs, and their declared
-dependencies; do not load unrelated subordinate specs by default. Read the
-complete manifest-listed set for boundary approval, completed-contract
-approval, cross-cutting changes, and final component review. An implementation
-assignment names the exact detail specs needed for its slice. Adding, removing,
-or changing a subordinate spec's normative responsibility after approval is a
-component-contract change and requires explicit owner review.
-
-An already approved single-file contract may be modularized through a bounded,
-owner-authorized documentation migration without reopening its substantive
-decisions. Before moving text, approve the proposed parent map and an exact
-section-to-document move plan. During the migration, preserve normative meaning
-and do not change requirements, reuse decisions, evidence, proofs, slices, or
-approval claims. The original monolith remains authoritative until the complete
-new set has no missing or duplicate normative ownership, all links resolve, the
-coverage ledgers reconcile, and the owner accepts the migration. If a
-substantive correction is discovered, separate it from the layout migration and
-use the normal contract-revision gate.
-
-## 2. Repeated component workflow
-
-Every component follows the same approval and delivery path:
+The operational rule is:
 
 ```text
-approved Phase 1 requirement(s)
-  -> short Phase 1 contract skeleton or indexed skeleton set drafted without version 2
-  -> owner or expressly delegated boundary and reconnaissance-scope approval
-  -> narrow version 2 code/test/fixture reconnaissance
-  -> completed focused contract or indexed contract set and reuse/proof assessment
-  -> owner or expressly delegated contract/reuse/test/slice-plan and advancement-mode approval
-  -> begin one bounded implementation slice
-  -> implement slice and run its allocated primary proof
-  -> record delegated acceptance and continue, or stop on a manual/failed gate
-  -> final component review
-  -> record delegated final conformance, or stop on a failed gate
-  -> vertical integration milestone
-  -> final operations, shadow, and cutover validation
+fixed product/architecture meaning
+  -> current component plan
+  -> implementation and evidence
+  -> accept, or diagnose and revise the lowest unsuitable artifact
+  -> continue in component order
 ```
 
-An approval applies only to the reviewed artifact and scope. Unless an exact
-standing delegation is recorded in this process and the specification map,
-`approval authority` below means the owner. Boundary approval
-confirms the Phase 1 constraints and permits only the named version 2
-reconnaissance; it does not approve detailed behavior, reuse, or implementation.
-Contract/reuse/test/slice-plan approval fixes the completed component contract,
-exact reuse whitelist, proof plan, and sequential delivery boundaries. It does
-not permit concurrent slices or changes to their boundaries. Unless the owner
-or applicable standing program decision marks a component or slice `manual`,
-that approval conditionally pre-authorizes
-the approved slices in sequence: only one is active, and the next begins only
-after the current slice satisfies the delegated acceptance gate in Section 2.6.
-Manual gates still wait for an explicit owner decision.
+A lower-level contract, fixture, test, benchmark, whitelist, slice, interface,
+review route, or implementation does not become coequal with Phase 1 because it
+was previously approved. If evidence exposes a mistake, revise it. An accepted
+slice/component may be reopened before final V1 acceptance.
 
-### 2.1 Targeted research and evidence
+For C7-C11 there is no component-local owner-response state. All correctable
+failures use the program's required correction loop; excluded external/live
+work, user/Git overlap, and tool/reviewer availability use its containment and
+fallback rules.
 
-Research answers only unresolved questions needed by the current component.
-Record the question, why the approved contracts do not already settle it, the
-evidence, and the resulting constraint or remaining uncertainty in that
-component's spec.
+Outside the V1 program, the applicable owner approval rules recorded in that
+component remain in force.
 
-Allowed evidence classes are:
+## 2. Contract-first component planning
 
-- provider documentation;
-- existing version 2 JSON or fake-provider fixtures;
-- controlled live observations explicitly authorized for that task;
-- product or mathematical invariants;
-- demonstrated predecessor regressions; and
-- explicit owner decisions.
+Before implementation, the component plan must:
 
-Evidence is component-local at this stage. Do not build an up-front global
-evidence registry, broad predecessor catalog, or speculative edge-case list.
-Evidence may be an embedded payload fixture or diagnostic/review record; it is
-not assumed to be a raw WebSocket recording. A global evidence/test index may
-later be assembled mechanically from approved component specs if it becomes
-useful.
+1. read `AGENTS.md`, `README.md`, the specification map, the V1 program when
+   applicable, every relevant Phase 1 authority, and accepted dependency
+   contracts;
+2. enumerate exact controlling `PG-*`, `ARCH-*`, `DTE-*`, and `LIFE-*` IDs;
+3. state one ownership boundary, inputs/outputs, dependencies, and explicit
+   non-scope;
+4. choose the simplest design satisfying those authorities;
+5. introduce no new product rule, state owner, watermark, evaluator,
+   T/Q-to-ranking dependency, time-window meaning, speculative edge case, or
+   duplicated responsibility;
+6. record a short Phase 1 boundary and exact V2 reconnaissance scope before
+   opening V2 code, tests, or fixtures;
+7. complete the detailed contract after reconnaissance, including trust
+   boundaries, requirements, one primary proof per requirement, verification
+   tiers, sequential slices, review triggers, implementation discretion,
+   deferrals, and correction conditions; and
+8. record the completed contract in the parent ledger as the current executable
+   plan.
 
-Before boundary approval, use the Phase 1 authorities and non-predecessor
-evidence. Version 2 code, tests, and fixtures are component-local evidence, but
-they may be opened only during the approved reconnaissance pass. This keeps the
-skeleton independent of predecessor structure without forcing the detailed
-contract to ignore working, live-informed implementation evidence.
+C8-C11 already have owner-approved boundary/reconnaissance plans at the parent
+paths in the specification map. Their detailed contracts are completed just in
+time after the preceding component's interface is finally accepted. Under the
+V1 program the orchestrator may revise and record the boundary or completed
+contract without another owner message. If a completed contract introduces or
+changes a consequential trust, persistence, identity, concurrency, ownership,
+ordering, or cross-component interface boundary, it receives one focused
+independent review before implementation. Other completed contracts do not
+need a ceremonial independent review.
 
-Live provider calls and credential access require explicit owner authorization
-for the current task. Without it, use documentation, existing fixtures, and
-offline evidence only.
+### 2.1 Layout and routing
 
-### 2.2 Phase 1 contract skeleton and boundary approval
+Use one compact file when the component has one cohesive ownership boundary,
+small evidence/trust ledgers, and at most two readily reviewable slices. Use a
+compact indexed parent plus subordinate details only when distinct semantic,
+trust, proof, or delivery concerns would otherwise force unrelated context into
+every task.
 
-Use the
-[`focused component specification template`](specifications/focused-component-spec-template.md).
-The initial artifact is a short contract skeleton, not a completed component
-contract. It may be one file or an indexed skeleton set under Section 1.1,
-but its parent remains sufficient to understand and route the boundary. Across
-the skeleton set it contains:
+The parent remains at the specification-map path and owns:
 
-- the outcome and user/operator consequence;
-- exact controlling Phase 1 requirement IDs;
-- component ownership, dependencies, scope, and explicit non-scope;
-- the settled semantic input/output boundary and invariants that version 2
-  cannot change;
-- unresolved behavior, provider, capacity, or proof questions;
-- the proposed categories of version 2 code, tests, and fixtures to inspect and
-  the question each category should answer; and
-- an initial view of the likely primary proof boundaries.
+- outcome, single boundary, dependencies, and non-scope;
+- cross-cutting Phase 1/V1 invariants;
+- current contract state and sole mutable delivery ledger; and
+- a normative document map routing every requirement, proof, decision, and
+  slice exactly once.
 
-Boundary approval by the applicable approval authority confirms that this is
-the correct Phase 1-derived component boundary and approves the proposed
-reconnaissance scope. It is not approval of detailed behavior or reuse. Until
-it passes, do not inspect version 2 code, tests, or fixtures. For C8-C11 under
-Section 2.8, the complete skeleton first receives an independent read-only
-review against the controlling Phase 1 and accepted dependency contracts. The
-orchestrator corrects in-scope findings, obtains focused re-review, records the
-review evidence and clean drift audit in the parent, and only then records the
-delegated boundary approval in its own local commit.
+Each detail owns one cohesive boundary, declares parent/dependencies/
+requirements/slices, and copies no mutable status. Cross-document dependencies
+are explicit and acyclic. A localized task reads the parent and routed details;
+final component review reads the complete set.
 
-### 2.3 Narrow version 2 reconnaissance and reuse assessment
+Within C7-C11, layout and document-map responsibility can be revised through
+the V1 correction loop. Record the before/after map and ensure no missing,
+duplicate, or contradictory normative ownership. Outside the program, use the
+applicable owner gate.
+
+### 2.2 Version 2 reconnaissance and reuse
 
 The only default predecessor is:
 
@@ -278,555 +108,342 @@ The only default predecessor is:
 /Users/joshuabelandres/Dev/Momentum-Equities-Live-Scanner-v2
 ```
 
-The older version 1 checkout is out of scope unless the owner later authorizes
-a precise exception. There is no broad predecessor harvest.
+Version 2 is evidence, never authority. The older Version 1 checkout is out of
+scope without a precise owner exception.
 
-After boundary approval, inspect only code, tests, and fixtures within the
-approved reconnaissance scope. Locate exact relevant files/functions and add a
-reuse assessment to its one authoritative location in the focused contract for
-each candidate containing:
+Before inspecting V2, record the source category, question, and exclusion.
+After inspection, record for each candidate:
 
-- source path and relevant function/type/fixture;
-- commit and file hash when provenance matters;
-- decision: `direct port`, `adapt`, `behavior evidence`, or `reject`;
-- behavior preserved because it satisfies the new contract;
-- predecessor coupling or ownership to remove; and
-- proof required for the reused behavior.
+- exact path and function/type/test/fixture;
+- commit/file hash when provenance matters;
+- `direct port`, `adapt`, `behavior evidence`, or `reject`;
+- behavior preserved;
+- predecessor ownership/coupling removed; and
+- required proof.
 
-Version 2 is evidence, never authority. The applicable approval authority
-approves the exact reuse and fixture whitelist before implementation. Approved per-component decisions may
-later accumulate into a repository-wide reuse index; unreviewed candidates do
-not.
+For C7-C11, the whitelist may be revised when new evidence remains inside the
+fixed component boundary. Record the expansion before opening the new source,
+then update its proof obligation. Apparent broader product/architecture tension
+uses the V1 program's authority-order and strict-compatible-interpretation rule.
 
-The reconnaissance should recover useful implementation knowledge rather than
-only search for copyable code. It records validated algorithms, provider
-behavior, regression cases, bounded-state techniques, existing proof quality,
-and places where old orchestration or ownership must be removed. If findings
-would change an approved Phase 1 boundary or expand the reconnaissance scope,
-stop for the applicable approval authority instead of allowing version 2 to
-drive the contract. Under Section 2.8 this requires a corrected C8-C11 skeleton,
-clean focused re-review, a new recorded approval, and a separate local commit;
-it never permits inspection outside the last approved scope.
+Credentials and live calls always require a separate explicit owner
+authorization.
 
-### 2.4 Completed contract, proof allocation, and approval
+## 3. Detailed contract and proof allocation
 
-After reconnaissance, complete the focused component contract. In a modular
-layout, keep the parent high-level and put each detailed concern in the one
-subordinate spec assigned by its document map. Across the set, define semantic
-inputs/outputs and owned state, required behavior, failure and terminal
-outcomes, accounting/observability, boundedness, evidenced edge cases,
-implementation discretion, acceptance criteria, and—when needed—a sequential
-implementation-slice plan. Use version 2 findings where they provide stronger
-implementation or behavior evidence, while keeping every normative decision
-subordinate to the cited Phase 1 requirements.
+The completed contract defines:
 
-Proof planning occurs in the focused contract before implementation. Each
-requirement receives one primary proof. A second test at another layer is
-allowed only when it proves a distinct boundary, and the contract names that
-boundary. Do not multiply the same scenario across unit, component,
-integration, replay, and live tests.
+- semantic inputs, outputs, owned state, and immutable/fact-returning
+  boundaries;
+- exact required behavior, failure/terminal outcomes, accounting,
+  observability, and bounds;
+- evidenced edge cases and explicitly deferred behavior;
+- implementation discretion versus fixed Phase 1 meaning;
+- the current V2/fixture whitelist;
+- one primary proof per requirement; and
+- one or more sequential implementation slices.
 
-One coherent test, trace, fixture, or construction inspection may serve as the
-primary proof for multiple tightly coupled requirements. It must name and
-assert each requirement's distinct claim, dangerous counterexample, observable
-result, and limitation so a failure remains diagnosable. Do not create separate
-test functions merely to mirror requirement IDs, and do not use proof sharing
-to hide an unexercised branch or distinct implementation path.
+### 3.1 Trust and false-success boundary
 
-Passing tests is necessary but not sufficient evidence of contract
-conformance. Before allocating proofs, make each consequential external,
-persisted, or cross-component trust boundary explicit:
+For each consequential external, persisted, or cross-component boundary, state:
 
-- the exact evidence accepted into the success path;
-- malformed, stale, contradictory, or otherwise invalid evidence that is
-  rejected;
-- whether failure is global, symbol-/field-local, or persistence-only;
-- the most dangerous false-success case: invalid evidence that could otherwise
-  look complete, current, or valid; and
-- important invalid states prevented by API, type, ownership, or construction
-  rather than by runtime tests.
+- exact evidence accepted into success;
+- malformed, stale, contradictory, or invalid evidence rejected/contained;
+- global, symbol/field-local, or persistence-only failure scope;
+- the smallest dangerous case that could falsely appear complete, current,
+  valid, or durable; and
+- invalid states prevented by type/API/ownership/construction.
 
-Do this only for the component's real trust and ownership boundaries. Terms
-such as `valid`, `strict`, `complete`, `current`, `immutable`, and `atomic` are
-not proof plans by themselves; define the concrete conditions that matter to
-the component. Do not expand the spec with a generic repository-wide mutation
-matrix.
+Do not create a generic repository-wide matrix. Cover the component's real
+risks only.
 
-For every primary proof, record:
+### 3.2 Primary proofs
+
+Each primary proof records:
 
 1. the exact claim;
-2. the dangerous counterexample or boundary condition it exercises;
-3. the observable result that distinguishes conformance from false success;
-4. any distinct implementation paths participating in the claim; and
+2. the dangerous counterexample/boundary;
+3. the observable result distinguishing conformance from false success;
+4. every distinct implementation path participating; and
 5. what the proof intentionally does not establish.
 
-The proof form remains component-specific. Deterministic mathematics usually
-needs exact boundary or permutation tests; provider normalization needs
-documented fixtures including ambiguous/failure envelopes; cache and
-filesystem behavior needs focused fault injection and path-safety inspection;
-identity needs golden encoding plus semantic mutation/permutation cases;
-ordered state needs event traces with invariants checked after each input; and
-lifecycle/recovery needs progress, terminal-disposition, containment, and
-accounting scenarios. Select only the forms justified by the component.
+One proof may cover tightly coupled requirements if every claim remains
+diagnosable. A second layer is allowed only for a distinct boundary. Do not
+duplicate the same scenario across unit, component, integration, replay, and
+live tests.
 
-Use the narrowest applicable proof form:
+Use the narrowest useful form: construction/ownership inspection, formula
+test, provider fixture, focused fault injection, lifecycle trace, deterministic
+replay, checkpoint/restart equivalence, controlled capacity evidence, or
+separately authorized live observation.
 
-| Proof form | What it establishes |
-| --- | --- |
-| Construction/ownership proof | API, type, visibility, and ownership design make an important invalid state or competing mutation path unavailable. |
-| Formula test | Exact deterministic mathematics, boundaries, invalid-input behavior, and tie/order rules. |
-| Provider-normalization fixture | Documented or captured payload-to-normalized-fact mapping and bounded rejection. |
-| Focused fault-injection scenario | Failure at a named I/O or persistence stage produces the contracted containment and terminal result. |
-| Focused lifecycle scenario | State transition, progress/exit event, failure containment, or terminal accounting. |
-| Deterministic aggregate replay | Shared normalized aggregate/state/evaluator path and market-time invariance across playback speeds. |
-| Checkpoint/restart equivalence | Coherent `T0` projection plus catch-up reproduces uninterrupted aggregate-derived state. |
-| Differential replay | New and approved reference behavior agree on a controlled corpus; disagreement is investigated rather than hidden. |
-| Authorized shadow observation | Production-shaped transport, timing, capacity, and operational behavior under explicit live-data authorization. |
-| Cutover evidence | Operational readiness, rollback, observability, and acceptance criteria in the intended deployment. |
+### 3.3 Slice plan
 
-Speculative edge cases require provider documentation, an existing fixture, a
-controlled observation, an invariant, a demonstrated regression, or explicit
-owner approval. Agreement proves scanner correctness only. It is not evidence
-of predictive trading edge, entries/exits, slippage, or executable expectancy.
+Begin with one slice. Add another only for a distinct observable behavior,
+proof family, provider/canonical boundary, ownership/package boundary, or
+dependency order that would make one change difficult to review. For C8-C11,
+use no more than two slices unless a recorded third boundary genuinely cannot
+fit two.
 
-Before completed-contract approval, begin with the presumption that the
-component is one bounded assignment. Add each further slice only by naming the independently
-observable behavior, distinct proof family, provider-I/O/canonical-mutation
-boundary, ownership/package boundary, dependency order, or reviewability
-problem that prevents one coherent assignment. A different helper, file, or
-requirement ID is not by itself a reason to split. Do not split by estimated
-hours, lines, or token count. Split at behavior and proof boundaries, and do not
-force one slice when the named boundaries would make review or rollback
-ambiguous.
+Each slice:
 
-Each slice must:
+- owns an exact subset of requirements and proofs;
+- produces coherent behavior, not unused scaffolding;
+- preserves one owner/state path;
+- leaves the repository buildable with its allocated proof passing;
+- states deferred behavior honestly; and
+- is reviewable without beginning the next slice.
 
-- produce one coherent observable behavior or tightly related behavior set;
-- own an exact subset of component requirements and their primary proofs;
-- leave the repository buildable with its allocated proofs passing;
-- preserve the approved ownership and semantic boundaries;
-- avoid unused scaffolding or a temporary competing state path;
-- state deferred behavior honestly; and
-- be reviewable before the next slice begins.
+Every requirement/proof is allocated once. Cross-slice interaction belongs to
+the last slice needed to make it real.
 
-Slice acceptance is provisional evidence that the approved next slice may
-proceed; final component review remains the complete conformance decision. At
-the slice gate, passing allocated proofs are accompanied by a compact
-conformance walkthrough stating:
+## 4. Implementation assignment
 
-- which important invalid states are prevented by construction;
-- what external or persisted evidence can reach the success return;
-- how the main failure paths are contained and terminally reported;
-- which distinct implementations participate in a shared requirement and how
-  each was proved; and
-- any material claim still supported only by inspection or intentionally left
-  unproved.
+One assignment covers exactly one current slice and contains:
 
-This is a short review artifact, not a second specification or broad test
-inventory. Its result and evidence references are written once to the parent
-delivery ledger. Subordinate detail specs retain normative allocation only and
-do not receive acceptance-status edits.
+1. authoritative documents and exact requirements;
+2. outcome, scope/non-scope, dependencies, interfaces, and ownership;
+3. allowed files/packages or precise ownership boundary;
+4. current V2 source/fixture whitelist and evidence inputs;
+5. primary proof and dangerous counterexample per requirement;
+6. verification tier, explicit timeout, and acceptance record;
+7. deferred behavior and routine decisions delegated to the implementer;
+8. prohibited Phase 1/product/ownership changes;
+9. risk-triggered review requirement; and
+10. the V1 zero-interruption/containment link and lower-level correction
+    triggers.
 
-Every component requirement and primary proof belongs to exactly one slice.
-If a requirement concerns interaction among slices, allocate its primary proof
-to the last slice needed to make that interaction real. A later milestone may
-add proof only for a distinct cross-component boundary. Contract/reuse/test/
-slice-plan approval by the applicable authority fixes the complete component contract,
-predecessor whitelist, approved fixtures, primary proofs, slice ordering, and
-any intentionally deferred secondary evidence. It also fixes
-`advancement_mode` as `delegated` by default or `manual` for the whole component
-or named slices.
+The implementer should not need project discussion history. Private helpers,
+file layout, ordinary algorithms, error wrapping, and test builders remain
+implementation discretion unless correctness or current reuse evidence fixes
+them.
 
-For C8-C11 under Section 2.8, approval requires a mandatory independent
-read-only review of the complete manifest-listed contract against the approved
-skeleton, Phase 1 and dependency meanings, exact V2 scope/whitelist, trust
-boundaries, proof allocation, slice plan, standing program decisions, and drift
-audit. The orchestrator corrects in-scope findings before approval, obtains a
-focused clean re-review, records the evidence, and commits the approval as its
-own local gate. A review that exposes a required substantive decision outside
-the standing authority is a manual stop, not an approval.
+If the slice becomes incoherent, update the current contract/slice allocation
+through the V1 correction loop. Do not let the task expand silently or create a
+temporary competing path.
 
-A focused component contract that has not yet received that approval must
-conform to the current mandatory template, including its document-map rules
-when modular, before approval even if its draft began under an earlier template
-revision. Do not silently retrofit or repartition an already approved component
-contract; revise it only through explicit owner review.
+## 5. Implementation, correction, and slice acceptance
 
-### 2.5 Bounded implementation-slice assignment
+Implement only the current slice. Keep blocking I/O outside the engine, inputs
+bounded, provider adapters fact-returning, canonical mutation in the sole
+engine, and readers on immutable output.
 
-One implementation assignment covers exactly one approved slice and must
-contain:
+### 5.1 Correction cycle
 
-1. authoritative documents and exact controlling requirement IDs;
-2. the slice identifier, coherent outcome, and exact requirements assigned;
-3. approved component scope, slice scope, and explicit non-scope;
-4. approved dependencies, semantic interfaces, and ownership boundary;
-5. allowed files/packages or a precise code-ownership boundary;
-6. approved version 2 source and fixture whitelist;
-7. approved fixtures and other evidence inputs;
-8. the primary proof for each assigned requirement;
-9. required verification and compact acceptance record;
-10. behavior explicitly deferred to later slices;
-11. routine decisions delegated to the implementer;
-12. prohibited changes; and
-13. stop/escalation conditions; and
-14. the component-specific trust-boundary counterexamples, construction
-    guarantees, and proof limitations allocated to the slice; and
-15. the inherited `advancement_mode` and exact conditions that force a manual
-    owner decision.
+When a test, benchmark, review, fixture, or implementation fails:
 
-The assignment must be implementable from a compact context bundle:
+1. preserve the observed command, configuration, fixture manifest, and result;
+2. identify the exact claim and classify the cause;
+3. revise the lowest unsuitable C7-C11 artifact or implementation;
+4. mark any affected accepted slice/component `reopened` while preserving
+   unrelated clean evidence;
+5. run the narrowest distinguishing proof and direct regressions;
+6. request focused re-review only when the correction changes the consequential
+   boundary originally reviewed; and
+7. update the parent ledger and continue.
 
-- `AGENTS.md`;
-- the approved parent focused component contract;
-- only the subordinate detail specs routed to the slice, plus their declared
-  dependencies;
-- exact cited Phase 1 sections and requirement IDs;
-- approved dependency specs or interface excerpts;
-- approved version 2 sources/fixtures; and
-- the one approved slice, its required verification, and its deferred behavior.
+Do not request owner approval for a new codec, corrected fixture, benchmark,
+proof allocation, slice boundary, contract map, threshold, or replacement
+implementation inside the fixed V1 boundary.
 
-The agent should not need the full project discussion history. Implementation
-discretion includes private helper names, exact internal file layout, and
-routine algorithms unless the approved contract makes one necessary for
-correctness. Stop if implementation exposes a missing contract, requires an
-unapproved dependency or predecessor file, or would change an owner-approved
-behavior. If the assignment no longer has one coherent outcome and reviewable
-proof, stop and split it rather than allowing the task to expand.
+Never rerun an unchanged failed command. After two failed attempts using the
+same mechanism or premise, abandon it for the simplest fixed-authority-
+compliant alternative, prove that alternative with a compact deterministic
+distinguishing case, and only then rebuild scale. Progress reports and local
+commits are evidence checkpoints, not turn-ending conditions.
 
-### 2.6 Slice implementation, delegated acceptance, and component review
+### 5.2 Slice acceptance record
 
-Implement only the assignment's authorized boundary and primary proofs. Keep
-provider adapters fact-returning, canonical mutation inside the sole engine
-owner, and concurrent consumers on immutable views. Preserve bounded queues,
-retention, diagnostics, and failure outcomes specified for the component.
+Record:
 
-At the end of every slice, produce a compact acceptance record containing:
+- coherent behavior now available;
+- exact requirements/proofs completed and behavior deferred;
+- files/ownership/interfaces changed;
+- proof design, result, limitation, and counterexample;
+- construction guarantees and success/failure-path walkthrough;
+- deviations, failed assumptions, and inspection-only claims;
+- review trigger/result; and
+- whether the next slice is valid or needs an in-program revision.
 
-- the coherent behavior now available;
-- exact requirements completed and behavior still deferred;
-- files, ownership, or interfaces changed;
-- the approved proof design, result, and what it establishes;
-- deviations, failed assumptions, or newly discovered evidence;
-- the compact construction and success/failure-path conformance walkthrough;
-- proof limitations and claims supported only by inspection;
-- whether the slice freezes a consequential trust, persistence, identity,
-  ownership, ordering, concurrency, or cross-component interface boundary;
-- whether the next approved slice remains valid; and
-- the delegated-gate result: accepted and continue, or stopped for the smallest
-  manual decision.
+Under the V1 program, a clean evidence-based gate records `accepted` and
+continues. A correctable failure records `reopened` or `correction_active` and
+continues through Section 5.1. C7-C11 do not record a component-local waiting-
+for-owner state.
 
-An independent slice review is not mandatory for every slice. Request one
-before dependent work proceeds when the slice freezes a consequential external
-trust, persistence/atomicity, market-identity/currentness, global-versus-local
-failure, sole-mutation/ordering, concurrency, or cross-component interface
-boundary and the allocated proof plus construction argument does not make the
-risk straightforward to assess. The review should target that boundary rather
-than repeat the full component review. A read-only independent final component
-review remains required after all slices.
+### 5.3 Final component review
 
-When an independent review is delegated to an agent, follow the trigger,
-model/effort, correction, and focused re-review policy in `AGENTS.md`.
+After all slices pass, one independent read-only review examines the complete
+component set and verifies:
 
-Under `advancement_mode: delegated`, mark the slice accepted in the parent
-ledger and continue to the next already-approved slice without requesting an
-owner response only when:
-
-1. every allocated proof and required verification passes;
-2. each required independent review is clean after focused correction;
-3. scope, dependencies, interfaces, document map, and predecessor whitelist are
-   unchanged;
-4. the conformance walkthrough contains no deviation, failed assumption,
-   unresolved success-invalidating inspection claim, or drift-audit `yes`; and
-5. the next slice remains exactly valid as approved.
-
-Send a concise progress update when advancing; it is informational and requires
-no reply. Under `manual` mode, or when any condition above fails, record the
-evidence without marking acceptance and stop for the smallest owner decision.
-A failing proof or implementation discovery may require revising the component
-contract or remaining slice plan; delegated advancement never authorizes that
-change inside the current assignment.
-
-After all slices pass, final component review reads the complete
-manifest-listed contract set and verifies:
-
-- conformance to every cited requirement and approved interface;
-- passage and diagnostic quality of the allocated primary proofs;
+- conformance to fixed Phase 1 and accepted dependency meaning;
+- passage/diagnostic quality of allocated proofs;
 - exact accounting and terminal outcomes where applicable;
-- absence of unapproved predecessor coupling or scope expansion;
-- bounded memory, queues, retries, cardinality, and diagnostics; and
-- whether the complete local data path is simpler and clearer than the
-  alternatives actually considered.
+- no unrecorded predecessor coupling or scope expansion;
+- bounded memory, queues, waits, retries, work, and diagnostics; and
+- one clear ownership/data path.
 
-If that mandatory independent review is clean, complete verification passes,
-and no manual-decision condition is present, delegated mode marks final
-component conformance accepted in the parent ledger. Update the specification
-map's coarse component status mechanically and continue only as permitted by
-the approved sequence and milestone dependencies. No separate owner acceptance
-message is required. A failed or ambiguous final review stops without claiming
-completion.
+Correct findings and request focused re-review. Do not repeat the broad review.
+When clean, record final component acceptance and update the specification map.
+Later integration evidence may still reopen the component before final V1
+acceptance.
 
-A completed component is not integrated merely because its slices pass in
-isolation. It advances when final component review and its vertical milestone
-demonstrate the shared boundary with real adjacent components or deterministic
-substitutes.
+## 6. Verification tiers and cost policy
 
-### 2.7 Verification cadence
+### 6.1 Ordinary
 
-Verification is cumulative at acceptance boundaries, not maximally broad after
-every edit. The approved component contract and slice assignment may require a
-stronger check when their risk demands it; otherwise use these tiers:
+The normal repository command is:
 
-1. **Development loop:** run the allocated primary proof under active
-   development and the smallest affected package or fixture checks. Do not
-   repeatedly run unrelated long proofs while editing.
-2. **Slice acceptance:** run every primary proof allocated to the slice, the
-   affected package tests, a repository compile/ordinary-test check, and only
-   earlier proofs whose owned state or interface the slice can affect. Run race
-   detection when the slice changes concurrency, queues, synchronization,
-   mutable ownership, publication, or reader isolation. Run other expensive
-   static, fault, or long-path checks only when allocated by the contract or
-   implicated by the change.
-3. **Focused correction re-review:** rerun the failed proof, the proof for the
-   affected boundary, and direct regressions. The component-final tier still
-   follows; a local correction does not automatically restart every clean
-   independent review or long proof.
-4. **Final component review:** rerun the complete component proof ledger,
-   repository build/test and static checks, required race checks, and the
-   read-only conformance review across the complete manifest-listed contract.
-5. **Vertical milestone and release:** run the named cross-component path,
-   milestone failure cases, and final-validation evidence. Reuse reviewed
-   lower-level results; duplicate them only when the milestone establishes a
-   distinct integration boundary.
+```text
+go test -short -timeout 2m ./...
+```
 
-Long-running, live, credentialed, destructive, or environment-sensitive checks
-remain separately authorized where required. Verification commands and results
-must state what claim they establish; command volume is not evidence quality.
+Ordinary unit/component tests use the smallest deterministic population and
+event stream proving the requirement. Tests skipped by `testing.Short()` must
+be explicit acceptance, capacity, benchmark, soak, race, or live-validation
+commands.
 
-### 2.8 C7-through-C11 unattended program
+### 6.2 Acceptance
 
-The owner approved the completed C7 contract as written and granted standing
-program-level delegated authority on 2026-08-07 for one sequential unattended
-C7-through-C11 program on `codex/c7-c11-program`. C7 begins from its approved
-three-slice plan. For C8-C11, the goal orchestrator may draft, independently
-review, correct, and record approval of each skeleton and completed contract
-without another owner message only through the gates in Sections 2.2 and 2.4.
-This delegation cannot change component order, ownership, Phase 1 or accepted
-dependency meaning, or any standing decision below.
+Run the current slice's primary proofs, affected package tests, a repository
+short compile/test check, and only earlier proofs whose owned state/interface
+can be affected. Add race detection when concurrency, queues, synchronization,
+mutable ownership, publication, or reader isolation changes.
 
-At each C8-C11 skeleton gate, a separate read-only reviewer examines the whole
-skeleton set, exact controlling IDs, ownership/non-scope, settled invariants,
-proposed document map, exact narrow V2 reconnaissance categories, exclusions,
-and likely proof boundaries. At each completed-contract gate, a separate
-read-only reviewer examines the whole manifest, reconnaissance provenance and
-whitelist, trust boundaries, all requirement/proof allocations, slice order,
-verification/review triggers, program decisions, and drift audit. The
-orchestrator may correct a draft within existing authority and request focused
-re-review; only a clean result may be recorded as approval. Reviewer and writer
-must be quiescent before the orchestrator updates the parent ledger or Git, and
-the writer must be quiescent before a gate reviewer begins so the reviewed
-artifact is stable.
+Acceptance commands are explicitly selected and timed out. No single local
+acceptance command exceeds 15 minutes without a component-specific recorded
+reason.
 
-Keep one active write-capable worker subagent at a time. Reviewers are read-only.
-The orchestrator may make the gate's ledger/status edits itself only while no
-worker or reviewer is active. It alone stages and commits. Stage exact paths
-only and make a separate local commit after every clean skeleton approval,
-completed-contract approval, accepted slice, final component acceptance, and
-distinct vertical milestone. Before staging, verify that the selected paths
-contain only that gate and that all unrelated user changes remain untouched.
-Never push, rebase, amend, rewrite history, delete branches, or use a
-destructive reset.
+### 6.3 Capacity
 
-The remaining distinct vertical milestone commits are production aggregate
-lifecycle after C8 final acceptance, T/Q enrichment after C9 final acceptance,
-and the private product-delivery release candidate after C11 final acceptance.
-Each is a separate evidence/ledger commit even when it immediately follows the
-component-final commit.
+Use the smallest population crossing the claimed boundary. The normal V1 local
+reference is exactly 6,000 symbols; theoretical 100,000-symbol structural
+admission is a separate bounded proof and not an operating-capacity claim.
 
-The standing decisions for the whole program are:
+Record OS/architecture/CPU, Go version, configuration, fixture bytes and
+structure, trial deadlines/segments, throughput, processing delay, queue high-
+water/growth, memory, rejected/dropped/shedded counts, and limitations. Run the
+capacity proof once after the implementation is stable, not in ordinary or
+repeated correction loops.
 
-- the release result is private/local, not public deployment;
-- the current local host is the benchmark reference, and no capacity claim may
-  exceed exact recorded evidence;
-- C8 thresholds are conservative and evidence-backed, prioritizing aggregate
-  correctness and false-ready avoidance;
-- no credentialed live-provider observation is permitted; indispensable live
-  evidence is a manual stop;
-- C9 adds no Tape Rate attention threshold, requires continuous warm-up,
-  restores T/Q in current rank order, permits complete T/Q shedding, and
-  protects aggregate processing first;
-- C10 is a private versioned read-only HTTP API with explicit field status,
-  publication identity, loopback binding, and an explicit CORS allow-list;
-  public authentication, TLS, hosting, and cutover are deferred; and
-- Chrome desktop is the required C11 browser. The C11 skeleton must record a
-  narrow V2 scope covering only the UI specification, UI code, assets, and
-  focused UI tests needed for a high-fidelity adaptation. Preserve useful V2
-  layout, visual character, information density, and interactions unless they
-  conflict with current product semantics, accessibility, independent
-  deployment, or the C10 API. Reject V2 browser-owned calculations, readiness
-  logic, obsolete state semantics, and backend coupling.
+### 6.4 Replay
 
-The program stops for an owner decision exactly when:
+Use compact deterministic logical-time streams. Do not simulate full-session
+wall duration. Multiple playback rates are used only to prove rate invariance.
+Replay/fake-provider evidence may complete the private V1 RC while the market
+is closed.
 
-1. an authority conflict, component-order or ownership change, substantive
-   drift-audit `yes`, or change to an owner-approved product, architecture,
-   standing-program, or accepted dependency meaning is required, including a
-   new owner instruction that pauses, revokes, or changes this delegation;
-2. after completed-contract approval, implementation or review requires a
-   substantive change to that contract, document-map responsibility, interface,
-   whitelist, fixture premise, requirement, proof allocation, slice boundary,
-   advancement mode, or standing decision, or reaches a gate explicitly marked
-   `manual`;
-3. a failed or ambiguous proof, verification, independent review, benchmark,
-   or acceptance gate cannot be corrected within approved behavior and scope,
-   or an inspection-only claim can invalidate success;
-4. credentialed/live-provider evidence becomes indispensable or the intended
-   claim exceeds recorded local-host evidence;
-5. public deployment, authentication, TLS, hosting, production cutover,
-   destructive/external action, or other new authority is required; or
-6. unexpected user changes or unresolved Git/history state prevent an isolated
-   exact-path local commit without overwriting or combining unrelated work.
+### 6.5 Live validation
 
-Correctable in-scope review findings and test failures are not manual stops.
-Done means all C7-C11 slices and final component reviews are accepted, each
-distinct vertical milestone is recorded, and the complete private release
-candidate is locally verified. Live validation and production deployment are
-explicitly outside this completion claim.
+Live observation is separate, credentialed, and owner-authorized per execution.
+Follow [`market-hours-validation.md`](market-hours-validation.md). Pending live
+validation does not block the private/local RC.
 
-## 3. Focused component sequence
+### 6.6 Universal bounds
 
-The
-[`specification map`](specification-map.md#phase-2-focused-component-sequence)
-is the single sequence and dependency index for the eleven real component
-contracts. Each map entry points to one authoritative parent; subordinate specs
-do not create extra sequence entries. This process does not maintain a second
-list. The map covers reference
-data/session binding, engine/canonical-state implementation details, aggregate
-evaluation, aggregate replay, Massive live input, REST hydration/recovery,
-checkpoints, readiness/operations, T/Q, the versioned API, and the independent
-UI.
+- No unbounded loop, retry, channel wait, polling interval, or generator.
+- Every long command and every individual performance trial has an explicit
+  timeout.
+- Validate symbol count, fixture bytes, interval, correction count, expected
+  state families, and planned records/requests before timing.
+- Separate semantic correctness from latency/capacity.
+- Do not make a noisy microbenchmark a release blocker without a stable method
+  and product-derived or explicitly program-selected threshold.
+- Run the narrow failed proof during correction; do not run the full repository
+  after every edit.
+- Reuse expensive evidence when code, configuration, fixture, and proof premise
+  are unchanged.
+- Run cross-component/capacity verification once after affected code is stable.
 
-That sequence does not create a shared interface meta-spec: normalized
-identity, clocks, merge rules, the authoritative engine/state owner, lifecycle,
-publication meanings, and failure boundaries are already controlled by Phase
-1.
+## 7. Independent review cadence
 
-Implementation follows the map sequentially. Keep one active implementation
-slice. A component with several slices completes them in approved order, with a
-recorded delegated or manual acceptance gate between slices. While component N
-is being implemented, the short Phase 1 skeleton for component N+1 may be
-drafted and receive boundary/reconnaissance-scope approval from the applicable
-authority. That approval
-records the future
-reconnaissance boundary; it does not permit opening version 2 or drafting N+1
-Sections 8–19 while N remains incomplete. Begin N+1 reconnaissance and detailed
-contract work only after all N slices have passed their allocated primary
-proofs and final component review. N+1 completed-contract approval and
-implementation also wait for any milestone boundary that the map names as a
-dependency. The owner may approve earlier work only when it depends exclusively
-on an already approved stable interface and the exception records exactly which
-reconnaissance, detailed-contract, or approval gate may advance.
+Use an independent review only for:
 
-Section 2.8 changes who may record clean C8-C11 skeleton and completed-contract
-approvals; it does not change this one-component lookahead, final-review, or
-milestone ordering.
+1. one completed-contract review when a consequential trust, persistence,
+   identity, concurrency, ownership, ordering, or cross-component interface
+   boundary is introduced or changed;
+2. a narrow implementation review when one such boundary is difficult to
+   assess from primary proof and construction alone;
+3. one final read-only review per completed component; and
+4. one final integrated V1 RC review after C11.
 
-This skeleton-only one-component lookahead overlaps the low-rework Phase 1
-boundary work without paying for predecessor reconnaissance or detailed design
-against an implementation that may still change. Keep the skeleton compact:
-outcome, controlling IDs, ownership/non-scope, settled invariants, unresolved
-evidence questions, proposed reconnaissance scope, proposed document map, and
-likely proof boundaries only. Do not add helper names, algorithms, final data
-structures, detailed proof matrices, or a committed slice count. If component N
-reveals that an approved N+1 skeleton assumption is wrong, revise the skeleton
-before reconnaissance; do not reopen completed component N unless an
-authoritative requirement was missed.
+After correction, request focused re-review of the finding and affected
+boundary. Do not repeat a complete review or ask a reviewer to reconfirm an
+unchanged primary proof. A review finding is correction input. Substitute an
+available reviewer model when needed; temporarily unavailable review capacity
+delays only that review while other work continues.
 
-Live-provider observation is not an up-front phase. The Massive live-adapter
-and T/Q component skeletons must first name the exact question and approved
-version 2 evidence. A controlled live observation may then be authorized only
-when current provider behavior, entitlement, or timing remains unproved. The
-aggregate adapter observation belongs with component 5; T/Q subscription and
-coverage observation belongs with component 9.
+Reviewer execution/model policy is in `AGENTS.md`.
 
-## 4. Vertical integration milestones
+## 8. Component sequence and integration milestones
 
-Integration proceeds through complete data paths:
+The specification map is the only component sequence. C7-C11 implementation
+is sequential:
 
-1. **Deterministic aggregate core:** replay source -> normalized aggregate ->
-   `ScannerStateEngine` -> canonical symbol state -> qualification/ranking ->
-   immutable snapshot. This proves deterministic market-time scanner behavior,
-   not live transport.
-2. **Production aggregate lifecycle:** live adapter + REST hydration/recovery +
-   checkpoints + readiness around the same aggregate core. This proves fresh
-   start, restart, live tail, gap recovery, failure containment, and supported
-   currentness.
-3. **T/Q enrichment:** qualified top-20 intent -> acknowledged subscription and
-   coverage -> Tape Rate/Spread -> aggregate-protecting pressure degradation.
-   This proves normal displayed-row enrichment and that complete T/Q shedding
-   leaves aggregate state, watermark, ranking, and readiness unchanged.
-4. **Product delivery and release validation:** versioned API + independent UI
-   + release/cutover evidence. This proves read-only product meaning,
-   independent deployment, and shutdown/rollback/cutover behavior against the
-   readiness and operations policy already established in milestone 2.
+1. **C7 checkpoint recovery:** coherent restart and replay continuation, with
+   bounded host evidence materially faster than equivalent fresh recovery.
+2. **C8 production aggregate lifecycle:** runnable composition, readiness,
+   recovery/shutdown, measurements, and 6,000-symbol controlled mixed load.
+3. **C9 T/Q enrichment:** normal top-20 Tape Rate/Spread plus aggregate-first
+   complete shedding and current-rank restoration.
+4. **C10/C11 private product delivery:** loopback versioned API plus independent
+   Chrome desktop dashboard.
 
-For the Section 2.8 program, milestone 4 is deliberately narrower: the private
-loopback API plus independent Chrome-desktop UI and local release-candidate
-evidence. Public hosting, live validation, authentication/TLS, and production
-cutover are deferred rather than claimed.
+Distinct vertical milestones are:
 
-Each milestone names its entry contracts, deterministic fixtures or authorized
-environment, exact assertions, failure cases, and unresolved limitations. A
-later milestone does not duplicate lower-layer proofs unless it establishes a
-new cross-component boundary.
+- production aggregate lifecycle after C8;
+- T/Q enrichment after C9; and
+- private/local V1 RC after C11.
 
-## 5. Final validation and release decision
+Each milestone proves only the new cross-component boundary. Reuse accepted
+lower-layer evidence instead of duplicating it.
 
-Final validation assembles approved component proofs; it does not invent new
-requirements or an after-the-fact global test strategy.
+## 9. Final V1 RC validation
 
-For the C7-C11 program in Section 2.8, this section ends at a private/local
-release-candidate decision. Items requiring authorized shadow observation,
-public hosting, production cutover, or live credentials remain deferred and do
-not block that narrower completion claim unless a contracted correctness claim
-cannot be established without them; in that case the program stops rather than
-weakening the claim.
+Final validation assembles, rather than reinvents, evidence:
 
-1. Re-run formula, fixture, lifecycle, replay, and checkpoint/restart primary
-   proofs in their approved configurations.
-2. Verify each vertical milestone, exact symbol/work accounting, stable API
-   meaning, UI independence, and bounded operational diagnostics.
-3. When explicitly authorized, run shadow observation to measure live
-   transport behavior, latency/currentness thresholds, resource pressure,
-   recovery, T/Q shedding/restoration, and checkpoint objectives without
-   claiming trading performance.
-4. Review cutover criteria, operational ownership, rollback, last-known-good
-   checkpoint behavior, monitoring reasons, and any known limitation.
-5. The owner approves cutover only when every required proof has a reviewed
-   result and no unresolved item can invalidate the intended production claim.
+1. confirm every V1 capability routes to one primary proof in
+   [`v1-release-program.md`](v1-release-program.md#6-v1-capability-and-primary-proof-matrix);
+2. run the short repository command;
+3. run each current component acceptance/capacity proof once in its recorded
+   configuration;
+4. run one compact deterministic cross-component scenario through scanner,
+   checkpoint/recovery, T/Q, API, and UI, asserting only integration meanings;
+5. verify independent UI restart/deployment leaves backend processing live;
+6. run one final integrated read-only review; and
+7. record market-hours validation as `pending` unless separately executed.
 
-Shadow agreement, differential agreement, and correct scanner output establish
-implementation correctness within their evidence limits. They do not validate
-forecast value or executable expectancy.
+The result is a private/local V1 RC. It is not live-provider validation, public
+deployment, production cutover, or trading-edge evidence.
 
-## 6. Drift audit
+## 10. Drift audit
 
-Run this audit at boundary review, after the completed contract/reuse
-assessment, after every implementation slice, at final component review, and
-before each integration milestone. Ask whether the work introduced:
+At contract completion, after each slice/correction, final component review,
+and each milestone, ask whether the work introduced:
 
 - a new product rule;
-- another mutable state owner, watermark, or evaluator;
-- aggregate dependence on T/Q health, data, or availability;
-- changed session, event-time, half-open-window, correction, or watermark
-  semantics;
-- behavior without component-local evidence or owner approval;
-- duplicated ownership or responsibility;
-- machinery not required by an approved contract; or
-- version 2 behavior that changed the new contract rather than serving it.
+- another state owner, watermark, evaluator, or publication authority;
+- aggregate dependence on T/Q;
+- changed session/event/window/correction/watermark meaning;
+- fabricated completeness/readiness/availability;
+- unevidenced provider behavior;
+- duplicated responsibility; or
+- unnecessary machinery.
 
-Any substantive **yes** stops advancement and requires explicit owner review.
-The resolution belongs in the applicable focused component contract if it changes
-that component contract, or in this document/`AGENTS.md` if it is a
-repository-wide mechanical convention. Routine implementation choices remain
-delegated; this repository does not use an ADR workflow.
+If the `yes` is in a lower-level C7-C11 artifact, correct that artifact and
+continue. If the apparent tension reaches fixed Phase 1 meaning, apply the V1
+program's authority order, strict compatible intersection, simplest design,
+and honest unavailable-output rule; do not solicit an in-goal owner decision.
+
+## 11. Orchestration and Git
+
+Keep one active implementation slice and at most one write-capable worker.
+Reviewers are read-only. Ledger/Git actions occur only while workers and
+reviewers are quiescent.
+
+Stage exact paths after verifying unrelated user changes are preserved. Make
+local commits at coherent planning/correction milestones, accepted slices,
+final component acceptance, and distinct vertical milestones when safe. If an
+exact-path commit would combine unrelated work or Git repair would rewrite user
+history, leave a precise working-tree handoff and continue; commits are not V1
+capability prerequisites. Never push, rebase, amend, rewrite history, delete
+branches, or use destructive reset.

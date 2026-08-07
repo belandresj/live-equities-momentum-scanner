@@ -170,7 +170,9 @@ are not metric labels.
   only state, opaque prefix, fabricated aggregate mark, old owner/token/fence,
   and 16-minute-lag checkpoint model are rejected.
 - No migration between schema versions is required in version 1. An unsupported
-  version falls back; adding migration later is a contract change.
+  version falls back. A migration or replacement format is a lower-level C7
+  contract revision allowed by the V1 correction loop when evidence requires
+  it; it cannot weaken semantic completeness or invalid-artifact rejection.
 
 ## 14. Evidenced edge cases
 
