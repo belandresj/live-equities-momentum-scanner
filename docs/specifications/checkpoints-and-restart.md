@@ -1,7 +1,7 @@
 # Checkpoints and restart
 
-**Status:** Detailed Component 7 contract draft; completed-contract,
-reuse/fixture-whitelist, proof-allocation, and slice-plan approval pending
+**Status:** Completed Component 7 contract approved for sequential slice
+implementation; implementation has not begun
 
 **Owner boundary and reconnaissance approval:** Pre-approved 2026-08-07 by the
 owner in the initiating Component 7 task, subject to the exact Sections 1–7
@@ -10,10 +10,37 @@ boundary, document map, and reconnaissance limits below
 **Owner stable-interface exception:** None was needed. Component 6 passed final
 component review on 2026-08-07 before version 2 reconnaissance began.
 
-**Owner contract/reuse/test/slice-plan approval:** Pending
+**Owner contract/reuse/test/slice-plan approval:** Approved 2026-08-07 as
+written, including the exact V2 whitelist, fixtures/evidence, eight primary
+proofs, three slices, required independent reviews, and
+`advancement_mode: delegated`
 
-**Proposed advancement mode:** `delegated` for every slice and the final
-component gate after completed-contract approval; no manual gate is proposed
+**Advancement mode:** `delegated` for every slice and the final component gate;
+no manual gate is designated
+
+**C7-C11 program authority:** The same 2026-08-07 owner decision authorizes the
+standing unattended program recorded in
+[`AGENTS.md`](../../AGENTS.md#c7-through-c11-unattended-program-authority), the
+[`implementation process`](../implementation-process.md#28-c7-through-c11-unattended-program),
+and the [specification map](../specification-map.md#c7-c11-standing-program-decisions).
+For C7, this adds no behavior, whitelist, proof, slice, target, or review change.
+The current local host is the benchmark reference, and C7 makes no capacity
+claim beyond its recorded evidence.
+
+**Standing downstream decisions:** C8 uses conservative evidence-backed
+thresholds and avoids false-ready results; C9 has no Tape Rate attention
+threshold, uses continuous warm-up and current-rank-order restoration, permits
+complete T/Q shedding, and protects aggregates first; C10 is a private
+versioned read-only loopback HTTP API with explicit field status, publication
+identity, and an explicit CORS allow-list, with public auth/TLS/hosting/cutover
+deferred; C11 targets Chrome desktop and narrowly inspects the V2 UI
+specification, code, assets, and focused tests for a high-fidelity adaptation.
+The adaptation preserves useful layout, visual character, density, and
+interactions subject to current semantics, accessibility, independent
+deployment, and C10, and rejects browser-owned calculations/readiness, obsolete
+state semantics, and backend coupling. No credentialed live-provider
+observation is authorized, and program completion is a locally verified
+private release candidate rather than live validation or production deployment.
 
 **Controlling Phase 1 requirements:** `PG-OPS-01`, `PG-OPS-02`,
 `PG-REPLAY-01`, `PG-OBS-03`, `ARCH-OWN-01`, `ARCH-OWN-02`,
@@ -73,14 +100,15 @@ not guess among detail specs or load unrelated dependency details.
 **Contract-wide coverage and acceptance:** Sections 1–7 below remain the
 approved boundary. The routed details now own the exact eight-requirement,
 eight-primary-proof, three-slice contract and the completed-contract checklist.
-No implementation is authorized until the owner approves that complete set.
+The owner-approved set authorizes its sequential slices only after a future goal
+is explicitly created; this preparation task does not start implementation.
 
 ## Authoritative delivery-state ledger
 
 | Item | State | Evidence and required review | Recorded at | Next action |
 | --- | --- | --- | --- | --- |
-| Component contract | `detailed_draft` | Owner approved the Sections 1–7 boundary/reconnaissance scope on 2026-08-07; C6 final acceptance then cleared reconnaissance; Sections 8–19 and the proposed whitelist/proofs/slices are complete | 2026-08-07 | Owner reviews and either revises or approves the completed contract with `advancement_mode: delegated` |
-| `C7-S1` | `pending` | `P-C7-STATE`, `P-C7-INSTALL`; narrow ownership/atomic-install review required | 2026-08-07 | Wait for completed-contract approval |
+| Component contract | `contract_approved` | Owner approved the complete four-document contract as written on 2026-08-07, including the exact V2 whitelist, fixtures/evidence, eight proofs, three slices, required reviews, and `advancement_mode: delegated` | 2026-08-07; governance commit records the approval | Begin `C7-S1` only when the future C7-C11 goal is explicitly created and launched |
+| `C7-S1` | `pending` | `P-C7-STATE`, `P-C7-INSTALL`; narrow ownership/atomic-install review required | 2026-08-07 | Wait for explicit future goal launch |
 | `C7-S2` | `pending` | `P-C7-CODEC`, `P-C7-STORE`, `P-C7-CADENCE`; narrow persistence/atomicity/concurrency review required | 2026-08-07 | Wait for accepted `C7-S1` |
 | `C7-S3` | `pending` | `P-C7-LIVE`, `P-C7-REPLAY`, `P-C7-OBJECTIVE`; narrow cross-component identity/restart-equivalence review required | 2026-08-07 | Wait for accepted `C7-S2` |
 | Final component review | `pending` | Mandatory separate read-only review after `C7-S1`–`C7-S3` pass | 2026-08-07 | Wait for all slices |
@@ -277,9 +305,8 @@ than replaces the preceding owner/path.
 document map, and reconnaissance scope above. Component 6 passed final review
 before that scope was exercised.
 
-**Detailed-contract gate:** Sections 8–19 are complete in the routed details.
-Stop for owner approval of the complete contract, exact V2 whitelist, proof
-allocation, three-slice plan, required reviews, and proposed delegated
-advancement. The owner approval is the only approval that cannot be supplied by
-the later goal orchestrator; after it, the orchestrator may evaluate and record
-clean delegated slice/final gates exactly as `AGENTS.md` permits.
+**Detailed-contract gate:** Passed by explicit owner approval on 2026-08-07.
+Sections 8–19 are complete in the routed details, and the exact V2 whitelist,
+proof allocation, three-slice plan, required reviews, and delegated advancement
+are fixed. No implementation begins during this preparation task; the future
+C7-C11 goal starts at `C7-S1`.

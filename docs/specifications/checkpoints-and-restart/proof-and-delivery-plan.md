@@ -96,20 +96,22 @@ findings to the active implementer, then use the same reviewer for focused
 re-review when practical. A reviewer supplies evidence; it cannot approve a
 contract change, whitelist expansion, revised proof, or slice boundary.
 
-### 16.2 Single-goal unattended execution protocol
+### 16.2 C7-C11 single-goal unattended execution protocol
 
-After—and only after—the owner approves this completed contract, whitelist,
-proof allocation, slices, reviews, and `advancement_mode: delegated`, one goal
-orchestrator may execute C7 through final acceptance without clean-gate owner
-messages:
+The owner approved this completed contract, whitelist, proof allocation,
+slices, reviews, and `advancement_mode: delegated` on 2026-08-07. One future
+goal orchestrator may begin at `C7-S1` and execute the sequential C7-C11
+program without clean-gate owner messages under the standing authority in
+`AGENTS.md` and the implementation process:
 
 1. Treat the parent delivery ledger as durable workflow state and resume from
    the first nonaccepted eligible item.
-2. Keep exactly one write-capable implementation subagent active. Give it only
+2. Keep at most one write-capable implementation subagent active. Give it only
    the current slice's routed contract/dependencies, whitelist, assignment,
    proofs, verification, prohibitions, and stop conditions.
-3. Use separate read-only subagents for the required narrow review and final
-   component review; follow the model/effort policy above.
+3. After the writer is quiescent, use separate read-only subagents for the
+   required narrow review and final component review; follow the model/effort
+   policy above.
 4. Return unambiguous in-scope findings to the implementer, rerun affected
    proofs/verification, and obtain focused re-review.
 5. The orchestrator—not the reviewer—performs the conformance walkthrough and
@@ -119,17 +121,32 @@ messages:
 6. After all slices pass, run final-component verification/review. If clean,
    record C7 final acceptance and mechanically synchronize
    `docs/specification-map.md`.
+7. Continue through C8-C11 in order. Each future skeleton and completed
+   contract receives its separate mandatory independent review and clean
+   focused re-review before the orchestrator records approval. Preserve the
+   exact one-component lookahead and V2-reconnaissance ordering.
+8. The orchestrator alone stages exact paths and makes separate local commits
+   after every clean skeleton approval, completed-contract approval, accepted
+   slice, final component acceptance, and distinct vertical milestone, and only
+   after all writers and reviewers are quiescent. It never pushes, rebases,
+   amends, rewrites history, deletes branches, or uses a destructive reset.
 
-This protocol does **not** delegate owner authority to the orchestrator. It may
-accept evidence under the already-approved delegated gate; it may not approve
-or amend the contract, behavior, scope, document map, dependency interface, V2
-whitelist, proof allocation, slice boundary, or a manual/failed/ambiguous gate.
+For C7, this protocol delegates only evidence-based slice and final acceptance;
+it may not amend the approved contract, behavior, scope, document map,
+dependency interface, V2 whitelist, proof allocation, slice boundary, or a
+manual/failed/ambiguous gate. The separate standing owner decision permits the
+orchestrator to approve clean independently reviewed C8-C11 skeletons and
+completed contracts before implementation; it does not permit post-approval
+substantive changes.
 
-The orchestrator stops only for a repository-authority conflict; explicit
-manual gate; required contract/interface/map/whitelist/proof/slice change;
-unauthorized live-provider, credentialed, destructive, or external action;
-success-invalidating failed assumption/inspection-only claim; or repeated
-unresolved review evidence needing an owner decision. Routine implementation
+The exact program manual stops and standing C8-C11 product decisions are the
+ones in
+[`AGENTS.md`](../../../AGENTS.md#c7-through-c11-unattended-program-authority)
+and the
+[`implementation process`](../../implementation-process.md#28-c7-through-c11-unattended-program).
+They include indispensable live evidence, unsupported capacity claims, public
+deployment/cutover, post-approval substantive changes, unresolved failed or
+ambiguous gates, authority drift, and unsafe Git state. Routine implementation
 choices, correctable test failures, clean transitions, and unambiguous in-scope
 review corrections do not stop the goal.
 
@@ -201,7 +218,7 @@ checkpoint; targets and reference fixture; and three-slice allocation.
 - [x] Every slice is coherent, sequential, reviewable, and honest about deferred behavior.
 - [x] Implementation discretion, prohibitions, and stop conditions support bounded assignments and unattended delegated gates.
 - [x] The drift audit below has no substantive `yes`.
-- [ ] Owner has approved the completed contract, exact V2 whitelist, fixtures/evidence, proofs, slices, reviews, and `advancement_mode: delegated`.
+- [x] Owner approved the completed contract as written on 2026-08-07, including the exact V2 whitelist, fixtures/evidence, proofs, slices, reviews, and `advancement_mode: delegated`.
 
 ## 19. Drift audit
 

@@ -82,6 +82,28 @@ indexed parent with cohesive subordinate detail specs; either layout remains
 one component authority and passes the same approval gates. Production
 implementation is not authorized merely because a specification draft exists.
 
+### Authorized C7-through-C11 local program
+
+The owner approved the completed Component 7 checkpoint contract on
+2026-08-07 and granted standing, conditional authority for one sequential
+unattended C7-through-C11 program on `codex/c7-c11-program`. Components 8-11
+still require separate Phase 1 skeleton and completed-contract gates, but the
+future goal orchestrator may record each gate without another owner message
+only after mandatory independent review, correction/re-review as needed,
+complete proof allocation, a clean drift audit, and conformance to the approved
+product, architecture, dependency, and program decisions. The exact delegation,
+manual stops, single-writer rule, and local-commit policy are in
+[`AGENTS.md`](AGENTS.md#c7-through-c11-unattended-program-authority) and the
+[`implementation process`](docs/implementation-process.md#28-c7-through-c11-unattended-program).
+
+The target is a completely reviewed and locally verified private release
+candidate through Component 11. This program does not authorize credentialed
+live-provider observation, a public capacity claim, public deployment,
+authentication/TLS/hosting, production cutover, pushing, or history rewriting.
+Chrome desktop is the required UI target, and Component 11 is a high-fidelity
+adaptation of the useful V2 scanner UI without V2 browser-owned calculations,
+readiness logic, obsolete state semantics, or backend coupling.
+
 ## Predecessor evidence
 
 The version 2 predecessor is retained separately as a source of Massive protocol

@@ -7,10 +7,14 @@ sequential roadmap.
 
 **Phase 2 roadmap approved:** 2026-08-05
 
+**C7-C11 unattended program approved:** 2026-08-07
+
 This map identifies the authoritative Phase 1 documents and the plain component
-sequence for Phase 2. It does not grant approval to a focused component contract or
-authorize implementation. The controlling work gates are in
-[`implementation-process.md`](implementation-process.md).
+sequence for Phase 2. It does not ordinarily grant approval to a focused
+component contract or authorize implementation. The explicit C7-C11 standing
+program authorization below is the sole exception and remains conditional on
+the controlling gates in
+[`implementation-process.md`](implementation-process.md#28-c7-through-c11-unattended-program).
 
 ## Authority
 
@@ -64,8 +68,8 @@ with Phase 1 architecture.
 
 | Document | Current status | Role |
 | --- | --- | --- |
-| [`implementation-process.md`](implementation-process.md) | Owner-approved operational process, revised 2026-08-06 | Operational gates from targeted research through final validation, including delegated evidence-based advancement, risk-triggered review, and tiered verification. |
-| [`specifications/focused-component-spec-template.md`](specifications/focused-component-spec-template.md) | Owner-approved mandatory template, revised 2026-08-06 | Required compact/modular structure, single parent delivery ledger, context routing, proof allocation, and slice rules for each Phase 2 focused component contract. |
+| [`implementation-process.md`](implementation-process.md) | Owner-approved operational process, revised 2026-08-07 | Operational gates from targeted research through final validation, including the C7-C11 standing delegation, independent contract gates, local-commit policy, delegated evidence-based advancement, risk-triggered review, and tiered verification. |
+| [`specifications/focused-component-spec-template.md`](specifications/focused-component-spec-template.md) | Owner-approved mandatory template, revised 2026-08-07 | Required compact/modular structure, approval authority and independent-review records, single parent delivery ledger, context routing, proof allocation, and slice rules for each Phase 2 focused component contract. |
 
 ## Concerns already settled by Phase 1
 
@@ -94,6 +98,35 @@ equivalent shared layer. Focused component contracts cite exact Phase 1
 requirement IDs and define only component-specific ownership, interfaces,
 behavior, failures, accounting, evidence, boundedness, and primary proof.
 
+## C7-C11 standing program decisions
+
+The owner approved the completed Component 7 contract as written on 2026-08-07.
+For Components 8-11, the future goal orchestrator has standing authority to
+draft, independently review, correct, and record approval of each Phase 1
+skeleton and completed contract without another owner message when the entire
+gate conforms to Phase 1 and accepted dependencies, preserves component order
+and ownership, has the required complete proof allocation, passes independent
+review and any focused re-review, and has no substantive drift-audit `yes`.
+This delegation changes the approval actor for those clean gates only; it does
+not permit concurrent components or slices, early V2 reconnaissance, or a
+post-approval contract change.
+
+The program is constrained as follows:
+
+| Scope | Standing decision |
+| --- | --- |
+| Release claim | Produce a completely reviewed and locally verified private release candidate through C11. Live validation, public deployment, and production cutover are not part of done. |
+| Evidence and capacity | Use the current local host as the benchmark reference. Record fixture, host, run segmentation, and results; make no capacity claim beyond that evidence. No credentialed live-provider observation is authorized, and indispensable live evidence stops the program. |
+| C8 readiness/operations | Select conservative evidence-backed thresholds, prioritizing aggregate correctness and avoiding false-ready publication. |
+| C9 T/Q | Add no Tape Rate attention threshold; require continuous warm-up; restore T/Q in current rank order; permit complete T/Q shedding; protect aggregate processing first. |
+| C10 API | Deliver a private versioned read-only HTTP API with explicit field status, publication identity, loopback binding, and an explicit CORS allow-list. Public authentication, TLS, hosting, and cutover are deferred. |
+| C11 UI | Chrome desktop is required. The approved reconnaissance category is the V2 UI specification, UI code, assets, and focused UI tests within the exact narrow scope recorded by the C11 skeleton. Deliver a high-fidelity adaptation preserving useful layout, visual character, information density, and interactions except where they conflict with current product semantics, accessibility, independent deployment, or C10. Do not port V2 browser-owned calculations, readiness logic, obsolete state semantics, or backend coupling. |
+
+The exact manual stops, one-write-capable-worker rule, independent skeleton and
+completed-contract gates, and exact-path local-commit policy are authoritative
+in [`AGENTS.md`](../AGENTS.md#c7-through-c11-unattended-program-authority) and
+the [implementation process](implementation-process.md#28-c7-through-c11-unattended-program).
+
 ## Phase 2: focused component sequence
 
 These are real focused component contracts, not labels for new shared
@@ -114,11 +147,11 @@ explicit in the parent.
 | 4 | [Aggregate replay](specifications/aggregate-replay.md) *(finally accepted 2026-08-06 after `C4-S1`–`C4-S4`, all nine primary proofs, cumulative build/test/race/vet verification, clean drift audit, and clean mandatory final read-only review; no acceptance item remains open)* | Adds the offline historical downloader/compiler, versioned normalized artifact, deterministic source, and injected simulated clock that drive components 1–3. Its Massive REST aggregate row normalizer is the one reused by component 6; Component 4 proves the mapper and its compiler consumer, while Component 6 later proves its own production consumer. Offline download mechanics do not own live hydration, recovery, or terminal-work accounting. This completes the deterministic aggregate-core milestone. Full T/Q replay remains deferred. |
 | 5 | [Massive live adapter](specifications/massive-live-adapter.md) *(finally accepted 2026-08-06 after `C5-S1`–`C5-S3`, all eleven primary proofs, complete final-tier verification, corrected mandatory independent final review, clean focused re-review, and no remaining acceptance item)* | Adds one bounded Stocks WebSocket adapter for A/T/Q/control classification, provider normalization, causal positions, epochs, commands, and acknowledgements. Aggregate/control integrates first; T/Q consumption remains component 9. Any live observation is narrow, question-driven, and separately authorized after v2 reconnaissance. |
 | 6 | [Aggregate REST hydration and recovery](specifications/aggregate-rest-hydration-and-recovery.md) *(finally accepted 2026-08-07 after `C6-S1`–`C6-S4`, all eleven primary proofs, complete final-tier build/test/race/vet verification, clean drift audit, and clean mandatory independent final review with focused re-review; no acceptance item remains open)* | Reuses component 4's Massive REST aggregate row normalizer and adds production pagination, request concurrency/retries, fresh hydration, checkpoint catch-up inputs, exact gap recovery, explicit terminal outcomes, ingress fencing, and REST/live reconciliation. It does not create a second REST aggregate mapping or replay path. |
-| 7 | [Checkpoints and restart](specifications/checkpoints-and-restart.md) *(detailed contract draft completed 2026-08-07 after C6 final acceptance and the preapproved V2 reconnaissance; owner completed-contract/reuse/proof/three-slice-plan approval remains pending)* | Defines coherent contents at `T0`, validation, atomic storage, cadence, restart installation, and `[T0,R)` catch-up after aggregate, feature, and recovery state are known. Checkpoints remain required in version 1. |
-| 8 | Readiness and operations | Fixes evidenced aggregate/runtime evaluation, freshness, and capacity thresholds, bounded diagnostics, recovery budgets, readiness reasons, and shutdown policy around components 1–7. T/Q pressure thresholds remain component 9. This completes the production aggregate-lifecycle milestone. |
-| 9 | Top-20 T/Q coverage and T/Q features | Adds selected-row subscription intent, acknowledgement-based coverage, Tape Rate, Spread, warm-up/gap behavior, and aggregate-protecting pressure degradation without changing aggregate ranking or readiness. |
-| 10 | Versioned snapshot API | Freezes the public read-only schema after aggregate fields, T/Q fields, accounting, availability, and readiness meanings are stable. Internal structures do not automatically become the API. |
-| 11 | Independent UI | Implements presentation and interaction against the approved versioned API and remains deployable without restarting the backend. |
+| 7 | [Checkpoints and restart](specifications/checkpoints-and-restart.md) *(completed contract, exact V2 whitelist, eight proofs, three slices, required reviews, and `advancement_mode: delegated` owner-approved 2026-08-07; implementation has not begun)* | Defines coherent contents at `T0`, validation, atomic storage, cadence, restart installation, and `[T0,R)` catch-up after aggregate, feature, and recovery state are known. Checkpoints remain required in version 1. |
+| 8 | Readiness and operations *(standing program authority; skeleton not started)* | Fixes evidenced aggregate/runtime evaluation, freshness, and capacity thresholds, bounded diagnostics, recovery budgets, readiness reasons, and shutdown policy around components 1–7. Thresholds must be conservative and evidence-backed, protect aggregate correctness, and avoid false-ready results. The local host is the only benchmark reference and supports no broader capacity claim. T/Q pressure thresholds remain component 9. This completes the production aggregate-lifecycle milestone. |
+| 9 | Top-20 T/Q coverage and T/Q features *(standing program authority; skeleton not started)* | Adds selected-row subscription intent, acknowledgement-based coverage, Tape Rate, Spread, continuous warm-up/gap behavior, current-rank-order restoration, and aggregate-first pressure degradation. It adds no Tape Rate attention threshold, permits complete T/Q shedding, and cannot change aggregate ranking or readiness. |
+| 10 | Versioned snapshot API *(standing program authority; skeleton not started)* | Freezes a private versioned read-only HTTP schema after aggregate fields, T/Q fields, accounting, availability, and readiness meanings are stable. It exposes explicit field status and publication identity, binds loopback, and uses an explicit CORS allow-list. Internal structures do not automatically become the API; public authentication, TLS, hosting, and cutover are deferred. |
+| 11 | Independent UI *(standing program authority; skeleton not started)* | Implements a Chrome-desktop, high-fidelity adaptation of the useful V2 scanner UI against the approved C10 API and remains deployable without restarting the backend. Its narrow reconnaissance covers the V2 UI specification, code, assets, and focused tests. Useful layout, visual character, information density, and interactions are preserved unless they conflict with current product semantics, accessibility, independent deployment, or C10. Browser-owned calculations/readiness, obsolete semantics, and backend coupling are rejected. |
 
 Implementation is sequential. Document decomposition and implementation slicing
 are separate decisions: subordinate specs reduce contract context while slices
@@ -128,7 +161,8 @@ Keep at most one active implementation slice. Each slice delivers one coherent
 behavior and its allocated primary proof, then passes a recorded delegated or
 manual acceptance gate before the next slice. While component N is being
 implemented and proved slice by slice, component N+1 may advance only through a
-compact Phase 1 skeleton and owner boundary/reconnaissance-scope approval.
+compact Phase 1 skeleton and boundary/reconnaissance-scope approval by the
+applicable authority.
 Version 2 reconnaissance, Sections 8–19, completed-contract approval, and N+1
 implementation wait until all N slices pass their proofs and final component
 review, unless the owner records an exact stable-interface exception. This is
@@ -154,15 +188,18 @@ state.
    checkpoints + readiness.
 3. **T/Q:** top-20 subscription + Tape Rate/Spread + aggregate-protecting
    pressure degradation.
-4. **Product delivery and release validation:** versioned API + independent UI
-   + release/cutover evidence against the readiness and operations policy
-   established in milestone 2.
+4. **Private product-delivery release candidate:** versioned API + independent
+   Chrome-desktop UI + local release-candidate evidence against the readiness
+   and operations policy established in milestone 2. Public hosting, live
+   validation, and production cutover remain deferred.
 
 Each focused component contract plans its evidence and primary proofs before
 implementation.
 There is no up-front global evidence registry or stand-alone test-strategy
 meta-spec. Final operations, authorized shadow observation, and cutover
 validation assemble the reviewed component and integration evidence under the
-[`implementation process`](implementation-process.md). Scanner agreement proves
+[`implementation process`](implementation-process.md). For the C7-C11 program,
+final validation ends at the private/local release candidate recorded above;
+credentialed shadow observation and public cutover are not authorized. Scanner agreement proves
 correctness within its evidence limits; it does not prove trading edge or
 executable expectancy.

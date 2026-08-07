@@ -4,7 +4,7 @@
 
 **Approved:** 2026-08-05
 
-**Revised:** 2026-08-06
+**Revised:** 2026-08-07
 
 Use this file as the parent for each focused component contract. A compact
 contract may keep all sections in the parent. A larger contract may keep the
@@ -13,11 +13,12 @@ directory named for the parent's filename stem. Both layouts represent one
 component contract and use the same two stages:
 
 1. **Phase 1 contract skeleton:** complete the content required by Sections 1–7
-   without opening version 2 code, tests, or fixtures, then stop for owner
-   boundary and reconnaissance scope approval.
+   without opening version 2 code, tests, or fixtures, then stop for boundary
+   and reconnaissance scope approval by the applicable authority.
 2. **Detailed component contract:** after that approval, perform the bounded
    version 2 reconnaissance, complete the content required by Sections 8–19,
-   and stop for owner contract/reuse/test/slice-plan approval. When this is the
+   and stop for contract/reuse/test/slice-plan approval by the applicable
+   authority. When this is the
    one-component lookahead skeleton, boundary approval records the future
    reconnaissance scope but Sections 8–19 wait until the preceding component
    passes final review unless the owner records an exact stable-interface
@@ -121,6 +122,12 @@ of a subordinate spec after approval requires explicit owner review. Document
 decomposition does not alter component sequence, ownership, requirements,
 proof allocation, or implementation-slice gates.
 
+For C8-C11 under the standing unattended-program authority, both approval gates
+also require the independent review, correction/re-review, parent evidence, and
+separate local-commit records defined in `AGENTS.md` and
+`docs/implementation-process.md`. Outside that exact program, the applicable
+approval authority remains the owner.
+
 For an approved single-file contract, do not apply this template piecemeal while
 moving content. Use an owner-authorized documentation-only migration with an
 approved parent map and exact move plan; keep the original authoritative until
@@ -136,9 +143,16 @@ Delete instructional text when drafting.
 **Status:** Skeleton draft | Boundary approved | Detailed draft | Contract/
 reuse/test/slice-plan approved | Approved for slice implementation
 
-**Owner boundary approval:** [date/link or pending]
+**Boundary approval authority:** [owner / exact standing program delegation]
 
-**Owner contract/reuse/test/slice-plan approval:** [date/link or pending]
+**Boundary approval:** [date/commit/review evidence or pending]
+
+**Completed-contract approval authority:** [owner / exact standing program delegation]
+
+**Contract/reuse/test/slice-plan approval:** [date/commit/review evidence or pending]
+
+**Standing program decisions:** [exact applicable decisions and manual stops,
+or `none`; link to the repository program authority without weakening it]
 
 **Advancement mode:** `delegated` (default after completed-contract approval) |
 `manual` [name any manual slices or component-final gate]
@@ -280,15 +294,23 @@ ownership or behavior.]
       sequential implementation slices and why; this is provisional until
       detailed evidence and proofs are complete.
 
-**Owner decision:** [approved boundary and reconnaissance scope / revisions]
+**Independent skeleton review:** [not required outside a standing program /
+reviewer, result, findings/corrections, and focused re-review evidence]
 
-**Stop here until owner approval.** Boundary approval permits only the named
-version 2 reconnaissance. It does not approve detailed behavior, reuse, tests,
-or implementation.
+**Skeleton drift audit:** [no substantive `yes`, with concise evidence for the
+Section 19 questions at the Phase 1 boundary / exact unresolved `yes` and stop]
+
+**Approval decision:** [owner or standing-program orchestrator; approved
+boundary and reconnaissance scope / revisions]
+
+**Stop here until approval.** Boundary approval permits only the named version
+2 reconnaissance. It does not approve detailed behavior, reuse, tests, or
+implementation. A standing-program approval is valid only after its required
+independent review is clean and the approval is committed separately.
 
 ## 8. Version 2 reconnaissance and reuse assessment
 
-Complete this section only after recording owner boundary approval above.
+Complete this section only after recording boundary approval above.
 
 | Exact source path and function/type/test/fixture | Commit/file hash when relevant | Finding or validated behavior | Decision (`direct port` / `adapt` / `behavior evidence` / `reject`) | Required adaptation or coupling to remove | Required proof |
 | --- | --- | --- | --- | --- | --- |
@@ -296,7 +318,8 @@ Complete this section only after recording owner boundary approval above.
 
 Record existing test strength and limitations. If discovery requires unrelated
 source areas, a new product rule, or a change to the approved skeleton, stop for
-owner review before expanding scope.
+the applicable approval authority before expanding scope. Any post-completed-
+contract change remains an owner decision.
 
 **Proposed implementation whitelist:** [exact version 2 sources and fixtures,
 or none]
@@ -476,6 +499,13 @@ to owner review because they would alter the approved contract.]
 
 ## 18. Completed-contract acceptance checklist
 
+**Independent completed-contract review:** [not required outside a standing
+program / reviewer, result, findings/corrections, and focused re-review evidence]
+
+**Approval decision:** [owner or standing-program orchestrator; exact contract,
+whitelist, fixtures/evidence, proofs, slices, required reviews, advancement
+mode, and local commit]
+
 - [ ] The parent document map lists the complete contract set and gives every
       document one exclusive normative responsibility.
 - [ ] The parent owns the only mutable delivery-state ledger; subordinate specs
@@ -493,15 +523,17 @@ to owner review because they would alter the approved contract.]
       resolve.
 - [ ] A slice can be implemented from the parent, its routed detail specs, and
       declared dependencies without loading unrelated detail specs.
-- [ ] Owner-approved boundary and reconnaissance scope are recorded.
+- [ ] Boundary and reconnaissance scope approval by the applicable authority is
+      recorded with required independent-review evidence.
 - [ ] Version 2 inspection stayed inside that scope, or expansions received
-      explicit owner approval.
+      approval from the applicable authority before inspection.
 - [ ] Exact version 2 sources, decisions, adaptations, fixtures, and proof
       obligations are recorded.
 - [ ] Inputs, outputs, owned state, bounds, required behavior, and terminal
       outcomes are complete without duplicating Phase 1.
 - [ ] Primary accounting identities and overlapping dimensions are explicit.
-- [ ] Every nontrivial edge case has evidence or owner approval.
+- [ ] Every nontrivial edge case has evidence or approval from the applicable
+      authority.
 - [ ] Every component requirement has one primary proof; duplicate layers name
       a distinct boundary.
 - [ ] Consequential trust boundaries define exact success evidence, rejection
@@ -522,8 +554,13 @@ to owner review because they would alter the approved contract.]
 - [ ] Each slice defines its compact conformance walkthrough and whether a
       narrow independent slice review is triggered.
 - [ ] The drift audit below has no unresolved substantive **yes**.
-- [ ] Exact version 2 implementation and fixture whitelist received owner
-      contract/reuse/test/slice-plan approval.
+- [ ] Exact version 2 implementation and fixture whitelist received
+      contract/reuse/test/slice-plan approval from the applicable authority.
+- [ ] Every applicable standing program decision and manual stop is recorded
+      without weakening repository authority.
+- [ ] Any required independent completed-contract review is clean after
+      corrections and focused re-review, and its evidence is recorded before
+      approval.
 
 ## 19. Drift audit
 

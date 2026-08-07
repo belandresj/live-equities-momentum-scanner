@@ -43,6 +43,11 @@ against an already stable dependency interface. N+1 completed-contract
 approval and implementation always wait for N final review unless that same
 exception explicitly covers the later gate.
 
+For C8-C11 inside the owner-authorized unattended program below, a clean
+independently reviewed orchestrator-recorded skeleton or completed-contract
+approval is the applicable approval; component order and the same lookahead
+limits do not change.
+
 ## Before completing a focused component contract
 
 Contract-first drafting is mandatory:
@@ -62,6 +67,9 @@ Contract-first drafting is mandatory:
    the proposed document map when modular.
 7. Stop for owner boundary approval. This approves the Phase 1 constraints and
    exact reconnaissance scope, not the detailed component contract or reuse.
+   The only standing exception is the C7-through-C11 program authorization
+   below, under which its orchestrator may record a clean independently reviewed
+   C8-C11 skeleton approval without another owner message.
 8. After boundary approval, inspect only the approved relevant version 2 code,
    tests, and fixtures. Use the findings to complete the focused contract
    and reuse/proof assessment. For a one-component lookahead skeleton, boundary
@@ -75,18 +83,24 @@ Contract-first drafting is mandatory:
    component or a component with large reconnaissance/proof ledgers should
    normally be modular. Do not keep a monolith merely to preserve a one-file
    convention, and do not shard arbitrary line or token ranges without a
-   semantic boundary. Stop for owner review before changing the approved
-   document map or reconnaissance routing.
+   semantic boundary. Stop for the applicable approval authority before
+   changing the approved document map or reconnaissance routing. Under the
+   C7-C11 program, that may be the orchestrator only while the contract remains
+   a pre-approval draft and the revised skeleton passes the same independent
+   review gate; after completed-contract approval, the change is manual.
 10. Decide whether the component fits one bounded implementation assignment. If
    it contains multiple independently provable behaviors, proof families,
    provider/canonical boundaries, or reviewable changes, define sequential
    implementation slices in the focused contract. Assign every requirement and
    its primary proof to exactly one slice.
 11. Stop for owner contract/reuse/test/slice-plan approval before preparing or
-    authorizing an implementation assignment. That approval also fixes the
-    component's advancement mode; unless the owner marks a slice or component
-    `manual`, evidence-based slice and final-component acceptance are delegated
-    under the rules below.
+    authorizing an implementation assignment. For C8-C11 only, the standing
+    program authorization below permits the orchestrator to record that
+    approval after the completed contract passes its mandatory independent
+    review and every program condition. That approval fixes the component's
+    advancement mode; unless the owner or standing program decision marks a
+    slice or component `manual`, evidence-based slice and final-component
+    acceptance are delegated under the rules below.
 
 Use the mandatory
 [`focused component specification template`](docs/specifications/focused-component-spec-template.md).
@@ -135,6 +149,100 @@ proof, requirement, or slice change in that migration, and keep the original
 file authoritative until the complete moved set passes link, coverage,
 duplication, and owner review. Any substantive edit follows the normal
 component-contract revision gate instead.
+
+## C7-through-C11 unattended program authority
+
+The owner approved the completed Component 7 contract as written on 2026-08-07
+and authorized one unattended, sequential C7-through-C11 program on
+`codex/c7-c11-program`. This is a standing delegation to the future goal
+orchestrator, not a relaxation of the product or architecture contracts.
+
+For Components 8 through 11, the orchestrator may draft, correct, and record
+approval of each Phase 1 skeleton and each completed component contract without
+another owner message only when all of the following are true:
+
+1. work remains in component order and preserves every approved ownership and
+   dependency boundary;
+2. the complete artifact for that gate receives a clean independent read-only
+   review, with findings corrected and focused re-review clean;
+3. the skeleton has exact Phase 1 IDs and a narrow V2 reconnaissance scope, or
+   the completed contract has a complete exact whitelist, trust-boundary
+   treatment, requirement/proof allocation, sequential slice plan, verification,
+   and review triggers;
+4. the gate conforms to the approved product, architecture, dependency, and
+   program decisions and has no substantive drift-audit `yes`; and
+5. no manual stop condition below is present.
+
+The orchestrator records the approval and evidence in the component parent.
+The independent reviewer supplies read-only evidence and never edits, approves,
+stages, or commits. A gate review starts only after the writer is quiescent.
+Keep at most one active write-capable worker subagent at a time. The
+orchestrator may perform ledger/status edits only when every worker and reviewer
+is quiescent, so there is never more than one concurrent writer.
+
+The program's standing product and delivery decisions are:
+
+- produce a private/local release candidate only; public deployment is not in
+  scope;
+- use the current local host as the benchmark reference and make no capacity
+  claim beyond the exact recorded evidence;
+- choose conservative, evidence-backed Component 8 thresholds that protect
+  aggregate correctness and avoid false-ready results;
+- perform no credentialed live-provider observation; stop if live evidence is
+  indispensable;
+- for Component 9, add no Tape Rate attention threshold, require continuous
+  warm-up, restore T/Q in current rank order, permit complete T/Q shedding, and
+  protect aggregate processing first;
+- for Component 10, build a private versioned read-only HTTP API with explicit
+  field status, publication identity, loopback binding, and an explicit CORS
+  allow-list; defer public authentication, TLS, hosting, and cutover; and
+- target Chrome desktop for Component 11. Its approved reconnaissance category
+  is the V2 UI specification, UI code, assets, and focused UI tests within the
+  exact narrow scope recorded in the C11 skeleton. Implement a high-fidelity
+  adaptation of the useful V2 layout, visual character, information density,
+  and interactions except where they conflict with current product semantics,
+  accessibility, independent deployment, or the C10 API. Do not port
+  browser-owned calculations, readiness logic, obsolete state semantics, or
+  backend coupling.
+
+The exact manual stop conditions for this program are:
+
+1. an authority conflict, component-order or ownership change, substantive
+   drift-audit `yes`, or a need to change an owner-approved product,
+   architecture, standing-program, or accepted dependency meaning, including a
+   new owner instruction that pauses, revokes, or changes this delegation;
+2. after a component's completed-contract approval, any required substantive
+   contract, document-map responsibility, interface, whitelist, fixture
+   premise, requirement, proof allocation, slice boundary, advancement mode, or
+   standing decision change, or arrival at any gate explicitly marked
+   `manual`;
+3. a failed or ambiguous proof, verification, independent review, benchmark,
+   or acceptance gate that cannot be corrected within the already approved
+   behavior and scope, including a success-invalidating inspection-only claim;
+4. indispensable credentialed/live-provider evidence, or a capacity claim not
+   supported by the recorded local-host evidence;
+5. public deployment, authentication, TLS, hosting, production cutover,
+   destructive/external action, or any other new authority; or
+6. unexpected user changes, unresolved Git/history state, or an inability to
+   make the required exact-path local commit without overwriting or combining
+   unrelated work.
+
+Routine in-scope implementation choices, correctable proof/test failures,
+review findings correctable without changing approved meaning, and clean gates
+are not manual stops. Done means Components 7 through 11 are completely
+implemented, independently reviewed, accepted, integrated at their distinct
+vertical milestones, and locally verified as a private release candidate. It
+does not mean live validation or production deployment.
+
+### Program local-commit policy
+
+The future orchestrator alone stages and commits, and only after all workers and
+reviewers are quiescent. It makes a separate local commit after every clean
+skeleton approval, completed-contract approval, accepted slice, final component
+acceptance, and distinct vertical milestone. It stages exact paths only, first
+checks that unrelated user changes are preserved, and records the gate evidence
+before committing. It must not push, rebase, amend, rewrite history, delete a
+branch, or use a destructive reset.
 
 ## Engineering rules
 
@@ -246,6 +354,8 @@ whitelist, or another consequential decision reserved to the owner.
 Do not spawn an independent reviewer automatically after every slice. Spawn one
 only when:
 
+- a C8-C11 skeleton or completed-contract gate in the standing unattended
+  program requires its mandatory read-only review;
 - the approved component contract marks that slice's consequential trust,
   persistence, identity, ownership, ordering, concurrency, or dependency-
   interface boundary as requiring narrow independent review;
@@ -287,6 +397,12 @@ Explicit owner approval remains required for:
   production cutover; and
 - any failed or ambiguous delegated gate whose resolution could change behavior
   or scope.
+
+For C8-C11, the first two bullets are satisfied by the standing program
+delegation only through the clean independent skeleton/completed-contract gates
+above. The remaining bullets and all listed program manual stops still require
+an owner message. Component 7's completed-contract approval was supplied
+directly by the owner on 2026-08-07.
 
 Approval of a completed contract delegates its objective evidence-based slice
 and final-component gates by default. Delegated acceptance requires all of the

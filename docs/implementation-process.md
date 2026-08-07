@@ -4,7 +4,7 @@
 
 **Approved:** 2026-08-05
 
-**Revised:** 2026-08-06
+**Revised:** 2026-08-07
 
 **Scope:** The controlling operational process for component research,
 specification, predecessor reuse, proof allocation, implementation assignment,
@@ -33,15 +33,22 @@ Before drafting a focused component contract, the assigned agent must:
    invariants, unresolved evidence questions, proposed version 2
    reconnaissance scope, and the proposed document map when modular;
 7. stop for owner boundary approval before opening version 2 code, tests, or
-   fixtures;
+   fixtures, except that the C8-C11 standing program delegation in Section 2.8
+   allows its orchestrator to record a clean independently reviewed skeleton
+   approval;
 8. after approval, inspect only the approved relevant version 2 sources and use
    the findings to complete the focused component contract;
 9. confirm the approved document layout still fits the reconnaissance findings,
-   stopping for owner review before changing its map or evidence routing;
+   stopping for the applicable approval authority before changing its map or
+   evidence routing; under Section 2.8, a pre-completed-contract C8-C11 draft
+   may be corrected and independently re-reviewed within the standing
+   delegation, but a post-approval change is manual;
 10. define one bounded implementation slice or a sequential slice plan that
    assigns every requirement and primary proof exactly once; and
 11. stop for owner contract/reuse/test/slice-plan approval before an
-    implementation assignment is prepared or authorized.
+    implementation assignment is prepared or authorized, except that the
+    Section 2.8 orchestrator may record the corresponding C8-C11 approval after
+    its mandatory completed-contract review gate passes cleanly.
 
 Phase 1 already controls the shared domain through the product goals, system
 overview, data/time/event contract, and `ScannerStateEngine` lifecycle. A
@@ -174,10 +181,10 @@ Every component follows the same approval and delivery path:
 ```text
 approved Phase 1 requirement(s)
   -> short Phase 1 contract skeleton or indexed skeleton set drafted without version 2
-  -> owner boundary and reconnaissance-scope approval
+  -> owner or expressly delegated boundary and reconnaissance-scope approval
   -> narrow version 2 code/test/fixture reconnaissance
   -> completed focused contract or indexed contract set and reuse/proof assessment
-  -> owner contract/reuse/test/slice-plan and advancement-mode approval
+  -> owner or expressly delegated contract/reuse/test/slice-plan and advancement-mode approval
   -> begin one bounded implementation slice
   -> implement slice and run its allocated primary proof
   -> record delegated acceptance and continue, or stop on a manual/failed gate
@@ -187,13 +194,16 @@ approved Phase 1 requirement(s)
   -> final operations, shadow, and cutover validation
 ```
 
-An approval applies only to the reviewed artifact and scope. Boundary approval
+An approval applies only to the reviewed artifact and scope. Unless an exact
+standing delegation is recorded in this process and the specification map,
+`approval authority` below means the owner. Boundary approval
 confirms the Phase 1 constraints and permits only the named version 2
 reconnaissance; it does not approve detailed behavior, reuse, or implementation.
 Contract/reuse/test/slice-plan approval fixes the completed component contract,
 exact reuse whitelist, proof plan, and sequential delivery boundaries. It does
 not permit concurrent slices or changes to their boundaries. Unless the owner
-marks a component or slice `manual`, that approval conditionally pre-authorizes
+or applicable standing program decision marks a component or slice `manual`,
+that approval conditionally pre-authorizes
 the approved slices in sequence: only one is active, and the next begins only
 after the current slice satisfies the delegated acceptance gate in Section 2.6.
 Manual gates still wait for an explicit owner decision.
@@ -250,10 +260,15 @@ the skeleton set it contains:
   the question each category should answer; and
 - an initial view of the likely primary proof boundaries.
 
-Owner boundary approval confirms that this is the correct Phase 1-derived
-component boundary and approves the proposed reconnaissance scope. It is not
-approval of detailed behavior or reuse. Until it passes, do not inspect version
-2 code, tests, or fixtures.
+Boundary approval by the applicable approval authority confirms that this is
+the correct Phase 1-derived component boundary and approves the proposed
+reconnaissance scope. It is not approval of detailed behavior or reuse. Until
+it passes, do not inspect version 2 code, tests, or fixtures. For C8-C11 under
+Section 2.8, the complete skeleton first receives an independent read-only
+review against the controlling Phase 1 and accepted dependency contracts. The
+orchestrator corrects in-scope findings, obtains focused re-review, records the
+review evidence and clean drift audit in the parent, and only then records the
+delegated boundary approval in its own local commit.
 
 ### 2.3 Narrow version 2 reconnaissance and reuse assessment
 
@@ -278,8 +293,8 @@ each candidate containing:
 - predecessor coupling or ownership to remove; and
 - proof required for the reused behavior.
 
-Version 2 is evidence, never authority. The owner approves the exact reuse and
-fixture whitelist before implementation. Approved per-component decisions may
+Version 2 is evidence, never authority. The applicable approval authority
+approves the exact reuse and fixture whitelist before implementation. Approved per-component decisions may
 later accumulate into a repository-wide reuse index; unreviewed candidates do
 not.
 
@@ -288,9 +303,12 @@ only search for copyable code. It records validated algorithms, provider
 behavior, regression cases, bounded-state techniques, existing proof quality,
 and places where old orchestration or ownership must be removed. If findings
 would change an approved Phase 1 boundary or expand the reconnaissance scope,
-stop for owner review instead of allowing version 2 to drive the contract.
+stop for the applicable approval authority instead of allowing version 2 to
+drive the contract. Under Section 2.8 this requires a corrected C8-C11 skeleton,
+clean focused re-review, a new recorded approval, and a separate local commit;
+it never permits inspection outside the last approved scope.
 
-### 2.4 Completed contract, proof allocation, and owner approval
+### 2.4 Completed contract, proof allocation, and approval
 
 After reconnaissance, complete the focused component contract. In a modular
 layout, keep the parent high-level and put each detailed concern in the one
@@ -371,8 +389,8 @@ controlled observation, an invariant, a demonstrated regression, or explicit
 owner approval. Agreement proves scanner correctness only. It is not evidence
 of predictive trading edge, entries/exits, slippage, or executable expectancy.
 
-Before owner approval, begin with the presumption that the component is one
-bounded assignment. Add each further slice only by naming the independently
+Before completed-contract approval, begin with the presumption that the
+component is one bounded assignment. Add each further slice only by naming the independently
 observable behavior, distinct proof family, provider-I/O/canonical-mutation
 boundary, ownership/package boundary, dependency order, or reviewability
 problem that prevents one coherent assignment. A different helper, file, or
@@ -412,12 +430,21 @@ do not receive acceptance-status edits.
 Every component requirement and primary proof belongs to exactly one slice.
 If a requirement concerns interaction among slices, allocate its primary proof
 to the last slice needed to make that interaction real. A later milestone may
-add proof only for a distinct cross-component boundary. Owner
-contract/reuse/test/slice-plan approval fixes the complete component contract,
+add proof only for a distinct cross-component boundary. Contract/reuse/test/
+slice-plan approval by the applicable authority fixes the complete component contract,
 predecessor whitelist, approved fixtures, primary proofs, slice ordering, and
 any intentionally deferred secondary evidence. It also fixes
 `advancement_mode` as `delegated` by default or `manual` for the whole component
 or named slices.
+
+For C8-C11 under Section 2.8, approval requires a mandatory independent
+read-only review of the complete manifest-listed contract against the approved
+skeleton, Phase 1 and dependency meanings, exact V2 scope/whitelist, trust
+boundaries, proof allocation, slice plan, standing program decisions, and drift
+audit. The orchestrator corrects in-scope findings before approval, obtains a
+focused clean re-review, records the evidence, and commits the approval as its
+own local gate. A review that exposes a required substantive decision outside
+the standing authority is a manual stop, not an approval.
 
 A focused component contract that has not yet received that approval must
 conform to the current mandatory template, including its document-map rules
@@ -576,6 +603,96 @@ Long-running, live, credentialed, destructive, or environment-sensitive checks
 remain separately authorized where required. Verification commands and results
 must state what claim they establish; command volume is not evidence quality.
 
+### 2.8 C7-through-C11 unattended program
+
+The owner approved the completed C7 contract as written and granted standing
+program-level delegated authority on 2026-08-07 for one sequential unattended
+C7-through-C11 program on `codex/c7-c11-program`. C7 begins from its approved
+three-slice plan. For C8-C11, the goal orchestrator may draft, independently
+review, correct, and record approval of each skeleton and completed contract
+without another owner message only through the gates in Sections 2.2 and 2.4.
+This delegation cannot change component order, ownership, Phase 1 or accepted
+dependency meaning, or any standing decision below.
+
+At each C8-C11 skeleton gate, a separate read-only reviewer examines the whole
+skeleton set, exact controlling IDs, ownership/non-scope, settled invariants,
+proposed document map, exact narrow V2 reconnaissance categories, exclusions,
+and likely proof boundaries. At each completed-contract gate, a separate
+read-only reviewer examines the whole manifest, reconnaissance provenance and
+whitelist, trust boundaries, all requirement/proof allocations, slice order,
+verification/review triggers, program decisions, and drift audit. The
+orchestrator may correct a draft within existing authority and request focused
+re-review; only a clean result may be recorded as approval. Reviewer and writer
+must be quiescent before the orchestrator updates the parent ledger or Git, and
+the writer must be quiescent before a gate reviewer begins so the reviewed
+artifact is stable.
+
+Keep one active write-capable worker subagent at a time. Reviewers are read-only.
+The orchestrator may make the gate's ledger/status edits itself only while no
+worker or reviewer is active. It alone stages and commits. Stage exact paths
+only and make a separate local commit after every clean skeleton approval,
+completed-contract approval, accepted slice, final component acceptance, and
+distinct vertical milestone. Before staging, verify that the selected paths
+contain only that gate and that all unrelated user changes remain untouched.
+Never push, rebase, amend, rewrite history, delete branches, or use a
+destructive reset.
+
+The remaining distinct vertical milestone commits are production aggregate
+lifecycle after C8 final acceptance, T/Q enrichment after C9 final acceptance,
+and the private product-delivery release candidate after C11 final acceptance.
+Each is a separate evidence/ledger commit even when it immediately follows the
+component-final commit.
+
+The standing decisions for the whole program are:
+
+- the release result is private/local, not public deployment;
+- the current local host is the benchmark reference, and no capacity claim may
+  exceed exact recorded evidence;
+- C8 thresholds are conservative and evidence-backed, prioritizing aggregate
+  correctness and false-ready avoidance;
+- no credentialed live-provider observation is permitted; indispensable live
+  evidence is a manual stop;
+- C9 adds no Tape Rate attention threshold, requires continuous warm-up,
+  restores T/Q in current rank order, permits complete T/Q shedding, and
+  protects aggregate processing first;
+- C10 is a private versioned read-only HTTP API with explicit field status,
+  publication identity, loopback binding, and an explicit CORS allow-list;
+  public authentication, TLS, hosting, and cutover are deferred; and
+- Chrome desktop is the required C11 browser. The C11 skeleton must record a
+  narrow V2 scope covering only the UI specification, UI code, assets, and
+  focused UI tests needed for a high-fidelity adaptation. Preserve useful V2
+  layout, visual character, information density, and interactions unless they
+  conflict with current product semantics, accessibility, independent
+  deployment, or the C10 API. Reject V2 browser-owned calculations, readiness
+  logic, obsolete state semantics, and backend coupling.
+
+The program stops for an owner decision exactly when:
+
+1. an authority conflict, component-order or ownership change, substantive
+   drift-audit `yes`, or change to an owner-approved product, architecture,
+   standing-program, or accepted dependency meaning is required, including a
+   new owner instruction that pauses, revokes, or changes this delegation;
+2. after completed-contract approval, implementation or review requires a
+   substantive change to that contract, document-map responsibility, interface,
+   whitelist, fixture premise, requirement, proof allocation, slice boundary,
+   advancement mode, or standing decision, or reaches a gate explicitly marked
+   `manual`;
+3. a failed or ambiguous proof, verification, independent review, benchmark,
+   or acceptance gate cannot be corrected within approved behavior and scope,
+   or an inspection-only claim can invalidate success;
+4. credentialed/live-provider evidence becomes indispensable or the intended
+   claim exceeds recorded local-host evidence;
+5. public deployment, authentication, TLS, hosting, production cutover,
+   destructive/external action, or other new authority is required; or
+6. unexpected user changes or unresolved Git/history state prevent an isolated
+   exact-path local commit without overwriting or combining unrelated work.
+
+Correctable in-scope review findings and test failures are not manual stops.
+Done means all C7-C11 slices and final component reviews are accepted, each
+distinct vertical milestone is recorded, and the complete private release
+candidate is locally verified. Live validation and production deployment are
+explicitly outside this completion claim.
+
 ## 3. Focused component sequence
 
 The
@@ -598,7 +715,8 @@ Implementation follows the map sequentially. Keep one active implementation
 slice. A component with several slices completes them in approved order, with a
 recorded delegated or manual acceptance gate between slices. While component N
 is being implemented, the short Phase 1 skeleton for component N+1 may be
-drafted and receive owner boundary/reconnaissance-scope approval. That approval
+drafted and receive boundary/reconnaissance-scope approval from the applicable
+authority. That approval
 records the future
 reconnaissance boundary; it does not permit opening version 2 or drafting N+1
 Sections 8–19 while N remains incomplete. Begin N+1 reconnaissance and detailed
@@ -608,6 +726,10 @@ implementation also wait for any milestone boundary that the map names as a
 dependency. The owner may approve earlier work only when it depends exclusively
 on an already approved stable interface and the exception records exactly which
 reconnaissance, detailed-contract, or approval gate may advance.
+
+Section 2.8 changes who may record clean C8-C11 skeleton and completed-contract
+approvals; it does not change this one-component lookahead, final-review, or
+milestone ordering.
 
 This skeleton-only one-component lookahead overlaps the low-rework Phase 1
 boundary work without paying for predecessor reconnaissance or detailed design
@@ -648,6 +770,11 @@ Integration proceeds through complete data paths:
    independent deployment, and shutdown/rollback/cutover behavior against the
    readiness and operations policy already established in milestone 2.
 
+For the Section 2.8 program, milestone 4 is deliberately narrower: the private
+loopback API plus independent Chrome-desktop UI and local release-candidate
+evidence. Public hosting, live validation, authentication/TLS, and production
+cutover are deferred rather than claimed.
+
 Each milestone names its entry contracts, deterministic fixtures or authorized
 environment, exact assertions, failure cases, and unresolved limitations. A
 later milestone does not duplicate lower-layer proofs unless it establishes a
@@ -657,6 +784,13 @@ new cross-component boundary.
 
 Final validation assembles approved component proofs; it does not invent new
 requirements or an after-the-fact global test strategy.
+
+For the C7-C11 program in Section 2.8, this section ends at a private/local
+release-candidate decision. Items requiring authorized shadow observation,
+public hosting, production cutover, or live credentials remain deferred and do
+not block that narrower completion claim unless a contracted correctness claim
+cannot be established without them; in that case the program stops rather than
+weakening the claim.
 
 1. Re-run formula, fixture, lifecycle, replay, and checkpoint/restart primary
    proofs in their approved configurations.
