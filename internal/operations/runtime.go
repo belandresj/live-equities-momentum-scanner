@@ -44,6 +44,8 @@ type Runtime struct {
 	metricsMu                 sync.Mutex
 	liveMu                    sync.Mutex
 	shutdownMu                sync.Mutex
+	captureMu                 sync.Mutex
+	captureSequence           uint64
 	attempt                   *massive.LiveAttempt
 	adapter                   *massive.LiveAdapter
 	liveCancel                context.CancelFunc

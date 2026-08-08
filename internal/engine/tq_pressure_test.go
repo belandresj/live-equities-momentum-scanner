@@ -167,7 +167,9 @@ func TestPC9PressureEpochReplacementPreservesMonotonicAuthority(t *testing.T) {
 	clockNanos.Store(start.Add(time.Second).UnixNano())
 	e.mu.Lock()
 	e.state.liveEpoch = 2
-	e.state.aggregateEvaluator.current = aggregateEvaluationResult{mode: rankingUnavailable}
+	e.state.aggregateEvaluator.current = pressureQualifiedEvaluation(start)
+	e.state.aggregateEvaluator.current.mode = rankingStale
+	e.state.aggregateEvaluator.current.rows = nil
 	e.reconcileTQLocked(start.Add(time.Second))
 	e.advanceTQPressureTimerLocked(start.Add(time.Second))
 	e.mu.Unlock()
@@ -225,9 +227,7 @@ func pressureProofEngine(t *testing.T) (*Engine, reference.Binding, *atomic.Int6
 	e.mu.Lock()
 	e.state.lifecycle, e.state.liveEpoch, e.state.liveEpochActive = lifecycleLive, 1, true
 	e.state.committedT = immutableTime(start)
-	e.state.aggregateEvaluator.current = aggregateEvaluationResult{mode: rankingQualifiedCurrent, rows: []aggregateRankingRow{
-		{rank: 1, symbol: "AAA", tqIntentEligible: true}, {rank: 2, symbol: "MISSING", tqIntentEligible: true},
-	}}
+	e.state.aggregateEvaluator.current = pressureQualifiedEvaluation(start)
 	coverage := tqCoverage{active: true, epoch: 1, start: start.Add(-10 * time.Second), ack: LivePosition{ConnectionEpoch: 1, FrameSequence: 1}, greatest: LivePosition{ConnectionEpoch: 1, FrameSequence: 10}}
 	e.state.tq = tqState{epoch: 1, nextToken: 1, desired: []string{"AAA", "MISSING"}, members: map[string]*tqSymbolState{
 		"AAA":     {present: true, tradeCoverage: coverage, quoteCoverage: coverage, fingerprints: make(map[string]tqFingerprint)},

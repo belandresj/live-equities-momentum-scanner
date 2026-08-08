@@ -67,7 +67,13 @@ func (r *Runtime) Metrics() Metrics {
 	if r == nil || r.engine == nil {
 		return Metrics{}
 	}
-	result := Metrics{SampledAt: r.clock().UTC(), Engine: r.engine.ObserveOperational()}
+	sampledAt := r.clock().UTC()
+	processLive := r.processLive.Load() && !r.joined.Load()
+	return r.metricsFromPublication(sampledAt, processLive, r.engine.ObserveOperational())
+}
+
+func (r *Runtime) metricsFromPublication(sampledAt time.Time, processLive bool, view engine.OperationalView) Metrics {
+	result := Metrics{SampledAt: sampledAt, Engine: view}
 	r.metricsMu.Lock()
 	if r.attempt != nil {
 		result.LiveQueue = r.attempt.QueueAccounting()
@@ -99,7 +105,7 @@ func (r *Runtime) Metrics() Metrics {
 	result.MaxProcessingDelayOneSecond = time.Duration(r.deliveryOneSecondMaxNanos)
 	result.deliveryWindowVersion = r.deliveryWindowVersion
 	r.deliveryWindowMu.Unlock()
-	status := deriveStatus(r.processLive.Load() && !r.joined.Load(), r.binding, r.config, result.SampledAt, result.Engine)
+	status := deriveStatus(processLive, r.binding, r.config, result.SampledAt, result.Engine)
 	result.WatermarkLag = status.WatermarkLag
 	var memory runtime.MemStats
 	runtime.ReadMemStats(&memory)

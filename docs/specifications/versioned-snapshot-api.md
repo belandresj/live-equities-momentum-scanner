@@ -1,7 +1,7 @@
 # Versioned snapshot API
 
 **Status:** Detailed V1 contract accepted as the current executable plan under
-the Version 1 Release Program; C10-S1 implementation active
+the Version 1 Release Program; C10-S1 accepted and C10-S2 implementation active
 
 **Boundary approval:** Approved 2026-08-07 by the owner through the Version 1
 Release Program revision
@@ -28,8 +28,8 @@ boundary, schema/trust rules, proofs, slices, and sole delivery ledger.
 | --- | --- | --- | --- |
 | Boundary/reconnaissance plan | `accepted` | Owner V1 program revision; C9 finally accepted; recorded V2 scope inspected | Complete |
 | Completed contract | `accepted_current_plan` | Focused publication/schema/HTTP trust review clean after exact-schema, immutable-T/Q, sample-identity, liveness, fence, and accounting corrections | Complete; remains revisable through the correction loop |
-| `C10-S1` immutable schema mapping | `in_progress` | `P-C10-SCHEMA` | Implement and verify sequentially |
-| `C10-S2` HTTP/CORS/runtime composition | `pending` | `P-C10-HTTP` | Implement after S1 acceptance |
+| `C10-S1` immutable schema mapping | `accepted` | `P-C10-SCHEMA`; ordinary and affected race clean; focused correction re-review clean | Complete |
+| `C10-S2` HTTP/CORS/runtime composition | `in_progress` | `P-C10-HTTP` | Implement and verify sequentially |
 | Final component review | `pending` | One mandatory read-only review after both proofs | Pending |
 
 ## Sections 1-4 — outcome, scope, ownership, and settled boundary
@@ -62,11 +62,14 @@ One Runtime capture mutex assigns a response-sample sequence, reads the clock
 and process-live atomics once, loads one immutable engine publication once, and
 samples fixed-cardinality nonengine metrics without rereading engine state. It
 then derives readiness once from that captured publication, time, and process
-fact and returns a detached immutable bundle. Publication identity identifies
-only engine facts; `(sample_id, publication identity if present)` identifies
-the whole response. Later mutable facts are excluded, never overlaid. The C10
-mapper owns only stable representation; handlers own method, route, CORS, and
-transport outcomes.
+fact and returns an operations-owned sealed bundle. Other packages may inspect
+only a detached copy; they cannot reconstruct a capture or submit replaced
+T/Q, readiness, metrics, or publication members to the public mapper. T/Q
+repeats the publication ID and status repeats the sample time as construction
+checks. Publication identity identifies only engine facts; `(sample_id,
+publication identity if present)` identifies the whole response. Later mutable
+facts are excluded, never overlaid. The C10 mapper owns only stable
+representation; handlers own method, route, CORS, and transport outcomes.
 
 These component requirements apply:
 
@@ -80,6 +83,8 @@ These component requirements apply:
 - `C10-SCHEMA-01`: `scanner.snapshot.v1` preserves every V1 row and independent
   field status/reason from one publication. Unavailable numeric/time values are
   JSON `null`, never fabricated zero; genuine zero remains numeric zero.
+  All nonnegative duration-to-millisecond conversions use integer truncation
+  (floor), so sub-millisecond values encode as genuine zero rather than rounding.
 - `C10-STATUS-01`: process-live, backend-ready, ranking-current/mode/reason, and
   T/Q pressure/coverage remain distinct. T/Q health never changes backend
   readiness. Replay, stale, suppressed, ended, or unfenced state cannot be
@@ -301,3 +306,20 @@ liveness. Re-review then required full causal-fence coordinates, the hydration-
 row identity, and null missing-watermark lag. The final focused re-review found
 no remaining P1/P2. These findings corrected only C10 representation and proof
 allocation; no accepted C1-C9 market meaning was reopened.
+
+`C10-S1` now publishes every product-visible T/Q-only transition under a new
+engine publication identity, captures publication/operational/T/Q facts from
+one atomic cell, derives readiness once from the same sampled clock/process
+fact, and maps the sealed capture into the exact `scanner.snapshot.v1` schema.
+The primary proof covers all named publication modes, genuine zero versus null,
+decimal precision, complete accounting identities, unequal causal fence
+coordinates, every hydration identity term, same-`T` T/Q replacement, sealed
+capture nonreconstruction, and bounded concurrent publication replacement.
+The dangerous mixed-publication/mixed-sample capture is prevented by an
+operations-private capture payload and rejected construction checks. Ordinary
+verification and the affected engine/operations/snapshot race tier passed; the
+focused implementation review required sealed capture authority, a positive
+hydration marker, and complete concurrent/identity mutation evidence, and its
+final re-review found no remaining P1/P2. The proof is local and deterministic;
+HTTP, browser, provider, and live-market behavior remain outside S1. S2 remains
+valid without revision.

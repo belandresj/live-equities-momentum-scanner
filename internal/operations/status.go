@@ -29,6 +29,7 @@ type Status struct {
 	Reason                                    ReadinessReason
 	Lifecycle, RankingMode                    string
 	PublicationID                             uint64
+	SampledAt                                 time.Time
 	Watermark, CausalTarget                   *time.Time
 	WatermarkLag                              time.Duration
 	QueueCapacity, QueueOccupancy             int
@@ -37,7 +38,7 @@ type Status struct {
 }
 
 func deriveStatus(processLive bool, binding reference.Binding, config Config, now time.Time, view engine.OperationalView) Status {
-	result := Status{ProcessLive: processLive, Lifecycle: view.Lifecycle, RankingMode: view.RankingMode, PublicationID: view.PublicationID,
+	result := Status{ProcessLive: processLive, Lifecycle: view.Lifecycle, RankingMode: view.RankingMode, PublicationID: view.PublicationID, SampledAt: now,
 		Watermark: cloneTime(view.Watermark), QueueCapacity: view.QueueCapacity, QueueOccupancy: view.QueueOccupancy,
 		RankingCurrent: view.CurrentMarketClaim, TQAvailable: false}
 	target := now.Truncate(time.Second).Add(-config.EvaluationDelay)

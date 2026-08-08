@@ -45,6 +45,7 @@ type publicationFingerprint struct {
 	evaluationRevision uint64
 	controlRevision    uint64
 	hydrationRevision  uint64
+	tqRevision         uint64
 }
 
 type privatePublication struct {
@@ -70,6 +71,7 @@ type privatePublication struct {
 	publications                                                            publicationCounters
 	aggregates                                                              aggregateAccounting
 	connectionControls                                                      connectionControlAccounting
+	connectionRecoveryAttempts                                              uint64
 	connectionEpoch                                                         uint64
 	connectionActive                                                        bool
 	aggregateAcknowledged                                                   bool
@@ -93,6 +95,8 @@ type privatePublication struct {
 	hydrationPolicyAction                                                   HydrationPolicyAction
 	hydrationPolicyToken                                                    uint64
 	hydrationPolicyWaiting                                                  bool
+	installedCheckpoint                                                     bool
+	tq                                                                      TQView
 }
 
 // publicationView is a defensive package-private read projection. Component
@@ -190,6 +194,7 @@ func (e *Engine) observePublication() publicationView {
 	copyValue := publicationView(*publication)
 	copyValue.watermark = immutableTimePointer(publication.watermark)
 	copyValue.aggregateEvaluation = cloneAggregateEvaluation(publication.aggregateEvaluation)
+	copyValue.tq = cloneTQView(publication.tq)
 	return copyValue
 }
 
@@ -201,6 +206,7 @@ func (e *Engine) publicationFingerprintLocked() publicationFingerprint {
 		evaluationRevision: e.state.evaluationRevision,
 		controlRevision:    e.state.connectionControl.revision,
 		hydrationRevision:  e.state.hydration.revision,
+		tqRevision:         e.state.tq.revision,
 	}
 	if e.state.binding != nil {
 		result.bindingIdentity = e.state.binding.identity
@@ -392,7 +398,8 @@ func (e *Engine) buildPublicationLocked(id, sequence uint64, disposition transit
 		admission: admission, transitions: transitions, publications: publications,
 		aggregates: e.state.aggregates, aggregateIntegrity: e.state.aggregateIntegrity,
 		connectionControls: e.state.connectionAccounting, connectionEpoch: e.state.liveEpoch,
-		connectionActive: e.state.liveEpochActive, aggregateAcknowledged: e.state.aggregateAcknowledged,
+		connectionRecoveryAttempts: e.state.connectionControl.recoveryAttempts,
+		connectionActive:           e.state.liveEpochActive, aggregateAcknowledged: e.state.aggregateAcknowledged,
 		aggregateAckPosition: e.state.aggregateAckPosition,
 		latestControlKind:    e.state.connectionControl.latestKind, latestControlOutcome: e.state.connectionControl.latestOutcome,
 		latestControlReason: e.state.connectionControl.latestReason,
@@ -410,9 +417,12 @@ func (e *Engine) buildPublicationLocked(id, sequence uint64, disposition transit
 		hydrationPolicyAction:       e.state.hydration.policyAction,
 		hydrationPolicyToken:        e.state.hydration.lastPolicyToken,
 		hydrationPolicyWaiting:      e.state.hydration.policyWaiting,
+		installedCheckpoint:         e.state.installedCheckpoint != nil,
+		tq:                          cloneTQView(e.tqViewLocked()),
 	}
 	candidate.currentMarketClaim = candidate.aggregateEvaluation.mode == rankingQualifiedCurrent ||
 		candidate.aggregateEvaluation.mode == rankingDegradedBootstrap
+	candidate.tq.PublicationID = id
 	if e.state.binding != nil {
 		candidate.bindingIdentity = e.state.binding.identity
 		candidate.tradingDate = e.state.binding.tradingDate
@@ -467,7 +477,7 @@ func validatePublication(candidate *privatePublication) error {
 	}
 	if (candidate.bindingIdentity == "") != (candidate.tradingDate == "") ||
 		candidate.currentMarketClaim != (candidate.aggregateEvaluation.mode == rankingQualifiedCurrent || candidate.aggregateEvaluation.mode == rankingDegradedBootstrap) ||
-		validateAggregateEvaluation(candidate.aggregateEvaluation) != nil {
+		validateAggregateEvaluation(candidate.aggregateEvaluation) != nil || !validTQPublication(candidate.tq, candidate.publicationID, candidate.aggregateEvaluation) {
 		return errors.New("invalid publication claim")
 	}
 	if (candidate.connectionActive && candidate.connectionEpoch == 0) ||

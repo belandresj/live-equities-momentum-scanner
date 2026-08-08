@@ -46,6 +46,28 @@ func TestC8RUNTIME01LifecycleReadinessShutdown(t *testing.T) {
 	if got := runtime.Status(); !got.BackendReady || !got.RankingCurrent || got.Reason != ReasonNone || got.TQAvailable {
 		t.Fatalf("current aggregate state not ready or TQ became a gate: %+v", got)
 	}
+	firstCapture, err := runtime.CaptureSnapshot()
+	firstView, firstOK := InspectSnapshotCapture(firstCapture)
+	if err != nil || !firstOK || !firstView.Status.BackendReady || firstView.Engine.Publication.PublicationID == 0 {
+		t.Fatalf("first immutable response capture = %+v/%v", firstCapture, err)
+	}
+	firstView.Status.BackendReady = false
+	if firstView.Engine.Publication.Watermark != nil {
+		*firstView.Engine.Publication.Watermark = time.Time{}
+	}
+	sealedAgain, sealedOK := InspectSnapshotCapture(firstCapture)
+	if !sealedOK || !sealedAgain.Status.BackendReady || sealedAgain.Engine.Publication.Watermark == nil || sealedAgain.Engine.Publication.Watermark.IsZero() {
+		t.Fatal("inspection copy mutated the sealed capture")
+	}
+	firstView = sealedAgain
+	now = now.Add(3 * time.Second)
+	staleCapture, err := runtime.CaptureSnapshot()
+	staleView, staleOK := InspectSnapshotCapture(staleCapture)
+	if err != nil || !staleOK || staleView.SampleID <= firstView.SampleID || staleView.Engine.Publication.PublicationID != firstView.Engine.Publication.PublicationID ||
+		staleView.Status.BackendReady || staleView.Status.Reason != ReasonWatermarkStale {
+		t.Fatalf("unchanged-publication readiness expiry = first=%+v stale=%+v err=%v", firstView, staleView, err)
+	}
+	now = now.Add(-3 * time.Second)
 	applyControl(t, owner, binding, engine.ConnectionLost, 1, 0, engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 2}, now)
 	if got := runtime.Status(); got.BackendReady || got.RankingCurrent || got.Reason != ReasonLifecycle || got.Lifecycle != "recovering" {
 		t.Fatalf("disconnect remained ready: %+v", got)

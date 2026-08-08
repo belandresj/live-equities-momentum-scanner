@@ -1007,6 +1007,9 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		e.enterSuppressionLocked(lifecycleEventAccountingIntegrity, node, lifecycleReasonAccountingIntegrity)
 	}
 	e.reconcileTQLocked(node.admissionTime)
+	if tqPublicationInput(node.kind) {
+		e.state.tq.revision++
+	}
 	disposition := transitionDisposition{EngineSequence: node.engineSequence, Code: code, Reason: reason,
 		hydrationPlan: stagedHydrationPlan, hydrationRows: stagedHydrationRows, hydrationAccounting: stagedHydrationAccounting,
 		hydrationFenceCommand: stagedHydrationFenceCommand}
@@ -1023,6 +1026,15 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		e.mu.Unlock()
 	}
 	return final
+}
+
+func tqPublicationInput(kind inputKind) bool {
+	switch kind {
+	case inputTimer, inputTQCommandResult, inputTrade, inputQuote, inputTQDrop, inputTQPressureResult, inputTQPressureTick:
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *Engine) applyExhaustionLocked() {

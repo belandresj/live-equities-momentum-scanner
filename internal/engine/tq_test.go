@@ -121,6 +121,7 @@ func TestPC9TAQ(t *testing.T) {
 	if view.Accounting.Consumed != view.Accounting.Applied+view.Accounting.Duplicate+view.Accounting.Rejected+view.Accounting.Fenced+view.Accounting.PressureShed+view.Accounting.Integrity {
 		t.Fatalf("accounting = %+v", view.Accounting)
 	}
+	publicationBeforeTQOnly := e.ObserveSnapshot()
 	changedConditions := trade
 	changedConditions.Live.FrameSequence = 26
 	changedConditions.Conditions = []int64{15}
@@ -129,6 +130,12 @@ func TestPC9TAQ(t *testing.T) {
 	}
 	if got := e.ObserveTQ().Rows[0].Tape; got.Status != TQInvalid || got.Reason != "unequal_repeat" {
 		t.Fatalf("unequal repeat status = %+v", got)
+	}
+	publicationAfterTQOnly := e.ObserveSnapshot()
+	if publicationAfterTQOnly.Publication.PublicationID <= publicationBeforeTQOnly.Publication.PublicationID || publicationBeforeTQOnly.Publication.Watermark == nil ||
+		publicationAfterTQOnly.Publication.Watermark == nil || *publicationAfterTQOnly.Publication.Watermark != *publicationBeforeTQOnly.Publication.Watermark ||
+		len(publicationAfterTQOnly.TQ.Rows) != 1 || publicationAfterTQOnly.TQ.Rows[0].Tape.Status != TQInvalid {
+		t.Fatalf("T/Q-only publication replacement: before=%+v after=%+v", publicationBeforeTQOnly, publicationAfterTQOnly)
 	}
 	oneSided := late
 	oneSided.Live.FrameSequence, oneSided.SIPTime, oneSided.AskPresent, oneSided.AskPrice = 27, now.Add(-500*time.Millisecond), false, 0
@@ -149,7 +156,9 @@ func TestPC9TAQ(t *testing.T) {
 	}
 
 	e.mu.Lock()
-	e.state.aggregateEvaluator.current.mode = rankingUnavailable
+	qualifiedEvaluation := cloneAggregateEvaluation(e.state.aggregateEvaluator.current)
+	e.state.aggregateEvaluator.current.mode = rankingStale
+	e.state.aggregateEvaluator.current.reason = ""
 	e.state.aggregateEvaluator.current.rows = nil
 	e.reconcileTQLocked(now)
 	e.mu.Unlock()
@@ -169,8 +178,7 @@ func TestPC9TAQ(t *testing.T) {
 	e.mu.Unlock()
 
 	e.mu.Lock()
-	e.state.aggregateEvaluator.current.mode = rankingQualifiedCurrent
-	e.state.aggregateEvaluator.current.rows = []aggregateRankingRow{{rank: 1, symbol: "AAA", tqIntentEligible: true}}
+	e.state.aggregateEvaluator.current = qualifiedEvaluation
 	e.reconcileTQLocked(now)
 	e.mu.Unlock()
 	view = e.ObserveTQ()
@@ -195,6 +203,57 @@ func TestPC9TAQ(t *testing.T) {
 	if view.CommandPending || !view.Rows[0].ProviderMembershipUnknown || view.Accounting.KnownPresent != 0 || view.Accounting.Unknown != 1 {
 		t.Fatalf("failed cleanup false-zero/loop = %+v", view)
 	}
+
+	writerDone := make(chan string, 1)
+	go func() {
+		for i := 0; i < 32; i++ {
+			admission, completion := e.AdmitTimer(context.Background())
+			if admission != AdmissionAdmitted || completion == nil {
+				writerDone <- "concurrent timer was not admitted"
+				return
+			}
+			if disposition := <-completion; disposition.Code != DispositionTimerApplied {
+				writerDone <- "concurrent timer was not applied"
+				return
+			}
+		}
+		writerDone <- ""
+	}()
+	observations := 0
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case failure := <-writerDone:
+			if failure != "" {
+				t.Fatal(failure)
+			}
+			if observations == 0 {
+				t.Fatal("concurrent publication replacement was not observed")
+			}
+			finalSnapshot := e.ObserveSnapshot()
+			if finalSnapshot.Publication.PublicationID != finalSnapshot.Operational.PublicationID || finalSnapshot.Publication.PublicationID != finalSnapshot.TQ.PublicationID {
+				t.Fatal("final snapshot mixed publication identities")
+			}
+			goto concurrencyComplete
+		case <-deadline.C:
+			t.Fatal("concurrent publication replacement timed out")
+		default:
+			snapshot := e.ObserveSnapshot()
+			if snapshot.Publication.PublicationID == 0 || snapshot.Publication.PublicationID != snapshot.Operational.PublicationID || snapshot.Publication.PublicationID != snapshot.TQ.PublicationID || len(snapshot.TQ.Rows) != len(snapshot.TQ.Desired) {
+				t.Fatalf("mixed concurrent snapshot = %+v", snapshot)
+			}
+			if len(snapshot.TQ.Desired) != 0 {
+				snapshot.TQ.Desired[0] = "MUTATED"
+				if again := e.ObserveSnapshot(); len(again.TQ.Desired) == 0 || again.TQ.Desired[0] == "MUTATED" {
+					t.Fatal("snapshot slices alias the publication cell")
+				}
+			}
+			observations++
+		}
+	}
+
+concurrencyComplete:
 	closeAndWait(t, e)
 }
 
@@ -240,9 +299,8 @@ func TestPC9TAQAggregateOnlyRetiresPendingAdditions(t *testing.T) {
 		}
 		e.mu.Lock()
 		e.state.lifecycle, e.state.liveEpoch, e.state.liveEpochActive = lifecycleLive, 1, true
-		e.state.aggregateEvaluator.current = aggregateEvaluationResult{mode: rankingQualifiedCurrent, rows: []aggregateRankingRow{
-			{rank: 1, symbol: "AAA", tqIntentEligible: true}, {rank: 2, symbol: "MISSING", tqIntentEligible: true},
-		}}
+		e.state.committedT = immutableTime(now)
+		e.state.aggregateEvaluator.current = pressureQualifiedEvaluation(now)
 		e.state.tq.members = map[string]*tqSymbolState{"AAA": {present: true,
 			tradeCoverage: tqCoverage{active: true, epoch: 1, greatest: LivePosition{ConnectionEpoch: 1, FrameSequence: 10}},
 			quoteCoverage: tqCoverage{active: true, epoch: 1, greatest: LivePosition{ConnectionEpoch: 1, FrameSequence: 10}},
@@ -300,6 +358,24 @@ func TestPC9TAQAggregateOnlyRetiresPendingAdditions(t *testing.T) {
 			}
 		}
 	})
+}
+
+func pressureQualifiedEvaluation(at time.Time) aggregateEvaluationResult {
+	counts := featureDimensionAccounting{}
+	counts.statuses[1], counts.statuses[2] = 2, 1
+	counts.reasons[0], counts.reasons[9] = 2, 1
+	counts.pairs[1][0], counts.pairs[2][9] = 2, 1
+	features := featureAccounting{dayPercent: counts, from4AMPercent: counts, hodDrawdown: counts, sessionRange: counts, rolling30: counts, rolling60: counts, activity: counts}
+	current := aggregateFeatureField{status: featureCurrent}
+	return aggregateEvaluationResult{
+		at: at, mode: rankingQualifiedCurrent,
+		population:    populationAccounting{universeTotal: 3, validPriorClose: 2, invalidOrMissingPriorClose: 1, trustedRankableMark: 2, coveredPopulation: 3},
+		qualification: qualificationAccounting{provisional: 2}, features: features, totalPassers: 2, knownRankableCount: 2, tqIntentAvailable: true,
+		rows: []aggregateRankingRow{
+			{rank: 1, symbol: "AAA", last: 2, dayPercent: 1, from4AMPercent: current, hodDrawdown: current, sessionRange: current, rolling30: current, rolling60: current, activity: current, tqIntentEligible: true},
+			{rank: 2, symbol: "MISSING", last: 1, dayPercent: 0, from4AMPercent: current, hodDrawdown: current, sessionRange: current, rolling30: current, rolling60: current, activity: current, tqIntentEligible: true},
+		},
+	}
 }
 
 func TestPC9TAQScaledSymbolBoundUnsubscribes(t *testing.T) {
