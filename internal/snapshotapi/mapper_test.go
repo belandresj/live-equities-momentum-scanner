@@ -33,7 +33,7 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 		t.Fatal(err)
 	}
 	hash := sha256.Sum256(body)
-	const goldenSHA256 = "891d822049f661885941693e901ea93784f137d4520bc3dc372ac6d9baf799f7"
+	const goldenSHA256 = "a2c02d7e9fb7a51cba8a49940543b15d45478bd111e5a24fc6a91732f244bf9a"
 	if got := hex.EncodeToString(hash[:]); got != goldenSHA256 {
 		t.Fatalf("snapshot golden SHA-256 = %s", got)
 	}
@@ -45,6 +45,10 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 	if row.From4AMChange.ValueRatio == nil || *row.From4AMChange.ValueRatio != 0 || row.HODDrawdown.ValueRatio != nil ||
 		row.TapeRate.OneSecond.TradesPerSecond == nil || *row.TapeRate.OneSecond.TradesPerSecond != 0 || row.Spread.Cents == nil || *row.Spread.Cents != 0 {
 		t.Fatalf("null versus genuine zero = %+v", row)
+	}
+	if row.DayChangeRatio != .0025 || row.DayRangePosition.ValueRatio == nil || *row.DayRangePosition.ValueRatio != .005 ||
+		row.Activity.ValueRatio == nil || *row.Activity.ValueRatio != .0125 {
+		t.Fatalf("percentage-point to ratio mapping = %+v", row)
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(body, &fields); err != nil {
@@ -119,6 +123,29 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 	missing, err := mapCaptureView(withoutWatermark)
 	if err != nil || missing.Status.WatermarkLagMS != nil || missing.Publication.CommittedT != nil {
 		t.Fatalf("missing watermark fabricated lag: snapshot=%+v err=%v", missing, err)
+	}
+}
+
+func TestPC10SchemaPercentagePointBoundariesMapToRatios(t *testing.T) {
+	capture := schemaCapture()
+	row := &capture.Engine.Publication.AggregateEvaluation.Rows[0]
+	row.DayPercent = 250
+	row.From4AMPercent = engine.ReplayFieldView{Status: "current", Value: -100}
+	row.HODDrawdown = engine.ReplayFieldView{Status: "current", Value: 0}
+	row.SessionRange = engine.ReplayFieldView{Status: "current", Value: 100}
+	row.Rolling30 = engine.ReplayFieldView{Status: "current", Value: 25}
+	row.Rolling60 = engine.ReplayFieldView{Status: "current", Value: 75}
+	row.Activity = engine.ReplayFieldView{Status: "current", Value: 100}
+
+	snapshot, err := mapCaptureView(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := snapshot.Rows[0]
+	if got.DayChangeRatio != 2.5 || *got.From4AMChange.ValueRatio != -1 || *got.HODDrawdown.ValueRatio != 0 ||
+		*got.DayRangePosition.ValueRatio != 1 || *got.Range30MPosition.ValueRatio != .25 ||
+		*got.Range60MPosition.ValueRatio != .75 || *got.Activity.ValueRatio != 1 {
+		t.Fatalf("boundary ratios = %+v", got)
 	}
 }
 

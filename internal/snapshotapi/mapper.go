@@ -161,7 +161,7 @@ func mapRow(row engine.ReplayRankingRowView, tq engine.TQSymbolView) (Row, error
 	if row.Rank == 0 || row.Rank > 20 || row.Symbol == "" || !finite(row.Last) || !finite(row.DayPercent) || row.MarkAge < 0 {
 		return Row{}, errors.New("invalid ranking row")
 	}
-	result := Row{Rank: uint64(row.Rank), Symbol: row.Symbol, LastUSD: row.Last, DayChangeRatio: row.DayPercent,
+	result := Row{Rank: uint64(row.Rank), Symbol: row.Symbol, LastUSD: row.Last, DayChangeRatio: percentagePointsToRatio(row.DayPercent),
 		MarkAgeMS: durationMilliseconds(row.MarkAge), From4AMChange: mapRatio(row.From4AMPercent), HODDrawdown: mapRatio(row.HODDrawdown),
 		DayRangePosition: mapRatio(row.SessionRange), Range30MPosition: mapRatio(row.Rolling30), Range60MPosition: mapRatio(row.Rolling60), Activity: mapRatio(row.Activity),
 		TapeRate: TapeRate{Status: "unselected", OneSecond: RateMeasurement{Status: "unselected"}, FiveSecond: RateMeasurement{Status: "unselected"}},
@@ -185,9 +185,16 @@ func mapRow(row engine.ReplayRankingRowView, tq engine.TQSymbolView) (Row, error
 func mapRatio(value engine.ReplayFieldView) RatioMeasurement {
 	result := RatioMeasurement{Status: value.Status, Reason: value.Reason}
 	if value.Status == "current" {
-		result.ValueRatio = floatPointer(value.Value)
+		result.ValueRatio = floatPointer(percentagePointsToRatio(value.Value))
 	}
 	return result
+}
+
+// Aggregate feature values are engine-owned percentage points. The public V1
+// schema deliberately exposes dimensionless ratios so every percentage field
+// has one stable wire unit (for example, 0.125 means 12.5%).
+func percentagePointsToRatio(value float64) float64 {
+	return value / 100
 }
 
 func mapRate(status engine.TQFieldStatus, reason string, value float64) RateMeasurement {

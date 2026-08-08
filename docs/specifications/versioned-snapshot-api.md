@@ -26,8 +26,8 @@ boundary, schema/trust rules, proofs, slices, and sole delivery ledger.
 | Item | State | Evidence | Next action |
 | --- | --- | --- | --- |
 | Boundary/reconnaissance plan | `accepted` | Owner V1 program revision; C9 finally accepted; recorded V2 scope inspected | Complete |
-| Completed contract | `accepted_current_plan` | Focused publication/schema/HTTP trust review clean after exact-schema, immutable-T/Q, sample-identity, liveness, fence, and accounting corrections | Complete; remains revisable through the correction loop |
-| `C10-S1` immutable schema mapping | `accepted` | `P-C10-SCHEMA`; ordinary and affected race clean; focused correction re-review clean | Complete |
+| Completed contract | `accepted_current_plan` | Focused publication/schema/HTTP trust review clean after exact-schema, immutable-T/Q, sample-identity, liveness, fence, accounting, and percentage-point conversion corrections | Complete; remains revisable through the correction loop |
+| `C10-S1` immutable schema mapping | `accepted_corrected` | C11 contract work exposed that engine feature values are percentage points while the V1 wire schema is ratios; the mapper now divides every aggregate percentage field by 100 and the boundary proof distinguishes zero, extrema, and values above 100 percentage points; focused ordinary and race verification plus independent re-review are clean | Complete |
 | `C10-S2` HTTP/CORS/runtime composition | `accepted` | `P-C10-HTTP`; ordinary and affected race clean; focused final correction re-review clean | Complete |
 | Final component review | `accepted` | Mandatory read-only review found one P2 proof-matrix gap; focused correction re-review clean | Complete |
 
@@ -134,7 +134,7 @@ emitted, and every array is present even when empty.
 | `status` | `process_live:bool`; `backend_ready:bool`; `readiness_reason:string enum`; `ranking_current:bool`; `causal_target:t`; `watermark_lag_ms:u?`; `accounting_valid:bool`; `tq_pressure_mode:string enum`; `tq_shed:bool`. Lag is null exactly when `committed_t` is null; otherwise it is nonnegative and genuine zero remains `0`. |
 | `ranking` | `mode:string enum`; `reason:string enum`; `total_passers:u`; `known_rankable_count:u`; `day_invalid_rankable:u`; `qualified_day_invalid:u` |
 | `rows[]` base | `rank:u` (1..20); `symbol:string`; `last_usd:f`; `day_change_ratio:f`; `mark_age_ms:u`; `from_4am_change:ratio`; `hod_drawdown:ratio`; `day_range_position:ratio`; `range_30m_position:ratio`; `range_60m_position:ratio`; `activity:ratio`; `tape_rate:object`; `spread:object`; `tq_membership:object` |
-| `ratio` | `status:string field-status`; `reason:string field-reason`; `value_ratio:f?`. Value is nonnull only for `current`; genuine zero is `0`. Ratio `0.125` means 12.5%, including range positions and Activity's dimensionless score. |
+| `ratio` | `status:string field-status`; `reason:string field-reason`; `value_ratio:f?`. Value is nonnull only for `current`; genuine zero is `0`. Ratio `0.125` means 12.5%, including range positions and Activity's dimensionless score. The mapper converts the engine's owner-authoritative percentage-point representation exactly once by dividing by 100; it never exposes percentage points under a ratio property. |
 | `rows[].tape_rate` | `status:string T/Q-status`; `reason:string T/Q-reason`; `trade_coverage:bool`; `one_second:rate`; `five_second:rate`; `timestamp_basis:string enum`; `lifecycle_records_observed:bool` |
 | `rate` | `status:string T/Q-status`; `reason:string T/Q-reason`; `trades_per_second:f?`, nonnull only for `current`; genuine covered zero is `0` |
 | `rows[].spread` | `status:string T/Q-status`; `reason:string T/Q-reason`; `quote_coverage:bool`; `cents:f?`; `basis_points:f?`; `valid_duration_ms:u`; `quality:string enum`. Both values are nonnull only for `current`; genuine locked spread is numeric zero. |
@@ -322,6 +322,16 @@ hydration marker, and complete concurrent/identity mutation evidence, and its
 final re-review found no remaining P1/P2. The proof is local and deterministic;
 HTTP, browser, provider, and live-market behavior remain outside S1. S2 remains
 valid without revision.
+
+The later C11 unit audit reopened only C10-S1 representation: the engine owns
+percentage-point values (`0.25` means 0.25%, and Activity spans 0..100), while
+the public schema owns dimensionless ratios (`0.0025` means 0.25%). The mapper
+now divides Day change and every status-bearing aggregate feature by 100 exactly
+once. The corrected proof distinguishes negative and above-100-point change,
+range/Activity extrema, genuine zero, and non-current null. Focused ordinary
+and affected race verification passed, and focused independent re-review found
+no semantic mapper/proof defect. C10-S2 and C1-C9 meanings were unaffected; C11
+must consume the corrected wire ratios directly.
 
 `C10-S2` now serves the sealed capture through the three bounded loopback
 routes, applies exact-origin CORS before source access, and maps liveness,
