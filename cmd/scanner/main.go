@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/belandresj/live-equities-momentum-scanner/internal/operations"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/reference"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/session"
+	"github.com/belandresj/live-equities-momentum-scanner/internal/snapshotapi"
 )
 
 func main() {
@@ -38,6 +40,9 @@ func run(ctx context.Context, arguments []string) error {
 	checkpointDirectory := flags.String("checkpoint-dir", filepath.Join("var", "checkpoints"), "private local checkpoint directory")
 	restOrigin := flags.String("rest-origin", "https://api.massive.com", "Massive HTTPS origin")
 	websocketEndpoint := flags.String("websocket-endpoint", "wss://socket.massive.com/stocks", "Massive stocks WebSocket endpoint")
+	apiAddress := flags.String("api-address", snapshotapi.DefaultAddress, "private loopback snapshot API address")
+	var allowedOrigins originFlags
+	flags.Var(&allowedOrigins, "allow-origin", "exact browser origin allowed to read the snapshot API; repeatable")
 	if err := flags.Parse(arguments); err != nil || *tradingDate == "" || flags.NArg() != 0 {
 		return errors.New("scanner requires exactly one --trading-date and no positional arguments")
 	}
@@ -98,6 +103,14 @@ func run(ctx context.Context, arguments []string) error {
 	components := operations.LiveComponents{Adapter: adapter, Hydrator: hydrator, Store: store, Workers: 8, RowsPerChunk: 256, MaximumResponseBytes: 512 << 20,
 		MaximumNormalizedRecords: int64(len(binding.UniverseSymbols())) * 57_600, MaximumResidentRecords: 8 * 57_600,
 		Durations: massive.OperationalDurations{Dial: 10 * time.Second, HandshakeStep: 5 * time.Second, HandshakeTotal: 30 * time.Second, HeartbeatInterval: 15 * time.Second, HeartbeatDeadline: 5 * time.Second, Write: 5 * time.Second, Close: 5 * time.Second}}
+	api, err := snapshotapi.Listen(runtime, snapshotapi.ServerConfig{Address: *apiAddress, AllowedOrigins: []string(allowedOrigins)})
+	if err != nil {
+		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = runtime.Shutdown(shutdown)
+		return fmt.Errorf("start snapshot API: %w", err)
+	}
+	apiDone := api.Done()
 	done := make(chan error, 1)
 	go func() { done <- runtime.RunLive(runCtx, components) }()
 	ticker := time.NewTicker(time.Second)
@@ -106,25 +119,29 @@ func run(ctx context.Context, arguments []string) error {
 	for {
 		select {
 		case <-runCtx.Done():
-			if err := joinAndShutdown(runtime, done, cancelRun); err != nil {
+			if err := joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, false); err != nil {
 				return err
 			}
 			return runCtx.Err()
 		case err := <-done:
-			cancelRun()
-			shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			shutdownErr := runtime.Shutdown(shutdown)
-			cancel()
-			if shutdownErr != nil {
+			if shutdownErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, true, false); shutdownErr != nil {
 				return shutdownErr
 			}
 			return err
+		case err := <-apiDone:
+			if shutdownErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, true); shutdownErr != nil {
+				return shutdownErr
+			}
+			if err == nil {
+				return errors.New("snapshot API stopped unexpectedly")
+			}
+			return fmt.Errorf("snapshot API: %w", err)
 		case <-ticker.C:
 			if err := encoder.Encode(struct {
 				Status  operations.Status
 				Metrics operations.Metrics
 			}{runtime.Status(), runtime.Metrics()}); err != nil {
-				if stopErr := joinAndShutdown(runtime, done, cancelRun); stopErr != nil {
+				if stopErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, false); stopErr != nil {
 					return stopErr
 				}
 				return errors.New("encode operational status")
@@ -133,14 +150,49 @@ func run(ctx context.Context, arguments []string) error {
 	}
 }
 
-func joinAndShutdown(runtime *operations.Runtime, done <-chan error, cancelRun context.CancelFunc) error {
+func joinAndShutdown(runtime *operations.Runtime, api *snapshotapi.Server, liveDone, apiDone <-chan error, cancelRun context.CancelFunc, liveJoined, apiJoined bool) error {
 	cancelRun()
-	deadline, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	select {
-	case <-done:
-	case <-deadline.Done():
-		return errors.New("live composition shutdown deadline exceeded")
+	apiDeadline, cancelAPI := context.WithTimeout(context.Background(), 10*time.Second)
+	apiShutdownErr := api.Shutdown(apiDeadline)
+	cancelAPI()
+	var apiJoinErr error
+	if !apiJoined {
+		joinDeadline, cancelJoin := context.WithTimeout(context.Background(), time.Second)
+		select {
+		case <-apiDone:
+		case <-joinDeadline.Done():
+			apiJoinErr = errors.New("snapshot API shutdown deadline exceeded")
+		}
+		cancelJoin()
 	}
-	return runtime.Shutdown(deadline)
+	liveDeadline, cancelLive := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelLive()
+	var liveJoinErr error
+	if !liveJoined {
+		select {
+		case <-liveDone:
+		case <-liveDeadline.Done():
+			liveJoinErr = errors.New("live composition shutdown deadline exceeded")
+		}
+	}
+	runtimeErr := runtime.Shutdown(liveDeadline)
+	if apiShutdownErr != nil {
+		return apiShutdownErr
+	}
+	if apiJoinErr != nil {
+		return apiJoinErr
+	}
+	if liveJoinErr != nil {
+		return liveJoinErr
+	}
+	return runtimeErr
+}
+
+type originFlags []string
+
+func (values *originFlags) String() string { return strings.Join(*values, ",") }
+
+func (values *originFlags) Set(value string) error {
+	*values = append(*values, value)
+	return nil
 }

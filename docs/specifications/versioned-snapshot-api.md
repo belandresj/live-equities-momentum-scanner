@@ -1,7 +1,6 @@
 # Versioned snapshot API
 
-**Status:** Detailed V1 contract accepted as the current executable plan under
-the Version 1 Release Program; C10-S1 accepted and C10-S2 implementation active
+**Status:** Finally accepted 2026-08-08 under the Version 1 Release Program
 
 **Boundary approval:** Approved 2026-08-07 by the owner through the Version 1
 Release Program revision
@@ -29,8 +28,8 @@ boundary, schema/trust rules, proofs, slices, and sole delivery ledger.
 | Boundary/reconnaissance plan | `accepted` | Owner V1 program revision; C9 finally accepted; recorded V2 scope inspected | Complete |
 | Completed contract | `accepted_current_plan` | Focused publication/schema/HTTP trust review clean after exact-schema, immutable-T/Q, sample-identity, liveness, fence, and accounting corrections | Complete; remains revisable through the correction loop |
 | `C10-S1` immutable schema mapping | `accepted` | `P-C10-SCHEMA`; ordinary and affected race clean; focused correction re-review clean | Complete |
-| `C10-S2` HTTP/CORS/runtime composition | `in_progress` | `P-C10-HTTP` | Implement and verify sequentially |
-| Final component review | `pending` | One mandatory read-only review after both proofs | Pending |
+| `C10-S2` HTTP/CORS/runtime composition | `accepted` | `P-C10-HTTP`; ordinary and affected race clean; focused final correction re-review clean | Complete |
+| Final component review | `accepted` | Mandatory read-only review found one P2 proof-matrix gap; focused correction re-review clean | Complete |
 
 ## Sections 1-4 — outcome, scope, ownership, and settled boundary
 
@@ -323,3 +322,28 @@ hydration marker, and complete concurrent/identity mutation evidence, and its
 final re-review found no remaining P1/P2. The proof is local and deterministic;
 HTTP, browser, provider, and live-market behavior remain outside S1. S2 remains
 valid without revision.
+
+`C10-S2` now serves the sealed capture through the three bounded loopback
+routes, applies exact-origin CORS before source access, and maps liveness,
+readiness, publication validity, HEAD, and error outcomes without handler-owned
+market calculations. The scanner composition starts the API with explicit
+loopback/origin flags and cancels and joins API/live work before Runtime
+shutdown. `P-C10-HTTP` covers initializing/awaiting-ack liveness without a
+valid product publication, ready and terminal states, every route/method/HEAD
+branch, exact CORS/preflight acceptance and rejection, the 1 MiB response cap,
+real loopback binding, fixed server deadlines, canceled clients, concurrent
+publication reads, and engine progress while a response writer is blocked.
+The final read-only review found no code-path correctness or ownership defect;
+its sole P2 finding was missing exact assertions for several method/HEAD/CORS
+branches. The expanded table-driven proof passed and focused re-review found no
+remaining P1/P2. Ordinary and affected race verification pass. Evidence is
+local loopback/httptest only: no browser, TLS/auth/public hosting, provider,
+live-market, or network-SLA claim is made.
+
+Final C10 conformance has one representation owner and one HTTP transport path;
+the engine remains sole product-state/publication owner, operations remains the
+readiness/process sampler, and T/Q health remains independent from aggregate
+ranking and readiness. The success path is one sealed Runtime capture to one
+validated schema/body; malformed capture, unavailable publication, invalid
+origin/preflight, over-bound encoding, canceled client, and shutdown timeout
+remain bounded non-success paths. No accepted C1-C9 market meaning was changed.
