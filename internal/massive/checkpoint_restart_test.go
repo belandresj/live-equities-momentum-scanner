@@ -467,7 +467,10 @@ func startAggregateEpochAtContext(t *testing.T, ctx context.Context, state *engi
 }
 
 func runCheckpointHydration(t *testing.T, state *engine.Engine, binding reference.Binding, epoch uint64, purpose engine.HydrationPurpose, server *httptest.Server) checkpointHydrationRun {
-	return runCheckpointHydrationWorkers(t, state, binding, epoch, purpose, server, 2)
+	// P-C7-LIVE proves semantic equivalence, not worker concurrency. One worker
+	// keeps the two-request loopback fixture deterministic under package load;
+	// the separately selected objective proof retains its explicit worker shape.
+	return runCheckpointHydrationWorkers(t, state, binding, epoch, purpose, server, 1)
 }
 
 func runCheckpointHydrationWorkers(t *testing.T, state *engine.Engine, binding reference.Binding, epoch uint64, purpose engine.HydrationPurpose, server *httptest.Server, workers int) checkpointHydrationRun {

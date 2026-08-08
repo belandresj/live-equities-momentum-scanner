@@ -144,31 +144,36 @@ type tqSymbolState struct {
 }
 
 type tqState struct {
-	epoch                  uint64
-	nextToken              uint64
-	desired                []string
-	members                map[string]*tqSymbolState
-	pending                *TQCommand
-	dispatched             bool
-	consumed, applied      uint64
-	duplicate, rejected    uint64
-	fenced, pressureShed   uint64
-	integrity              uint64
-	tradeCount, quoteCount int
-	fingerprintCount       int
-	globalBound            bool
-	aggregateOnly          bool
+	epoch                                                                                      uint64
+	nextToken                                                                                  uint64
+	desired                                                                                    []string
+	members                                                                                    map[string]*tqSymbolState
+	pending                                                                                    *TQCommand
+	dispatched                                                                                 bool
+	consumed, applied                                                                          uint64
+	duplicate, rejected                                                                        uint64
+	fenced, pressureShed                                                                       uint64
+	integrity                                                                                  uint64
+	tradeCount, quoteCount                                                                     int
+	fingerprintCount                                                                           int
+	globalBound                                                                                bool
+	aggregateOnly                                                                              bool
+	pressure                                                                                   tqPressureState
+	restoring                                                                                  bool
+	restoreNotBefore                                                                           time.Time
+	commandsIssued, commandsAcknowledged, commandsFailed, commandsFenced, commandResultsFenced uint64
 }
 
 type TQFieldStatus string
 
 const (
-	TQUnselected  TQFieldStatus = "unselected"
-	TQWarming     TQFieldStatus = "warming"
-	TQCurrent     TQFieldStatus = "current"
-	TQStale       TQFieldStatus = "stale"
-	TQUnavailable TQFieldStatus = "unavailable"
-	TQInvalid     TQFieldStatus = "invalid"
+	TQUnselected   TQFieldStatus = "unselected"
+	TQWarming      TQFieldStatus = "warming"
+	TQCurrent      TQFieldStatus = "current"
+	TQStale        TQFieldStatus = "stale"
+	TQUnavailable  TQFieldStatus = "unavailable"
+	TQInvalid      TQFieldStatus = "invalid"
+	TQPressureShed TQFieldStatus = "pressure_shed"
 )
 
 type TapeRateView struct {
@@ -204,15 +209,24 @@ type TQAccountingView struct {
 	RetainedTrades, RetainedQuotes, RetainedFingerprints                    int
 }
 
+type TQCommandAccountingView struct {
+	Issued, Pending, Acknowledged, Failed, Fenced, ResultFenced uint64
+}
+
 type TQView struct {
-	Desired        []string
-	CommandPending bool
-	PendingAction  TQAction
-	PendingSymbol  string
-	Rows           []TQSymbolView
-	Bounds         bool
-	AggregateOnly  bool
-	Accounting     TQAccountingView
+	Desired                             []string
+	CommandPending                      bool
+	PendingAction                       TQAction
+	PendingSymbol                       string
+	Rows                                []TQSymbolView
+	Bounds                              bool
+	AggregateOnly                       bool
+	Pressure                            TQPressureMode
+	ShedTradesQuotes                    bool
+	PressureMisses                      uint32
+	PressureTransitions, PressureFenced uint64
+	Accounting                          TQAccountingView
+	Commands                            TQCommandAccountingView
 }
 
 func (e *Engine) AdmitTQCommandResult(ctx context.Context, input TQCommandResultInput) (AdmissionResult, <-chan Disposition) {
@@ -282,7 +296,22 @@ func (e *Engine) reconcileTQLocked(now time.Time) {
 		s.nextToken = 1
 	}
 	if s.epoch != e.state.liveEpoch {
-		*s = tqState{epoch: e.state.liveEpoch, nextToken: maxUint64(e.state.aggregateWriteToken+1, maxUint64(1, s.nextToken)), members: make(map[string]*tqSymbolState)}
+		previous := *s
+		commandFenced := previous.commandsFenced
+		if previous.pending != nil {
+			commandFenced++
+		}
+		pressure := previous.pressure
+		pressure.pending, pressure.dispatched = nil, false
+		pressure.nextSequence = maxUint64(1, pressure.nextSequence)
+		*s = tqState{
+			epoch: e.state.liveEpoch, nextToken: maxUint64(e.state.aggregateWriteToken+1, maxUint64(1, previous.nextToken)), members: make(map[string]*tqSymbolState),
+			consumed: previous.consumed, applied: previous.applied, duplicate: previous.duplicate, rejected: previous.rejected, fenced: previous.fenced,
+			pressureShed: previous.pressureShed, integrity: previous.integrity, globalBound: previous.globalBound, aggregateOnly: previous.aggregateOnly,
+			commandsIssued: previous.commandsIssued, commandsAcknowledged: previous.commandsAcknowledged, commandsFailed: previous.commandsFailed,
+			commandsFenced: commandFenced, commandResultsFenced: previous.commandResultsFenced,
+			pressure: pressure,
+		}
 	}
 	if s.nextToken <= e.state.aggregateWriteToken {
 		s.nextToken = e.state.aggregateWriteToken + 1
@@ -311,11 +340,30 @@ func (e *Engine) reconcileTQLocked(now time.Time) {
 			member.tradeCoverage.active, member.quoteCoverage.active = false, false
 			if !member.present && !member.unknown {
 				member.bound = false
+				if len(member.trades) == 0 && len(member.quotes) == 0 && len(member.fingerprints) == 0 {
+					delete(s.members, symbol)
+				}
 			}
 		}
 	}
+	if s.pending != nil && s.pending.action == TQSubscribe && !s.dispatched && !desiredSet[s.pending.symbol] {
+		s.pending, s.dispatched = nil, false
+		s.commandsFenced++
+	}
 	if s.pending != nil || !e.state.liveEpochActive || e.state.lifecycle != lifecycleLive {
 		return
+	}
+	if s.pressure.mode == TQPressureDegraded {
+		return
+	}
+	if s.aggregateOnly {
+		for index := len(desired) - 1; index >= 0; index-- {
+			member := s.members[desired[index]]
+			if member != nil && (member.present || (member.unknown && !member.cleanupAttempted)) {
+				e.issueTQCommandLocked(TQUnsubscribe, desired[index])
+				return
+			}
+		}
 	}
 	for symbol, member := range s.members {
 		if (member.present || (member.unknown && !member.cleanupAttempted)) && (s.aggregateOnly || member.bound || member.resetRequired || !desiredSet[symbol]) {
@@ -325,6 +373,12 @@ func (e *Engine) reconcileTQLocked(now time.Time) {
 	}
 	if s.aggregateOnly {
 		return
+	}
+	wireMembers := 0
+	for _, member := range s.members {
+		if member.present || member.unknown {
+			wireMembers++
+		}
 	}
 	for _, symbol := range desired {
 		member := s.member(symbol)
@@ -338,6 +392,12 @@ func (e *Engine) reconcileTQLocked(now time.Time) {
 			return
 		}
 		if !member.present {
+			if wireMembers >= maximumTQSymbols {
+				return
+			}
+			if s.restoring && now.Before(s.restoreNotBefore) {
+				return
+			}
 			e.issueTQCommandLocked(TQSubscribe, symbol)
 			return
 		}
@@ -401,6 +461,7 @@ func (e *Engine) issueTQCommandLocked(action TQAction, symbol string) {
 	command := &TQCommand{bindingIdentity: e.state.binding.identity, connectionEpoch: e.state.liveEpoch, commandToken: s.nextToken, action: action, symbol: symbol, done: make(chan Disposition, 1)}
 	s.nextToken++
 	s.pending, s.dispatched = command, false
+	s.commandsIssued++
 	if action == TQUnsubscribe {
 		m := s.member(symbol)
 		m.tradeCoverage.active, m.quoteCoverage.active = false, false
@@ -427,12 +488,25 @@ func (e *Engine) enterTQGlobalBoundLocked() {
 
 func (e *Engine) enterTQAggregateOnlyLocked() {
 	s := &e.state.tq
+	if s.pressure.mode != TQPressureAggregateOnly {
+		s.pressure.mode = TQPressureAggregateOnly
+		s.pressure.transitions++
+		if s.pressure.degradedAt.IsZero() {
+			s.pressure.degradedAt = e.lastClock
+		}
+	}
 	s.aggregateOnly = true
+	e.stopTQAdditionsLocked()
+	e.closeAllTQCoverageLocked()
+}
+
+func (e *Engine) stopTQAdditionsLocked() {
+	s := &e.state.tq
 	if s.pending != nil && s.pending.action == TQSubscribe && !s.dispatched {
 		s.pending = nil
 		s.dispatched = false
+		s.commandsFenced++
 	}
-	e.closeAllTQCoverageLocked()
 }
 
 func (e *Engine) closeAllTQCoverageLocked() {
@@ -448,11 +522,13 @@ func (e *Engine) applyTQCommandResultLocked(node *queueNode) (DispositionCode, D
 	if e.state.binding == nil || v.command.bindingIdentity != e.state.binding.identity || v.command.connectionEpoch != e.state.liveEpoch || !e.state.liveEpochActive || s.pending == nil ||
 		v.command != *s.pending || !s.dispatched {
 		s.fenced++
+		s.commandResultsFenced++
 		return DispositionTQFenced, ReasonHistoricalContext
 	}
 	m := s.member(v.command.symbol)
 	s.pending, s.dispatched = nil, false
 	if v.outcome != ControlSucceeded {
+		s.commandsFailed++
 		m.present, m.unknown = false, true
 		m.tradeCoverage.active, m.quoteCoverage.active = false, false
 		if v.command.action == TQUnsubscribe {
@@ -461,13 +537,17 @@ func (e *Engine) applyTQCommandResultLocked(node *queueNode) (DispositionCode, D
 		s.rejected++
 		return DispositionTQRejected, ReasonControlOutcome
 	}
+	s.commandsAcknowledged++
 	if v.command.action == TQUnsubscribe {
 		m.present, m.unknown, m.cleanupAttempted = false, false, false
 		m.resetRequired = false
 		s.releaseMember(m)
 		m.unequalRepeat, m.lifecycleObserved = false, false
+		if !s.desiredContains(v.command.symbol) {
+			delete(s.members, v.command.symbol)
+		}
 	} else {
-		if s.aggregateOnly || m.bound || m.resetRequired {
+		if s.aggregateOnly || m.bound || m.resetRequired || !s.desiredContains(v.command.symbol) {
 			// A subscribe already written before containment may still have been
 			// applied by the provider. Preserve that cleanup liability, but never
 			// reopen causal coverage after additions have stopped.
@@ -489,6 +569,20 @@ func (e *Engine) applyTQCommandResultLocked(node *queueNode) (DispositionCode, D
 		m.quoteCoverage = m.tradeCoverage
 		s.releaseMember(m)
 		m.unequalRepeat, m.lifecycleObserved = false, false
+		if s.restoring {
+			s.restoreNotBefore = node.admissionTime.Add(e.tqPressurePolicy.restoreInterval)
+			allPresent := true
+			for _, symbol := range s.desired {
+				member := s.member(symbol)
+				if !member.present || member.resetRequired {
+					allPresent = false
+					break
+				}
+			}
+			if allPresent {
+				s.restoring = false
+			}
+		}
 	}
 	s.applied++
 	return DispositionTQApplied, ReasonNone
@@ -502,6 +596,10 @@ func (e *Engine) applyTQDropLocked(node *queueNode) (DispositionCode, Dispositio
 		return DispositionTQFenced, ReasonHistoricalContext
 	}
 	if v.Symbol == "" {
+		if v.DropReason == "optional_tq_shed" && s.pressure.mode != TQPressureNormal {
+			s.pressureShed++
+			return DispositionTQRejected, ReasonPressure
+		}
 		var greatest LivePosition
 		for _, member := range s.members {
 			coverage := member.tradeCoverage
@@ -655,7 +753,17 @@ func (e *Engine) ObserveTQ() TQView {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	s := &e.state.tq
-	result := TQView{Desired: append([]string(nil), s.desired...), Bounds: s.globalBound, AggregateOnly: s.aggregateOnly}
+	if s.pressure.mode == "" {
+		s.pressure.mode = TQPressureNormal
+	}
+	pressureMode := s.pressure.mode
+	if s.aggregateOnly {
+		pressureMode = TQPressureAggregateOnly
+	}
+	shedding := s.aggregateOnly || pressureMode != TQPressureNormal
+	result := TQView{Desired: append([]string(nil), s.desired...), Bounds: s.globalBound, AggregateOnly: s.aggregateOnly,
+		Pressure: pressureMode, ShedTradesQuotes: shedding, PressureMisses: s.pressure.consecutiveMisses,
+		PressureTransitions: s.pressure.transitions, PressureFenced: s.pressure.fenced}
 	if s.pending != nil {
 		result.CommandPending, result.PendingAction, result.PendingSymbol = true, s.pending.action, s.pending.symbol
 	}
@@ -672,6 +780,11 @@ func (e *Engine) ObserveTQ() TQView {
 			row.Tape = tapeView(m, e.state.committedT)
 			row.Spread = spreadView(m, e.state.committedT)
 		}
+		if shedding {
+			row.Tape = TapeRateView{Status: TQPressureShed, Reason: "pressure", OneSecondStatus: TQPressureShed, FiveSecondStatus: TQPressureShed,
+				OneSecondReason: "pressure", FiveSecondReason: "pressure", LifecycleRecordsObserved: row.Tape.LifecycleRecordsObserved}
+			row.Spread = SpreadView{Status: TQPressureShed, Reason: "pressure"}
+		}
 		result.Rows = append(result.Rows, row)
 	}
 	knownPresent, unknown := 0, 0
@@ -685,7 +798,22 @@ func (e *Engine) ObserveTQ() TQView {
 	}
 	result.Accounting = TQAccountingView{Consumed: s.consumed, Applied: s.applied, Duplicate: s.duplicate, Rejected: s.rejected, Fenced: s.fenced, PressureShed: s.pressureShed, Integrity: s.integrity,
 		KnownPresent: knownPresent, KnownAbsent: len(s.members) - knownPresent - unknown, Unknown: unknown, RetainedTrades: s.tradeCount, RetainedQuotes: s.quoteCount, RetainedFingerprints: s.fingerprintCount}
+	pending := uint64(0)
+	if s.pending != nil {
+		pending = 1
+	}
+	result.Commands = TQCommandAccountingView{Issued: s.commandsIssued, Pending: pending, Acknowledged: s.commandsAcknowledged, Failed: s.commandsFailed,
+		Fenced: s.commandsFenced, ResultFenced: s.commandResultsFenced}
 	return result
+}
+
+func (s *tqState) desiredContains(symbol string) bool {
+	for _, desired := range s.desired {
+		if desired == symbol {
+			return true
+		}
+	}
+	return false
 }
 
 func tapeView(m *tqSymbolState, target *time.Time) TapeRateView {

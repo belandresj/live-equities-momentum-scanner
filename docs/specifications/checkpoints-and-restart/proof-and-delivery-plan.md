@@ -59,6 +59,15 @@ No secondary proof layer duplicates these claims. `P-C7-LIVE` is intentionally
 cross-component rather than a second install proof: it establishes C5/C6
 handoff and current-epoch reconciliation that `P-C7-INSTALL` cannot.
 
+The compact `P-C7-LIVE` fixture uses one hydration worker for its two semantic
+requests. Two repeated runs of the prior concurrent loopback fixture failed in
+the local TLS handshake before either request could distinguish checkpoint
+semantics; reducing only that proof's worker count removes the transport flake
+without changing `[T0,R)`, empty-evidence, correction, or equivalence claims.
+The selected 6,000-symbol objective proof retains and preflights its explicit
+multiworker workload, so this correction does not weaken the accepted capacity
+or timing evidence.
+
 ## 16. Sequential implementation-slice plan
 
 Three slices are required because in-memory canonical ownership, persisted

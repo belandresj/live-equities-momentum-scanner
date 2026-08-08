@@ -78,6 +78,104 @@ func TestC8RUNTIME01CheckpointPrePlanCannotReportReady(t *testing.T) {
 	}
 }
 
+func TestPC9PressureRuntimeCommandAndSampling(t *testing.T) {
+	binding := operationsBinding(t)
+	base := binding.SessionStart().Add(15 * time.Minute)
+	clockNanos := &atomic.Int64{}
+	clockNanos.Store(base.UnixNano())
+	config := DefaultConfig()
+	config.SampleCadence = 10 * time.Minute
+	run, err := New(context.Background(), binding, config, func() time.Time { return time.Unix(0, clockNanos.Load()).UTC() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := run.Shutdown(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	ackAt := base.Add(-config.EvaluationDelay)
+	applyControl(t, run.Engine(), binding, engine.ConnectionAttempt, 1, 1, engine.LivePosition{}, ackAt)
+	applyControl(t, run.Engine(), binding, engine.AggregateCommandWriteResult, 1, 2, engine.LivePosition{}, ackAt)
+	applyControl(t, run.Engine(), binding, engine.AggregateSubscriptionResult, 1, 2, engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 1}, ackAt)
+	completeHydration(t, run.Engine(), binding, engine.HydrationFreshBootstrap, 1, base)
+	readyBefore := run.Status()
+	if !readyBefore.BackendReady || !readyBefore.RankingCurrent {
+		t.Fatalf("pressure proof requires ready aggregate control: %+v", readyBefore)
+	}
+
+	sample := engine.TQPressureSample{QueueCurrentFrames: 50, QueueCapacityFrames: 100, TQLocalAccountingHealthy: true, Goroutines: 1}
+	run.pressureSampler = func(Metrics) engine.TQPressureSample { return sample }
+	cycle := func(at time.Time) {
+		clockNanos.Store(at.UnixNano())
+		admission, completion := run.Engine().AdmitTQPressureTick(context.Background())
+		if admission != engine.AdmissionAdmitted || completion == nil || (<-completion).Code != engine.DispositionTQApplied {
+			t.Fatal("pressure timer")
+		}
+		run.syncTQPressure(context.Background())
+	}
+	run.deliveryWindowMu.Lock()
+	run.deliveryOneSecondMaxNanos = uint64(125 * time.Millisecond)
+	run.deliveryWindowVersion++
+	run.deliveryWindowMu.Unlock()
+	cycle(base)
+	run.deliveryWindowMu.Lock()
+	windowMax := run.deliveryOneSecondMaxNanos
+	run.deliveryWindowMu.Unlock()
+	if windowMax != 0 || run.Engine().ObserveTQ().Pressure != engine.TQPressureNormal {
+		t.Fatalf("first runtime pressure sample = %+v max=%d", run.Engine().ObserveTQ(), windowMax)
+	}
+	cycle(base.Add(500 * time.Millisecond))
+	if view := run.Engine().ObserveTQ(); view.Pressure != engine.TQPressureDegraded || !view.ShedTradesQuotes {
+		t.Fatalf("runtime degradation = %+v", view)
+	}
+	sample.TQLocalAccountingHealthy = false
+	cycle(base.Add(time.Second))
+	if view := run.Engine().ObserveTQ(); view.Pressure != engine.TQPressureAggregateOnly || !view.AggregateOnly {
+		t.Fatalf("runtime aggregate-only = %+v", view)
+	}
+	readyAfter := run.Status()
+	if !readyAfter.BackendReady || !readyAfter.RankingCurrent || readyAfter.Watermark == nil || readyBefore.Watermark == nil || readyAfter.Watermark.Before(*readyBefore.Watermark) {
+		t.Fatalf("T/Q pressure changed aggregate readiness: before=%+v after=%+v", readyBefore, readyAfter)
+	}
+}
+
+func TestPC9PressureBroadAccountingRoutesGlobalIngressIntegrity(t *testing.T) {
+	binding := operationsBinding(t)
+	now := binding.SessionStart().Add(15 * time.Minute)
+	config := DefaultConfig()
+	config.SampleCadence = 10 * time.Minute
+	run, err := New(context.Background(), binding, config, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := run.Shutdown(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	applyControl(t, run.Engine(), binding, engine.ConnectionAttempt, 1, 1, engine.LivePosition{}, now)
+	run.metricsSnapshot = func() Metrics {
+		return Metrics{LiveQueue: massive.LiveQueueAccounting{FramesRead: 1, CapacityFrames: 100}, TQNormalization: massive.TQNormalizationAccounting{}}
+	}
+	admission, completion := run.Engine().AdmitTQPressureTick(context.Background())
+	if admission != engine.AdmissionAdmitted || completion == nil || (<-completion).Code != engine.DispositionTQApplied {
+		t.Fatal("pressure tick")
+	}
+	run.syncTQPressure(context.Background())
+	operational := run.Engine().ObserveOperational()
+	if operational.Lifecycle != "suppressed" || operational.LifecycleReason != "ingress_integrity" || operational.Suppression != engine.SuppressionSameBindingRecoveryAllowed {
+		t.Fatalf("broad accounting did not route globally: %+v", operational)
+	}
+	if view := run.Engine().ObserveTQ(); view.Pressure != engine.TQPressureNormal || view.AggregateOnly {
+		t.Fatalf("broad accounting was mislabeled T/Q-local: %+v", view)
+	}
+}
+
 // TestC8RUNTIME02HealthyLifetimeOutlivesRecoveryDeadline proves the bounded
 // establishment context is not the lifetime of a healthy live connection.
 func TestC8RUNTIME02HealthyLifetimeOutlivesRecoveryDeadline(t *testing.T) {
@@ -350,6 +448,7 @@ func TestPC9TAQOpaqueEngineCommandThroughC5Ack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	run.setLiveSources(attempt, adapter)
 	if result, err := massive.DeliverToEngine(context.Background(), run.Engine(), startDelivery); err != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
 		t.Fatalf("start = %+v/%v", result, err)
 	}
@@ -370,7 +469,7 @@ func TestPC9TAQOpaqueEngineCommandThroughC5Ack(t *testing.T) {
 		now = window.Add(time.Second)
 		input := engine.AggregateInput{SchemaVersion: engine.AggregateSchemaV1, BindingIdentity: binding.Identity(), Source: engine.AggregateSourceLive, Symbol: "AAA",
 			WindowStart: window, WindowEnd: window.Add(time.Second), Values: engine.AggregateValues{Open: 12, High: 12, Low: 12, Close: 12, Volume: 10_000, VWAP: 12, AverageTradeSize: 10, ATSProvenance: engine.ATSLiveProviderAverage},
-			DeliveryTime: now, Live: engine.LivePosition{ConnectionEpoch: attempt.Epoch(), FrameSequence: uint64(10 + index)}}
+			DeliveryTime: now, Live: engine.LivePosition{ConnectionEpoch: attempt.Epoch(), FrameSequence: 4, ArrayIndex: uint32(index + 1)}}
 		admission, completion := run.Engine().AdmitAggregate(context.Background(), input)
 		if admission != engine.AdmissionAdmitted || (<-completion).Code != engine.DispositionAggregateInserted {
 			t.Fatalf("aggregate %d admission=%s", index, admission)
@@ -380,7 +479,7 @@ func TestPC9TAQOpaqueEngineCommandThroughC5Ack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	coverageInput, err := engine.NewLiveCoverageFenceInput(coverageCommand, engine.LiveCoverageFenceComplete, 69, 2, now)
+	coverageInput, err := engine.NewLiveCoverageFenceInput(coverageCommand, engine.LiveCoverageFenceComplete, 4, 2, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,7 +526,7 @@ func TestPC9TAQOpaqueEngineCommandThroughC5Ack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	coverageInput, err = engine.NewLiveCoverageFenceInput(coverageCommand, engine.LiveCoverageFenceComplete, 69, 3, now)
+	coverageInput, err = engine.NewLiveCoverageFenceInput(coverageCommand, engine.LiveCoverageFenceComplete, 9, 3, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -459,13 +558,52 @@ func TestPC9TAQOpaqueEngineCommandThroughC5Ack(t *testing.T) {
 	if !view.Rows[0].TradeCoverage || !view.Rows[0].QuoteCoverage || view.AggregateOnly {
 		t.Fatalf("foreign-binding drop mutated coverage = %+v", view)
 	}
+	pressureSample := engine.TQPressureSample{QueueCurrentFrames: 50, QueueCapacityFrames: 100, TQLocalAccountingHealthy: true, Goroutines: 1}
+	run.pressureSampler = func(Metrics) engine.TQPressureSample { return pressureSample }
+	pressureTick := func(at time.Time) {
+		now = at
+		admission, completion := run.Engine().AdmitTQPressureTick(context.Background())
+		if admission != engine.AdmissionAdmitted || completion == nil || (<-completion).Code != engine.DispositionTQApplied {
+			t.Fatal("integrated pressure tick")
+		}
+		run.syncTQPressure(context.Background())
+		run.syncTQCommand(context.Background())
+	}
+	pressureStart := now
+	pressureTick(pressureStart)
+	pressureTick(pressureStart.Add(500 * time.Millisecond))
+	view = run.Engine().ObserveTQ()
+	if view.Pressure != engine.TQPressureDegraded || !view.ShedTradesQuotes || view.Rows[0].TradeCoverage || view.Rows[0].QuoteCoverage {
+		t.Fatalf("runtime degraded containment = %+v", view)
+	}
 	result, ok, err = attempt.DeliverNextToEngine(context.Background(), run.Engine())
 	if err != nil || !ok || result.TQDisposition.Code != engine.DispositionTQRejected {
-		t.Fatalf("normalization drop = %+v/%v/%v", result, ok, err)
+		t.Fatalf("early T/Q shed = %+v/%v/%v", result, ok, err)
+	}
+	result, ok, err = attempt.DeliverNextToEngine(context.Background(), run.Engine())
+	if err != nil || !ok || result.AggregateDisposition.Code != engine.DispositionAggregateInserted {
+		t.Fatalf("aggregate hidden by mixed-frame shed = %+v/%v/%v", result, ok, err)
+	}
+	pressureSample.TQLocalAccountingHealthy = false
+	pressureTick(pressureStart.Add(time.Second))
+	time.Sleep(10 * time.Millisecond)
+	if pendingView, accounting := run.Engine().ObserveTQ(), adapter.Accounting(); !pendingView.CommandPending || pendingView.PendingAction != engine.TQUnsubscribe || accounting.CommandsPendingAck != 1 {
+		t.Fatalf("unsubscribe was not pending at both boundaries: view=%+v adapter=%+v", pendingView, accounting)
+	}
+	result, ok, err = attempt.DeliverNextToEngine(context.Background(), run.Engine())
+	if err != nil || !ok || result.TQDisposition.Code != engine.DispositionTQApplied {
+		t.Fatalf("unsubscribe control after shedding = %+v/%v/%v", result, ok, err)
 	}
 	view = run.Engine().ObserveTQ()
-	if view.Rows[0].TradeCoverage || view.Rows[0].QuoteCoverage || !view.AggregateOnly || !view.CommandPending || view.PendingAction != engine.TQUnsubscribe {
-		t.Fatalf("drop left false-current coverage = %+v", view)
+	if view.Pressure != engine.TQPressureAggregateOnly || !view.AggregateOnly || view.Accounting.KnownPresent != 0 || view.Accounting.Unknown != 0 || view.CommandPending ||
+		view.Commands.Issued != view.Commands.Pending+view.Commands.Acknowledged+view.Commands.Failed+view.Commands.Fenced {
+		t.Fatalf("aggregate-only zero/accounting = %+v", view)
+	}
+	if metrics := run.Metrics(); !metrics.TQNormalization.Reconciles() || metrics.TQNormalization.Rejected == 0 || !metrics.Adapter.Reconciles() || !metrics.LiveQueue.Reconciles() {
+		t.Fatalf("mixed-frame/runtime accounting = %+v", metrics)
+	}
+	if status := run.Status(); !status.BackendReady || !status.RankingCurrent {
+		t.Fatalf("T/Q pressure changed aggregate readiness: %+v", status)
 	}
 	_ = attempt.Close(massive.CloseEpochCommand{BindingIdentity: binding.Identity(), ConnectionEpoch: attempt.Epoch(), CommandToken: command.CommandToken() + 100, Cause: massive.CloseControlledStop})
 	shutdown, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -502,7 +640,12 @@ func tqAckWebSocketServer(t *testing.T, eventAt time.Time) *httptest.Server {
 		_ = write(fmt.Sprintf(`[{"ev":"T","sym":"AAA","x":4,"i":"nonvolume","p":12,"s":10,"t":%d,"c":[15]}]`, eventAt.UnixMilli()))
 		_ = write(fmt.Sprintf(`[{"ev":"T","sym":"AAA","x":4,"i":"unreviewed","p":12,"s":10,"t":%d,"c":[57]}]`, eventAt.UnixMilli()))
 		_ = write(fmt.Sprintf(`[{"ev":"Q","sym":"AAA","t":%d,"bp":12,"ap":12.02,"c":[1],"i":[2]}]`, eventAt.UnixMilli()))
-		_ = write(fmt.Sprintf(`[{"ev":"Q","t":%d,"bp":12,"ap":12.02}]`, eventAt.UnixMilli()))
+		window := eventAt.Truncate(time.Second)
+		_ = write(fmt.Sprintf(`[{"ev":"Q","t":%d,"bp":12,"ap":12.02},{"ev":"A","sym":"AAA","s":%d,"e":%d,"o":12,"h":12,"l":12,"c":12,"v":100,"vw":12,"z":1}]`,
+			eventAt.UnixMilli(), window.UnixMilli(), window.Add(time.Second).UnixMilli()))
+		if _, _, err := connection.Read(ctx); err == nil {
+			_ = write(`[{"ev":"status","status":"success"},{"ev":"status","status":"success"}]`)
+		}
 		<-ctx.Done()
 	}))
 }

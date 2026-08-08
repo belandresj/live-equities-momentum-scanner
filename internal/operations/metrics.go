@@ -13,24 +13,27 @@ import (
 // engine-owned monotonic counter, a bounded component accounting family, or a
 // scalar runtime observation; it contains no symbol/provider labels.
 type Metrics struct {
-	SampledAt           time.Time
-	Engine              engine.OperationalView
-	Adapter             massive.AdapterAccounting
-	LiveQueue           massive.LiveQueueAccounting
-	Checkpoint          checkpoint.WriterAccounting
-	QueueCurrentFrames  uint64
-	QueueHighFrames     uint64
-	QueueCurrentBytes   int
-	QueueHighBytes      int
-	Deliveries          uint64
-	ConsumerDeferred    uint64
-	MeanProcessingDelay time.Duration
-	MaxProcessingDelay  time.Duration
-	WatermarkLag        time.Duration
-	HeapAllocBytes      uint64
-	HeapInUseBytes      uint64
-	Goroutines          int
-	AccountingValid     bool
+	SampledAt                   time.Time
+	Engine                      engine.OperationalView
+	Adapter                     massive.AdapterAccounting
+	LiveQueue                   massive.LiveQueueAccounting
+	TQNormalization             massive.TQNormalizationAccounting
+	Checkpoint                  checkpoint.WriterAccounting
+	QueueCurrentFrames          uint64
+	QueueHighFrames             uint64
+	QueueCurrentBytes           int
+	QueueHighBytes              int
+	Deliveries                  uint64
+	ConsumerDeferred            uint64
+	MeanProcessingDelay         time.Duration
+	MaxProcessingDelay          time.Duration
+	MaxProcessingDelayOneSecond time.Duration
+	WatermarkLag                time.Duration
+	HeapAllocBytes              uint64
+	HeapInUseBytes              uint64
+	Goroutines                  int
+	AccountingValid             bool
+	deliveryWindowVersion       uint64
 }
 
 func (r *Runtime) observeDelivery(started time.Time, result massive.EngineDeliveryResult) {
@@ -43,6 +46,12 @@ func (r *Runtime) observeDelivery(started time.Time, result massive.EngineDelive
 	r.deliveryTotalNanos.Add(nanos)
 	for old := r.deliveryMaxNanos.Load(); nanos > old && !r.deliveryMaxNanos.CompareAndSwap(old, nanos); old = r.deliveryMaxNanos.Load() {
 	}
+	r.deliveryWindowMu.Lock()
+	if nanos > r.deliveryOneSecondMaxNanos {
+		r.deliveryOneSecondMaxNanos = nanos
+	}
+	r.deliveryWindowVersion++
+	r.deliveryWindowMu.Unlock()
 	if result.ConsumerDeferred {
 		r.consumerDeferred.Add(1)
 	}
@@ -62,6 +71,7 @@ func (r *Runtime) Metrics() Metrics {
 	r.metricsMu.Lock()
 	if r.attempt != nil {
 		result.LiveQueue = r.attempt.QueueAccounting()
+		result.TQNormalization = r.attempt.TQNormalizationAccounting()
 	}
 	if r.adapter != nil {
 		result.Adapter = r.adapter.Accounting()
@@ -85,12 +95,16 @@ func (r *Runtime) Metrics() Metrics {
 		result.MeanProcessingDelay = time.Duration(r.deliveryTotalNanos.Load() / result.Deliveries)
 	}
 	result.MaxProcessingDelay = time.Duration(r.deliveryMaxNanos.Load())
+	r.deliveryWindowMu.Lock()
+	result.MaxProcessingDelayOneSecond = time.Duration(r.deliveryOneSecondMaxNanos)
+	result.deliveryWindowVersion = r.deliveryWindowVersion
+	r.deliveryWindowMu.Unlock()
 	status := deriveStatus(r.processLive.Load() && !r.joined.Load(), r.binding, r.config, result.SampledAt, result.Engine)
 	result.WatermarkLag = status.WatermarkLag
 	var memory runtime.MemStats
 	runtime.ReadMemStats(&memory)
 	result.HeapAllocBytes, result.HeapInUseBytes = memory.HeapAlloc, memory.HeapInuse
 	result.Goroutines = runtime.NumGoroutine()
-	result.AccountingValid = operationalAccountingValid(result.Engine) && result.LiveQueue.Reconciles() && result.Adapter.Reconciles() && (r.writer == nil || result.Checkpoint.Reconciles())
+	result.AccountingValid = operationalAccountingValid(result.Engine) && result.LiveQueue.Reconciles() && result.Adapter.Reconciles() && result.TQNormalization.Reconciles() && (r.writer == nil || result.Checkpoint.Reconciles())
 	return result
 }

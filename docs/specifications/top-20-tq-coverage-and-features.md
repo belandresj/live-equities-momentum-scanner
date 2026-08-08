@@ -1,7 +1,7 @@
 # Top-20 T/Q coverage and features
 
-**Status:** Detailed V1 contract accepted as the current executable plan; S1
-accepted and S2 implementation active
+**Status:** Component 9 finally accepted for the private/local V1 release
+candidate; both slices and the final review are complete
 
 **Boundary approval:** Approved 2026-08-07 by the owner through the Version 1
 Release Program revision
@@ -36,8 +36,8 @@ Sections 8-19 are completed here after just-in-time V2 reconnaissance.
 | Boundary/reconnaissance plan | `accepted` | Direct owner V1 program revision; C8 finally accepted; recorded V2 scope inspected | Complete |
 | Completed contract | `accepted_current_plan` | Focused read-only review clean after corrections for ambiguous membership, accounting failure domains, bounds, out-of-order quote time, pressure authority/expiry, and the distinct acknowledged Q time/causal boundaries | Complete; remains revisable through the correction loop |
 | `C9-S1` membership/coverage/features | `accepted` | `P-C9-TAQ`; ordinary and affected race gates; focused read-only review clean | Complete |
-| `C9-S2` pressure/shedding/restoration | `in_progress` | `P-C9-PRESSURE` | Implement and verify sequentially |
-| Final component review | `pending` | One final read-only review after both proofs and proportionate verification | Pending |
+| `C9-S2` pressure/shedding/restoration | `accepted` | `P-C9-PRESSURE`; ordinary and affected race gates; focused corrections and re-review clean | Complete |
+| Final component review | `accepted` | One final read-only review plus focused re-reviews found no remaining P1/P2 | Complete; reopen only through the V1 correction loop |
 
 ## 1-4. Outcome, scope, ownership, and settled boundary
 
@@ -333,7 +333,11 @@ pressure_shed + integrity`. Commands reconcile as `issued = pending +
 acknowledged + failed + fenced`; provider membership partitions into known
 present, known absent, and ambiguous/unknown for every affected desired or
 cleanup symbol, with known present plus unknown at most 20. Desired membership
-equals the current qualified rows and at most 20. Retained raw,
+equals the current qualified rows and at most 20. The mutable membership map is
+the union of at most 20 desired symbols and at most 20 distinct present/unknown
+cleanup liabilities; a known-absent, non-desired, retention-empty member is
+deleted immediately, so rank churn cannot retain historical universe entries.
+Retained raw,
 identity-fingerprint, lifecycle, and quote totals equal the sum of their
 per-symbol counts and never exceed their separate stated bounds. Pressure
 transitions and intentional drops are monotonic counters. Aggregate
@@ -454,6 +458,53 @@ the engine lock, FIFO admission, opaque one-shot command, and terminal result
 branches enforce the reviewed interleavings. Pressure sampling, early adapter
 shedding, timed degradation/aggregate-only transitions, and ranked restoration
 remain solely in S2; its contracted boundary remains valid.
+
+### C9-S2 and final acceptance record
+
+The engine now owns one fixed one-second pressure-sampling authority with
+opaque, monotonically sequenced commands, a two-second terminal deadline, and
+bounded missing-sample progress. The first missed sample enters
+`taq_degraded`; a second enters `aggregate_only`. Timely unhealthy samples use
+the contracted dwell thresholds, while recovery requires a continuous healthy
+sample sequence for 30 seconds and at least 15 seconds since degradation. A
+sampling blackout cannot manufacture recovery. Degraded mode closes displayed
+T/Q measurements and enables C5 early T/Q shedding without dropping later
+aggregate/control elements from the same frame. Aggregate-only additionally
+removes provider membership; restoration follows current rank order with fresh
+coverage/warming and at most one successful addition per five seconds.
+
+`P-C9-PRESSURE` passed through the engine policy trace and the concrete
+Runtime/C5 loopback composition. It proves mixed-frame aggregate/readiness
+survival under T/Q shedding, deterministic low-rank removal to known zero,
+unknown-membership preservation, continuous-health recovery, ranked warming,
+missing and late result containment, T/Q-local accounting failure, and broad
+queue/adapter ambiguity routing through the existing global ingress-integrity
+path. Queue occupancy includes every slot-consuming frame/marker, raw oldest
+age remains separately measured, quiescent membership is pruned, and fact,
+command, pressure, retained-state, and provider-partition accounting identities
+remain exact. Global retained-state containment is permanent; every
+aggregate-only cause enables early shedding.
+
+Corrections rejected the dangerous counterexamples where a 30-second sampling
+blackout recovered on one healthy result, a symbol-less/global bound left C5
+shedding disabled, marker saturation understated occupancy, rank churn grew an
+unbounded member map, or a live-epoch reset regressed operator counters and
+reused pressure sequence numbers. The final epoch proof seeds nonzero
+identity-consistent counters, replaces the connection epoch, retires the old
+pending T/Q command into its fenced terminal, strictly advances pressure
+sequence, and fences both old opaque result types without recreating
+membership. Process/binding-lifetime counters and pressure state survive while
+epoch-local membership and pending authority do not.
+
+Final verification passed `go test -short -timeout 2m ./... -count=1`,
+`go test -race -short -timeout 5m ./internal/engine ./internal/massive
+./internal/operations -count=1`, and `git diff --check`. The mandatory final
+read-only review and focused re-reviews found no remaining P1/P2. The proof is
+deterministic loopback/engine evidence rather than a scheduler soak or measured
+host saturation frontier; the conservative numeric gates remain provisional
+safety settings, and no provider credential, market-hours, capacity, or SLA
+claim is made. Component 10 may rely on the accepted C9 view and accounting
+boundary without making ranking depend on T/Q health.
 
 Reopen S1 if a normalized shape cannot carry the stated identity/quality facts,
 paired acknowledgement cannot prove per-symbol/channel coverage, the weighted

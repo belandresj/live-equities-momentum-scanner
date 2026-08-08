@@ -711,6 +711,27 @@ func TestPC5BoundRawFIFOAccountingAndDrain(t *testing.T) {
 			t.Fatalf("mixed shed preservation = %#v %+v", results, counts)
 		}
 	})
+
+	t.Run("pressure sample exposes current capacity and oldest raw age", func(t *testing.T) {
+		queue := newLiveFrameQueue(LiveQueueConfig{FrameSlots: 4, MaxFrameBytes: 32, TotalFrameBytes: 128})
+		at := time.Date(2026, 8, 8, 15, 0, 0, 0, time.UTC)
+		queue.now = func() time.Time { return at.Add(300 * time.Millisecond) }
+		if _, reason := queue.tryEnqueue(1, socketMessageText, at, []byte("[]")); reason != FrameAdmitted {
+			t.Fatal(reason)
+		}
+		view := queue.snapshot()
+		if view.CapacityFrames != 4 || view.CapacityBytes != 128 || view.OldestFrameAge != 300*time.Millisecond {
+			t.Fatalf("queued pressure view = %+v", view)
+		}
+		frame, ok := queue.pop(context.Background())
+		if !ok || queue.snapshot().OldestFrameAge != 300*time.Millisecond {
+			t.Fatal("classifying frame disappeared from oldest-age sample")
+		}
+		queue.complete(frame, false)
+		if view = queue.snapshot(); view.OldestFrameAge != 0 || !view.Reconciles() {
+			t.Fatalf("completed pressure view = %+v", view)
+		}
+	})
 }
 
 // TestC6FENCE01RawFrameMarkerEngineFIFOLinearization is P-C6-FENCE. It proves

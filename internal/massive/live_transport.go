@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -192,6 +193,14 @@ type AdapterAccounting struct {
 	CommandsCanceledOrFenced                                  uint64
 }
 
+type TQNormalizationAccounting struct {
+	Classified, Normalized, Rejected uint64
+}
+
+func (a TQNormalizationAccounting) Reconciles() bool {
+	return a.Classified == a.Normalized+a.Rejected
+}
+
 func (a AdapterAccounting) Reconciles() bool {
 	return a.ConnectionAttempts == a.AttemptsActive+a.AttemptsConnected+a.AttemptsFailed+a.AttemptsCanceled &&
 		a.CommandsStarted == a.CommandsPendingWrite+a.CommandsPendingAck+a.CommandsAcknowledged+a.CommandsFailed+a.CommandsAmbiguous+a.CommandsCanceledOrFenced
@@ -371,12 +380,34 @@ type LiveAttempt struct {
 	handshakeDone                 chan struct{}
 	handshakeDeliveries           []AdapterDelivery
 	handshakeErr                  error
+	shedTQ                        atomic.Bool
+	tqAccountingMu                sync.Mutex
+	tqAccounting                  TQNormalizationAccounting
 }
 
 func (*LiveAttempt) String() string   { return "massive.LiveAttempt{credential:redacted}" }
 func (*LiveAttempt) GoString() string { return "massive.LiveAttempt{credential:redacted}" }
 
 func (a *LiveAttempt) Epoch() uint64 { return a.epoch }
+
+func (a *LiveAttempt) SetTQShedding(enabled bool) { a.shedTQ.Store(enabled) }
+
+func (a *LiveAttempt) TQNormalizationAccounting() TQNormalizationAccounting {
+	a.tqAccountingMu.Lock()
+	defer a.tqAccountingMu.Unlock()
+	return a.tqAccounting
+}
+
+func (a *LiveAttempt) accountTQ(normalized bool) {
+	a.tqAccountingMu.Lock()
+	a.tqAccounting.Classified++
+	if normalized {
+		a.tqAccounting.Normalized++
+	} else {
+		a.tqAccounting.Rejected++
+	}
+	a.tqAccountingMu.Unlock()
+}
 
 func (a *LiveAttempt) runHandshake() {
 	deliveries, err := a.performHandshake()
@@ -889,7 +920,7 @@ func (a *LiveAttempt) next(ctx context.Context) (AdapterDelivery, bool) {
 			continue
 		}
 		a.currentFrame = &frame
-		a.currentCursor = newLiveFrameCursor(LiveFrame{Binding: a.binding, ConnectionEpoch: a.epoch, FrameSequence: frame.sequence, ReceivedAt: frame.receivedAt, Data: frame.data}, statusContext, LiveNormalizationOptions{})
+		a.currentCursor = newLiveFrameCursor(LiveFrame{Binding: a.binding, ConnectionEpoch: a.epoch, FrameSequence: frame.sequence, ReceivedAt: frame.receivedAt, Data: frame.data}, statusContext, LiveNormalizationOptions{ShedTradesQuotes: a.shedTQ.Load()})
 		a.currentFrameCompleted = false
 	}
 }
@@ -922,10 +953,15 @@ func (a *LiveAttempt) mapResult(result LiveResult, frame queuedLiveFrame) (Adapt
 	case LiveResultAggregate:
 		return AdapterDelivery{Kind: DeliveryAggregate, Position: result.Position, Aggregate: result.Aggregate}, true
 	case LiveResultTrade:
+		a.accountTQ(true)
 		return AdapterDelivery{Kind: DeliveryTrade, Position: result.Position, Trade: result.Trade}, true
 	case LiveResultQuote:
+		a.accountTQ(true)
 		return AdapterDelivery{Kind: DeliveryQuote, Position: result.Position, Quote: result.Quote}, true
 	case LiveResultRejected:
+		if result.Rejection.Family == LiveFamilyTrade || result.Rejection.Family == LiveFamilyQuote {
+			a.accountTQ(false)
+		}
 		return AdapterDelivery{Kind: DeliveryNormalizationDrop, Position: result.Position, Rejection: result.Rejection}, true
 	case LiveResultAmbiguous:
 		delivery := controlDelivery(a.binding.Identity(), a.epoch, engine.IngressIntegrityFailure, 0, engine.ControlAmbiguous, result.Position, frame.receivedAt)

@@ -162,6 +162,11 @@ func TestPC9TAQ(t *testing.T) {
 	if got := admitTQResultForTest(t, e, removeResult); got.Code != DispositionTQApplied {
 		t.Fatalf("remove ack = %+v", got)
 	}
+	e.mu.Lock()
+	if len(e.state.tq.members) != 0 {
+		t.Fatalf("quiescent non-desired membership retained: %+v", e.state.tq.members)
+	}
+	e.mu.Unlock()
 
 	e.mu.Lock()
 	e.state.aggregateEvaluator.current.mode = rankingQualifiedCurrent
@@ -214,7 +219,7 @@ func TestPC9TAQScaledGlobalBoundContainment(t *testing.T) {
 	}
 	e.reconcileTQLocked(now)
 	view := e.ObserveTQ()
-	if !view.Bounds || !view.AggregateOnly || !view.CommandPending || view.PendingAction != TQUnsubscribe ||
+	if !view.Bounds || !view.AggregateOnly || view.Pressure != TQPressureAggregateOnly || !view.ShedTradesQuotes || !view.CommandPending || view.PendingAction != TQUnsubscribe ||
 		e.state.tq.members["AAA"].tradeCoverage.active || e.state.tq.members["BBB"].quoteCoverage.active {
 		t.Fatalf("global containment = %+v state=%+v", view, e.state.tq)
 	}

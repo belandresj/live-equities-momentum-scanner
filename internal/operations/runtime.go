@@ -34,29 +34,34 @@ func (c Config) valid() bool {
 }
 
 type Runtime struct {
-	engine             *engine.Engine
-	binding            reference.Binding
-	config             Config
-	clock              func() time.Time
-	processLive        atomic.Bool
-	joined             atomic.Bool
-	writer             *checkpoint.Writer
-	metricsMu          sync.Mutex
-	liveMu             sync.Mutex
-	shutdownMu         sync.Mutex
-	attempt            *massive.LiveAttempt
-	adapter            *massive.LiveAdapter
-	liveCancel         context.CancelFunc
-	liveDone           chan struct{}
-	liveRunning        bool
-	queueHighFrames    uint64
-	queueHighBytes     int
-	deliveryCount      atomic.Uint64
-	deliveryTotalNanos atomic.Uint64
-	deliveryMaxNanos   atomic.Uint64
-	consumerDeferred   atomic.Uint64
-	timerCancel        context.CancelFunc
-	timerDone          chan struct{}
+	engine                    *engine.Engine
+	binding                   reference.Binding
+	config                    Config
+	clock                     func() time.Time
+	processLive               atomic.Bool
+	joined                    atomic.Bool
+	writer                    *checkpoint.Writer
+	metricsMu                 sync.Mutex
+	liveMu                    sync.Mutex
+	shutdownMu                sync.Mutex
+	attempt                   *massive.LiveAttempt
+	adapter                   *massive.LiveAdapter
+	liveCancel                context.CancelFunc
+	liveDone                  chan struct{}
+	liveRunning               bool
+	queueHighFrames           uint64
+	queueHighBytes            int
+	deliveryCount             atomic.Uint64
+	deliveryTotalNanos        atomic.Uint64
+	deliveryMaxNanos          atomic.Uint64
+	deliveryWindowMu          sync.Mutex
+	deliveryOneSecondMaxNanos uint64
+	deliveryWindowVersion     uint64
+	consumerDeferred          atomic.Uint64
+	pressureSampler           func(Metrics) engine.TQPressureSample
+	metricsSnapshot           func() Metrics
+	timerCancel               context.CancelFunc
+	timerDone                 chan struct{}
 }
 
 func New(ctx context.Context, binding reference.Binding, config Config, clock func() time.Time) (*Runtime, error) {
@@ -71,7 +76,8 @@ func NewWithCheckpoint(ctx context.Context, binding reference.Binding, config Co
 	if err != nil {
 		return nil, err
 	}
-	runtime := &Runtime{engine: owner, binding: binding, config: config, clock: clock, writer: writer}
+	runtime := &Runtime{engine: owner, binding: binding, config: config, clock: clock, writer: writer, pressureSampler: defaultTQPressureSample}
+	runtime.metricsSnapshot = runtime.Metrics
 	admission, completion := owner.AdmitBinding(ctx, engine.BindingInstall{SchemaVersion: engine.BindingInstallSchemaV1, BindingIdentity: binding.Identity(), Binding: binding})
 	if admission != engine.AdmissionAdmitted || completion == nil {
 		owner.Close()
@@ -99,13 +105,15 @@ func NewWithCheckpoint(ctx context.Context, binding reference.Binding, config Co
 
 func (r *Runtime) runTimer(ctx context.Context) {
 	defer close(r.timerDone)
-	ticker := time.NewTicker(r.config.SampleCadence)
-	defer ticker.Stop()
+	evaluationTicker := time.NewTicker(r.config.SampleCadence)
+	pressureTicker := time.NewTicker(time.Second)
+	defer evaluationTicker.Stop()
+	defer pressureTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-evaluationTicker.C:
 			r.captureLiveCoverage(ctx)
 			admission, completion := r.engine.AdmitTimer(ctx)
 			if admission != engine.AdmissionAdmitted || completion == nil {
@@ -120,7 +128,80 @@ func (r *Runtime) runTimer(ctx context.Context) {
 			case <-completion:
 				r.syncTQCommand(ctx)
 			}
+		case <-pressureTicker.C:
+			admission, completion := r.engine.AdmitTQPressureTick(ctx)
+			if admission != engine.AdmissionAdmitted || completion == nil {
+				if ctx.Err() != nil {
+					return
+				}
+				continue
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-completion:
+				r.syncTQPressure(ctx)
+				r.syncTQCommand(ctx)
+			}
 		}
+	}
+}
+
+func (r *Runtime) syncTQPressure(ctx context.Context) {
+	command, err := r.engine.IssueTQPressureCommand()
+	if err != nil {
+		return
+	}
+	metrics := r.metricsSnapshot()
+	if !metrics.LiveQueue.Reconciles() || !metrics.Adapter.Reconciles() {
+		admission, completion := r.engine.AdmitOperationalIngressIntegrity(ctx)
+		if admission == engine.AdmissionAdmitted && completion != nil {
+			select {
+			case <-ctx.Done():
+			case <-completion:
+			}
+		}
+		return
+	}
+	sample := r.pressureSampler(metrics)
+	input, err := engine.NewTQPressureResultInput(command, sample)
+	if err != nil {
+		return
+	}
+	admission, completion := r.engine.AdmitTQPressureResult(ctx, input)
+	if admission != engine.AdmissionAdmitted || completion == nil {
+		return
+	}
+	select {
+	case <-ctx.Done():
+		return
+	case disposition := <-completion:
+		if disposition.Code == engine.DispositionTQApplied {
+			r.deliveryWindowMu.Lock()
+			if r.deliveryWindowVersion == metrics.deliveryWindowVersion {
+				r.deliveryOneSecondMaxNanos = 0
+			}
+			r.deliveryWindowMu.Unlock()
+		}
+	}
+	r.metricsMu.Lock()
+	attempt := r.attempt
+	r.metricsMu.Unlock()
+	if attempt != nil {
+		attempt.SetTQShedding(r.engine.ObserveTQ().ShedTradesQuotes)
+	}
+}
+
+func defaultTQPressureSample(metrics Metrics) engine.TQPressureSample {
+	capacity := uint64(0)
+	if metrics.LiveQueue.CapacityFrames > 0 {
+		capacity = uint64(metrics.LiveQueue.CapacityFrames)
+	}
+	return engine.TQPressureSample{
+		QueueCurrentFrames:  metrics.QueueCurrentFrames,
+		QueueCapacityFrames: capacity, OldestFrameAge: metrics.LiveQueue.OldestFrameAge,
+		MaxDeliveryDelayOneSec: metrics.MaxProcessingDelayOneSecond, HeapAllocBytes: metrics.HeapAllocBytes,
+		Goroutines: metrics.Goroutines, TQLocalAccountingHealthy: metrics.TQNormalization.Reconciles(),
 	}
 }
 

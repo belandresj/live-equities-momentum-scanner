@@ -230,6 +230,9 @@ const (
 	inputTrade
 	inputQuote
 	inputTQDrop
+	inputTQPressureResult
+	inputTQPressureTick
+	inputOperationalIngressIntegrity
 )
 
 type queueNode struct {
@@ -271,6 +274,7 @@ type queueNode struct {
 	trade                  frozenTradeInput
 	quote                  frozenQuoteInput
 	tqDrop                 frozenTQDropInput
+	tqPressureResult       frozenTQPressureResultInput
 }
 
 type engineState struct {
@@ -390,6 +394,7 @@ type Engine struct {
 	evaluationFault     bool
 	checkpointSubmitter *checkpoint.Writer
 	tqLimits            tqRetentionLimits
+	tqPressurePolicy    tqPressurePolicy
 }
 
 // New constructs an unbound engine shell and starts its sole consumer.
@@ -404,6 +409,7 @@ func New(config Config) (*Engine, error) {
 		nextSequence: 1, state: &engineState{lifecycle: lifecycleInitializing, clockMonotonic: true},
 		checkpointSubmitter: config.CheckpointSubmitter,
 		tqLimits:            defaultTQRetentionLimits(),
+		tqPressurePolicy:    defaultTQPressurePolicy(),
 	}
 	e.buildCandidate = buildInstalledBinding
 	e.installInitialPublication()
@@ -830,6 +836,32 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 	} else if node.kind == inputTQDrop {
 		e.mu.Lock()
 		code, reason = e.applyTQDropLocked(node)
+		e.mu.Unlock()
+	} else if node.kind == inputTQPressureResult {
+		e.mu.Lock()
+		code, reason = e.applyTQPressureResultLocked(node)
+		e.mu.Unlock()
+	} else if node.kind == inputTQPressureTick {
+		e.mu.Lock()
+		e.advanceTQPressureTimerLocked(node.admissionTime)
+		code, reason = DispositionTQApplied, ReasonNone
+		e.mu.Unlock()
+	} else if node.kind == inputOperationalIngressIntegrity {
+		e.mu.Lock()
+		if e.mode != RunModeLive || e.state.binding == nil || !e.state.liveEpochActive {
+			code, reason = DispositionTQFenced, ReasonHistoricalContext
+		} else {
+			if e.state.hydration.generation.active && !e.cancelHydrationGenerationLocked(true) {
+				code, reason = DispositionAccountingIntegrity, ReasonAccounting
+			} else {
+				e.state.hydration.generation.active = false
+				e.state.hydration.fenceReconciled = false
+				e.state.liveEpochActive = false
+				e.clearAggregateAcknowledgementLocked()
+				e.enterSuppressionLocked(lifecycleEventIngressIntegrity, node, lifecycleReasonIngressIntegrity)
+				code, reason = DispositionIngressIntegrity, ReasonIngressIntegrity
+			}
+		}
 		e.mu.Unlock()
 	} else if node.kind == inputHydrationPlan {
 		e.mu.Lock()

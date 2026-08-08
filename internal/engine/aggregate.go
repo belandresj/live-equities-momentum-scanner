@@ -101,6 +101,7 @@ const (
 	ReasonClockRegression              DispositionReason = "clock_regression"
 	ReasonPublication                  DispositionReason = "publication"
 	ReasonAccounting                   DispositionReason = "accounting"
+	ReasonPressure                     DispositionReason = "pressure"
 	ReasonTerminal                     DispositionReason = "terminal"
 	ReasonReplayEvidence               DispositionReason = "replay_evidence"
 )

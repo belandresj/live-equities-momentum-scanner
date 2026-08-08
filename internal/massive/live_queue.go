@@ -38,6 +38,8 @@ type LiveQueueAccounting struct {
 	TerminalMarkersQueued, TerminalMarkersClassifying, TerminalMarkersDispositioned uint64
 	IngressFencesStarted                                                            uint64
 	IngressFencesQueued, IngressFencesClassifying, IngressFencesDispositioned       uint64
+	CapacityFrames, CapacityBytes                                                   int
+	OldestFrameAge                                                                  time.Duration
 }
 
 func (a LiveQueueAccounting) Reconciles() bool {
@@ -84,6 +86,7 @@ type liveFrameQueue struct {
 	bytes           int
 	next            uint64
 	lastReceipt     time.Time
+	classifyingAt   time.Time
 	greatestRaw     uint64
 	nextFenceMarker uint64
 	now             func() time.Time
@@ -347,6 +350,7 @@ func (q *liveFrameQueue) pop(ctx context.Context) (queuedLiveFrame, bool) {
 				q.accounting.FramesQueued--
 				q.accounting.FramesClassifying++
 				q.accounting.QueuedBytes = q.bytes
+				q.classifyingAt = frame.receivedAt
 			}
 			q.notifyLocked()
 			q.mu.Unlock()
@@ -376,6 +380,7 @@ func (q *liveFrameQueue) complete(frame queuedLiveFrame, fenced bool) {
 		q.accounting.IngressFencesDispositioned++
 	} else {
 		q.accounting.FramesClassifying--
+		q.classifyingAt = time.Time{}
 		if fenced {
 			q.accounting.FramesFenced++
 		} else {
@@ -389,5 +394,19 @@ func (q *liveFrameQueue) complete(frame queuedLiveFrame, fenced bool) {
 func (q *liveFrameQueue) snapshot() LiveQueueAccounting {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.accounting
+	result := q.accounting
+	result.CapacityFrames, result.CapacityBytes = q.config.FrameSlots, q.config.TotalFrameBytes
+	oldest := q.classifyingAt
+	for _, frame := range q.frames {
+		if frame.kind == queuedLiveRaw && (oldest.IsZero() || frame.receivedAt.Before(oldest)) {
+			oldest = frame.receivedAt
+		}
+	}
+	if !oldest.IsZero() {
+		result.OldestFrameAge = q.now().Sub(oldest)
+		if result.OldestFrameAge < 0 {
+			result.OldestFrameAge = 0
+		}
+	}
+	return result
 }
