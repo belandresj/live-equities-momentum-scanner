@@ -80,6 +80,10 @@ const (
 	DispositionConnectionControlFenced   DispositionCode = "connection_control_fenced"
 	DispositionIngressIntegrity          DispositionCode = "ingress_integrity_failure"
 	DispositionRecoveryExhausted         DispositionCode = "recovery_exhausted"
+	DispositionTQApplied                 DispositionCode = "tq_applied"
+	DispositionTQDuplicate               DispositionCode = "tq_exact_duplicate"
+	DispositionTQRejected                DispositionCode = "tq_rejected"
+	DispositionTQFenced                  DispositionCode = "tq_fenced"
 )
 
 // Disposition is an immutable completion value for one admitted input.
@@ -222,6 +226,10 @@ const (
 	inputCheckpointTerminal
 	inputLiveCoverageFence
 	inputRecoveryExhaustion
+	inputTQCommandResult
+	inputTrade
+	inputQuote
+	inputTQDrop
 )
 
 type queueNode struct {
@@ -259,6 +267,10 @@ type queueNode struct {
 	liveCoverageCompletion chan LiveCoverageFenceDisposition
 	signalLiveCoverage     bool
 	recoveryExhaustion     frozenRecoveryExhaustionInput
+	tqCommandResult        frozenTQCommandResultInput
+	trade                  frozenTradeInput
+	quote                  frozenQuoteInput
+	tqDrop                 frozenTQDropInput
 }
 
 type engineState struct {
@@ -295,6 +307,7 @@ type engineState struct {
 	checkpointRequestSequence uint64
 	checkpointOutstanding     map[uint64]checkpoint.Request
 	checkpointOperations      CheckpointOperations
+	tq                        tqState
 }
 
 type admissionCounters struct {
@@ -376,6 +389,7 @@ type Engine struct {
 	publicationFault    publicationFault
 	evaluationFault     bool
 	checkpointSubmitter *checkpoint.Writer
+	tqLimits            tqRetentionLimits
 }
 
 // New constructs an unbound engine shell and starts its sole consumer.
@@ -389,6 +403,7 @@ func New(config Config) (*Engine, error) {
 		queue: make([]*queueNode, 0, config.Capacity), changed: make(chan struct{}), done: make(chan struct{}),
 		nextSequence: 1, state: &engineState{lifecycle: lifecycleInitializing, clockMonotonic: true},
 		checkpointSubmitter: config.CheckpointSubmitter,
+		tqLimits:            defaultTQRetentionLimits(),
 	}
 	e.buildCandidate = buildInstalledBinding
 	e.installInitialPublication()
@@ -800,6 +815,22 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		e.mu.Lock()
 		code, reason = e.applyRecoveryExhaustionLocked(node)
 		e.mu.Unlock()
+	} else if node.kind == inputTQCommandResult {
+		e.mu.Lock()
+		code, reason = e.applyTQCommandResultLocked(node)
+		e.mu.Unlock()
+	} else if node.kind == inputTrade {
+		e.mu.Lock()
+		code, reason = e.applyTradeLocked(node)
+		e.mu.Unlock()
+	} else if node.kind == inputQuote {
+		e.mu.Lock()
+		code, reason = e.applyQuoteLocked(node)
+		e.mu.Unlock()
+	} else if node.kind == inputTQDrop {
+		e.mu.Lock()
+		code, reason = e.applyTQDropLocked(node)
+		e.mu.Unlock()
 	} else if node.kind == inputHydrationPlan {
 		e.mu.Lock()
 		var plan HydrationPlanResult
@@ -943,6 +974,7 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		code, reason = DispositionAccountingIntegrity, ReasonAccounting
 		e.enterSuppressionLocked(lifecycleEventAccountingIntegrity, node, lifecycleReasonAccountingIntegrity)
 	}
+	e.reconcileTQLocked(node.admissionTime)
 	disposition := transitionDisposition{EngineSequence: node.engineSequence, Code: code, Reason: reason,
 		hydrationPlan: stagedHydrationPlan, hydrationRows: stagedHydrationRows, hydrationAccounting: stagedHydrationAccounting,
 		hydrationFenceCommand: stagedHydrationFenceCommand}

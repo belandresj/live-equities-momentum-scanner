@@ -200,7 +200,7 @@ func TestPC5TradeNormalization(t *testing.T) {
 	complete := fmt.Sprintf(`{"ev":"T","sym":"AAA","x":4,"i":"trade-1","p":10.25,"s":2,"ds":"2.5","c":[1,999],"pt":%d,"t":%d,"q":7,"z":2,"trfi":12,"trft":1}`, sip.Add(-time.Millisecond).UnixMilli(), sip.UnixMilli())
 	result := oneLiveResult(t, binding, received, complete)
 	trade := result.Trade
-	if result.Kind != LiveResultTrade || trade.BindingIdentity != binding.Identity() || trade.TradingDate != binding.TradingDate() || trade.EconomicSize != 2.5 || trade.EventTime != trade.ParticipantTime || trade.TimestampBasis != TimestampParticipant || trade.Conditions.Count != 2 || trade.Conditions.Classified || !trade.TRFPresent || !trade.IdentityClassified || trade.Sequence.Value != 7 || trade.Tape.Value != 2 {
+	if result.Kind != LiveResultTrade || trade.BindingIdentity != binding.Identity() || trade.TradingDate != binding.TradingDate() || trade.EconomicSize != 2.5 || trade.EventTime != trade.ParticipantTime || trade.TimestampBasis != TimestampParticipant || trade.Conditions.Count != 2 || !trade.Conditions.Classified || !trade.TRFPresent || !trade.IdentityClassified || trade.Sequence.Value != 7 || trade.Tape.Value != 2 {
 		t.Fatalf("complete trade = %+v", trade)
 	}
 
@@ -250,7 +250,7 @@ func TestPC5QuoteNormalization(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			raw := fmt.Sprintf(`{"ev":"Q","sym":"AAA","t":%d,%s,"c":7,"i":[1,2]}`, sip.UnixMilli(), test.prices)
 			got := oneLiveResult(t, binding, received, raw)
-			if got.Kind != LiveResultQuote || got.Quote.Conditions.Shape != MetadataScalar || got.Quote.Indicators.Shape != MetadataArray || got.Quote.Conditions.Classified || got.Quote.BidSize.Present || got.Quote.AskSize.Present {
+			if got.Kind != LiveResultQuote || got.Quote.Conditions.Shape != MetadataScalar || got.Quote.Indicators.Shape != MetadataArray || !got.Quote.Conditions.Classified || !got.Quote.Indicators.Classified || got.Quote.BidSize.Present || got.Quote.AskSize.Present {
 				t.Fatalf("quote = %+v", got.Quote)
 			}
 		})
@@ -264,15 +264,24 @@ func TestPC5QuoteNormalization(t *testing.T) {
 		}
 	})
 
+	t.Run("one-sided quote remains explicit feature evidence", func(t *testing.T) {
+		raw := fmt.Sprintf(`{"ev":"Q","sym":"AAA","t":%d,"bp":10}`, sip.UnixMilli())
+		got := oneLiveResult(t, binding, received, raw)
+		if got.Kind != LiveResultQuote || !got.Quote.BidPresent || got.Quote.AskPresent || got.Quote.BidPrice != 10 {
+			t.Fatalf("one-sided quote = %+v", got)
+		}
+	})
+
 	invalid := map[string]string{
 		"future":         fmt.Sprintf(`{"ev":"Q","sym":"AAA","t":%d,"bp":10,"ap":10.1}`, received.Add(providerFutureSkew+time.Millisecond).UnixMilli()),
-		"missing_core":   fmt.Sprintf(`{"ev":"Q","sym":"AAA","t":%d,"bp":10}`, sip.UnixMilli()),
+		"missing_symbol": fmt.Sprintf(`{"ev":"Q","t":%d,"bp":10,"ap":10.1}`, sip.UnixMilli()),
+		"no_sides":       fmt.Sprintf(`{"ev":"Q","sym":"AAA","t":%d}`, sip.UnixMilli()),
 		"duplicate_core": fmt.Sprintf(`{"ev":"Q","sym":"AAA","t":%d,"bp":10,"bp":11,"ap":12}`, sip.UnixMilli()),
 	}
 	for name, raw := range invalid {
 		t.Run(name, func(t *testing.T) {
 			got := oneLiveResult(t, binding, received, raw)
-			if got.Kind != LiveResultRejected || !reflect.DeepEqual(got.Quote, NormalizedQuote{}) {
+			if got.Kind != LiveResultRejected || !reflect.DeepEqual(got.Quote, NormalizedQuote{}) || got.Rejection.BindingIdentity != binding.Identity() || got.Rejection.TradingDate != binding.TradingDate() {
 				t.Fatalf("quote rejection = %+v", got)
 			}
 		})

@@ -186,6 +186,7 @@ type NormalizedQuote struct {
 	Symbol                                      string
 	SIPTime, ReceiptTime                        time.Time
 	BidPrice, AskPrice                          float64
+	BidPresent, AskPresent                      bool
 	BidExchange, AskExchange                    OptionalInt64
 	BidSize, AskSize                            OptionalInt64
 	Conditions, Indicators                      BoundedIntVector
@@ -208,10 +209,12 @@ type NormalizedStatus struct {
 }
 
 type LiveRejection struct {
-	Family   LiveFamily
-	Symbol   string
-	Reason   LiveRejectionReason
-	Position engine.LivePosition
+	BindingIdentity string
+	TradingDate     string
+	Family          LiveFamily
+	Symbol          string
+	Reason          LiveRejectionReason
+	Position        engine.LivePosition
 }
 
 type LiveResult struct {
@@ -470,12 +473,12 @@ func normalizeElement(frame LiveFrame, position engine.LivePosition, raw json.Ra
 		return normalizeAggregate(frame, position, members)
 	case string(LiveFamilyTrade):
 		if options.ShedTradesQuotes {
-			return rejection(LiveFamilyTrade, "", position, LiveRejectOptionalShed), false
+			return rejection(frame, LiveFamilyTrade, "", position, LiveRejectOptionalShed), false
 		}
 		return normalizeTrade(frame, position, members)
 	case string(LiveFamilyQuote):
 		if options.ShedTradesQuotes {
-			return rejection(LiveFamilyQuote, "", position, LiveRejectOptionalShed), false
+			return rejection(frame, LiveFamilyQuote, "", position, LiveRejectOptionalShed), false
 		}
 		return normalizeQuote(frame, position, members)
 	case string(LiveFamilyStatus):
@@ -491,9 +494,9 @@ func ambiguity(position engine.LivePosition, reason LiveRejectionReason) LiveRes
 	return result
 }
 
-func rejection(family LiveFamily, symbol string, position engine.LivePosition, reason LiveRejectionReason) LiveResult {
+func rejection(frame LiveFrame, family LiveFamily, symbol string, position engine.LivePosition, reason LiveRejectionReason) LiveResult {
 	result := LiveResult{Kind: LiveResultRejected, Position: position}
-	result.Rejection = LiveRejection{Family: family, Symbol: symbol, Reason: reason, Position: position}
+	result.Rejection = LiveRejection{BindingIdentity: frame.Binding.Identity(), TradingDate: frame.Binding.TradingDate(), Family: family, Symbol: symbol, Reason: reason, Position: position}
 	return result
 }
 
@@ -515,16 +518,16 @@ func normalizeAggregate(frame LiveFrame, position engine.LivePosition, members o
 		return ambiguity(position, LiveRejectSymbol), true
 	}
 	if duplicateRecognized(members, "s", "e", "o", "h", "l", "c", "dv", "v", "vw", "z") {
-		return rejection(LiveFamilyAggregate, symbol, position, LiveRejectDuplicateMember), false
+		return rejection(frame, LiveFamilyAggregate, symbol, position, LiveRejectDuplicateMember), false
 	}
 	startMillis, startOK := rawExactInt64(members.values["s"])
 	endMillis, endOK := rawExactInt64(members.values["e"])
 	if !startOK || !endOK || startMillis%1000 != 0 || endMillis-startMillis != 1000 {
-		return rejection(LiveFamilyAggregate, symbol, position, LiveRejectTimestamp), false
+		return rejection(frame, LiveFamilyAggregate, symbol, position, LiveRejectTimestamp), false
 	}
 	start, end := time.UnixMilli(startMillis).UTC(), time.UnixMilli(endMillis).UTC()
 	if start.UnixMilli() != startMillis || end.UnixMilli() != endMillis || start.Before(frame.Binding.SessionStart()) || end.After(frame.Binding.SessionEnd()) {
-		return rejection(LiveFamilyAggregate, symbol, position, LiveRejectTimestamp), false
+		return rejection(frame, LiveFamilyAggregate, symbol, position, LiveRejectTimestamp), false
 	}
 	open, openOK := rawFiniteFloat(members.values["o"])
 	high, highOK := rawFiniteFloat(members.values["h"])
@@ -540,12 +543,12 @@ func normalizeAggregate(frame LiveFrame, position engine.LivePosition, members o
 	}
 	average, averageOK := rawExactInt64(members.values["z"])
 	if !openOK || !highOK || !lowOK || !closeOK || !vwapOK || !volumeOK || !averageOK || average < 0 {
-		return rejection(LiveFamilyAggregate, symbol, position, LiveRejectNumeric), false
+		return rejection(frame, LiveFamilyAggregate, symbol, position, LiveRejectNumeric), false
 	}
 	open, high, low, closePrice = normalizeSignedZero(open), normalizeSignedZero(high), normalizeSignedZero(low), normalizeSignedZero(closePrice)
 	volume, vwap = normalizeSignedZero(volume), normalizeSignedZero(vwap)
 	if !validAggregateStructure(open, high, low, closePrice, volume, vwap) {
-		return rejection(LiveFamilyAggregate, symbol, position, LiveRejectAggregate), false
+		return rejection(frame, LiveFamilyAggregate, symbol, position, LiveRejectAggregate), false
 	}
 	input := engine.AggregateInput{
 		SchemaVersion: engine.AggregateSchemaV1, BindingIdentity: frame.Binding.Identity(),
@@ -559,28 +562,28 @@ func normalizeAggregate(frame LiveFrame, position engine.LivePosition, members o
 func normalizeTrade(frame LiveFrame, position engine.LivePosition, members objectMembers) (LiveResult, bool) {
 	recognized := []string{"sym", "x", "i", "p", "s", "ds", "c", "pt", "t", "q", "z", "trfi", "trft", "e"}
 	if duplicateRecognized(members, recognized...) {
-		return rejection(LiveFamilyTrade, bestEffortSymbol(members), position, LiveRejectDuplicateMember), false
+		return rejection(frame, LiveFamilyTrade, bestEffortSymbol(members), position, LiveRejectDuplicateMember), false
 	}
 	symbol, symbolOK := boundedSymbol(members.values["sym"])
 	exchange, exchangeOK := rawExactInt64(members.values["x"])
 	tradeID, tradeIDOK := rawString(members.values["i"])
 	price, priceOK := rawFiniteFloat(members.values["p"])
 	if !symbolOK || !exchangeOK || exchange <= 0 || !tradeIDOK || tradeID == "" || len(tradeID) > maximumTradeIDBytes || !priceOK || price <= 0 || price > 1e9 {
-		return rejection(LiveFamilyTrade, bestEffortSymbol(members), position, LiveRejectTradeIdentity), false
+		return rejection(frame, LiveFamilyTrade, bestEffortSymbol(members), position, LiveRejectTradeIdentity), false
 	}
 	baseSize, sizeOK := rawExactInt64(members.values["s"])
 	if !sizeOK || baseSize < 0 {
-		return rejection(LiveFamilyTrade, symbol, position, LiveRejectTradeSize), false
+		return rejection(frame, LiveFamilyTrade, symbol, position, LiveRejectTradeSize), false
 	}
 	economicSize := float64(baseSize)
 	if members.counts["ds"] == 1 {
 		value, ok := rawDecimalString(members.values["ds"], true, 1e12, maximumScalarBytes)
 		if !ok || math.Floor(value) != float64(baseSize) {
-			return rejection(LiveFamilyTrade, symbol, position, LiveRejectTradeSize), false
+			return rejection(frame, LiveFamilyTrade, symbol, position, LiveRejectTradeSize), false
 		}
 		economicSize = value
 	} else if baseSize == 0 {
-		return rejection(LiveFamilyTrade, symbol, position, LiveRejectTradeSize), false
+		return rejection(frame, LiveFamilyTrade, symbol, position, LiveRejectTradeSize), false
 	}
 	conditions := decodeConditions(members, "c", false)
 	participant, participantPresent, participantValid := decodeEventTime(members, "pt", frame)
@@ -594,7 +597,7 @@ func normalizeTrade(frame LiveFrame, position engine.LivePosition, members objec
 	} else if sipValid {
 		eventTime, basis = sip, TimestampSIPFallback
 	} else {
-		return rejection(LiveFamilyTrade, symbol, position, LiveRejectTimestamp), false
+		return rejection(frame, LiveFamilyTrade, symbol, position, LiveRejectTimestamp), false
 	}
 	sequence := decodeOptionalInt(members, "q", 0, math.MaxInt64)
 	tape := decodeOptionalInt(members, "z", 1, 3)
@@ -629,24 +632,29 @@ func normalizeTrade(frame LiveFrame, position engine.LivePosition, members objec
 func normalizeQuote(frame LiveFrame, position engine.LivePosition, members objectMembers) (LiveResult, bool) {
 	recognized := []string{"sym", "t", "bx", "ax", "bp", "ap", "bs", "as", "c", "i", "q", "z"}
 	if duplicateRecognized(members, recognized...) {
-		return rejection(LiveFamilyQuote, bestEffortSymbol(members), position, LiveRejectDuplicateMember), false
+		return rejection(frame, LiveFamilyQuote, bestEffortSymbol(members), position, LiveRejectDuplicateMember), false
 	}
 	symbol, symbolOK := boundedSymbol(members.values["sym"])
 	sip, _, sipValid := decodeEventTime(members, "t", frame)
-	bid, bidOK := rawFiniteFloat(members.values["bp"])
-	ask, askOK := rawFiniteFloat(members.values["ap"])
+	bidRaw, bidPresent := members.values["bp"]
+	askRaw, askPresent := members.values["ap"]
+	bid, bidOK := rawFiniteFloat(bidRaw)
+	ask, askOK := rawFiniteFloat(askRaw)
 	if !symbolOK {
-		return rejection(LiveFamilyQuote, bestEffortSymbol(members), position, LiveRejectSymbol), false
+		return rejection(frame, LiveFamilyQuote, bestEffortSymbol(members), position, LiveRejectSymbol), false
 	}
 	if !sipValid {
-		return rejection(LiveFamilyQuote, symbol, position, LiveRejectTimestamp), false
+		return rejection(frame, LiveFamilyQuote, symbol, position, LiveRejectTimestamp), false
 	}
-	if !bidOK || !askOK || bid <= 0 || ask <= 0 || bid > 1e9 || ask > 1e9 {
-		return rejection(LiveFamilyQuote, symbol, position, LiveRejectQuotePrice), false
+	if bidPresent && (!bidOK || bid <= 0 || bid > 1e9) || askPresent && (!askOK || ask <= 0 || ask > 1e9) {
+		return rejection(frame, LiveFamilyQuote, symbol, position, LiveRejectQuotePrice), false
+	}
+	if !bidPresent && !askPresent {
+		return rejection(frame, LiveFamilyQuote, symbol, position, LiveRejectQuotePrice), false
 	}
 	quote := NormalizedQuote{
 		SchemaVersion: "normalized-quote-v1", BindingIdentity: frame.Binding.Identity(), TradingDate: frame.Binding.TradingDate(), Symbol: symbol,
-		SIPTime: sip, ReceiptTime: frame.ReceivedAt.UTC(), BidPrice: normalizeSignedZero(bid), AskPrice: normalizeSignedZero(ask),
+		SIPTime: sip, ReceiptTime: frame.ReceivedAt.UTC(), BidPrice: normalizeSignedZero(bid), AskPrice: normalizeSignedZero(ask), BidPresent: bidPresent, AskPresent: askPresent,
 		BidExchange: decodeOptionalInt(members, "bx", 1, math.MaxInt64), AskExchange: decodeOptionalInt(members, "ax", 1, math.MaxInt64),
 		BidSize: decodeOptionalInt(members, "bs", 1, math.MaxInt64), AskSize: decodeOptionalInt(members, "as", 1, math.MaxInt64),
 		Conditions: decodeConditions(members, "c", true), Indicators: decodeConditions(members, "i", false),
@@ -798,7 +806,7 @@ func decodeConditions(members objectMembers, name string, scalarAllowed bool) Bo
 	}
 	if scalarAllowed {
 		if value, ok := rawExactInt64(raw); ok {
-			result := BoundedIntVector{Shape: MetadataScalar}
+			result := BoundedIntVector{Shape: MetadataScalar, Classified: true}
 			result.Values[0], result.Count = value, 1
 			return result
 		}
@@ -833,9 +841,9 @@ func decodeConditions(members objectMembers, name string, scalarAllowed bool) Bo
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return BoundedIntVector{Shape: MetadataUnclassified}
 	}
-	// Component 5 has no approved condition-classification source. The raw
-	// bounded codes are faithful evidence, never feature eligibility.
-	result.Classified = result.Count == 0
+	// Classified means the provider shape is syntactically bounded and exact;
+	// only the engine-owned C9 fixture decides semantic feature eligibility.
+	result.Classified = true
 	return result
 }
 

@@ -69,6 +69,20 @@ type ChangeTQCommand struct {
 	CommandToken    uint64
 	Action          TQCommandAction
 	Symbols         []string
+	engineCommand   engine.TQCommand
+}
+
+func ChangeTQCommandFromEngine(command engine.TQCommand) (ChangeTQCommand, error) {
+	action := TQSubscribe
+	if command.Action() == engine.TQUnsubscribe {
+		action = TQUnsubscribe
+	} else if command.Action() != engine.TQSubscribe {
+		return ChangeTQCommand{}, errCommand
+	}
+	if command.BindingIdentity() == "" || command.ConnectionEpoch() == 0 || command.CommandToken() == 0 || command.Symbol() == "" {
+		return ChangeTQCommand{}, errCommand
+	}
+	return ChangeTQCommand{BindingIdentity: command.BindingIdentity(), ConnectionEpoch: command.ConnectionEpoch(), CommandToken: command.CommandToken(), Action: action, Symbols: []string{command.Symbol()}, engineCommand: command}, nil
 }
 
 type CloseCause string
@@ -154,6 +168,9 @@ type AdapterDelivery struct {
 	AggregateIngressFence                    AggregateIngressFenceFact
 	LiveCoverageFence                        LiveCoverageFenceFact
 	ExpectedStatusCount, ObservedStatusCount int
+	TQAction                                 TQCommandAction
+	TQSymbols                                []string
+	tqCommand                                engine.TQCommand
 }
 
 type EngineDeliveryResult struct {
@@ -162,6 +179,7 @@ type EngineDeliveryResult struct {
 	AggregateDisposition    engine.AggregateDisposition
 	HydrationDisposition    engine.HydrationDisposition
 	LiveCoverageDisposition engine.LiveCoverageFenceDisposition
+	TQDisposition           engine.Disposition
 	ConsumerDeferred        bool
 }
 
@@ -304,6 +322,9 @@ type pendingCommand struct {
 	writeDone     chan struct{}
 	accounted     bool
 	statusOutcome engine.ConnectionControlOutcome
+	action        TQCommandAction
+	symbols       []string
+	engineCommand engine.TQCommand
 }
 
 type terminalCause struct {
@@ -647,7 +668,7 @@ func (a *LiveAttempt) ChangeTQ(ctx context.Context, command ChangeTQCommand) (Ad
 	if command.Action == TQUnsubscribe {
 		kind = CommandTradeQuoteUnsubscribe
 	}
-	a.pending = &pendingCommand{kind: kind, token: command.CommandToken, expectedCount: 2 * len(command.Symbols), deadline: a.adapter.now().Add(a.durations.HandshakeStep), writeDone: make(chan struct{})}
+	a.pending = &pendingCommand{kind: kind, token: command.CommandToken, expectedCount: 2 * len(command.Symbols), deadline: a.adapter.now().Add(a.durations.HandshakeStep), writeDone: make(chan struct{}), action: command.Action, symbols: append([]string(nil), command.Symbols...), engineCommand: command.engineCommand}
 	a.workers.Add(1)
 	a.adapter.mu.Lock()
 	a.adapter.lastToken = command.CommandToken
@@ -684,6 +705,9 @@ func (a *LiveAttempt) ChangeTQ(ctx context.Context, command ChangeTQCommand) (Ad
 	}
 	a.adapter.mu.Unlock()
 	delivery := controlDelivery(a.binding.Identity(), a.epoch, engineKind, command.CommandToken, outcome, engine.LivePosition{}, a.adapter.now())
+	delivery.TQAction = command.Action
+	delivery.TQSymbols = append([]string(nil), command.Symbols...)
+	delivery.tqCommand = command.engineCommand
 	if err != nil {
 		return delivery, errCommandWrite
 	}
@@ -693,6 +717,11 @@ func (a *LiveAttempt) ChangeTQ(ctx context.Context, command ChangeTQCommand) (Ad
 func (a *LiveAttempt) validTQCommand(command ChangeTQCommand) bool {
 	if command.BindingIdentity != a.binding.Identity() || command.ConnectionEpoch != a.epoch || command.CommandToken == 0 ||
 		(command.Action != TQSubscribe && command.Action != TQUnsubscribe) || len(command.Symbols) == 0 || len(command.Symbols) > maximumTQSymbols {
+		return false
+	}
+	if command.engineCommand.CommandToken() != 0 && (command.engineCommand.BindingIdentity() != command.BindingIdentity || command.engineCommand.ConnectionEpoch() != command.ConnectionEpoch ||
+		command.engineCommand.CommandToken() != command.CommandToken || len(command.Symbols) != 1 || command.engineCommand.Symbol() != command.Symbols[0] ||
+		command.engineCommand.Action() == engine.TQSubscribe != (command.Action == TQSubscribe)) {
 		return false
 	}
 	a.adapter.mu.Lock()
@@ -934,6 +963,9 @@ func (a *LiveAttempt) mapResult(result LiveResult, frame queuedLiveFrame) (Adapt
 		delivery := controlDelivery(a.binding.Identity(), a.epoch, engine.TradeQuoteSubscriptionResult, pending.token, outcome, result.Position, result.Status.ReceiptTime)
 		delivery.ExpectedStatusCount = pending.expectedCount
 		delivery.ObservedStatusCount = result.Status.ObservedCount
+		delivery.TQAction = pending.action
+		delivery.TQSymbols = append([]string(nil), pending.symbols...)
+		delivery.tqCommand = pending.engineCommand
 		return delivery, true
 	default:
 		return AdapterDelivery{}, false
@@ -1128,6 +1160,26 @@ func DeliverToEngine(ctx context.Context, state *engine.Engine, delivery Adapter
 	}
 	switch delivery.Kind {
 	case DeliveryControl, DeliveryTerminal:
+		if (delivery.Control.Kind == engine.TradeQuoteSubscriptionResult ||
+			delivery.Control.Kind == engine.TradeQuoteCommandWriteResult && delivery.Control.Outcome != engine.ControlSucceeded) && len(delivery.TQSymbols) == 1 {
+			input, inputErr := engine.NewTQCommandResultInput(delivery.tqCommand, delivery.Control.Position, delivery.Control.ReceiptTime, delivery.Control.Outcome)
+			if delivery.tqCommand.CommandToken() != 0 && inputErr != nil {
+				return EngineDeliveryResult{}, inputErr
+			}
+			if inputErr == nil {
+				admission, completion := state.AdmitTQCommandResult(ctx, input)
+				result := EngineDeliveryResult{Admission: admission}
+				if admission != engine.AdmissionAdmitted || completion == nil {
+					return result, nil
+				}
+				select {
+				case <-ctx.Done():
+					return result, ctx.Err()
+				case result.TQDisposition = <-completion:
+					return result, nil
+				}
+			}
+		}
 		admission, completion := state.AdmitConnectionControl(ctx, delivery.Control)
 		result := EngineDeliveryResult{Admission: admission}
 		if admission != engine.AdmissionAdmitted || completion == nil {
@@ -1183,7 +1235,56 @@ func DeliverToEngine(ctx context.Context, state *engine.Engine, delivery Adapter
 		case result.LiveCoverageDisposition = <-completion:
 			return result, nil
 		}
-	case DeliveryTrade, DeliveryQuote, DeliveryNormalizationDrop:
+	case DeliveryTrade:
+		input := engine.TradeInput{SchemaVersion: engine.TQSchemaV1, BindingIdentity: delivery.Trade.BindingIdentity, TradingDate: delivery.Trade.TradingDate,
+			Symbol: delivery.Trade.Symbol, TradeID: delivery.Trade.TradeID, Exchange: delivery.Trade.Exchange, TRFPresent: delivery.Trade.TRFPresent, TRFID: delivery.Trade.TRFID,
+			Price: delivery.Trade.Price, EconomicSize: delivery.Trade.EconomicSize, EventTime: delivery.Trade.EventTime, ReceiptTime: delivery.Trade.ReceiptTime,
+			TimestampBasis: string(delivery.Trade.TimestampBasis), Conditions: delivery.Trade.Conditions.Slice(), ConditionsClassified: delivery.Trade.Conditions.Classified,
+			IdentityClassified: delivery.Trade.IdentityClassified, Lifecycle: string(delivery.Trade.Lifecycle), Live: delivery.Trade.Live}
+		admission, completion := state.AdmitTrade(ctx, input)
+		result := EngineDeliveryResult{Admission: admission}
+		if admission != engine.AdmissionAdmitted || completion == nil {
+			return result, nil
+		}
+		select {
+		case <-ctx.Done():
+			return result, ctx.Err()
+		case result.TQDisposition = <-completion:
+			return result, nil
+		}
+	case DeliveryQuote:
+		input := engine.QuoteInput{SchemaVersion: engine.TQSchemaV1, BindingIdentity: delivery.Quote.BindingIdentity, TradingDate: delivery.Quote.TradingDate, Symbol: delivery.Quote.Symbol,
+			SIPTime: delivery.Quote.SIPTime, ReceiptTime: delivery.Quote.ReceiptTime, BidPrice: delivery.Quote.BidPrice, AskPrice: delivery.Quote.AskPrice,
+			BidPresent: delivery.Quote.BidPresent, AskPresent: delivery.Quote.AskPresent, Conditions: delivery.Quote.Conditions.Slice(), Indicators: delivery.Quote.Indicators.Slice(),
+			ConditionsClassified: delivery.Quote.Conditions.Classified, IndicatorsClassified: delivery.Quote.Indicators.Classified, Live: delivery.Quote.Live}
+		admission, completion := state.AdmitQuote(ctx, input)
+		result := EngineDeliveryResult{Admission: admission}
+		if admission != engine.AdmissionAdmitted || completion == nil {
+			return result, nil
+		}
+		select {
+		case <-ctx.Done():
+			return result, ctx.Err()
+		case result.TQDisposition = <-completion:
+			return result, nil
+		}
+	case DeliveryNormalizationDrop:
+		if delivery.Rejection.Family == LiveFamilyTrade || delivery.Rejection.Family == LiveFamilyQuote {
+			input := engine.TQDropInput{SchemaVersion: engine.TQSchemaV1, BindingIdentity: delivery.Rejection.BindingIdentity, TradingDate: delivery.Rejection.TradingDate,
+				Family: string(delivery.Rejection.Family), Symbol: delivery.Rejection.Symbol,
+				DropReason: string(delivery.Rejection.Reason), Live: delivery.Rejection.Position}
+			admission, completion := state.AdmitTQDrop(ctx, input)
+			result := EngineDeliveryResult{Admission: admission}
+			if admission != engine.AdmissionAdmitted || completion == nil {
+				return result, nil
+			}
+			select {
+			case <-ctx.Done():
+				return result, ctx.Err()
+			case result.TQDisposition = <-completion:
+				return result, nil
+			}
+		}
 		return EngineDeliveryResult{ConsumerDeferred: true}, nil
 	default:
 		return EngineDeliveryResult{}, errAttemptState

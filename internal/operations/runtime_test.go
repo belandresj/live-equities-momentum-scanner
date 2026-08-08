@@ -330,6 +330,183 @@ func TestC8RUNTIME05ShutdownTimeoutDoesNotClaimJoined(t *testing.T) {
 	}
 }
 
+func TestPC9TAQOpaqueEngineCommandThroughC5Ack(t *testing.T) {
+	binding := operationsBinding(t)
+	now := binding.SessionStart().Add(20 * time.Minute)
+	eventAt := now.Add(60*time.Second + 100*time.Millisecond)
+	config := DefaultConfig()
+	config.EvaluationDelay, config.SampleCadence = 0, 10*time.Minute
+	run, err := New(context.Background(), binding, config, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := tqAckWebSocketServer(t, eventAt)
+	defer server.Close()
+	adapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{Endpoint: "ws" + strings.TrimPrefix(server.URL, "http"), Credential: "fixture", Queue: massive.LiveQueueConfig{FrameSlots: 8, MaxFrameBytes: 4096, TotalFrameBytes: 16384}, Clock: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, startDelivery, err := adapter.Start(context.Background(), massive.OpenAggregateEpoch{BindingIdentity: binding.Identity(), CommandToken: 1, Durations: capacityDurations()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, err := massive.DeliverToEngine(context.Background(), run.Engine(), startDelivery); err != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
+		t.Fatalf("start = %+v/%v", result, err)
+	}
+	handshake, err := attempt.Handshake(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, delivery := range handshake {
+		result, err := massive.DeliverToEngine(context.Background(), run.Engine(), delivery)
+		if err != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
+			t.Fatalf("handshake = %+v/%v", result, err)
+		}
+	}
+	completeHydration(t, run.Engine(), binding, engine.HydrationFreshBootstrap, attempt.Epoch(), now)
+	base := now
+	for index := 0; index < 60; index++ {
+		window := base.Add(time.Duration(index) * time.Second)
+		now = window.Add(time.Second)
+		input := engine.AggregateInput{SchemaVersion: engine.AggregateSchemaV1, BindingIdentity: binding.Identity(), Source: engine.AggregateSourceLive, Symbol: "AAA",
+			WindowStart: window, WindowEnd: window.Add(time.Second), Values: engine.AggregateValues{Open: 12, High: 12, Low: 12, Close: 12, Volume: 10_000, VWAP: 12, AverageTradeSize: 10, ATSProvenance: engine.ATSLiveProviderAverage},
+			DeliveryTime: now, Live: engine.LivePosition{ConnectionEpoch: attempt.Epoch(), FrameSequence: uint64(10 + index)}}
+		admission, completion := run.Engine().AdmitAggregate(context.Background(), input)
+		if admission != engine.AdmissionAdmitted || (<-completion).Code != engine.DispositionAggregateInserted {
+			t.Fatalf("aggregate %d admission=%s", index, admission)
+		}
+	}
+	coverageCommand, err := run.Engine().IssueLiveCoverageFence()
+	if err != nil {
+		t.Fatal(err)
+	}
+	coverageInput, err := engine.NewLiveCoverageFenceInput(coverageCommand, engine.LiveCoverageFenceComplete, 69, 2, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, coverageCompletion := run.Engine().AdmitLiveCoverageFence(context.Background(), coverageInput)
+	if admission != engine.AdmissionAdmitted || (<-coverageCompletion).Code != engine.DispositionLiveCoverageFenceApplied {
+		t.Fatal("live coverage advance")
+	}
+	admission, timer := run.Engine().AdmitTimer(context.Background())
+	if admission != engine.AdmissionAdmitted || (<-timer).Code != engine.DispositionTimerApplied {
+		t.Fatal("qualification timer")
+	}
+	command, err := run.Engine().IssueTQCommand()
+	if err != nil {
+		t.Fatalf("engine command: %v view=%+v evaluation=%+v", err, run.Engine().ObserveTQ(), run.Engine().ObserveReplayDeterministic().Evaluation)
+	}
+	adapterCommand, err := massive.ChangeTQCommandFromEngine(command)
+	if err != nil || adapterCommand.Symbols[0] != "AAA" || adapterCommand.CommandToken != command.CommandToken() {
+		t.Fatalf("C5 conversion = %+v/%v", adapterCommand, err)
+	}
+	write, err := attempt.ChangeTQ(context.Background(), adapterCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, err := massive.DeliverToEngine(context.Background(), run.Engine(), write); err != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlDeferred {
+		t.Fatalf("write = %+v/%v", result, err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	result, ok, err := attempt.DeliverNextToEngine(context.Background(), run.Engine())
+	if err != nil || !ok || result.TQDisposition.Code != engine.DispositionTQApplied {
+		t.Fatalf("ack = %+v ok=%v err=%v", result, ok, err)
+	}
+	view := run.Engine().ObserveTQ()
+	if len(view.Rows) != 1 || !view.Rows[0].ProviderPresent || !view.Rows[0].TradeCoverage || !view.Rows[0].QuoteCoverage || view.CommandPending {
+		t.Fatalf("coverage = %+v", view)
+	}
+	for index := 0; index < 4; index++ {
+		result, ok, err := attempt.DeliverNextToEngine(context.Background(), run.Engine())
+		if err != nil || !ok || result.TQDisposition.Code != engine.DispositionTQApplied {
+			t.Fatalf("T/Q evidence %d = %+v/%v/%v", index, result, ok, err)
+		}
+	}
+	now = now.Add(time.Second)
+	coverageCommand, err = run.Engine().IssueLiveCoverageFence()
+	if err != nil {
+		t.Fatal(err)
+	}
+	coverageInput, err = engine.NewLiveCoverageFenceInput(coverageCommand, engine.LiveCoverageFenceComplete, 69, 3, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, coverageCompletion = run.Engine().AdmitLiveCoverageFence(context.Background(), coverageInput)
+	if admission != engine.AdmissionAdmitted || (<-coverageCompletion).Code != engine.DispositionLiveCoverageFenceApplied {
+		t.Fatal("T/Q coverage advance")
+	}
+	admission, timer = run.Engine().AdmitTimer(context.Background())
+	if admission != engine.AdmissionAdmitted || (<-timer).Code != engine.DispositionTimerApplied {
+		t.Fatal("T/Q feature timer")
+	}
+	view = run.Engine().ObserveTQ()
+	if view.Rows[0].Tape.OneSecond != 1 || view.Rows[0].Tape.OneSecondStatus != engine.TQCurrent || view.Rows[0].Spread.Quality != "known_special" {
+		t.Fatalf("C5 semantic evidence = %+v", view.Rows[0])
+	}
+	foreignBinding := binding.Identity()[:len(binding.Identity())-1] + "0"
+	if foreignBinding == binding.Identity() {
+		foreignBinding = binding.Identity()[:len(binding.Identity())-1] + "1"
+	}
+	foreignDrop := massive.AdapterDelivery{Kind: massive.DeliveryNormalizationDrop, Rejection: massive.LiveRejection{
+		BindingIdentity: foreignBinding, TradingDate: binding.TradingDate(), Family: massive.LiveFamilyQuote, Symbol: "AAA",
+		Reason: massive.LiveRejectQuotePrice, Position: engine.LivePosition{ConnectionEpoch: attempt.Epoch(), FrameSequence: 1_000},
+	}}
+	foreignResult, err := massive.DeliverToEngine(context.Background(), run.Engine(), foreignDrop)
+	if err != nil || foreignResult.TQDisposition.Code != engine.DispositionTQFenced {
+		t.Fatalf("foreign-binding drop = %+v/%v", foreignResult, err)
+	}
+	view = run.Engine().ObserveTQ()
+	if !view.Rows[0].TradeCoverage || !view.Rows[0].QuoteCoverage || view.AggregateOnly {
+		t.Fatalf("foreign-binding drop mutated coverage = %+v", view)
+	}
+	result, ok, err = attempt.DeliverNextToEngine(context.Background(), run.Engine())
+	if err != nil || !ok || result.TQDisposition.Code != engine.DispositionTQRejected {
+		t.Fatalf("normalization drop = %+v/%v/%v", result, ok, err)
+	}
+	view = run.Engine().ObserveTQ()
+	if view.Rows[0].TradeCoverage || view.Rows[0].QuoteCoverage || !view.AggregateOnly || !view.CommandPending || view.PendingAction != engine.TQUnsubscribe {
+		t.Fatalf("drop left false-current coverage = %+v", view)
+	}
+	_ = attempt.Close(massive.CloseEpochCommand{BindingIdentity: binding.Identity(), ConnectionEpoch: attempt.Epoch(), CommandToken: command.CommandToken() + 100, Cause: massive.CloseControlledStop})
+	shutdown, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := run.Shutdown(shutdown); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func tqAckWebSocketServer(t *testing.T, eventAt time.Time) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, err := websocket.Accept(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer connection.CloseNow()
+		ctx := request.Context()
+		write := func(value string) bool { return connection.Write(ctx, websocket.MessageText, []byte(value)) == nil }
+		if !write(`[{"ev":"status","status":"connected"}]`) {
+			return
+		}
+		if _, _, err := connection.Read(ctx); err != nil || !write(`[{"ev":"status","status":"auth_success"}]`) {
+			return
+		}
+		if _, _, err := connection.Read(ctx); err != nil || !write(`[{"ev":"status","status":"success"}]`) {
+			return
+		}
+		if _, _, err := connection.Read(ctx); err != nil {
+			return
+		}
+		_ = write(`[{"ev":"status","status":"success"},{"ev":"status","status":"success"}]`)
+		_ = write(fmt.Sprintf(`[{"ev":"T","sym":"AAA","x":4,"i":"eligible","p":12,"s":10,"t":%d,"c":[14]}]`, eventAt.UnixMilli()))
+		_ = write(fmt.Sprintf(`[{"ev":"T","sym":"AAA","x":4,"i":"nonvolume","p":12,"s":10,"t":%d,"c":[15]}]`, eventAt.UnixMilli()))
+		_ = write(fmt.Sprintf(`[{"ev":"T","sym":"AAA","x":4,"i":"unreviewed","p":12,"s":10,"t":%d,"c":[57]}]`, eventAt.UnixMilli()))
+		_ = write(fmt.Sprintf(`[{"ev":"Q","sym":"AAA","t":%d,"bp":12,"ap":12.02,"c":[1],"i":[2]}]`, eventAt.UnixMilli()))
+		_ = write(fmt.Sprintf(`[{"ev":"Q","t":%d,"bp":12,"ap":12.02}]`, eventAt.UnixMilli()))
+		<-ctx.Done()
+	}))
+}
+
 func waitForOperational(t *testing.T, run *Runtime, joined <-chan error, minimumConnections int32, ready bool) {
 	t.Helper()
 	deadline := time.After(8 * time.Second)
@@ -424,7 +601,7 @@ func applyControl(t *testing.T, owner *engine.Engine, binding reference.Binding,
 
 func completeHydration(t *testing.T, owner *engine.Engine, binding reference.Binding, purpose engine.HydrationPurpose, epoch uint64, at time.Time) {
 	t.Helper()
-	budgets := engine.HydrationPlanBudgets{Workers: 1, RowsPerChunk: 1, MaximumResponseBytes: 1024, MaximumNormalizedRecords: 100, MaximumResidentRecords: 10}
+	budgets := engine.HydrationPlanBudgets{Workers: 1, RowsPerChunk: 1, MaximumResponseBytes: 1 << 20, MaximumNormalizedRecords: 57_600, MaximumResidentRecords: 57_600}
 	admission, completion := owner.AdmitHydrationPlan(context.Background(), engine.HydrationPlanInput{SchemaVersion: engine.HydrationPlanSchemaV1, BindingIdentity: binding.Identity(), Purpose: purpose, ConnectionEpoch: epoch, Budgets: budgets})
 	if admission != engine.AdmissionAdmitted || completion == nil {
 		t.Fatal("hydration plan")
@@ -437,9 +614,19 @@ func completeHydration(t *testing.T, owner *engine.Engine, binding reference.Bin
 			t.Fatal(err)
 		}
 		_, terminalCompletion := owner.AdmitHydrationTerminal(context.Background(), terminal)
-		fence = (<-terminalCompletion).FenceCommand
+		terminalResult := <-terminalCompletion
+		if terminalResult.Code != engine.DispositionHydrationTerminalApplied {
+			t.Fatalf("hydration terminal=%+v", terminalResult)
+		}
+		if terminalResult.FenceCommand.CommandToken() != 0 {
+			fence = terminalResult.FenceCommand
+		}
 	}
-	fenceInput, err := engine.NewAggregateIngressFenceInput(fence, engine.AggregateIngressFenceComplete, 1, 1, at)
+	if fence.CommandToken() == 0 {
+		t.Fatalf("hydration produced no fence: plan=%+v", planResult)
+	}
+	through := max(uint64(1), owner.ObserveOperational().Connection.AckFrame)
+	fenceInput, err := engine.NewAggregateIngressFenceInput(fence, engine.AggregateIngressFenceComplete, through, 1, at)
 	if err != nil {
 		t.Fatal(err)
 	}

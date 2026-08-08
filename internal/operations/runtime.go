@@ -118,6 +118,41 @@ func (r *Runtime) runTimer(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-completion:
+				r.syncTQCommand(ctx)
+			}
+		}
+	}
+}
+
+func (r *Runtime) syncTQCommand(ctx context.Context) {
+	r.metricsMu.Lock()
+	attempt := r.attempt
+	r.metricsMu.Unlock()
+	if attempt == nil {
+		return
+	}
+	command, err := r.engine.IssueTQCommand()
+	if err != nil {
+		return
+	}
+	adapterCommand, err := massive.ChangeTQCommandFromEngine(command)
+	if err != nil {
+		return
+	}
+	delivery, writeErr := attempt.ChangeTQ(ctx, adapterCommand)
+	if delivery.Kind != "" {
+		started := time.Now()
+		result, _ := massive.DeliverToEngine(ctx, r.engine, delivery)
+		r.observeDelivery(started, result)
+	} else if writeErr != nil {
+		input, inputErr := engine.NewTQCommandResultInput(command, engine.LivePosition{}, r.clock().UTC(), engine.ControlFailed)
+		if inputErr == nil {
+			admission, completion := r.engine.AdmitTQCommandResult(ctx, input)
+			if admission == engine.AdmissionAdmitted && completion != nil {
+				select {
+				case <-ctx.Done():
+				case <-completion:
+				}
 			}
 		}
 	}
