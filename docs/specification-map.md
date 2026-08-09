@@ -67,6 +67,7 @@ and review records.
 | [`specifications/focused-component-spec-template.md`](specifications/focused-component-spec-template.md) | Mandatory template, revised 2026-08-07: compact/modular routing, current-plan and correction records, single parent ledger, proof and slice rules. |
 | [`market-hours-validation.md`](market-hours-validation.md) | Procedure approved; execution pending a separate owner authorization. Not a private V1 RC gate and not credential authority by itself. |
 | [`v1-release-follow-on-goal.md`](v1-release-follow-on-goal.md) | Short handoff prompt for the subsequent autonomous C7-C11 goal. |
+| [`replay-rest-feasibility-benchmark.md`](replay-rest-feasibility-benchmark.md) | Proposed non-authoritative C12 acquisition evidence plan and future assignment. It authorizes no credentials, provider request, production change, or capacity claim. |
 
 ## Version 1 Release Program
 
@@ -103,6 +104,12 @@ ledgers.
 | 9 | [Top-20 T/Q coverage and features](specifications/top-20-tq-coverage-and-features.md) | Finally accepted 2026-08-08. Opaque paired membership authority, causal coverage, bounded Tape Rate/Spread state, aggregate-independent pressure shedding to known zero/explicit unknown, continuous-health ranked restoration, and exact accounting pass with clean final re-review. |
 | 10 | [Versioned snapshot API](specifications/versioned-snapshot-api.md) | Finally accepted 2026-08-08. One sealed immutable capture maps to the exact versioned schema; loopback HTTP, exact-origin CORS, liveness/readiness, bounded transport, and joined scanner composition pass with clean focused final re-review. |
 | 11 | [Independent UI](specifications/independent-ui.md) | Owner-approved V1 boundary/reconnaissance plan; detailed contract is now active after C10 acceptance. Independent Chrome-desktop high-fidelity V2 adaptation with every V1 field/status and no browser-owned market logic. |
+
+### Proposed follow-on component — not yet part of the approved sequence
+
+| Proposed sequence | Focused component | Outcome and current state |
+| --- | --- | --- |
+| 12 | [Historical replay product mode](specifications/historical-replay-product-mode.md) | Skeleton draft pending owner boundary approval and REST feasibility evidence. Proposes accepted-artifact replay through the sole engine, existing loopback snapshot API, and independent dashboard with explicit replay/nonlive and aggregate-only meaning. It is not yet a V1 RC gate or implementation authority. |
 
 Implementation is sequential. C8-C11 detailed contracts are completed just in
 time after the preceding final interface unless an already stable dependency
