@@ -26,7 +26,7 @@ test("P-C11-VISUAL presentation bands are stable and non-semantic", () => {
   snapshot.rows[0].spread.basis_points = 50;
   const row = buildViewModel(snapshot).rows[0];
   assert.deepEqual([row.dayBand, row.from4am.band, row.hod.band], [0, 0, 0], "returns and drawdown must not receive presentation bands");
-  assert.deepEqual([row.dayRange.band, row.range60.band, row.range30.band], [3, 4, 0], "range position must run red through neutral to green");
+  assert.deepEqual([row.dayRange.position, row.range60.position, row.range30.position], [75, 100, 0], "range position must retain continuous presentation coordinates");
   assert.deepEqual([row.activity.band, row.tape.band, row.spread.band], [4, 4, 4], "existing intensity palettes changed unexpectedly");
   assert.equal(buildViewModel(snapshot).current, true, "visual bands changed readiness");
 });
@@ -37,7 +37,7 @@ test("P-C11-VISUAL every text/status token palette meets WCAG AA contrast", () =
     ["#8da5b6", "#0b1721"], ["#d9e5ed", "#071019"], ["#95a7b4", "#111a21"], ["#ffb58f", "#071019"],
     ["#a8e9c8", "#10271f"], ["#7ce2b3", "#123024"], ["#ffe29d", "#302817"], ["#ffb09c", "#351b18"],
     ["#8298a8", "#10271f"], ["#8298a8", "#123024"], ["#8298a8", "#302817"], ["#8298a8", "#351b18"],
-    ["#ffb4a8", "#3a1719"], ["#ffc1b8", "#2b1a1c"], ["#d2dae0", "#202a31"], ["#7cf0bb", "#0d3929"],
+    ["#e7eef5", "#3a1719"], ["#e7eef5", "#202a31"], ["#e7eef5", "#0d3929"],
   ];
   for (const [foreground, background] of pairs) assert.ok(contrast(foreground, background) >= 4.5, `${foreground} on ${background}`);
 });
@@ -64,6 +64,9 @@ test("P-C11-VISUAL CSS fixes desktop density, focus, and reduced motion", async 
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(css, /animation-duration: \.01ms !important/);
   assert.match(css, /table\[data-publication-state="noncurrent"\]/);
+  assert.match(css, /attr\(data-range-red-weight type\(<percentage>\), 0%\)/);
+  assert.match(css, /color-mix\(in oklab/);
+  assert.doesNotMatch(css, /data-palette="range"\]\[data-band=/, "range position reverted to hard buckets");
   assert.match(css, /grid-template-columns: repeat\(8, 1fr\)/);
   assert.ok(32 + 52 + 53 + 27 + 30 + 20 * 32 <= 900, "status strip plus full table exceeds target viewport");
 });

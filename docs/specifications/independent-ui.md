@@ -166,9 +166,10 @@ Genuine numeric zero remains visible. A non-current status hides its numeric
 slot and shows its exact status/reason; color never overrides that state.
 Day %, From 4AM %, and HOD drawdown remain numerically uncolored because equal
 magnitudes can have different symbol-relative meaning. The three range-position
-columns alone use a directional palette at 0, 25, 50, 75, and 100%: low values
-run bright red through muted red, 50% is neutral gray, and high values run muted
-through bright green. Activity retains intensity bands at 0, 25, 50, 75, and
+columns use continuous linear color interpolation from red at 0%, through
+neutral gray at 50%, to green at 100%; intermediate percentages have no
+categorical cutoff or implied statistical threshold. Out-of-range numbers stay
+visible while their color uses the nearest endpoint. Activity retains intensity bands at 0, 25, 50, 75, and
 100%; Tape at 0, 1, 5, 15, and 30 trades/second; Spread at 0, 5, 10, 25, and
 50 bps pending owner evaluation of those three existing palettes. Values
 outside a visual band remain numerically visible. These bands do not create
@@ -453,7 +454,8 @@ stable focus, and vanished-row fallback.
 Owner visual review on 2026-08-09 revised the lower-level palette without
 changing any market meaning: Day %, From 4AM %, and HOD drawdown no longer
 receive magnitude fills; Day, 60 MIN, and 30 MIN range positions use a dedicated
-red-to-neutral-to-green directional scale; and the synthetic current fixture is
+continuous red-to-neutral-to-green directional scale with no intermediate
+cutoffs; and the synthetic current fixture is
 Day-% descending so it no longer visually contradicts the server-ranking
 contract. Activity, Tape Rate, and Spread retain their prior intensity scales
 pending separate owner evaluation. Focused model, palette, contrast, and fixture

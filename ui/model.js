@@ -204,9 +204,8 @@ function tqState(status, reason) { return KNOWN_TQ_STATUS.has(status) && KNOWN_T
 export function formatPercent(ratio, digits = 2) { return `${(ratio * 100).toFixed(digits)}%`; }
 function formatUSD(value) { return value >= 100 ? `$${value.toFixed(2)}` : `$${value.toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}`; }
 function band(value, stops) { const magnitude = Math.abs(value); let result = 0; for (let index = 1; index < stops.length; index++) if (magnitude >= stops[index]) result = index; return result; }
-function rangeBand(value) { const percent = value * 100; if (percent < 25) return 0; if (percent < 50) return 1; if (percent < 75) return 2; if (percent < 100) return 3; return 4; }
 function fieldView(field, stops = null) { return knownCurrentMeasurement(field) ? { state: "current", text: formatPercent(field.value_ratio), reason: field.reason, band: stops ? band(field.value_ratio * 100, stops) : 0 } : { state: KNOWN_FIELD_STATUS.has(field.status) && KNOWN_FIELD_REASON.has(field.reason) ? field.status : "unknown", text: "—", reason: field.reason || field.status, band: 0 }; }
-function rangeFieldView(field) { const view = fieldView(field); if (view.state === "current") view.band = rangeBand(field.value_ratio); return view; }
+function rangeFieldView(field) { const view = fieldView(field); view.position = view.state === "current" ? field.value_ratio * 100 : null; return view; }
 function rateView(rate, outerCurrent) { return outerCurrent && knownCurrentTQ(rate.status, rate.reason) ? `${rate.trades_per_second.toFixed(1)}/s` : "—"; }
 
 export function buildViewModel(input, transport = "connected") {

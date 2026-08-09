@@ -245,6 +245,8 @@ test("P-C11-STATE detached renderer degrades retained rows and commits atomicall
   const renderedCells = find(document.body, node => node.tagName === "TBODY")[0].children[0].children;
   assert.deepEqual(renderedCells.slice(3, 6).map(node => node.dataset.palette), [undefined, undefined, undefined], "return and drawdown cells received a palette");
   assert.deepEqual(renderedCells.slice(6, 9).map(node => node.dataset.palette), ["range", "range", "range"]);
+  assert.deepEqual(renderedCells.slice(6, 9).map(node => node.dataset.rangePosition), ["50", "75", "25"]);
+  assert.deepEqual(renderedCells.slice(6, 9).map(node => [node.dataset.rangeRedWeight, node.dataset.rangeGreenWeight]), [["0%", "0%"], ["0%", "50%"], ["50%", "0%"]]);
   assert.deepEqual(renderedCells.slice(9, 12).map(node => node.dataset.palette), ["intensity", "intensity", "intensity"]);
   assert.match(document.body.textContent, /60 MIN Range %30 MIN Range %/);
 

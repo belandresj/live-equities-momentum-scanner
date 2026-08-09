@@ -5,9 +5,14 @@ function textElement(document, tag, value, className = "") { const node = elemen
 function statusItem(document, label, value, state = "") {
   const item = element(document, "div"); item.append(textElement(document, "span", label)); const strong = textElement(document, "strong", value); if (state) strong.dataset.state = state; item.append(strong); return item;
 }
-function cell(document, value, state, detail, overallCurrent, band = 0, focusKey = "", palette = "") {
+function rangeWeights(position) {
+  const bounded = Math.max(0, Math.min(100, position));
+  return { red: bounded < 50 ? (50 - bounded) * 2 : 0, green: bounded > 50 ? (bounded - 50) * 2 : 0 };
+}
+function cell(document, value, state, detail, overallCurrent, band = 0, focusKey = "", palette = "", rangePosition = null) {
   const td = element(document, "td"); td.dataset.state = overallCurrent ? state : "retained"; td.dataset.fieldState = state;
   td.dataset.band = String(band); if (palette) td.dataset.palette = palette;
+  if (palette === "range" && rangePosition !== null) { const weights = rangeWeights(rangePosition); td.dataset.rangePosition = String(rangePosition); td.dataset.rangeRedWeight = `${weights.red}%`; td.dataset.rangeGreenWeight = `${weights.green}%`; }
   td.append(textElement(document, "span", value, "primary"));
   if (detail) { td.tabIndex = 0; td.title = detail; td.dataset.focusKey = focusKey; td.setAttribute("aria-label", `${value}. ${detail}`); }
   return td;
@@ -27,8 +32,8 @@ function buildTable(document, model) {
     const tr = element(document, "tr"); tr.dataset.publicationState = model.current ? "current" : "noncurrent";
     const key = row.symbol;
     tr.append(cell(document, String(row.rank), "current", "", model.current), cell(document, row.symbol, "current", "", model.current), cell(document, row.last, "current", `mark age ${row.markAgeMS} ms`, model.current, 0, `${key}:last`), cell(document, row.day, "current", "", model.current, row.dayBand),
-      cell(document, row.from4am.text, row.from4am.state, row.from4am.reason, model.current, row.from4am.band, `${key}:from4am`), cell(document, row.hod.text, row.hod.state, row.hod.reason, model.current, row.hod.band, `${key}:hod`), cell(document, row.dayRange.text, row.dayRange.state, row.dayRange.reason, model.current, row.dayRange.band, `${key}:dayrange`, "range"),
-      cell(document, row.range60.text, row.range60.state, row.range60.reason, model.current, row.range60.band, `${key}:range60`, "range"), cell(document, row.range30.text, row.range30.state, row.range30.reason, model.current, row.range30.band, `${key}:range30`, "range"), cell(document, row.activity.text, row.activity.state, row.activity.reason, model.current, row.activity.band, `${key}:activity`, "intensity"),
+      cell(document, row.from4am.text, row.from4am.state, row.from4am.reason, model.current, row.from4am.band, `${key}:from4am`), cell(document, row.hod.text, row.hod.state, row.hod.reason, model.current, row.hod.band, `${key}:hod`), cell(document, row.dayRange.text, row.dayRange.state, row.dayRange.reason, model.current, row.dayRange.band, `${key}:dayrange`, "range", row.dayRange.position),
+      cell(document, row.range60.text, row.range60.state, row.range60.reason, model.current, row.range60.band, `${key}:range60`, "range", row.range60.position), cell(document, row.range30.text, row.range30.state, row.range30.reason, model.current, row.range30.band, `${key}:range30`, "range", row.range30.position), cell(document, row.activity.text, row.activity.state, row.activity.reason, model.current, row.activity.band, `${key}:activity`, "intensity"),
       dualCell(document, row.tape.primary, row.tape.secondary, row.tape.state, row.tape.detail, model.current, row.tape.band, `${key}:tape`), dualCell(document, row.spread.primary, row.spread.secondary, row.spread.state, row.spread.detail, model.current, row.spread.band, `${key}:spread`));
     tbody.append(tr);
   }
