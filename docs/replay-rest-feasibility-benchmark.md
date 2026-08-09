@@ -53,27 +53,36 @@ report has fixed `deterministic_subset` scope, fixed false complete-universe/
 artifact/acceptance eligibility, and no binding value, normalized rows,
 `DownloadResult`, artifact identity, or path. The production downloader,
 normalizer, request limits, retries, accounting, CLI, and scanner remain
-unchanged. Full-binding stages and artifact compilation stay outside this
-local-harness authorization.
+unchanged.
+
+The owner's 2026-08-09 B3 authorization adds one separate download-only full-
+binding report path. It invokes the same downloader over the accepted binding,
+records exact binding identity and sorted-symbol digest, and seals only the
+existing measurement facts. Its `complete_binding_download_only` scope is
+explicitly distinct from artifact completeness and product acceptance, both
+of which remain false and structurally unavailable. It cannot compile or
+return an artifact, binding, `DownloadResult`, normalized row, artifact
+identity, or path. B4 artifact compilation remains separately authorized and
+outside this harness.
 
 ### Local implementation evidence
 
 `internal/reference/benchmark_subset.go` derives the strict subset from the
 accepted binding's schedule, universe, and prior-close facts, then re-enters
 the ordinary binding assembler. `internal/massive/offline_benchmark.go` applies
-the fixed evenly-spaced selection, hard timeout, and existing downloader, then
-seals only the measurement report described above. It contains no credential
-lookup or provider-stage runner.
+the fixed evenly-spaced selection or exact full binding, hard timeout, and
+existing downloader, then seals only the applicable measurement report. It
+contains no credential lookup or provider-stage runner.
 
 The ordinary fake-HTTPS proof covers deterministic selection identity;
 successful nonempty and empty symbols; pagination, retry attempts, response
 bytes, and normalized-row counts; exact failed/canceled terminal accounting;
-in-flight timeout cancellation; and rejection of complete-binding scope before
-HTTPS. Focused and repository-short verification pass. No independent review
-was triggered: this milestone changes no product/component contract or
-production trust/interface semantics, and the strict-subset/false-success risk
-is directly constrained by construction and the ordinary proof. B0-B4 remain
-unexecuted.
+in-flight timeout cancellation; rejection of complete-binding scope through
+the subset API before HTTPS; and full-binding download success/failure with
+fixed false artifact/acceptance eligibility. Focused and repository-short
+verification pass. No production downloader, provider, artifact, CLI, or
+scanner behavior changes. Provider-stage results are reported to the owner and
+are not persisted in this document.
 
 ## Required measurements
 

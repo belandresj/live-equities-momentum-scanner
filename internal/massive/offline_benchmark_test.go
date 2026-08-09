@@ -184,3 +184,87 @@ func TestOfflineSubsetBenchmarkRejectsCompleteBindingScope(t *testing.T) {
 		t.Fatalf("complete-binding scope was not rejected: err=%v report=%+v", err, report)
 	}
 }
+
+func TestOfflineFullBindingBenchmarkMeasurementsAndClaimBoundary(t *testing.T) {
+	binding := component4TestBinding(t, []string{"AAA", "BBB", "CCC"})
+	start := binding.SessionStart()
+	var servedBytes atomic.Int64
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		symbol := strings.Split(request.URL.Path, "/")[4]
+		body := fmt.Sprintf(`{"status":"OK","ticker":%q,"adjusted":false,"results":[]}`, symbol)
+		if symbol == "BBB" {
+			body = fmt.Sprintf(`{"status":"OK","ticker":"BBB","adjusted":false,"results":[{"t":%d,"o":10,"h":11,"l":9,"c":10,"v":10,"vw":10,"n":2}]}`, start.UnixMilli())
+		}
+		_, _ = io.WriteString(writer, body)
+		servedBytes.Add(int64(len(body)))
+	}))
+	defer server.Close()
+
+	report, err := RunOfflineFullBindingBenchmark(context.Background(), testOfflineDownloader(t, server), OfflineFullBindingBenchmarkConfig{
+		Binding: binding, Start: start, End: start.Add(time.Second), Workers: 2, HardTimeout: time.Second,
+		MaximumNormalizedRecords: 3, MaximumResponseBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := report.Selection()
+	if selection.BindingIdentity != binding.Identity() || selection.Method != OfflineFullBindingSelectionMethod ||
+		selection.Symbols != 3 || selection.SortedSymbolsSHA256 != benchmarkSymbolsDigest([]string{"AAA", "BBB", "CCC"}) {
+		t.Fatalf("full binding selection = %+v", selection)
+	}
+	want := DownloadAccounting{PlannedSymbols: 3, CompleteSymbols: 3, NonemptySymbols: 1, EmptySymbols: 2,
+		Records: 1, Pages: 3, Attempts: 3, Bytes: servedBytes.Load()}
+	if report.State() != OfflineFullBindingStateComplete || !report.Reconciles() || report.Accounting() != want {
+		t.Fatalf("report state=%s reconciles=%t accounting=%+v want=%+v", report.State(), report.Reconciles(), report.Accounting(), want)
+	}
+	if report.EvidenceScope() != OfflineFullBindingBenchmarkScope || !report.CompleteBindingScope() ||
+		report.ArtifactEligible() || report.AcceptanceEligible() {
+		t.Fatalf("full binding claim boundary scope=%q complete_binding=%t artifact=%t acceptance=%t",
+			report.EvidenceScope(), report.CompleteBindingScope(), report.ArtifactEligible(), report.AcceptanceEligible())
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(encoded, &value); err != nil {
+		t.Fatal(err)
+	}
+	if value["schema"] != OfflineFullBindingBenchmarkSchema || value["evidence_scope"] != OfflineFullBindingBenchmarkScope ||
+		value["complete_binding_scope"] != true || value["artifact_eligible"] != false || value["acceptance_eligible"] != false {
+		t.Fatalf("serialized full binding boundary = %s", encoded)
+	}
+	for _, prohibited := range []string{"artifact_id", "path", "binding", "download_result", "rows"} {
+		if _, ok := value[prohibited]; ok {
+			t.Fatalf("full binding report exposes %s: %s", prohibited, encoded)
+		}
+	}
+}
+
+func TestOfflineFullBindingBenchmarkTerminalFailureRemainsMeasurement(t *testing.T) {
+	binding := component4TestBinding(t, []string{"AAA", "BBB"})
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		symbol := strings.Split(request.URL.Path, "/")[4]
+		if symbol == "BBB" {
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(writer, "terminal")
+			return
+		}
+		fmt.Fprintf(writer, `{"status":"OK","ticker":%q,"adjusted":false,"results":[]}`, symbol)
+	}))
+	defer server.Close()
+	start := binding.SessionStart()
+	report, err := RunOfflineFullBindingBenchmark(context.Background(), testOfflineDownloader(t, server), OfflineFullBindingBenchmarkConfig{
+		Binding: binding, Start: start, End: start.Add(time.Second), Workers: 1, HardTimeout: time.Second,
+		MaximumNormalizedRecords: 2, MaximumResponseBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accounting := report.Accounting()
+	if report.State() != OfflineFullBindingStateFailed || !report.Reconciles() || accounting.PlannedSymbols != 2 ||
+		accounting.CompleteSymbols != 1 || accounting.FailedSymbols != 1 || accounting.CanceledSymbols != 0 ||
+		report.Outcomes()[1].Reason != DownloadReasonEnvelopeIdentityStatus || report.ArtifactEligible() || report.AcceptanceEligible() {
+		t.Fatalf("terminal failure report state=%s accounting=%+v outcomes=%+v", report.State(), accounting, report.Outcomes())
+	}
+}
