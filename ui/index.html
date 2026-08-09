@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Momentum Scanner</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div><p class="eyebrow">LIVE EQUITIES</p><h1>Momentum Scanner</h1></div>
+      <div id="status-live" class="status-live" role="status" aria-live="polite">Connecting to scanner API</div>
+    </header>
+    <section class="status-grid" aria-label="Scanner status">
+      <div><span>Transport</span><strong id="transport">connecting</strong></div>
+      <div><span>Backend</span><strong id="backend">unknown</strong></div>
+      <div><span>Ranking</span><strong id="ranking">unknown</strong></div>
+      <div><span>Watermark</span><strong id="watermark">—</strong></div>
+      <div><span>T/Q</span><strong id="tq">unknown</strong></div>
+      <div><span>Sample</span><strong id="sample">—</strong></div>
+    </section>
+    <details id="diagnostics"><summary>Operational details</summary><dl id="diagnostic-values"></dl></details>
+    <div id="message" class="message" hidden></div>
+    <div class="table-shell">
+      <table id="scanner-table">
+        <caption>Server-ranked top 20 qualifying equities</caption>
+        <thead><tr>
+          <th scope="col">Rank</th><th scope="col">Symbol</th><th scope="col">Last</th><th scope="col">Day %</th>
+          <th scope="col">From 4AM %</th><th scope="col">HOD DD %</th><th scope="col">Day Range %</th>
+          <th scope="col">60m Range %</th><th scope="col">30m Range %</th><th scope="col">Activity</th>
+          <th scope="col">Tape Rate</th><th scope="col">Spread</th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </main>
+  <script src="/config.js"></script>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

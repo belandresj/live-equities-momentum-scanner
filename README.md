@@ -104,6 +104,22 @@ Chrome desktop is the required UI target, and Component 11 is a high-fidelity
 adaptation of the useful V2 scanner UI without V2 browser-owned calculations,
 readiness logic, obsolete state semantics, or backend coupling.
 
+## Private local dashboard
+
+The dashboard is an independent loopback process. Start the scanner API with
+the dashboard origin explicitly allowed, then start the static UI server from
+the repository root:
+
+```text
+go run ./cmd/scanner --trading-date YYYY-MM-DD --api-address 127.0.0.1:8080 --allow-origin http://127.0.0.1:4173
+go run ./cmd/dashboard --address 127.0.0.1:4173 --api-origin http://127.0.0.1:8080 --assets ui
+```
+
+Open `http://127.0.0.1:4173` in Chrome. The UI polls the versioned snapshot once
+per second with one request in flight. Restarting the dashboard does not stop
+or relink the scanner. This is a private/local configuration; it does not add
+public binding, authentication, TLS, hosting, or credentialed live validation.
+
 ## Predecessor evidence
 
 The version 2 predecessor is retained separately as a source of Massive protocol

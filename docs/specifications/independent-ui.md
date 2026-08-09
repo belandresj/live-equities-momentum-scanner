@@ -32,7 +32,7 @@ Sections 8-19 are completed here after just-in-time V2 UI reconnaissance.
 | --- | --- | --- | --- |
 | Boundary/reconnaissance plan | `accepted` | Direct owner V1 program revision; exact source list recorded before bounded content inspection | Complete |
 | Completed contract | `accepted_current_plan` | Focused review corrections add full T/Q trust disclosure, fail-closed semantic coherence, additive compatibility, C10-matching response bounds, exact accessibility assertions, and delayed-refresh containment; focused re-review clean | Begin C11-S1 |
-| `C11-S1` API/view-state integration | `pending` | `P-C11-STATE` | Begin after completed-contract review |
+| `C11-S1` API/view-state integration | `accepted` | Initial review corrections and three residual trust/time fixes complete; `P-C11-STATE` passes 14 bounded tests, server proof, ordinary, and affected race; focused re-review clean | Begin C11-S2 |
 | `C11-S2` visual/interaction/accessibility | `pending` | `P-C11-VISUAL` | Begin only after S1 acceptance |
 | Final component review | `pending` | Mandatory read-only review after both proofs and verification | Then integrated V1 RC review |
 
@@ -384,3 +384,38 @@ does not depend on T/Q, browser health, or presentation. The fixed V1 outcome
 remains a private/local independently runnable scanner and dashboard; public
 deployment and separately authorized market-hours validation remain outside
 the completion claim.
+
+`C11-S1` implements one pure `scanner.snapshot.v1` validator/view model, one
+bounded nonoverlapping poller, one text-only atomic renderer, and a separate
+loopback static server. `P-C11-STATE` passes the full named corpus, including
+ratio/Activity units, exact order/count, all field/TQ states and trust details,
+currentness contradictions, every wire accounting identity, additive fields,
+malicious strings, response bounds, delayed/timeout/frozen/reconnect behavior,
+and same/new-publication replacement. The server proof rejects public bind,
+nonloopback/path-bearing API origins, unknown routes, symlink escape, oversize
+assets, and unjoined shutdown while proving exact known assets/config/CSP/HEAD.
+Ordinary repository and affected race verification pass. The coherent S1
+success path is one bounded C10 body to one validated detached view; malformed,
+incoherent, unsafe, over-bound, or timed-out inputs cannot partially replace it.
+S2 visual density, computed accessibility/contrast, Chrome screenshots, and UI-
+restart evidence remain deferred exactly as allocated.
+
+The initial S1 implementation review rejected known-invalid T/Q tuples and
+hydration fences reaching current, current-looking frozen rows/empty claims,
+dropped process/membership/bound facts, sequential partial DOM mutation, and
+loose calendar/timestamp parsing. Corrections enforce exact known aggregate/TQ
+trust tuples while preserving unknown-reason compatibility, require positive
+same-epoch reconciled fences, downgrade the entire retained table and empty
+message, expose every bounded V1 family plus row membership/mark age, build one
+detached document before a single swap and acknowledge snapshots only after the
+swap, and parse canonical UTC RFC3339Nano/calendar dates. The expanded proof
+injects each dangerous counterexample, actual detached DOM failure, readiness-
+expired/refresh-delayed/disconnected styling, and unrendered-snapshot failure.
+Focused re-review then found operations-sample accounting incorrectly vetoed
+C10 readiness, unknown Tape meanings still exposed inner rates, and fractional
+timestamps accepted noncanonical trailing zeros. The final correction renders
+operations accounting as diagnostics only, gates both rates on known-current
+outer Tape authority, and matches C10 canonical RFC3339Nano. All 14 focused
+tests, the server proof, ordinary repository verification, and affected race
+verification pass; final focused re-review found no remaining P1/P2. S1 is
+accepted and its S2 boundary remains valid.
