@@ -109,7 +109,7 @@ ledgers.
 
 | Proposed sequence | Focused component | Outcome and current state |
 | --- | --- | --- |
-| 12 | [Historical replay product mode](specifications/historical-replay-product-mode.md) | Skeleton draft pending owner boundary approval and REST feasibility evidence. Proposes accepted-artifact replay through the sole engine, existing loopback snapshot API, and independent dashboard with explicit replay/nonlive and aggregate-only meaning. It is not yet a V1 RC gate or implementation authority. |
+| 12 | [Historical replay product mode](specifications/historical-replay-product-mode.md) | Owner-approved boundary skeleton; detailed Sections 8-19, focused review, and implementation approval remain pending. Defines a selected historical observation window with deterministic warm-up from session start, ordinary 1x playback through the sole engine/API/dashboard path, explicit replay/nonlive aggregate-only meaning, and retained terminal inspection. It is not a V1 RC gate or implementation authority. |
 
 Implementation is sequential. C8-C11 detailed contracts are completed just in
 time after the preceding final interface unless an already stable dependency

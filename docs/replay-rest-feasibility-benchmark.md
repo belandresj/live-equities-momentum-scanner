@@ -1,9 +1,9 @@
 # REST replay acquisition feasibility benchmark
 
-**Status:** Local subset harness implemented and deterministic fake-HTTPS
-verification clean under the owner's 2026-08-09 authorization; provider
-execution remains pending. This document is evidence planning, not product
-authority or C12 approval.
+**Status:** B0-B4 completed under exact owner authorizations on 2026-08-09;
+local harness verification and B4 artifact reopen validation succeeded. This
+document records acquisition evidence and future rerun safeguards, not product
+authority or C12 implementation approval.
 
 **Related proposed component:** [Historical replay product mode](specifications/historical-replay-product-mode.md)
 
@@ -11,20 +11,48 @@ authority or C12 approval.
 
 ## Authorization boundary
 
-The owner's 2026-08-09 authorization permits only the benchmark-local code and
-ordinary deterministic tests needed to construct a strict subset binding,
-invoke the sealed C4 `massive.OfflineDownloader`, and report its existing
-measurements honestly. It permits no production CLI flag, downloader/retry/
-worker-limit change, artifact-schema change, scanner-runtime change, C12
-product implementation, credential read, provider request, licensed-data
-download, or B0-B4 execution.
+The owner's initial 2026-08-09 authorization permitted only the benchmark-local
+code and ordinary deterministic tests needed to construct a strict subset
+binding, invoke the sealed C4 `massive.OfflineDownloader`, and report its
+existing measurements honestly. It permitted no production CLI flag,
+downloader/retry/worker-limit change, artifact-schema change, scanner-runtime
+change, C12 product implementation, credential read, provider request,
+licensed-data download, or B0-B4 execution. Separate later owner messages
+authorized each completed provider stage and B4 artifact construction with
+exact bounds; none created continuing credential or provider authority.
 
 Implementation authorization and provider-execution authorization are
-separate. The local harness may exist and pass fake-HTTPS tests before the C12
-boundary is approved. Every real stage still requires a later owner message
-naming the exact stage, trading date, interval, population, workers, hard
-timeout, and permission to read `MASSIVE_API_KEY`. C12 approval by itself does
-not supply those facts or authorize a provider request.
+separate. The local harness passed fake-HTTPS tests before the C12 boundary was
+approved. The completed 2026-08-09 stages authorized no continuing provider
+access. Every future rerun still requires a new owner message naming the exact
+stage, trading date, interval, population, workers, hard timeout, and permission
+to read `MASSIVE_API_KEY`. C12 approval by itself does not supply those facts or
+authorize another provider request.
+
+## Completed evidence summary
+
+B0-B3 established credential/entitlement operation, subset interval and worker
+scaling, and exact full-binding premarket request completion. B4 then compiled
+and independently reopened one complete 2026-08-07 04:00-20:00 New York
+artifact:
+
+- 5,691 of 5,691 symbols completed; zero failed or canceled;
+- 5,519 nonempty and 172 successful-empty symbols;
+- 7,671,171 normalized one-second aggregate records;
+- 5,691 HTTP pages, 5,750 attempts, and 693,876,166 response bytes;
+- 2,584,011,150 artifact bytes;
+- 12:28.835 acquisition/compile wall time plus 1:32.697 independent reopen
+  validation; and
+- exact binding, interval, coverage, record-count, and SHA-256 identity match on
+  reopen.
+
+The run missed the approximate ten-minute preference but completed inside its
+authorized fifteen-minute compile deadline. REST acquisition is accepted for
+the first C12 workflow. Peak Go heap allocation reached 11.58 GB; routine daily
+artifact construction on this 8 GiB host should later replace the current
+memory-heavy compile path with the already-permitted bounded spill/merge design.
+That is a C4 operational follow-up, not a C12 semantic dependency. Licensed
+artifact bytes and exact-date caches remain private, ignored, and uncommitted.
 
 ## Decision this benchmark supports
 
@@ -32,7 +60,8 @@ Determine whether the accepted per-symbol Massive one-second aggregate
 downloader is operationally suitable for routine complete-session replay on the
 owner's current subscription, network, and host. The desired full eligible-
 universe 04:00-20:00 New York artifact acquisition target is approximately ten
-minutes. This target is provisional until the owner accepts the C12 contract.
+minutes. The owner accepted that preference as a target rather than a hard
+acceptance limit; B4's bounded 12:28.835 result retains REST for C12.
 
 The benchmark does not validate market semantics already owned by C4 and does
 not prove provider SLA, future entitlement, public capacity, live latency,
@@ -62,8 +91,8 @@ existing measurement facts. Its `complete_binding_download_only` scope is
 explicitly distinct from artifact completeness and product acceptance, both
 of which remain false and structurally unavailable. It cannot compile or
 return an artifact, binding, `DownloadResult`, normalized row, artifact
-identity, or path. B4 artifact compilation remains separately authorized and
-outside this harness.
+identity, or path. B4 artifact compilation was separately authorized, completed,
+and independently validated outside this harness.
 
 ### Local implementation evidence
 
@@ -81,8 +110,9 @@ in-flight timeout cancellation; rejection of complete-binding scope through
 the subset API before HTTPS; and full-binding download success/failure with
 fixed false artifact/acceptance eligibility. Focused and repository-short
 verification pass. No production downloader, provider, artifact, CLI, or
-scanner behavior changes. Provider-stage results are reported to the owner and
-are not persisted in this document.
+scanner behavior changes. This document persists only bounded nonsecret stage
+accounting; it contains no licensed rows, artifact path, credential, header, or
+continuation value.
 
 ## Required measurements
 
@@ -117,8 +147,9 @@ response body, or licensed provider rows in a committed artifact.
 
 ## Sequential trial matrix
 
-This matrix is a future provider-execution sequence, not authorization. Every
-stage requires its own exact owner authorization and the preceding result to be
+This matrix records the completed 2026-08-09 sequence and remains the protocol
+for any future rerun. It is not continuing authorization. Every future stage
+requires its own exact owner authorization and the preceding result to be
 complete and reconciled. A failure records evidence and stops escalation; it
 does not justify broadening scope or raising limits automatically.
 
@@ -137,13 +168,13 @@ must not replace the deterministic subset.
 
 ## Interpretation and decision rule
 
-The ten-minute full-day target is the primary product preference. Before B4,
-forecast conservatively from B1-B3 and report uncertainty rather than asserting
-linear scaling: per-symbol request overhead, sparse results, 50,000-row
-pagination, provider throttling, response bytes, and local parsing do not scale
-identically.
+The ten-minute full-day target is the primary product preference. For any future
+B4 rerun, forecast conservatively from preceding stages and report uncertainty
+rather than asserting linear scaling: per-symbol request overhead, sparse
+results, 50,000-row pagination, provider throttling, response bytes, and local
+parsing do not scale identically.
 
-Proposed decision bands, subject to owner acceptance:
+Decision bands retained for future evidence interpretation:
 
 - actual B4 complete artifact at or below ten minutes with no unresolved
   terminal failure: retain REST acquisition for the first C12 implementation;
@@ -156,8 +187,9 @@ Proposed decision bands, subject to owner acceptance:
   mismatch: REST is not accepted as the routine complete-day acquisition path.
 
 The thirty-minute boundary is a proposed investigation trigger, not a product
-requirement. The benchmark reports evidence; the owner selects the acquisition
-path.
+requirement. B4's actual bounded success selected REST for the first C12 path;
+future evidence may reopen that operational decision without changing replay
+semantics.
 
 ## Authorized local-harness implementation assignment
 
