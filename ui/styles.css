@@ -25,7 +25,6 @@ th:nth-child(2), td:nth-child(2) { text-align: left; }
 th:first-child, td:first-child { width: 42px; }
 th:nth-child(2), td:nth-child(2) { width: 66px; }
 td { height: 32px; padding: 0 7px; border-bottom: 1px solid #172b39; color: #d9e5ed; text-align: right; font: 600 11px ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-tbody tr:hover { background: #102431; }
 td[data-state="warming"], td[data-state="unavailable"] { color: #95a7b4; }
 td[data-state="invalid"], td[data-state="unknown"], td[data-state="pressure_shed"], td[data-state="stale"] { color: #ffb58f; }
 table[data-publication-state="current"] td[data-state="current"][data-band="1"] { color: #a8e9c8; background: #10271f; }

@@ -54,6 +54,7 @@ test("P-C11-VISUAL CSS fixes desktop density, focus, and reduced motion", async 
   assert.match(css, /th \{[^}]*height: 30px/s);
   assert.ok(30 + 20 * 32 <= 670, "table body exceeds allocated desktop height");
   assert.match(css, /:focus-visible/);
+  assert.doesNotMatch(css, /tbody\s+tr:hover/, "pointer hover must not highlight an entire scanner row");
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(css, /animation-duration: \.01ms !important/);
   assert.match(css, /table\[data-publication-state="noncurrent"\]/);
