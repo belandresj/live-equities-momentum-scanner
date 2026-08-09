@@ -8,7 +8,7 @@ h1 { margin: 0; font-size: 22px; letter-spacing: -.02em; }
 .status-live { border: 1px solid #51697a; border-radius: 999px; padding: 7px 12px; font: 600 12px ui-monospace, monospace; }
 [data-state="current"] { color: #7ce2b3; }
 [data-state="warning"] { color: #ffd37a; }
-.status-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 1px; margin: 10px 0; background: #223747; border: 1px solid #294052; }
+.status-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 1px; margin: 10px 0; background: #223747; border: 1px solid #294052; }
 .status-grid div { background: #0c1822; padding: 7px 9px; min-width: 0; }
 .status-grid span { display: block; color: #819bad; font-size: 9px; letter-spacing: .12em; text-transform: uppercase; }
 .status-grid strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 11px ui-monospace, monospace; }
@@ -28,7 +28,12 @@ td { height: 32px; padding: 0 7px; border-bottom: 1px solid #172b39; color: #d9e
 tbody tr:hover { background: #102431; }
 td[data-state="warming"], td[data-state="unavailable"] { color: #95a7b4; }
 td[data-state="invalid"], td[data-state="unknown"], td[data-state="pressure_shed"], td[data-state="stale"] { color: #ffb58f; }
+table[data-publication-state="current"] td[data-state="current"][data-band="1"] { color: #a8e9c8; background: #10271f; }
+table[data-publication-state="current"] td[data-state="current"][data-band="2"] { color: #7ce2b3; background: #123024; }
+table[data-publication-state="current"] td[data-state="current"][data-band="3"] { color: #ffe29d; background: #302817; }
+table[data-publication-state="current"] td[data-state="current"][data-band="4"] { color: #ffb09c; background: #351b18; }
 table[data-publication-state="noncurrent"] tbody { background: #111a21; }
-td[data-state="retained"] { color: #91a0aa; opacity: .72; }
+td[data-state="retained"] { color: #91a0aa; }
 td small { display: block; color: #8298a8; font-size: 8px; line-height: 9px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; } }

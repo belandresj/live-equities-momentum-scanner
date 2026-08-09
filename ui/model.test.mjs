@@ -195,19 +195,23 @@ test("P-C11-STATE renderer never interprets API strings as HTML", async () => {
 });
 
 class FakeNode {
-  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.dataset = {}; this.attributes = {}; this.hidden = false; this.id = ""; this.className = ""; this._text = ""; }
+  constructor(tag, document = null) { this.tagName = tag.toUpperCase(); this.ownerDocument = document; this.children = []; this.dataset = {}; this.attributes = {}; this.hidden = false; this.open = false; this.id = ""; this.className = ""; this._text = ""; }
   set textContent(value) { this._text = String(value); this.children = []; }
   get textContent() { return this._text + this.children.map(child => child.textContent).join(""); }
   append(...nodes) { this.children.push(...nodes); }
   replaceChildren(...nodes) { this._text = ""; this.children = nodes; }
   setAttribute(name, value) { this.attributes[name] = String(value); }
+  querySelector(selector) { const match = /^\[data-focus-key="(.*)"\]$/.exec(selector); return match ? find(this, node => node.dataset.focusKey === match[1])[0] || null : null; }
+  focus() { if (this.ownerDocument) this.ownerDocument.activeElement = this; }
 }
 class FakeDocument {
-  constructor() { this.body = new FakeNode("body"); }
-  createElement(tag) { return new FakeNode(tag); }
-  createDocumentFragment() { return new FakeNode("fragment"); }
+  constructor() { this.body = new FakeNode("body", this); this.activeElement = null; }
+  createElement(tag) { return new FakeNode(tag, this); }
+  createDocumentFragment() { return new FakeNode("fragment", this); }
+  getElementById(id) { return find(this.body, node => node.id === id)[0] || null; }
 }
 function find(node, predicate, result = []) { if (predicate(node)) result.push(node); for (const child of node.children) find(child, predicate, result); return result; }
+globalThis.CSS ??= { escape: value => String(value).replace(/["\\]/g, "\\$&") };
 
 test("P-C11-STATE detached renderer degrades retained rows and commits atomically", () => {
   const document = new FakeDocument();
@@ -225,6 +229,31 @@ test("P-C11-STATE detached renderer degrades retained rows and commits atomicall
   assert.equal(find(document.body, node => node.tagName === "TABLE")[0].dataset.publicationState, "noncurrent");
   assert.ok(find(document.body, node => node.tagName === "TD").every(node => node.dataset.state === "retained"));
   assert.match(document.body.textContent, /FROZEN · DISCONNECTED/);
+});
+
+test("P-C11-VISUAL polling preserves disclosure, keyed focus, and live announcer", () => {
+  const document = new FakeDocument(), first = buildViewModel(snapshotFixture());
+  renderDashboard(document, { transport: "connected", model: first });
+  const announcer = document.getElementById("announcer"), details = document.getElementById("diagnostics"); details.open = true;
+  const tape = find(document.body, node => node.dataset.focusKey?.endsWith(":tape"))[0]; tape.focus(); const key = tape.dataset.focusKey;
+  const secondSnapshot = snapshotFixture(2); secondSnapshot.sample.id = "11";
+  [secondSnapshot.rows[0], secondSnapshot.rows[1]] = [secondSnapshot.rows[1], secondSnapshot.rows[0]];
+  secondSnapshot.rows[0].rank = 1; secondSnapshot.rows[1].rank = 2;
+  secondSnapshot.tq.desired_symbols = secondSnapshot.rows.map(row => row.symbol);
+  renderDashboard(document, { transport: "connected", model: buildViewModel(secondSnapshot) });
+  assert.equal(document.getElementById("announcer"), announcer, "live region was recreated");
+  assert.match(announcer.textContent, /publication 20/);
+  assert.equal(document.getElementById("diagnostics").open, true);
+  assert.equal(document.activeElement.dataset.focusKey, key);
+
+  const summary = find(document.body, node => node.dataset.focusKey === "diagnostics:summary")[0]; summary.focus();
+  renderDashboard(document, { transport: "connected", model: buildViewModel(secondSnapshot) });
+  assert.equal(document.activeElement.dataset.focusKey, "diagnostics:summary");
+
+  const missing = snapshotFixture(); missing.rows[0].symbol = "DIFFERENT"; missing.tq.desired_symbols[0] = "DIFFERENT";
+  const oldTape = find(document.body, node => node.dataset.focusKey?.endsWith(":tape"))[0]; oldTape.focus();
+  renderDashboard(document, { transport: "connected", model: buildViewModel(missing) });
+  assert.equal(document.activeElement.dataset.focusKey, "diagnostics:summary", "missing row did not use the safe disclosure fallback");
 });
 
 test("P-C11-STATE noncurrent qualified empty never claims exact-current empty", () => {

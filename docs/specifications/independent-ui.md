@@ -33,7 +33,7 @@ Sections 8-19 are completed here after just-in-time V2 UI reconnaissance.
 | Boundary/reconnaissance plan | `accepted` | Direct owner V1 program revision; exact source list recorded before bounded content inspection | Complete |
 | Completed contract | `accepted_current_plan` | Focused review corrections add full T/Q trust disclosure, fail-closed semantic coherence, additive compatibility, C10-matching response bounds, exact accessibility assertions, and delayed-refresh containment; focused re-review clean | Begin C11-S1 |
 | `C11-S1` API/view-state integration | `accepted` | Initial review corrections and three residual trust/time fixes complete; `P-C11-STATE` passes 14 bounded tests, server proof, ordinary, and affected race; focused re-review clean | Begin C11-S2 |
-| `C11-S2` visual/interaction/accessibility | `pending` | `P-C11-VISUAL` | Begin only after S1 acceptance |
+| `C11-S2` visual/interaction/accessibility | `proof_blocked_tooling` | Visual implementation and 19 deterministic state/contrast/focus/fixture checks pass; focused static correction re-review clean; Chrome extension unavailable | Connect the ChatGPT Chrome extension, then run `P-C11-VISUAL` |
 | Final component review | `pending` | Mandatory read-only review after both proofs and verification | Then integrated V1 RC review |
 
 ## 1-4. Outcome, scope, ownership, and settled boundary
@@ -419,3 +419,26 @@ outer Tape authority, and matches C10 canonical RFC3339Nano. All 14 focused
 tests, the server proof, ordinary repository verification, and affected race
 verification pass; final focused re-review found no remaining P1/P2. S1 is
 accepted and its S2 boundary remains valid.
+
+`C11-S2` now implements the fixed presentation bands, compact 20-row desktop
+allocation, eight-part status hierarchy, retained/noncurrent suppression,
+WCAG-AA token palette, reduced-motion override, semantic table, persistent
+polite announcer, native disclosure, and stable symbol/field focus restoration.
+Its deterministic fixture API is a separate loopback proof process; all current,
+empty, degraded, T/Q-degraded, hostile, hang, and error bodies pass the
+production validator before serving, sample identity advances independently of
+unchanged publication identity, and the degraded corpus explicitly reconciles
+20 known rows plus one unresolved bootstrap failure. Static proof and focused
+correction re-review are clean after fixing alpha-composed retained contrast,
+status-strip wrapping, fixture population, persistent interaction state, rank-
+stable focus, and vanished-row fallback.
+
+The required Chrome proof is not claimed. Chrome is installed and running, but
+the ChatGPT browser extension is absent from every Chrome profile, so the
+required browser-control surface cannot connect. Per the browser-control trust
+rules no in-app, shell, or alternate automation surface substitutes for Chrome.
+Until the extension is installed/enabled, screenshots, 1440x900 computed fit,
+computed browser contrast, real keyboard/focus/live-region behavior, reduced-
+motion behavior, browser CORS, and browser-observed UI-restart/API-continuity
+remain pending. This tooling block does not reopen S1 or create a product/owner
+decision gate; S2 and final C11 acceptance remain incomplete.

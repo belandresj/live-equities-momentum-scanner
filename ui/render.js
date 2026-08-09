@@ -5,14 +5,15 @@ function textElement(document, tag, value, className = "") { const node = elemen
 function statusItem(document, label, value, state = "") {
   const item = element(document, "div"); item.append(textElement(document, "span", label)); const strong = textElement(document, "strong", value); if (state) strong.dataset.state = state; item.append(strong); return item;
 }
-function cell(document, value, state, detail, overallCurrent) {
+function cell(document, value, state, detail, overallCurrent, band = 0, focusKey = "") {
   const td = element(document, "td"); td.dataset.state = overallCurrent ? state : "retained"; td.dataset.fieldState = state;
+  td.dataset.band = String(band);
   td.append(textElement(document, "span", value, "primary"));
-  if (detail) { td.tabIndex = 0; td.title = detail; td.setAttribute("aria-label", `${value}. ${detail}`); }
+  if (detail) { td.tabIndex = 0; td.title = detail; td.dataset.focusKey = focusKey; td.setAttribute("aria-label", `${value}. ${detail}`); }
   return td;
 }
-function dualCell(document, primary, secondary, state, detail, overallCurrent) {
-  const td = cell(document, primary, state, detail, overallCurrent); if (secondary) td.append(textElement(document, "small", secondary)); return td;
+function dualCell(document, primary, secondary, state, detail, overallCurrent, band, focusKey) {
+  const td = cell(document, primary, state, detail, overallCurrent, band, focusKey); if (secondary) td.append(textElement(document, "small", secondary)); return td;
 }
 function buildTable(document, model) {
   const shell = element(document, "div", "table-shell");
@@ -24,26 +25,31 @@ function buildTable(document, model) {
   const tbody = element(document, "tbody"); tbody.id = "rows";
   for (const row of model.rows) {
     const tr = element(document, "tr"); tr.dataset.publicationState = model.current ? "current" : "noncurrent";
-    tr.append(cell(document, String(row.rank), "current", "", model.current), cell(document, row.symbol, "current", "", model.current), cell(document, row.last, "current", `mark age ${row.markAgeMS} ms`, model.current), cell(document, row.day, "current", "", model.current),
-      cell(document, row.from4am.text, row.from4am.state, row.from4am.reason, model.current), cell(document, row.hod.text, row.hod.state, row.hod.reason, model.current), cell(document, row.dayRange.text, row.dayRange.state, row.dayRange.reason, model.current),
-      cell(document, row.range60.text, row.range60.state, row.range60.reason, model.current), cell(document, row.range30.text, row.range30.state, row.range30.reason, model.current), cell(document, row.activity.text, row.activity.state, row.activity.reason, model.current),
-      dualCell(document, row.tape.primary, row.tape.secondary, row.tape.state, row.tape.detail, model.current), dualCell(document, row.spread.primary, row.spread.secondary, row.spread.state, row.spread.detail, model.current));
+    const key = row.symbol;
+    tr.append(cell(document, String(row.rank), "current", "", model.current), cell(document, row.symbol, "current", "", model.current), cell(document, row.last, "current", `mark age ${row.markAgeMS} ms`, model.current, 0, `${key}:last`), cell(document, row.day, "current", "", model.current, row.dayBand),
+      cell(document, row.from4am.text, row.from4am.state, row.from4am.reason, model.current, row.from4am.band, `${key}:from4am`), cell(document, row.hod.text, row.hod.state, row.hod.reason, model.current, row.hod.band, `${key}:hod`), cell(document, row.dayRange.text, row.dayRange.state, row.dayRange.reason, model.current, row.dayRange.band, `${key}:dayrange`),
+      cell(document, row.range60.text, row.range60.state, row.range60.reason, model.current, row.range60.band, `${key}:range60`), cell(document, row.range30.text, row.range30.state, row.range30.reason, model.current, row.range30.band, `${key}:range30`), cell(document, row.activity.text, row.activity.state, row.activity.reason, model.current, row.activity.band, `${key}:activity`),
+      dualCell(document, row.tape.primary, row.tape.secondary, row.tape.state, row.tape.detail, model.current, row.tape.band, `${key}:tape`), dualCell(document, row.spread.primary, row.spread.secondary, row.spread.state, row.spread.detail, model.current, row.spread.band, `${key}:spread`));
     tbody.append(tr);
   }
   table.append(tbody); shell.append(table); return shell;
 }
-function buildDiagnostics(document, model) {
-  const details = element(document, "details"); details.id = "diagnostics"; details.append(textElement(document, "summary", "Operational details"));
+function buildDiagnostics(document, model, open) {
+  const details = element(document, "details"); details.id = "diagnostics"; details.open = open;
+  const summary = textElement(document, "summary", "Operational details"); summary.dataset.focusKey = "diagnostics:summary"; details.append(summary);
   const list = element(document, "dl");
   for (const [label, value] of model.diagnostics) { list.append(textElement(document, "dt", label), textElement(document, "dd", value)); }
   details.append(list); return details;
 }
 
 export function renderDashboard(document, event, options = {}) {
+  const previousDetails = document.getElementById?.("diagnostics");
+  const detailsOpen = Boolean(previousDetails?.open);
+  const focusKey = document.activeElement?.dataset?.focusKey || "";
   const main = element(document, "main"), model = event.model;
   const header = element(document, "header"), title = element(document, "div"); title.append(textElement(document, "p", "LIVE EQUITIES", "eyebrow"), textElement(document, "h1", "Momentum Scanner"));
   const live = textElement(document, "div", model ? `${model.current ? "CURRENT" : event.transport === "refresh_delayed" ? "REFRESH DELAYED" : event.transport === "disconnected" ? "FROZEN · DISCONNECTED" : "NONCURRENT"} · publication ${model.publicationID} · ${model.rows.length} ranked` : event.error ? `Scanner API disconnected: ${event.error}` : "Connecting to scanner API", "status-live");
-  live.id = "status-live"; live.setAttribute("role", "status"); live.setAttribute("aria-live", "polite"); live.dataset.state = model?.current ? "current" : "warning"; header.append(title, live); main.append(header);
+  live.id = "status-live"; live.dataset.state = model?.current ? "current" : "warning"; header.append(title, live); main.append(header);
   const grid = element(document, "section", "status-grid"); grid.setAttribute("aria-label", "Scanner status");
   grid.append(statusItem(document, "Transport", event.transport, event.transport === "connected" ? "current" : "warning"),
     statusItem(document, "Process", model ? model.processLive ? "live" : "not live" : "unknown", model?.processLive ? "current" : "warning"),
@@ -54,7 +60,7 @@ export function renderDashboard(document, event, options = {}) {
     statusItem(document, "T/Q", model ? `${model.tqPressure}${model.tqAggregateOnly ? " · aggregate only" : ""}${model.tqRetainedBoundHit ? " · retained bound" : ""} · ${model.tqUnknown} unknown` : "unknown", model?.tqPressure === "normal" && !model?.tqRetainedBoundHit && model?.tqUnknown === 0 ? "current" : "warning"),
     statusItem(document, "Sample", model ? `${new Date(model.sampledAt).toLocaleTimeString()} · #${model.sampleID}` : "—"));
   main.append(grid);
-  if (model) main.append(buildDiagnostics(document, model));
+  if (model) main.append(buildDiagnostics(document, model, detailsOpen));
   const message = element(document, "div", "message"); message.id = "message";
   if (!model) message.textContent = "No valid scanner snapshot is available.";
   else if (model.rows.length === 0) message.textContent = model.current && model.rankingMode === "qualified_current" ? "No symbols currently qualify." : `No rows in retained noncurrent publication · ${model.rankingMode}${model.rankingReason ? ` · ${model.rankingReason}` : ""}.`;
@@ -62,6 +68,17 @@ export function renderDashboard(document, event, options = {}) {
   main.append(message);
   if (model) main.append(buildTable(document, model));
   options.beforeCommit?.(main);
-  document.body.replaceChildren(main);
+  let mount = document.getElementById?.("app");
+  if (!mount) { mount = element(document, "div"); mount.id = "app"; document.body.append(mount); }
+  let announcer = document.getElementById?.("announcer");
+  if (!announcer) { announcer = element(document, "div", "sr-only"); announcer.id = "announcer"; announcer.setAttribute("role", "status"); announcer.setAttribute("aria-live", "polite"); document.body.append(announcer); }
+  mount.replaceChildren(main);
+  announcer.textContent = live.textContent;
+  if (focusKey) {
+    try {
+      const restored = mount.querySelector?.(`[data-focus-key="${CSS.escape(focusKey)}"]`) || mount.querySelector?.('[data-focus-key="diagnostics:summary"]');
+      restored?.focus({ preventScroll: true });
+    } catch { /* full coherent view is already committed */ }
+  }
   return main;
 }

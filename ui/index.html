@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <main>
+  <div id="app"><main>
     <header>
       <div><p class="eyebrow">LIVE EQUITIES</p><h1>Momentum Scanner</h1></div>
       <div id="status-live" class="status-live" role="status" aria-live="polite">Connecting to scanner API</div>
@@ -34,7 +34,8 @@
         <tbody id="rows"></tbody>
       </table>
     </div>
-  </main>
+  </main></div>
+  <div id="announcer" class="sr-only" role="status" aria-live="polite">Connecting to scanner API</div>
   <script src="/config.js"></script>
   <script type="module" src="/app.js"></script>
 </body>
