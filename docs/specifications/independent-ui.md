@@ -34,7 +34,7 @@ Sections 8-19 are completed here after just-in-time V2 UI reconnaissance.
 | Boundary/reconnaissance plan | `accepted` | Direct owner V1 program revision; exact source list recorded before bounded content inspection | Complete |
 | Completed contract | `accepted_current_plan` | Focused review corrections add full T/Q trust disclosure, fail-closed semantic coherence, additive compatibility, C10-matching response bounds, exact accessibility assertions, and delayed-refresh containment; focused re-review clean | Begin C11-S1 |
 | `C11-S1` API/view-state integration | `accepted_after_correction` | Manual Chrome exposed an unbound native-fetch receiver before the first API request; the production default is now explicitly bound to the browser global and a receiver-sensitive `P-C11-STATE` regression brings the focused suite to 20 passing tests | Rerun the corrected production path in Chrome as part of C11-S2 proof |
-| `C11-S2` visual/interaction/accessibility | `proof_blocked_tooling` | Visual implementation and 20 deterministic state/transport/contrast/focus/fixture checks pass; focused static correction re-review clean; automated Chrome control remains unavailable | Connect the ChatGPT Chrome extension, then run `P-C11-VISUAL` |
+| `C11-S2` visual/interaction/accessibility | `proof_blocked_tooling` | Visual implementation and 20 deterministic state/transport/contrast/focus/fixture checks pass, including five-second-only Tape Rate and fail-closed five-second Spread duration/nonnegative T/Q validation; focused static correction re-review clean; automated Chrome control remains unavailable | Connect the ChatGPT Chrome extension, then run `P-C11-VISUAL` |
 | Final component review | `pending` | Mandatory read-only review after both proofs and verification | Then integrated V1 RC review |
 
 ## 1-4. Outcome, scope, ownership, and settled boundary
@@ -150,9 +150,9 @@ Display conversion is presentation only:
   displayed as 80%, not 0.8% or 80.00 points. Day %, From 4AM %, and HOD
   drawdown retain two decimals; range positions and Activity use whole percents;
 - range positions are not numerically clamped by the browser;
-- Tape Rate shows five-second trades/second and the labeled one-second burst on
-  one line. Keyboard/focus detail always exposes both windows, trade
-  coverage, participant/SIP/mixed timestamp basis, lifecycle-record observation,
+- Tape Rate shows only five-second trades/second. The API may retain the
+  one-second fact, but the dashboard does not display it. Keyboard/focus detail
+  exposes trade coverage, participant/SIP/mixed timestamp basis, lifecycle-record observation,
   and the exact status/reason so a current number cannot imply fully corrected
   consolidated tape;
 - Spread shows basis points and cents on one slash-separated line.
@@ -461,8 +461,8 @@ continuous red-to-neutral-to-green directional scale with no intermediate
 cutoffs; and the synthetic current fixture is
 Day-% descending so it no longer visually contradicts the server-ranking
 contract. A follow-up owner revision makes Activity and five-second Tape Rate
-continuous gray-to-orange intensity scales, labels the one-second Tape burst
-inline, renders Spread bps/cents inline, and removes false decimal precision
+continuous gray-to-orange intensity scales, renders only the five-second Tape
+Rate and inline Spread bps/cents, and removes false decimal precision
 from range position and Activity. Spread retains its prior bands pending owner
 evaluation. Focused model, palette, contrast, and fixture
 proofs distinguish these presentation-only decisions; C10 remains the sole

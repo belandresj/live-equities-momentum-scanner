@@ -19,6 +19,8 @@ const (
 	maximumTradesGlobal       = 500_000
 	maximumFingerprintsGlobal = 1_000_000
 	maximumQuotesGlobal       = 400_000
+	spreadWindow              = 5 * time.Second
+	minimumSpreadCoverage     = 4 * time.Second
 )
 
 type tqRetentionLimits struct {
@@ -947,10 +949,10 @@ func spreadView(m *tqSymbolState, target *time.Time) SpreadView {
 	if !m.quoteCoverage.active || target == nil {
 		return v
 	}
-	if target.Sub(m.quoteCoverage.start) < 8*time.Second {
+	if target.Sub(m.quoteCoverage.start) < minimumSpreadCoverage {
 		v.Status, v.Reason = TQWarming, "coverage_warming"
 	}
-	windowStart := target.Add(-10 * time.Second)
+	windowStart := target.Add(-spreadWindow)
 	segments := make([]weightedSpread, 0, len(m.quotes))
 	var latest *tqQuote
 	for i := range m.quotes {
@@ -1000,8 +1002,8 @@ func spreadView(m *tqSymbolState, target *time.Time) SpreadView {
 		v.Status, v.Reason = TQStale, "stale_quote"
 		return v
 	}
-	if v.ValidDuration < 8*time.Second {
-		if target.Sub(m.quoteCoverage.start) >= 8*time.Second {
+	if v.ValidDuration < minimumSpreadCoverage {
+		if target.Sub(m.quoteCoverage.start) >= minimumSpreadCoverage {
 			v.Status, v.Reason = TQUnavailable, "insufficient_coverage"
 		}
 		return v

@@ -319,7 +319,7 @@ controls.
   causal tuple, hydration request/result ordinal, replay record ordinal, or
   system sequence.
 
-- **Spread:** The quote-derived 10-second time-weighted median of valid NBBO
+- **Spread:** The quote-derived five-second time-weighted median of valid NBBO
   spread states defined by the product and focused feature contract. It has
   quote coverage independent of aggregate ranking.
 

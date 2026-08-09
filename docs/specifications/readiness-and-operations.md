@@ -38,7 +38,7 @@ Sections 8-19 are completed here after its just-in-time V2 reconnaissance.
 | Boundary/reconnaissance plan | `accepted` | Direct owner V1 program revision; C7 finally accepted; recorded V2 scope inspected | Complete |
 | Completed contract | `accepted_current_plan` | Two slices and two primary proofs preserve the existing engine-owned lifecycle/readiness boundary; no new competing owner or consequential interface requires pre-implementation review | Implement `C8-S1` |
 | `C8-S1` runtime/lifecycle | `accepted` | `P-C8-RUNTIME` covers initial bootstrap retry/exhaustion, two live-gap-live recoveries followed by exact post-live exhaustion, checkpoint pre-plan false-ready rejection, active-live shutdown join, and timeout without a false joined claim; affected race clean | Complete |
-| `C8-S2` measurements/load | `accepted` | `P-C8-LOAD`: 6,000-symbol bound population, 100 active aggregate symbols, 20 corrections, 20 duplicates, 20 rejects, and 60 T/Q-deferred facts; 53.58 s end-to-end and exact accounting | Complete |
+| `C8-S2` measurements/load | `accepted_after_correction` | `P-C8-LOAD`: 6,000-symbol bound population, 100 active aggregate symbols, 20 corrections, 20 duplicates, 20 rejects, and 60 normalized T/Q facts correctly fenced without acknowledged membership; 53.67 s end-to-end and exact accounting | Complete |
 | Final component review | `accepted` | Focused final re-review found no remaining P1/P2 finding after the recovery, shutdown, and checkpoint false-ready corrections; ordinary and affected race suites passed uncached. Unchanged non-short load evidence was reused. | Begin C9 contract completion |
 
 ## 1-4. Outcome, scope, ownership, and settled boundary
@@ -297,18 +297,20 @@ from disappearing until a later market publication.
 
 The accepted current-host `P-C8-LOAD` manifest is exactly 6,000 bound symbols,
 100 initially active symbols, 20 same-window live corrections, 20 exact
-duplicates, 20 engine rejections, 60 deferred T/Q facts, two post-handshake raw
-frames, and one exact evaluator timer. The latest run measured 29.14 seconds
-for the controlled stream and 53.58 seconds end-to-end, about 8 items/s,
-131.24 ms mean and 317.97 ms maximum instrumented delivery delay, two frames
-and 9,172 bytes at queue high-water, about 90.4 MiB heap growth, three
+duplicates, 20 engine rejections, 60 normalized T/Q facts, two post-handshake raw
+frames, and one exact evaluator timer. The latest run measured 29.27 seconds
+for the controlled stream and 53.67 seconds end-to-end, about 8 items/s,
+131.82 ms mean and 255.56 ms maximum instrumented delivery delay, two frames
+and 9,172 bytes at queue high-water, about 104.3 MiB heap growth, three
 goroutines of growth, and zero watermark lag. Aggregate accounting was exactly
 `consumed=160=100 inserted+20 revised+20 duplicate+20 rejected`; all 6,000
 symbols reconciled as 100 trusted marks plus 5,900 no-print-through-T. The 60
-T/Q facts changed only the deferred diagnostic and `TQAvailable` remained
-false; readiness/ranking stayed current. This is bounded local fixture
-evidence, not provider availability, a market-hours observation, an SLA, or
-capacity beyond this host and shape.
+T/Q facts were all normalized, consumed by Component 9, and fenced because the
+scenario intentionally has no acknowledged selected-symbol T/Q membership;
+`TQAvailable` remained false and readiness/ranking stayed current. This corrects
+the pre-C9 deferred-consumer oracle without changing the load shape. This is
+bounded local fixture evidence, not provider availability, a market-hours
+observation, an SLA, or capacity beyond this host and shape.
 
 Verification after both slices: `go test -short -timeout 2m ./...` passed; the
 affected `internal/engine`, `internal/massive`, and `internal/operations` race

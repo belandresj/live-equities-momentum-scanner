@@ -247,7 +247,9 @@ expansion_bps = 10,000 * ln(max(High) / min(Low))
 ```
 
 Compare both components with independently eligible completed 30-second blocks
-in the prior rolling 60 minutes. Require at least 10 reference blocks, use
+from the 04:00 session boundary through the completed block immediately before
+the target. The baseline never resets at regular-hours open or after-hours
+open. Require at least 10 reference blocks, use
 inclusive empirical percentiles, and report:
 
 ```text
@@ -273,7 +275,7 @@ meaning.
 
 ### PG-FEATURE-04 — Spread
 
-Spread reports the 10-second time-weighted median validated NBBO spread in cents
+Spread reports the five-second time-weighted median validated NBBO spread in cents
 and basis points. Locked quotes are valid zero spread. Crossed, one-sided,
 stale, warming, or insufficient-coverage states are unavailable rather than
 negative or fabricated spread.

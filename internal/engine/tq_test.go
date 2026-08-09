@@ -92,8 +92,14 @@ func TestPC9TAQ(t *testing.T) {
 	}
 
 	for i, offset := range []time.Duration{-9 * time.Second, -7 * time.Second, -5 * time.Second, -3 * time.Second, -time.Second} {
+		ask := 10.02
+		if offset < -spreadWindow {
+			// These wide quotes would change the old ten-second median but must
+			// not contribute to the five-second Spread window.
+			ask = 10.10
+		}
 		quote := QuoteInput{SchemaVersion: TQSchemaV1, BindingIdentity: binding.Identity(), TradingDate: binding.TradingDate(), Symbol: "AAA",
-			SIPTime: now.Add(offset), ReceiptTime: now.Add(offset), BidPrice: 10, AskPrice: 10.02,
+			SIPTime: now.Add(offset), ReceiptTime: now.Add(offset), BidPrice: 10, AskPrice: ask,
 			BidPresent: true, AskPresent: true, ConditionsClassified: true, IndicatorsClassified: true,
 			Live: LivePosition{ConnectionEpoch: 1, FrameSequence: uint64(20 + i), ArrayIndex: 1}}
 		if got := admitQuoteForTest(t, e, quote); got.Code != DispositionTQApplied {
@@ -115,7 +121,7 @@ func TestPC9TAQ(t *testing.T) {
 	view = e.ObserveTQ()
 	if len(view.Rows) != 1 || !view.Rows[0].TradeCoverage || !view.Rows[0].QuoteCoverage || view.Rows[0].Tape.OneSecond != 1 ||
 		view.Rows[0].Tape.FiveSecond != .2 || view.Rows[0].Tape.OneSecondStatus != TQCurrent || view.Rows[0].Tape.FiveSecondStatus != TQCurrent ||
-		view.Rows[0].Spread.Status != TQCurrent || math.Abs(view.Rows[0].Spread.Cents-2) > 1e-9 || view.Rows[0].Spread.ValidDuration != 9*time.Second || view.Rows[0].Spread.Quality != "reviewed_ordinary" {
+		view.Rows[0].Spread.Status != TQCurrent || math.Abs(view.Rows[0].Spread.Cents-2) > 1e-9 || view.Rows[0].Spread.ValidDuration != 5*time.Second || view.Rows[0].Spread.Quality != "reviewed_ordinary" {
 		t.Fatalf("feature view = %+v", view.Rows)
 	}
 	if view.Accounting.Consumed != view.Accounting.Applied+view.Accounting.Duplicate+view.Accounting.Rejected+view.Accounting.Fenced+view.Accounting.PressureShed+view.Accounting.Integrity {
@@ -255,6 +261,32 @@ func TestPC9TAQ(t *testing.T) {
 
 concurrencyComplete:
 	closeAndWait(t, e)
+}
+
+func TestSpreadViewFiveSecondCoverageBoundary(t *testing.T) {
+	target := testBinding(t).SessionStart().Add(time.Hour)
+	quote := func(offset time.Duration, sequence uint64) tqQuote {
+		return tqQuote{at: target.Add(offset), receipt: target.Add(offset), position: LivePosition{ConnectionEpoch: 1, FrameSequence: sequence},
+			bid: 10, ask: 10.02, bidPresent: true, askPresent: true, quality: "reviewed_ordinary"}
+	}
+	for _, test := range []struct {
+		name   string
+		quotes []tqQuote
+		status TQFieldStatus
+		reason string
+		valid  time.Duration
+	}{
+		{"four of five seconds is current", []tqQuote{quote(-4*time.Second, 1), quote(-2*time.Second, 2)}, TQCurrent, "", 4 * time.Second},
+		{"three of five seconds is unavailable", []tqQuote{quote(-3*time.Second, 1), quote(-time.Second, 2)}, TQUnavailable, "insufficient_coverage", 3 * time.Second},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state := &tqSymbolState{quoteCoverage: tqCoverage{active: true, start: target.Add(-spreadWindow)}, quotes: test.quotes}
+			got := spreadView(state, &target)
+			if got.Status != test.status || got.Reason != test.reason || got.ValidDuration != test.valid {
+				t.Fatalf("spread = %+v", got)
+			}
+		})
+	}
 }
 
 func TestPC9TAQScaledGlobalBoundContainment(t *testing.T) {

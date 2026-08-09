@@ -8,14 +8,13 @@ import (
 )
 
 const (
-	activityBlockDuration                       = 30 * time.Second
-	minimumActivityReferences                   = 10
-	maximumActivityReferences                   = 1920
-	maximumActivityEvaluationReferences         = 119
-	maximumMutableActivityBlockIDs              = 33
-	maximumActivityTargetBlocks                 = 1920
-	maximumActivityTargetContributions          = 57_600
-	minimumActivityReferenceTx          float64 = 100
+	activityBlockDuration                      = 30 * time.Second
+	minimumActivityReferences                  = 10
+	maximumActivityReferences                  = 1920
+	maximumMutableActivityBlockIDs             = 33
+	maximumActivityTargetBlocks                = 1920
+	maximumActivityTargetContributions         = 57_600
+	minimumActivityReferenceTx         float64 = 100
 )
 
 type activityFeatureResult struct {
@@ -66,8 +65,8 @@ type activityFoldedTargetBlock struct {
 
 // activityFeatureState is owned by the same canonical symbol graph and called
 // through the same contributor transition as the accepted C3-S1 state.
-// references contains at most one sufficient summary per possible reference
-// position in the exact rolling interval. mutable contains only block IDs with
+// references contains at most one sufficient summary per session-aligned
+// reference position. mutable contains only block IDs with
 // a folded prefix that can still be corrected at the inclusive H boundary.
 type activityFeatureState struct {
 	references                map[int64]activityBlockSummary
@@ -378,17 +377,14 @@ func finalizeActivityMutable(activity *activityFeatureState, now time.Time) {
 	}
 }
 
-func expireActivityReferences(activity *activityFeatureState, binding *installedBinding, at time.Time) {
-	floor := at.Add(-60 * time.Minute)
-	if floor.Before(binding.sessionStart) {
-		floor = binding.sessionStart
-	}
+func expireActivityReferences(activity *activityFeatureState, binding *installedBinding, _ time.Time) {
 	for end := range activity.references {
 		blockEnd := time.Unix(end, 0).UTC()
 		blockStart := blockEnd.Add(-activityBlockDuration)
 		// Future sufficient blocks remain available while committed T is stalled;
-		// only evidence older than the committed-boundary floor is expired.
-		if blockStart.Before(floor) || blockStart.Before(binding.sessionStart) || blockEnd.After(binding.sessionEnd) {
+		// only evidence outside this binding's session is expired. Activity's
+		// baseline is session-to-date from the 04:00 session boundary.
+		if blockStart.Before(binding.sessionStart) || blockEnd.After(binding.sessionEnd) {
 			delete(activity.references, end)
 		}
 	}
@@ -452,13 +448,10 @@ func evaluateActivityFeatures(binding *installedBinding, state *symbolAggregateS
 	result.targetTransactions = target.transactions
 	result.targetExpansionBPS = target.expansionBPS
 
-	floor := at.Add(-60 * time.Minute)
-	if floor.Before(binding.sessionStart) {
-		floor = binding.sessionStart
-	}
+	floor := binding.sessionStart
 	upper := at.Add(-activityBlockDuration)
-	transactionReferences := make([]float64, 0, maximumActivityEvaluationReferences)
-	expansionReferences := make([]float64, 0, maximumActivityEvaluationReferences)
+	transactionReferences := make([]float64, 0, maximumActivityReferences)
+	expansionReferences := make([]float64, 0, maximumActivityReferences)
 	for blockStart := firstAlignedActivityStart(binding, floor); blockStart.Add(activityBlockDuration).Compare(upper) <= 0; blockStart = blockStart.Add(activityBlockDuration) {
 		blockEnd := blockStart.Add(activityBlockDuration)
 		if blockEnd.After(binding.sessionEnd) {

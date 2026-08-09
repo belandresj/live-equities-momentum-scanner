@@ -35,9 +35,9 @@ Sections 8-19 are completed here after just-in-time V2 reconnaissance.
 | --- | --- | --- | --- |
 | Boundary/reconnaissance plan | `accepted` | Direct owner V1 program revision; C8 finally accepted; recorded V2 scope inspected | Complete |
 | Completed contract | `accepted_current_plan` | Focused read-only review clean after corrections for ambiguous membership, accounting failure domains, bounds, out-of-order quote time, pressure authority/expiry, and the distinct acknowledged Q time/causal boundaries | Complete; remains revisable through the correction loop |
-| `C9-S1` membership/coverage/features | `accepted` | `P-C9-TAQ`; ordinary and affected race gates; focused read-only review clean | Complete |
+| `C9-S1` membership/coverage/features | `accepted_after_owner_revision` | Owner shortened Spread to a five-second weighted median with four-of-five valid-duration coverage; focused boundary/window proof, ordinary/race verification, and focused read-only review pass | Complete |
 | `C9-S2` pressure/shedding/restoration | `accepted` | `P-C9-PRESSURE`; ordinary and affected race gates; focused corrections and re-review clean | Complete |
-| Final component review | `accepted` | One final read-only review plus focused re-reviews found no remaining P1/P2 | Complete; reopen only through the V1 correction loop |
+| Final component review | `accepted_after_owner_revision` | Original final review plus the 2026-08-09 focused read-only review found no remaining P1/P2/P3 after the Spread correction | Complete; reopen only through the V1 correction loop |
 
 ## 1-4. Outcome, scope, ownership, and settled boundary
 
@@ -53,7 +53,7 @@ In scope:
   begin per-channel causal coverage only after acknowledged boundaries;
 - implement Tape Rate's five-second and one-second qualifying-original trade
   rates with evidenced conditions and explicit lifecycle limitations;
-- implement 10-second time-weighted median validated NBBO spread in cents and
+- implement five-second time-weighted median validated NBBO spread in cents and
   basis points, including locked-zero and unavailable crossed/one-sided/stale/
   insufficient-coverage behavior;
 - clear measurements across gaps, maintain continuous warm-up, report coverage
@@ -113,7 +113,7 @@ authority:
 | Source and SHA-256 | Decision | Preserved evidence and coupling removed | Allocated proof |
 | --- | --- | --- | --- |
 | `internal/massive/trade_conditions.go` `7d25ea...034` and `trade_conditions_fixture.json` `290afe...050` | `adapt` | Preserve the embedded, strictly decoded 55-rule stocks fixture, its reviewed/non-volume distinction, source hash, and file hash. Move eligibility under the current engine feature owner; reject the V2 package/state owner. | `P-C9-TAQ` |
-| `internal/massive/taq_product.go` `c8f8fe...3fc` | `behavior evidence` | Preserve paired post-ack causal coverage, qualifying-original disclosure, five/one-second windows, locked-zero, two-second quote carry, eight-of-ten-second valid spread coverage, weighted median, complete state clearing, pressure thresholds, and rank-order restoration. Replace its mutex-owned ranking/readiness/lifecycle/command state with typed facts and state in the sole current engine. Remove the unevidenced Tape Rate attention threshold and optional exact lifecycle mutation path. | Both |
+| `internal/massive/taq_product.go` `c8f8fe...3fc` | `behavior evidence` | Preserve paired post-ack causal coverage, qualifying-original disclosure, five/one-second Tape windows, locked-zero, two-second quote carry, weighted median, complete state clearing, pressure thresholds, and rank-order restoration. Adapt Spread coverage to the owner-selected four-of-five-second boundary. Replace its mutex-owned ranking/readiness/lifecycle/command state with typed facts and state in the sole current engine. Remove the unevidenced Tape Rate attention threshold and optional exact lifecycle mutation path. | Both |
 | `internal/massive/taq_product_state_test.go` `c4f3ef...81d` and `phase3_taq_resilience_test.go` `759e16...170` | `fixture/oracle evidence` | Preserve pre-ack rejection, mixed-frame aggregate independence, fresh warming after gaps, locked/crossed/partial-coverage oracles, SIP fallback, deduplication, unknown/non-volume condition exclusion, write-before-ack causality, and recovery ordering. Replace V2 provider/health/capability objects with current C5 and engine boundaries. | Both |
 | `internal/massive/live_taq_capacity_test.go` `977d05...d40` and `capacity_artifacts.go` `003eb9...97b` | `measurement-shape evidence` | Preserve current oldest-frame age, current processing age, queue/heap/goroutine samples, bounded manifests, and explicit headroom/limitation reporting. Do not import its credentialed procedure, selector, health owner, results claim, or 10-second acceptance limit. | `P-C9-PRESSURE` |
 
@@ -170,13 +170,13 @@ crossed quotes are an invalid timeline state. Bounded condition/indicator
 metadata is retained as reviewed-ordinary, known-special, or unclassified
 quality evidence but is not guessed into a disallow rule without a reviewed
 source. Each valid quote carries from its SIP time until the earlier of the
-next quote, two seconds, or `T`. Within `[T-10s,T)`, separately compute cents
+next quote, two seconds, or `T`. Within `[T-5s,T)`, separately compute cents
 `100*(ask-bid)` and basis points
 `10000*(ask-bid)/((ask+bid)/2)`. The weighted median is the first sorted value
 whose cumulative duration is at least half of total valid duration. Spread is
 current only when the latest timeline state at `T` is valid and no older than
-two seconds and at least eight seconds of the ten-second window has valid quote
-duration. Less than eight seconds is `warming` before eight seconds of channel
+two seconds and at least four seconds of the five-second window has valid quote
+duration. Less than four seconds is `warming` before four seconds of channel
 coverage and `unavailable/insufficient_coverage` afterward. A latest crossed
 state is `invalid`; an expired valid quote is `stale`. Cents and basis points
 are absent in every non-current state.

@@ -10,8 +10,8 @@ import (
 )
 
 // TestC3ACT01TargetReferencePercentileBoundaryTable is the sole C3-ACT-01
-// primary proof. Dangerous counterexamples are an all-session/current-target
-// reference, fabricated missing seconds, ATS zero becoming zero transactions,
+// primary proof. Dangerous counterexamples are a pre-session/current-target
+// reference, a later session-boundary reset, fabricated missing seconds, ATS zero becoming zero transactions,
 // exclusion of transactions==100, strict tie percentiles, flat-block
 // invalidation, nonfinite leakage, and Activity changing independent fields.
 // Exact components/counts/percentiles/statuses distinguish conformance. The
@@ -67,6 +67,20 @@ func TestC3ACT01TargetReferencePercentileBoundaryTable(t *testing.T) {
 		got = evaluateActivityFeatures(installed, state, at)
 		if got.referenceCount != 10 || got.activity != currentField(100) {
 			t.Fatalf("inclusive 100 boundary = %+v", got)
+		}
+	})
+
+	t.Run("session-to-date baseline survives the rolling hour RTH and after-hours boundaries", func(t *testing.T) {
+		resetActivityTestState(state, installed)
+		start := installed.sessionStart
+		at := start.Add(13 * time.Hour)
+		for block := 0; block < 10; block++ {
+			installActivityTestRecord(state, start.Add(time.Duration(block)*activityBlockDuration), activityValues(100, 0))
+		}
+		installActivityTestRecord(state, at.Add(-activityBlockDuration), activityValues(100, 0))
+		got := evaluateActivityFeatures(installed, state, at)
+		if got.referenceCount != 10 || got.activity != currentField(100) {
+			t.Fatalf("session-to-date Activity = %+v", got)
 		}
 	})
 
@@ -134,10 +148,10 @@ func TestC3ACT01TargetReferencePercentileBoundaryTable(t *testing.T) {
 
 // TestC3ACT02CorrectionLongPathDifferentialTrace is the sole C3-ACT-02
 // primary proof. It compares insert/revision/reference insert-remove-replace,
-// withdrawal/conflict, expiry, timer maintenance, horizon equality/strict
+// withdrawal/conflict, session retention, timer maintenance, horizon equality/strict
 // fold, and forward/reverse delivery with full recomputation after every event.
-// Stale membership/percentiles, delivery-order dependence, all-session/raw
-// retention, >119 references, >33 mutable IDs, price/range mutation, or rank
+// Stale membership/percentiles, delivery-order dependence, rolling-hour/raw
+// retention, >1,920 references, >33 mutable IDs, price/range mutation, or rank
 // state are observable. Checkpoint/restart equivalence, provider ATS mapping,
 // production latency, and Component 8 capacity remain intentionally unproved.
 func TestC3ACT02CorrectionLongPathDifferentialTrace(t *testing.T) {
@@ -210,8 +224,10 @@ func TestC3ACT02CorrectionLongPathDifferentialTrace(t *testing.T) {
 			t.Fatal("strictly old evidence remained in canonical tail")
 		}
 
-		// Advancing T expires old references. Seed only the existing central T
-		// field because Component 2 intentionally has no run-support producer yet.
+		// Advancing T beyond one hour retains every earlier same-session
+		// reference. Seed only the existing central T field because Component 2
+		// intentionally has no run-support producer yet.
+		retainedReferences := len(state.activity.references)
 		advanced := start.Add(75 * time.Minute)
 		e.mu.Lock()
 		e.state.committedT = immutableTime(advanced)
@@ -222,8 +238,8 @@ func TestC3ACT02CorrectionLongPathDifferentialTrace(t *testing.T) {
 			t.Fatalf("expiry timer admission=%s", result)
 		}
 		state = aggregateState(t, e, "AAA")
-		if len(state.activity.references) != 0 {
-			t.Fatalf("expired references retained: %d", len(state.activity.references))
+		if len(state.activity.references) != retainedReferences {
+			t.Fatalf("same-session references changed across one-hour boundary: got %d want %d", len(state.activity.references), retainedReferences)
 		}
 		assertActivityBounds(t, state)
 		closeAndWait(t, e)
@@ -349,7 +365,7 @@ func runActivityPermutationTrace(t *testing.T, binding interface {
 	}
 	// Fold the complete canonical tail through an ordered timer while holding
 	// target T fixed with the engine's configured delay. This reaches the exact
-	// 119-reference boundary and proves target sufficient state survives strict
+	// session-to-date reference path and proves target sufficient state survives strict
 	// folding without a raw bar copy.
 	delay := correctionHorizon + time.Nanosecond
 	e.mu.Lock()
@@ -450,17 +466,10 @@ func fullActivityReference(sessionStart time.Time, records map[int64]AggregateVa
 		return result
 	}
 	result.targetTransactions, result.targetExpansionBPS = target.transactions, target.expansionBPS
-	floor := at.Add(-60 * time.Minute)
-	if floor.Before(sessionStart) {
-		floor = sessionStart
-	}
 	upper := at.Add(-activityBlockDuration)
-	txReferences := make([]float64, 0, maximumActivityEvaluationReferences)
-	expansionReferences := make([]float64, 0, maximumActivityEvaluationReferences)
+	txReferences := make([]float64, 0, maximumActivityReferences)
+	expansionReferences := make([]float64, 0, maximumActivityReferences)
 	for blockStart := sessionStart; blockStart.Add(activityBlockDuration).Compare(upper) <= 0; blockStart = blockStart.Add(activityBlockDuration) {
-		if blockStart.Before(floor) {
-			continue
-		}
 		summary := fullActivityComponents(records, blockStart, blockStart.Add(activityBlockDuration))
 		if summary.invalid {
 			result.activity = aggregateFeatureField{status: featureInvalid, reason: featureReasonInvalidInput}
@@ -550,16 +559,12 @@ func fullActivityOccupancy(sessionStart time.Time, records map[int64]AggregateVa
 		end := sessionStart.Add((offset/activityBlockDuration + 1) * activityBlockDuration)
 		blocks[end.Unix()] = struct{}{}
 	}
-	floor := at.Add(-60 * time.Minute)
-	if floor.Before(sessionStart) {
-		floor = sessionStart
-	}
 	upper := at.Add(-activityBlockDuration)
 	for end := range blocks {
 		blockEnd := time.Unix(end, 0).UTC()
 		if now.After(blockEnd.Add(correctionHorizon)) {
 			blockStart := blockEnd.Add(-activityBlockDuration)
-			if !blockStart.Before(floor) && !blockEnd.After(upper) {
+			if !blockStart.Before(sessionStart) && !blockEnd.After(upper) {
 				references++
 			}
 		} else {

@@ -21,10 +21,11 @@ test("P-C11-STATE preserves server order, units, zero, and TQ trust", () => {
   assert.equal(model.rows[0].from4am.text, "0.00%");
   assert.equal(model.rows[0].dayRange.text, "50%");
   assert.equal(model.rows[0].activity.text, "80%");
-  assert.equal(model.rows[0].tape.primary, "1.4/s · 2.0/s burst");
+  assert.equal(model.rows[0].tape.primary, "1.4/s");
   assert.equal(model.rows[0].spread.primary, "15.0 bps / 1.50¢");
   assert.match(model.rows[0].tape.detail, /coverage yes; timestamp mixed; lifecycle records observed/);
-  assert.match(model.rows[0].spread.detail, /coverage yes; duration 10000 ms; quality reviewed_ordinary/);
+  assert.match(model.rows[0].spread.detail, /coverage yes; duration 5000 ms; quality reviewed_ordinary/);
+	assert.doesNotMatch(model.rows[0].tape.detail, /burst|one-second/);
   assert.match(model.rows[0].tape.detail, /membership desired yes, provider present, unknown no/);
   assert.equal(model.tqKnownPresent, 20); assert.equal(model.tqUnknown, 0); assert.equal(model.tqRetainedBoundHit, false);
   assert.ok(model.diagnostics.some(([name, value]) => name === "operations.deliveries" && value === "10"));
@@ -115,7 +116,12 @@ test("P-C11-STATE rejects contradictory known field and TQ trust tuples", () => 
     snapshot => { snapshot.rows[0].tape_rate.five_second.reason = "pressure"; },
     snapshot => { snapshot.rows[0].spread.quote_coverage = false; },
     snapshot => { snapshot.rows[0].spread.quality = "fabricated"; },
-    snapshot => { snapshot.rows[0].spread.valid_duration_ms = 7999; },
+    snapshot => { snapshot.rows[0].spread.valid_duration_ms = 3999; },
+    snapshot => { snapshot.rows[0].spread.valid_duration_ms = 5001; },
+    snapshot => { snapshot.rows[0].spread.cents = -0.01; },
+    snapshot => { snapshot.rows[0].spread.basis_points = -0.01; },
+    snapshot => { snapshot.rows[0].tape_rate.one_second.trades_per_second = -1; },
+    snapshot => { snapshot.rows[0].tape_rate.five_second.trades_per_second = -1; },
   ];
   for (const edit of edits) { const snapshot = snapshotFixture(); edit(snapshot); assert.throws(() => validateSnapshot(snapshot), /conflict|unknown/); }
   const compatible = snapshotFixture(); compatible.rows[0].tape_rate.reason = "future_tape_reason";

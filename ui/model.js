@@ -62,7 +62,10 @@ function validateMeasurement(value, name) {
 function validateRate(value, name) {
   fields(value, ["status", "reason", "trades_per_second"], name);
   string(value.status, `${name}.status`); string(value.reason, `${name}.reason`);
-  if (value.trades_per_second !== null) finite(value.trades_per_second, `${name}.trades_per_second`);
+  if (value.trades_per_second !== null) {
+    finite(value.trades_per_second, `${name}.trades_per_second`);
+    if (value.trades_per_second < 0) fail(`${name} status/value conflict: negative rate`);
+  }
   if (KNOWN_TQ_STATUS.has(value.status) && ((value.status === "current") !== (value.trades_per_second !== null))) fail(`${name} status/value conflict`);
 }
 
@@ -90,16 +93,20 @@ function validateTape(value, name) {
 function validateSpread(value, name) {
   fields(value, ["status", "reason", "quote_coverage", "cents", "basis_points", "valid_duration_ms", "quality"], name);
   string(value.status, `${name}.status`); string(value.reason, `${name}.reason`); bool(value.quote_coverage, `${name}.quote_coverage`); uint(value.valid_duration_ms, `${name}.valid_duration_ms`); string(value.quality, `${name}.quality`);
+  if (value.valid_duration_ms > 5000) fail(`${name} trust tuple conflict: duration exceeds five-second window`);
   if (!SPREAD_QUALITY.has(value.quality)) fail(`${name} unknown quality`);
   if ((value.cents === null) !== (value.basis_points === null)) fail(`${name} value pair conflict`);
-  if (value.cents !== null) { finite(value.cents, `${name}.cents`); finite(value.basis_points, `${name}.basis_points`); }
+  if (value.cents !== null) {
+    finite(value.cents, `${name}.cents`); finite(value.basis_points, `${name}.basis_points`);
+    if (value.cents < 0 || value.basis_points < 0) fail(`${name} status/value conflict: negative spread`);
+  }
   if ((value.status === "current") !== (value.cents !== null)) fail(`${name} status/value conflict`);
   if (!KNOWN_TQ_STATUS.has(value.status) || !KNOWN_TQ_REASON.has(value.reason)) return;
   let legal = false;
   switch (value.status) {
     case "unselected": legal = !value.quote_coverage && value.reason === "" && value.valid_duration_ms === 0 && value.quality === ""; break;
-    case "warming": legal = value.quote_coverage && value.reason === "coverage_warming" && value.valid_duration_ms < 8000; break;
-    case "current": legal = value.quote_coverage && value.reason === "" && value.valid_duration_ms >= 8000 && value.quality !== ""; break;
+    case "warming": legal = value.quote_coverage && value.reason === "coverage_warming" && value.valid_duration_ms < 4000; break;
+    case "current": legal = value.quote_coverage && value.reason === "" && value.valid_duration_ms >= 4000 && value.quality !== ""; break;
     case "stale": legal = value.quote_coverage && value.reason === "stale_quote"; break;
     case "invalid": legal = value.quote_coverage && value.reason === "crossed_quote"; break;
     case "unavailable": legal = !value.quote_coverage && value.reason === "coverage" && value.valid_duration_ms === 0 && value.quality === "" || value.quote_coverage && new Set(["one_sided_quote", "insufficient_coverage"]).has(value.reason); break;
@@ -216,11 +223,11 @@ export function buildViewModel(input, transport = "connected") {
     const tapeCurrent = knownCurrentTQ(row.tape_rate.status, row.tape_rate.reason);
     const fiveSecondCurrent = tapeCurrent && knownCurrentTQ(row.tape_rate.five_second.status, row.tape_rate.five_second.reason);
     const spreadCurrent = knownCurrentTQ(row.spread.status, row.spread.reason);
-    const fiveSecondRate = rateView(row.tape_rate.five_second, tapeCurrent), oneSecondRate = rateView(row.tape_rate.one_second, tapeCurrent);
+    const fiveSecondRate = rateView(row.tape_rate.five_second, tapeCurrent);
     return {
     rank: row.rank, symbol: row.symbol, last: formatUSD(row.last_usd), day: formatPercent(row.day_change_ratio), dayBand: 0, markAgeMS: row.mark_age_ms,
     from4am: fieldView(row.from_4am_change), hod: fieldView(row.hod_drawdown), dayRange: rangeFieldView(row.day_range_position), range60: rangeFieldView(row.range_60m_position), range30: rangeFieldView(row.range_30m_position), activity: activityFieldView(row.activity),
-    tape: { state: tqState(row.tape_rate.status, row.tape_rate.reason), position: fiveSecondCurrent ? row.tape_rate.five_second.trades_per_second / 30 * 100 : null, primary: tapeCurrent ? `${fiveSecondRate} · ${oneSecondRate} burst` : "—", secondary: "", detail: `five-second ${fiveSecondRate}; one-second burst ${oneSecondRate}; status ${row.tape_rate.status}; reason ${row.tape_rate.reason || "none"}; coverage ${row.tape_rate.trade_coverage ? "yes" : "no"}; timestamp ${row.tape_rate.timestamp_basis || "none"}; lifecycle records ${row.tape_rate.lifecycle_records_observed ? "observed" : "not observed"}; membership desired ${row.tq_membership.desired ? "yes" : "no"}, provider ${row.tq_membership.provider_present ? "present" : "absent"}, unknown ${row.tq_membership.provider_membership_unknown ? "yes" : "no"}` },
+    tape: { state: tqState(row.tape_rate.status, row.tape_rate.reason), position: fiveSecondCurrent ? row.tape_rate.five_second.trades_per_second / 30 * 100 : null, primary: tapeCurrent ? fiveSecondRate : "—", secondary: "", detail: `five-second ${fiveSecondRate}; status ${row.tape_rate.status}; reason ${row.tape_rate.reason || "none"}; coverage ${row.tape_rate.trade_coverage ? "yes" : "no"}; timestamp ${row.tape_rate.timestamp_basis || "none"}; lifecycle records ${row.tape_rate.lifecycle_records_observed ? "observed" : "not observed"}; membership desired ${row.tq_membership.desired ? "yes" : "no"}, provider ${row.tq_membership.provider_present ? "present" : "absent"}, unknown ${row.tq_membership.provider_membership_unknown ? "yes" : "no"}` },
     spread: { state: tqState(row.spread.status, row.spread.reason), band: spreadCurrent ? band(row.spread.basis_points, [0, 5, 10, 25, 50]) : 0, primary: spreadCurrent ? `${row.spread.basis_points.toFixed(1)} bps / ${row.spread.cents.toFixed(2)}¢` : "—", secondary: "", detail: `status ${row.spread.status}; reason ${row.spread.reason || "none"}; coverage ${row.spread.quote_coverage ? "yes" : "no"}; duration ${row.spread.valid_duration_ms} ms; quality ${row.spread.quality || "none"}; membership desired ${row.tq_membership.desired ? "yes" : "no"}, provider ${row.tq_membership.provider_present ? "present" : "absent"}, unknown ${row.tq_membership.provider_membership_unknown ? "yes" : "no"}` },
   }; });
   return {

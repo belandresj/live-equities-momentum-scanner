@@ -260,7 +260,7 @@ false-success path.
 | Slice | Coherent outcome | Requirement IDs / primary proofs | Dependencies and allowed boundary | Approved v2 use | Acceptance record | Explicitly deferred |
 | --- | --- | --- | --- | --- | --- | --- |
 | `C3-S1` | Exact correction-aware price/range feature state and independent availability exist inside the engine, without a ranking publication. | `C3-FEAT-01`, `C3-FEAT-02`; their two feature proofs. | Finally approved Component 2; `internal/engine` named feature state/helpers/tests only. | Named feature techniques/tests in feature Section 5–6. | Formula/availability table, differential trace, 7,200-point bound, ownership walk, deviations, S2 validity. | Activity, qualification, population/ranking projection. |
-| `C3-S2` | Exact rolling-60-minute Activity with bounded correction-aware references extends S1 state. | `C3-ACT-01`, `C3-ACT-02`; their two Activity proofs. | Accepted S1; same package and contributor state, no alternate evaluator. | Named Activity arithmetic/tests only; all-session/delay expectations rejected. | Target/reference table, differential trace, 119/33 bounds, rank-independence result, deviations, S3 validity. | Qualification and population/ranking projection. |
+| `C3-S2` | Exact 04:00 session-to-date Activity with bounded correction-aware references extends S1 state. | `C3-ACT-01`, `C3-ACT-02`; their two Activity proofs. | Accepted S1; same package and contributor state, no alternate evaluator. | Named Activity arithmetic/tests only; five-second-delay expectations rejected. | Target/reference table, differential trace, 1,920/33 bounds, rank-independence result, deviations, S3 validity. | Qualification and population/ranking projection. |
 | `C3-S3` | Exact aggregate gate owns revocable provisional proofs and the strictly finalized session latch. | `C3-QUAL-01`, `C3-QUAL-02`; gate and latch proofs. | Accepted S1/S2 and Component 2 correction/finalization seam; `internal/engine` qualification state/tests only. | Named gate/proof techniques/tests. | Boundary matrix, multiproof correction trace, 961 proof/dirty bounds, checkpoint-reproduction obligation, deviations, S4 validity. | Population, exact/degraded ranking, immutable rows. |
 | `C3-S4` | One atomic evaluator classifies the full population, selects exact qualified/degraded rows, attaches independent fields, and contributes one immutable result. | `C3-POP-01`, `C3-POP-02`, `C3-RANK-01`, `C3-PROJ-01`, `C3-EVAL-01`; five owning proofs. | Accepted S1–S3; extend only Component 2 central commit/contributor/private publication in `internal/engine`. | Named ranking/independence fixtures and fixed counter technique only. | Complete partition and selection tables, mode/field table, failed/success/same-T atomic trace, construction and success/failure walkthrough, all prior proof reruns, limitations, final-review request. | Components 4–11 fact production, checkpoint schema, operations thresholds, T/Q implementation, public API/UI. |
 | `C3-R1` | Exact coverage/origin, committed-`T`-safe sufficient state, truthful feature/qualification accounting, and prevalidated atomic candidate publication close the final-review findings. | Amendments to `C3-FEAT-01`/`02`, `C3-ACT-01`/`02`, `C3-QUAL-01`/`02`, `C3-POP-01`/`02`, `C3-PROJ-01`, `C3-EVAL-01`; all named false-success cases. | Accepted S1–S4; only this contract set, parent ledger, and `internal/engine`; no Component 6 producer. | No new predecessor source or fixture. | Complete C3 ledger, coverage/origin/empty-target/stalled-`T`/atomicity/reason-accounting proofs, assignment/ownership inspection, focused re-review request. | Final acceptance/spec-map update, Components 4–11, provider/recovery producer, checkpoint schema, cutover. |
@@ -286,7 +286,7 @@ population scan, and error wrapping outside retained state. It may use tighter
 bounds only if semantics and the differential proofs remain unchanged.
 
 Non-discretionary choices are the full-precision formulas, Activity block/
-eligibility/rolling interval, inclusive percentile, `H=16m`, strict proof
+eligibility/session-to-date interval, inclusive percentile, `H=16m`, strict proof
 finalization, category precedence, exact comparator, filter-before-truncate,
 mode predicates, finite bounds, and staged central-commit integration.
 
@@ -297,7 +297,7 @@ mode predicates, finite bounds, and staged central-commit integration.
 - T/Q-, Activity-, range-, freshness-, pressure-, or presentation-dependent
   qualification/order; rounded ranking values or another tie-breaker.
 - Session-long canonical raw feature history, more than 1,920 derived Activity
-  block summaries, 119 Activity evaluation references, 1,920 folded-target
+  block summaries, 1,920 Activity evaluation-reference capacity, 1,920 folded-target
   blocks, or 57,600 folded target contributions, more than 20 retained
   candidate rows, or counter repair after mismatch.
 - Provider decoding/mapping, hydration/recovery fact production, successful
@@ -349,8 +349,8 @@ mode predicates, finite bounds, and staged central-commit integration.
 | Local invalidity globalized? | No | Field/symbol invalidity is local; only binding/canonical/accounting ambiguity suppresses. |
 | Unevidenced provider edge? | No | No provider behavior was specified; ATS mappings/provenance are consumed from Phase 1. |
 | Duplicated checkpoint/API/readiness ownership? | No | Only reproduction/input obligations are stated; schemas, thresholds, and mappings remain later. |
-| Unbounded or unnecessary machinery? | No | 7,200 rolling deque points, two 57,600-point cutoff chains, 1,920 retained Activity summaries/119 evaluation references/33 mutable IDs plus 1,920 folded-target blocks/57,600 Activity-only contributions, 57,601 qualification summaries plus 961 proof/dirty ends, fixed counters, one current result, and heap 20; no framework/service/database. |
-| V2 drove architecture or conflicting behavior survived? | No | All-session Activity, five-second delay, fractional returns, all-passer output, old owner/watermark/readiness are explicitly rejected. |
+| Unbounded or unnecessary machinery? | No | 7,200 rolling deque points, two 57,600-point cutoff chains, 1,920 retained Activity summaries/evaluation-reference capacity/33 mutable IDs plus 1,920 folded-target blocks/57,600 Activity-only contributions, 57,601 qualification summaries plus 961 proof/dirty ends, fixed counters, one current result, and heap 20; no framework/service/database. |
+| V2 drove architecture or conflicting behavior survived? | No | The owner-selected session-to-date Activity baseline is implemented within the existing owner; five-second delay, fractional returns, all-passer output, and old owner/watermark/readiness remain rejected. |
 
 Any later substantive `yes` or whitelist/interface expansion requires owner
 review. The owner approved this complete contract, predecessor reuse decisions,

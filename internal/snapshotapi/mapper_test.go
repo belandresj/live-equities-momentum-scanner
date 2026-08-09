@@ -33,7 +33,7 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 		t.Fatal(err)
 	}
 	hash := sha256.Sum256(body)
-	const goldenSHA256 = "a2c02d7e9fb7a51cba8a49940543b15d45478bd111e5a24fc6a91732f244bf9a"
+	const goldenSHA256 = "58d44b81c24042faa77cf8e873171aa0686adf1e6ca2574a670b9ab9ee800428"
 	if got := hex.EncodeToString(hash[:]); got != goldenSHA256 {
 		t.Fatalf("snapshot golden SHA-256 = %s", got)
 	}
@@ -370,7 +370,7 @@ func schemaCapture() operations.SnapshotCaptureView {
 	tq := engine.TQView{PublicationID: operational.PublicationID, Desired: []string{"AAA"}, Rows: []engine.TQSymbolView{{Symbol: "AAA", Desired: true, ProviderPresent: true, TradeCoverage: true, QuoteCoverage: true,
 		Tape: engine.TapeRateView{Status: engine.TQCurrent, Reason: "qualifying_original_prints", OneSecondStatus: engine.TQCurrent, OneSecondReason: "qualifying_original_prints",
 			FiveSecondStatus: engine.TQCurrent, FiveSecondReason: "qualifying_original_prints", TimestampBasis: "none"},
-		Spread: engine.SpreadView{Status: engine.TQCurrent, ValidDuration: 10 * time.Second, Quality: "reviewed_ordinary"}}}, Pressure: engine.TQPressureNormal,
+		Spread: engine.SpreadView{Status: engine.TQCurrent, ValidDuration: 5 * time.Second, Quality: "reviewed_ordinary"}}}, Pressure: engine.TQPressureNormal,
 		Accounting: engine.TQAccountingView{Consumed: 2, Applied: 1, Duplicate: 1, KnownPresent: 1}, Commands: engine.TQCommandAccountingView{Issued: 1, Acknowledged: 1}}
 	publication := engine.ReplayPublicationView{SchemaVersion: "engine-private-publication-v1", PublicationID: operational.PublicationID, BindingIdentity: operational.BindingIdentity,
 		TradingDate: operational.TradingDate, RunMode: engine.RunModeLive, Lifecycle: "live", LastEngineSequence: operational.LastEngineSequence,

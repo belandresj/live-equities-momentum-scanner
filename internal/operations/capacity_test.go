@@ -36,7 +36,7 @@ func TestC8LOAD01CurrentHostMixedLoad(t *testing.T) {
 		corrections       = 20
 		exactDuplicates   = 20
 		engineRejections  = 20
-		consumerDeferred  = 60
+		tqFacts           = 60
 		itemsPerFrame     = 100
 		trialTimeout      = 5 * time.Minute
 		maximumHeapGrowth = 512 << 20
@@ -53,11 +53,11 @@ func TestC8LOAD01CurrentHostMixedLoad(t *testing.T) {
 	var adapterNanos atomic.Int64
 	adapterNanos.Store(target.UnixNano())
 	window := target.Add(-time.Second)
-	frames := capacityFrames(symbols, initialRecords, window, corrections, exactDuplicates, consumerDeferred, itemsPerFrame)
-	wantFrames := (initialRecords + corrections + exactDuplicates + consumerDeferred) / itemsPerFrame
+	frames := capacityFrames(symbols, initialRecords, window, corrections, exactDuplicates, tqFacts, itemsPerFrame)
+	wantFrames := (initialRecords + corrections + exactDuplicates + tqFacts) / itemsPerFrame
 	if len(binding.UniverseSymbols()) != population || len(frames) != wantFrames || initialRecords <= 0 || initialRecords > population || corrections > 961 ||
-		(initialRecords+corrections+exactDuplicates+consumerDeferred)%itemsPerFrame != 0 {
-		t.Fatalf("load manifest population=%d frames=%d/%d initial=%d corrections=%d duplicates=%d rejected=%d deferred=%d", len(binding.UniverseSymbols()), len(frames), wantFrames, initialRecords, corrections, exactDuplicates, engineRejections, consumerDeferred)
+		(initialRecords+corrections+exactDuplicates+tqFacts)%itemsPerFrame != 0 {
+		t.Fatalf("load manifest population=%d frames=%d/%d initial=%d corrections=%d duplicates=%d rejected=%d tq=%d", len(binding.UniverseSymbols()), len(frames), wantFrames, initialRecords, corrections, exactDuplicates, engineRejections, tqFacts)
 	}
 
 	releaseFrames := make(chan struct{})
@@ -98,7 +98,8 @@ func TestC8LOAD01CurrentHostMixedLoad(t *testing.T) {
 
 	startedLoad := time.Now()
 	codes := map[engine.DispositionCode]uint64{}
-	for item := 0; item < initialRecords+corrections+exactDuplicates+consumerDeferred; item++ {
+	tqCodes := map[engine.DispositionCode]uint64{}
+	for item := 0; item < initialRecords+corrections+exactDuplicates+tqFacts; item++ {
 		if item%itemsPerFrame == 0 {
 			_ = run.Metrics() // sample the real queue once per source frame
 		}
@@ -109,6 +110,10 @@ func TestC8LOAD01CurrentHostMixedLoad(t *testing.T) {
 		}
 		run.observeDelivery(startedDelivery, result)
 		if result.ConsumerDeferred {
+			t.Fatal("normalized T/Q fact bypassed the current Component 9 consumer")
+		}
+		if result.TQDisposition.Code != "" {
+			tqCodes[result.TQDisposition.Code]++
 			continue
 		}
 		codes[result.AggregateDisposition.Code]++
@@ -135,8 +140,9 @@ func TestC8LOAD01CurrentHostMixedLoad(t *testing.T) {
 	elapsed := time.Since(startedLoad)
 
 	if codes[engine.DispositionAggregateInserted] != initialRecords || codes[engine.DispositionAggregateRevised] != corrections ||
-		codes[engine.DispositionAggregateExactDuplicate] != exactDuplicates || codes[engine.DispositionAggregateRejected] != engineRejections {
-		t.Fatalf("aggregate oracle codes=%v", codes)
+		codes[engine.DispositionAggregateExactDuplicate] != exactDuplicates || codes[engine.DispositionAggregateRejected] != engineRejections ||
+		tqCodes[engine.DispositionTQFenced] != tqFacts {
+		t.Fatalf("aggregate/TQ oracle aggregate=%v tq=%v", codes, tqCodes)
 	}
 	view := run.Engine().ObserveReplayDeterministic()
 	if len(view.Canonical) != population || len(view.Canonical[0].Records) != 1 || view.Canonical[0].LatestValues.Close != capacityCorrectionClose(corrections-1) ||
@@ -147,16 +153,18 @@ func TestC8LOAD01CurrentHostMixedLoad(t *testing.T) {
 	}
 	status := run.Status()
 	metrics := run.Metrics()
+	tqView := run.Engine().ObserveTQ()
 	wantConsumed := uint64(initialRecords + corrections + exactDuplicates + engineRejections)
-	if !status.BackendReady || !status.RankingCurrent || status.TQAvailable || metrics.ConsumerDeferred != consumerDeferred ||
+	if !status.BackendReady || !status.RankingCurrent || status.TQAvailable || metrics.ConsumerDeferred != 0 ||
 		metrics.Engine.Aggregates.Consumed != wantConsumed || !metrics.AccountingValid || metrics.QueueHighFrames == 0 || metrics.QueueHighFrames > 512 ||
 		metrics.LiveQueue.FramesRead != uint64(wantFrames+3) || metrics.LiveQueue.FramesDispositioned != uint64(wantFrames+3) || metrics.QueueCurrentFrames != 0 ||
-		metrics.HeapAllocBytes > baseline.HeapAllocBytes+maximumHeapGrowth {
-		t.Fatalf("load status=%+v metrics=%+v baseline_heap=%d", status, metrics, baseline.HeapAllocBytes)
+		metrics.TQNormalization.Classified != tqFacts || metrics.TQNormalization.Normalized != tqFacts ||
+		tqView.Accounting.Consumed != tqFacts || tqView.Accounting.Fenced != tqFacts || metrics.HeapAllocBytes > baseline.HeapAllocBytes+maximumHeapGrowth {
+		t.Fatalf("load status=%+v metrics=%+v tq=%+v baseline_heap=%d", status, metrics, tqView, baseline.HeapAllocBytes)
 	}
-	throughput := float64(initialRecords+corrections+exactDuplicates+engineRejections+consumerDeferred) / elapsed.Seconds()
-	t.Logf("host=%s/%s go=%s cpus=%d population=%d frames=%d aggregates=%d corrections=%d duplicates=%d rejected=%d tq_deferred=%d elapsed=%s throughput=%.0f_items/s mean_delay=%s max_delay=%s queue_high_frames=%d queue_high_bytes=%d heap_growth=%d goroutine_growth=%d watermark_lag=%s",
-		runtime.GOOS, runtime.GOARCH, runtime.Version(), runtime.NumCPU(), population, wantFrames, initialRecords, corrections, exactDuplicates, engineRejections, consumerDeferred, elapsed, throughput,
+	throughput := float64(initialRecords+corrections+exactDuplicates+engineRejections+tqFacts) / elapsed.Seconds()
+	t.Logf("host=%s/%s go=%s cpus=%d population=%d frames=%d aggregates=%d corrections=%d duplicates=%d rejected=%d tq_fenced=%d elapsed=%s throughput=%.0f_items/s mean_delay=%s max_delay=%s queue_high_frames=%d queue_high_bytes=%d heap_growth=%d goroutine_growth=%d watermark_lag=%s",
+		runtime.GOOS, runtime.GOARCH, runtime.Version(), runtime.NumCPU(), population, wantFrames, initialRecords, corrections, exactDuplicates, engineRejections, tqFacts, elapsed, throughput,
 		metrics.MeanProcessingDelay, metrics.MaxProcessingDelay, metrics.QueueHighFrames, metrics.QueueHighBytes, int64(metrics.HeapAllocBytes)-int64(baseline.HeapAllocBytes), metrics.Goroutines-baseline.Goroutines, metrics.WatermarkLag)
 
 	run.closeAndDrain(ctx, attempt, 190, massive.CloseControlledStop)
