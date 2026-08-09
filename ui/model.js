@@ -267,8 +267,9 @@ export async function readBoundedJSON(response) {
 }
 
 export class PollController {
-  constructor({ url, pollMilliseconds = 1000, requestTimeoutMilliseconds = 3000, fetchImpl = fetch, onUpdate = () => {} }) {
-    this.url = url; this.pollMilliseconds = pollMilliseconds; this.requestTimeoutMilliseconds = requestTimeoutMilliseconds; this.fetchImpl = fetchImpl; this.onUpdate = onUpdate;
+  constructor({ url, pollMilliseconds = 1000, requestTimeoutMilliseconds = 3000, fetchImpl = null, onUpdate = () => {} }) {
+    this.url = url; this.pollMilliseconds = pollMilliseconds; this.requestTimeoutMilliseconds = requestTimeoutMilliseconds;
+    this.fetchImpl = fetchImpl ?? globalThis.fetch.bind(globalThis); this.onUpdate = onUpdate;
     this.active = null; this.timer = null; this.lastSnapshot = null; this.stopped = false;
   }
   start() { if (this.timer !== null) return; this.stopped = false; void this.tick(); this.timer = setInterval(() => void this.tick(), this.pollMilliseconds); }

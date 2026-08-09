@@ -1,7 +1,8 @@
 # Independent UI
 
-**Status:** Completed C11 contract is the current executable plan under the
-Version 1 Release Program; implementation pending
+**Status:** C11-S1 is accepted after a manual-Chrome transport correction;
+C11-S2 implementation and deterministic proofs are complete, with the required
+Chrome visual/interaction/independence proof pending
 
 **Boundary approval:** Approved 2026-08-07 by the owner through the Version 1
 Release Program revision
@@ -32,8 +33,8 @@ Sections 8-19 are completed here after just-in-time V2 UI reconnaissance.
 | --- | --- | --- | --- |
 | Boundary/reconnaissance plan | `accepted` | Direct owner V1 program revision; exact source list recorded before bounded content inspection | Complete |
 | Completed contract | `accepted_current_plan` | Focused review corrections add full T/Q trust disclosure, fail-closed semantic coherence, additive compatibility, C10-matching response bounds, exact accessibility assertions, and delayed-refresh containment; focused re-review clean | Begin C11-S1 |
-| `C11-S1` API/view-state integration | `accepted` | Initial review corrections and three residual trust/time fixes complete; `P-C11-STATE` passes 14 bounded tests, server proof, ordinary, and affected race; focused re-review clean | Begin C11-S2 |
-| `C11-S2` visual/interaction/accessibility | `proof_blocked_tooling` | Visual implementation and 19 deterministic state/contrast/focus/fixture checks pass; focused static correction re-review clean; Chrome extension unavailable | Connect the ChatGPT Chrome extension, then run `P-C11-VISUAL` |
+| `C11-S1` API/view-state integration | `accepted_after_correction` | Manual Chrome exposed an unbound native-fetch receiver before the first API request; the production default is now explicitly bound to the browser global and a receiver-sensitive `P-C11-STATE` regression brings the focused suite to 20 passing tests | Rerun the corrected production path in Chrome as part of C11-S2 proof |
+| `C11-S2` visual/interaction/accessibility | `proof_blocked_tooling` | Visual implementation and 20 deterministic state/transport/contrast/focus/fixture checks pass; focused static correction re-review clean; automated Chrome control remains unavailable | Connect the ChatGPT Chrome extension, then run `P-C11-VISUAL` |
 | Final component review | `pending` | Mandatory read-only review after both proofs and verification | Then integrated V1 RC review |
 
 ## 1-4. Outcome, scope, ownership, and settled boundary
@@ -420,6 +421,19 @@ tests, the server proof, ordinary repository verification, and affected race
 verification pass; final focused re-review found no remaining P1/P2. S1 is
 accepted and its S2 boundary remains valid.
 
+A 2026-08-09 manual production-Chrome attempt then reopened S1's transport
+claim: before sending its first request, `PollController` stored native
+`Window.fetch` and invoked it as a controller method, so Chrome supplied the
+controller as the receiver and rejected every poll with `Illegal invocation`.
+The fixture API and generated API origin were healthy, distinguishing this
+from CORS, replay, and backend availability. The production default now binds
+`globalThis.fetch` to `globalThis`; an injected fetch remains unchanged for
+deterministic boundaries. A new receiver-sensitive regression would fail under
+the original method call and proves a connected current snapshot under the
+correct receiver. All 20 focused tests pass. This correction changes no API,
+polling cadence, state meaning, or market logic; corrected real-Chrome
+observation remains allocated to `P-C11-VISUAL`.
+
 `C11-S2` now implements the fixed presentation bands, compact 20-row desktop
 allocation, eight-part status hierarchy, retained/noncurrent suppression,
 WCAG-AA token palette, reduced-motion override, semantic table, persistent
@@ -440,5 +454,6 @@ rules no in-app, shell, or alternate automation surface substitutes for Chrome.
 Until the extension is installed/enabled, screenshots, 1440x900 computed fit,
 computed browser contrast, real keyboard/focus/live-region behavior, reduced-
 motion behavior, browser CORS, and browser-observed UI-restart/API-continuity
-remain pending. This tooling block does not reopen S1 or create a product/owner
-decision gate; S2 and final C11 acceptance remain incomplete.
+remain pending. Following the S1 transport correction above, this tooling block
+creates no product/owner decision gate; S2 and final C11 acceptance remain
+incomplete.

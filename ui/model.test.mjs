@@ -164,6 +164,26 @@ test("P-C11-STATE enforces the streamed 1 MiB response cap", async () => {
   await assert.rejects(readBoundedJSON(declared), /exceeds 1 MiB/);
 });
 
+test("P-C11-STATE default poller fetch preserves the browser global receiver", async () => {
+  const originalFetch = globalThis.fetch;
+  const updates = [];
+  let receiver = null;
+  globalThis.fetch = function () {
+    receiver = this;
+    return Promise.resolve(new Response(JSON.stringify(snapshotFixture()), { status: 200 }));
+  };
+  let controller;
+  try {
+    controller = new PollController({ url: "http://127.0.0.1/api/v1/snapshot", onUpdate: update => updates.push(update) });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  await controller.tick();
+  assert.equal(receiver, globalThis);
+  assert.equal(updates.at(-1).transport, "connected");
+  assert.equal(updates.at(-1).model.current, true);
+});
+
 test("P-C11-STATE poller marks skipped hung refresh, freezes, and reconnects", async () => {
   const updates = []; let resolveFirst;
   const deferred = new Promise(resolve => { resolveFirst = resolve; });
