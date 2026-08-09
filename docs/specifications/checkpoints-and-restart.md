@@ -1,9 +1,9 @@
 # Checkpoints and restart
 
-**Status:** Component 7 finally accepted under the Version 1 Release Program;
-`C7-S1` through `C7-S3`, all eight primary proofs, cumulative verification,
-and the mandatory final read-only review are clean and reopenable by later V1
-integration evidence
+**Status:** Component 7 reaccepted under the Version 1 Release Program after
+the 2026-08-09 `P-C7-LIVE` fixture correction; `C7-S1` through `C7-S3`, all
+eight primary proofs, cumulative verification, and the mandatory focused final
+read-only review are clean and reopenable by later V1 integration evidence
 
 **Owner boundary and reconnaissance approval:** Pre-approved 2026-08-07 by the
 owner in the initiating Component 7 task, subject to the exact Sections 1–7
@@ -93,8 +93,9 @@ and then continues. Models do not guess among details or load unrelated
 dependency material.
 
 **Contract-wide coverage and acceptance:** Sections 1–7 retain the fixed Phase
-1 boundary. All eight requirements and primary proofs pass. The corrected S3
-objective and focused re-review are clean, so Component 7 is finally accepted.
+1 boundary. All eight requirements and primary proofs pass after the
+2026-08-09 `P-C7-LIVE` fake-provider ordering correction. The corrected S3
+objective and focused final reviews are clean, so Component 7 is reaccepted.
 This remains accepted evidence rather than a frozen design and may be reopened
 by later V1 integration evidence.
 
@@ -102,11 +103,50 @@ by later V1 integration evidence.
 
 | Item | State | Evidence and required review | Recorded at | Next action |
 | --- | --- | --- | --- | --- |
-| Component contract | `accepted_reopenable` | All eight requirements/proofs pass under the corrected V1 contract; no fixed-authority conflict remains | 2026-08-07 | Advance sequentially to C8; reopen only if later evidence invalidates a claim |
+| Component contract | `accepted_reopenable` | The 2026-08-09 correction re-established deterministic `P-C7-LIVE` input without changing production behavior; focused repetition, dangerous-path rejection, affected race, ordinary verification, and final review pass | 2026-08-09 | Complete; reopen only if later evidence invalidates a claim |
 | `C7-S1` | `accepted_reopenable` | `P-C7-STATE` and `P-C7-INSTALL` pass; S3 preserved their semantic/ownership evidence | 2026-08-07 | Complete |
 | `C7-S2` | `accepted_reopenable` | `P-C7-CODEC`, `P-C7-STORE`, and `P-C7-CADENCE` pass. S3 added bounded lazy latest/previous selection without changing durability semantics; the isolated 100,000-symbol maximum-shape proof passes. | 2026-08-07 | Complete |
-| `C7-S3` | `accepted_reopenable` | `P-C7-LIVE` and `P-C7-REPLAY` pass, including engine-owned replay cutoff/fallback authority. The exact preflighted 6,000-symbol/961-correction artifact is 1,674,157 bytes (`425f997f4ed161a0faf3a3c44cf0e2b5d577af55ae5c0ec5111898e5edd4c03c`). Three separately bounded trials produced checkpoint median/max 10.286/10.290 seconds versus 36.641 seconds fresh median: 71.9% faster and below 60 seconds on every trial. | 2026-08-07 | Complete |
-| Final component review | `accepted` | `gpt-5.6-sol` medium found four blockers: caller-authorized replay prefix, under-shaped objective/preflight, incomplete trial deadlines, and eager unbounded fallback loading. All received direct corrections and focused regressions; the same reviewer found the affected boundaries clean. Ordinary verification and focused race pass. One parallel multi-package race run produced a non-reproducing fake-provider failure; the exact race test and full Massive race package rerun passed. | 2026-08-07 | Complete |
+| `C7-S3` | `accepted_reopenable` | `P-C7-REPLAY` and `P-C7-OBJECTIVE` evidence remains valid. Corrected `P-C7-LIVE` passed 500 consecutive focused runs; the explicit descending-response counterexample passed 20 runs and preserved exact provider-failed terminal handling. | 2026-08-09 | Complete |
+| Final component review | `accepted` | `gpt-5.6-sol` medium found no implementation or proof defect. It confirmed the failure signature comes from unordered fake-provider rows, equivalence assertions are unchanged, descending input still fails closed, and fixed checkpoint/C6 meanings are preserved. Its documentation-state finding was corrected and focused re-review was clean. | 2026-08-09 | Complete |
+
+### 2026-08-09 `C7-LIVE-01` reopening record
+
+The reopened claim is that `P-C7-LIVE` is a deterministic checkpoint-catch-up
+equivalence proof. The observed failure is preserved by
+`go test -short -timeout 2m -run '^TestC7LIVE01CheckpointCatchupEquivalence$' -count=100 ./internal/massive`:
+14 runs reported two started items partitioned as one `completed_empty` and one
+`provider_failed`, so those runs never reached the checkpoint-versus-oracle
+comparison. The prior worker-count reduction therefore did not remove the
+failure.
+
+The root cause is a test-fixture defect, not HTTP terminal handling or
+checkpoint catch-up. The fake endpoint advertised `sort=asc` behavior but
+serialized two AAA rows by iterating a Go map. When the fresh-control interval
+contained both timestamps, the map could emit the later bar first. The shared
+C4/C6 acquisition path correctly rejected that response with
+`symbol_interval_order_duplicate` and emitted one failed terminal. Local
+`httptest` TLS handshake messages seen in the broader run do not explain the
+repeatable producer accounting signature and are not checkpoint evidence.
+
+The correction sorts the filtered fake-provider timestamps before encoding the
+response; it does not change worker count, retries, production HTTP code,
+terminal outcomes, engine ownership, `T0`, `[T0,R)`, merge behavior, or any
+market semantic. A focused C6 regression supplies the dangerous counterexample:
+an explicitly descending two-row response must emit no chunks, exactly one
+`provider_failed` terminal with `symbol_interval_order_duplicate`, and no
+value/empty success.
+
+The distinguishing proof passed 500 consecutive corrected runs under the
+two-minute bound. The descending-response counterexample passed 20 consecutive
+runs. Affected race verification passed for `P-C7-LIVE` and the shared C6 REST
+contract, and ordinary verification passed with
+`go test -short -timeout 2m ./...`. The correction changes test code only, so
+no production concurrency, HTTP, terminal, or checkpoint race claim was
+reopened. The limitation remains that `P-C7-LIVE` uses deterministic local fake
+TLS/HTTP and proves checkpoint/catch-up equivalence, not provider availability,
+live transport latency, or deployed capacity. The focused final review found no
+implementation/proof defect; its documentation-state finding was corrected and
+cleanly re-reviewed.
 
 ### C7-S1 acceptance record
 

@@ -164,6 +164,22 @@ func TestHydrationSharedRESTContract(t *testing.T) {
 		}
 	})
 
+	t.Run("descending rows fail instead of becoming value or empty", func(t *testing.T) {
+		server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			fmt.Fprintf(writer, `{"status":"OK","ticker":"AAA","adjusted":false,"count":2,"results":[{"t":%d,"o":11,"h":12,"l":10,"c":11.5,"v":1,"vw":11,"n":1},{"t":%d,"o":10,"h":11,"l":9,"c":10.5,"v":1,"vw":10,"n":1}]}`,
+				start.Add(time.Second).UnixMilli(), start.UnixMilli())
+		}))
+		defer server.Close()
+		sink := &recordingHydrationSink{}
+		result := testHydrationWorker(t, server).Run(context.Background(), context.Background(), plan, sink)
+		chunks, terminals := sink.snapshot()
+		if len(chunks) != 0 || len(terminals) != 1 || terminals[0].State() != HydrationFailed ||
+			terminals[0].Reason() != DownloadReasonSymbolIntervalOrder || result.Accounting().ProviderFailed != 1 ||
+			result.Accounting().ProviderCompletedValue != 0 || result.Accounting().ProviderCompletedEmpty != 0 {
+			t.Fatalf("descending rows exposed false success chunks=%+v terminals=%+v accounting=%+v", chunks, terminals, result.Accounting())
+		}
+	})
+
 	t.Run("invalid second page discards buffered first page", func(t *testing.T) {
 		var requests atomic.Int64
 		var server *httptest.Server

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -600,11 +601,16 @@ func checkpointHydrationServer(t *testing.T, records map[string]map[int64]float6
 		through, _ := strconv.ParseInt(parts[9], 10, 64)
 		writer.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(writer, `{"status":"OK","ticker":%q,"adjusted":false,"results":[`, symbol)
-		first := true
-		for at, close := range records[symbol] {
-			if at < from || at > through {
-				continue
+		timestamps := make([]int64, 0, len(records[symbol]))
+		for at := range records[symbol] {
+			if at >= from && at <= through {
+				timestamps = append(timestamps, at)
 			}
+		}
+		sort.Slice(timestamps, func(i, j int) bool { return timestamps[i] < timestamps[j] })
+		first := true
+		for _, at := range timestamps {
+			close := records[symbol][at]
 			if !first {
 				fmt.Fprint(writer, ",")
 			}
