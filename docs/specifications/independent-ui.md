@@ -147,15 +147,15 @@ Display conversion is presentation only:
 - `last_usd` is USD with two to four decimals as magnitude requires;
 - `day_change_ratio`, every status-bearing aggregate `value_ratio`, and
   Activity are ratios, multiplied by 100 only for a `%` label. Activity 0.80 is
-  displayed as 80%, not 0.8% or 80.00 points;
-- range positions use the same ratio-to-percent formatting; they are not
-  clamped by the browser;
-- Tape Rate uses five-second trades/second as the primary value and one-second
-  burst as secondary context. Keyboard/focus detail always exposes trade
+  displayed as 80%, not 0.8% or 80.00 points. Day %, From 4AM %, and HOD
+  drawdown retain two decimals; range positions and Activity use whole percents;
+- range positions are not numerically clamped by the browser;
+- Tape Rate shows five-second trades/second and the labeled one-second burst on
+  one line. Keyboard/focus detail always exposes both windows, trade
   coverage, participant/SIP/mixed timestamp basis, lifecycle-record observation,
   and the exact status/reason so a current number cannot imply fully corrected
   consolidated tape;
-- Spread uses basis points as the primary value and cents as secondary context.
+- Spread shows basis points and cents on one slash-separated line.
   Keyboard/focus detail always exposes quote coverage, valid duration, quality,
   and exact status/reason;
 - UTC timestamps are rendered in the browser locale only after valid parsing;
@@ -169,10 +169,13 @@ magnitudes can have different symbol-relative meaning. The three range-position
 columns use continuous linear color interpolation from red at 0%, through
 neutral gray at 50%, to green at 100%; intermediate percentages have no
 categorical cutoff or implied statistical threshold. Out-of-range numbers stay
-visible while their color uses the nearest endpoint. Activity retains intensity bands at 0, 25, 50, 75, and
-100%; Tape at 0, 1, 5, 15, and 30 trades/second; Spread at 0, 5, 10, 25, and
-50 bps pending owner evaluation of those three existing palettes. Values
-outside a visual band remain numerically visible. These bands do not create
+visible while their color uses the nearest endpoint. Activity uses continuous
+gray-to-orange intensity across its defined 0–100 percentile-derived scale.
+Tape uses the same continuous palette on an absolute linear display scale from
+0 to 30 five-second trades/second; rates above 30 retain their number and use
+the endpoint color. Spread retains bands at 0, 5, 10, 25, and 50 bps pending
+owner evaluation. Values outside a visual scale remain numerically visible.
+These presentation scales do not create
 alerts, qualification, ranking, readiness, or capacity claims.
 
 ## 10. Authoritative view-state matrix
@@ -457,8 +460,11 @@ receive magnitude fills; Day, 60 MIN, and 30 MIN range positions use a dedicated
 continuous red-to-neutral-to-green directional scale with no intermediate
 cutoffs; and the synthetic current fixture is
 Day-% descending so it no longer visually contradicts the server-ranking
-contract. Activity, Tape Rate, and Spread retain their prior intensity scales
-pending separate owner evaluation. Focused model, palette, contrast, and fixture
+contract. A follow-up owner revision makes Activity and five-second Tape Rate
+continuous gray-to-orange intensity scales, labels the one-second Tape burst
+inline, renders Spread bps/cents inline, and removes false decimal precision
+from range position and Activity. Spread retains its prior bands pending owner
+evaluation. Focused model, palette, contrast, and fixture
 proofs distinguish these presentation-only decisions; C10 remains the sole
 ranking and value owner.
 

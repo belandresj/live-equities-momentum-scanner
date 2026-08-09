@@ -19,7 +19,10 @@ test("P-C11-STATE preserves server order, units, zero, and TQ trust", () => {
   assert.equal(model.rows[0].symbol, `<img src=x onerror=alert(1)>`);
   assert.equal(model.rows[0].day, "2.15%");
   assert.equal(model.rows[0].from4am.text, "0.00%");
-  assert.equal(model.rows[0].activity.text, "80.00%");
+  assert.equal(model.rows[0].dayRange.text, "50%");
+  assert.equal(model.rows[0].activity.text, "80%");
+  assert.equal(model.rows[0].tape.primary, "1.4/s · 2.0/s burst");
+  assert.equal(model.rows[0].spread.primary, "15.0 bps / 1.50¢");
   assert.match(model.rows[0].tape.detail, /coverage yes; timestamp mixed; lifecycle records observed/);
   assert.match(model.rows[0].spread.detail, /coverage yes; duration 10000 ms; quality reviewed_ordinary/);
   assert.match(model.rows[0].tape.detail, /membership desired yes, provider present, unknown no/);
@@ -116,7 +119,7 @@ test("P-C11-STATE rejects contradictory known field and TQ trust tuples", () => 
   ];
   for (const edit of edits) { const snapshot = snapshotFixture(); edit(snapshot); assert.throws(() => validateSnapshot(snapshot), /conflict|unknown/); }
   const compatible = snapshotFixture(); compatible.rows[0].tape_rate.reason = "future_tape_reason";
-  const compatibleModel = buildViewModel(compatible); assert.equal(compatibleModel.rows[0].tape.state, "unknown"); assert.equal(compatibleModel.rows[0].tape.primary, "—"); assert.equal(compatibleModel.rows[0].tape.secondary, "—");
+  const compatibleModel = buildViewModel(compatible); assert.equal(compatibleModel.rows[0].tape.state, "unknown"); assert.equal(compatibleModel.rows[0].tape.primary, "—"); assert.equal(compatibleModel.rows[0].tape.secondary, "");
   const compatibleStatus = snapshotFixture(); compatibleStatus.rows[0].tape_rate.status = "future_tape_status";
   const statusModel = buildViewModel(compatibleStatus); assert.equal(statusModel.rows[0].tape.state, "unknown"); assert.equal(statusModel.rows[0].tape.primary, "—");
 });
@@ -247,7 +250,8 @@ test("P-C11-STATE detached renderer degrades retained rows and commits atomicall
   assert.deepEqual(renderedCells.slice(6, 9).map(node => node.dataset.palette), ["range", "range", "range"]);
   assert.deepEqual(renderedCells.slice(6, 9).map(node => node.dataset.rangePosition), ["50", "75", "25"]);
   assert.deepEqual(renderedCells.slice(6, 9).map(node => [node.dataset.rangeRedWeight, node.dataset.rangeGreenWeight]), [["0%", "0%"], ["0%", "50%"], ["50%", "0%"]]);
-  assert.deepEqual(renderedCells.slice(9, 12).map(node => node.dataset.palette), ["intensity", "intensity", "intensity"]);
+  assert.deepEqual(renderedCells.slice(9, 12).map(node => node.dataset.palette), ["heat", "heat", "spread"]);
+  assert.deepEqual(renderedCells.slice(9, 11).map(node => node.dataset.heatWeight), ["80%", "4.67%"]);
   assert.match(document.body.textContent, /60 MIN Range %30 MIN Range %/);
 
   assert.throws(() => renderDashboard(document, { transport: "connected", model: buildViewModel(snapshotFixture()) }, { beforeCommit: () => { throw new Error("injected render failure"); } }), /injected/);

@@ -27,10 +27,16 @@ th:nth-child(2), td:nth-child(2) { width: 66px; }
 td { height: 32px; padding: 0 7px; border-bottom: 1px solid #172b39; color: #d9e5ed; text-align: right; font: 600 11px ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 td[data-state="warming"], td[data-state="unavailable"] { color: #95a7b4; }
 td[data-state="invalid"], td[data-state="unknown"], td[data-state="pressure_shed"], td[data-state="stale"] { color: #ffb58f; }
-table[data-publication-state="current"] td[data-state="current"][data-palette="intensity"][data-band="1"] { color: #a8e9c8; background: #10271f; }
-table[data-publication-state="current"] td[data-state="current"][data-palette="intensity"][data-band="2"] { color: #7ce2b3; background: #123024; }
-table[data-publication-state="current"] td[data-state="current"][data-palette="intensity"][data-band="3"] { color: #ffe29d; background: #302817; }
-table[data-publication-state="current"] td[data-state="current"][data-palette="intensity"][data-band="4"] { color: #ffb09c; background: #351b18; }
+table[data-publication-state="current"] td[data-state="current"][data-palette="spread"][data-band="1"] { color: #a8e9c8; background: #10271f; }
+table[data-publication-state="current"] td[data-state="current"][data-palette="spread"][data-band="2"] { color: #7ce2b3; background: #123024; }
+table[data-publication-state="current"] td[data-state="current"][data-palette="spread"][data-band="3"] { color: #ffe29d; background: #302817; }
+table[data-publication-state="current"] td[data-state="current"][data-palette="spread"][data-band="4"] { color: #ffb09c; background: #351b18; }
+table[data-publication-state="current"] td[data-state="current"][data-palette="heat"] {
+  color: #e7eef5;
+  background: #202a31;
+  --heat-weight: attr(data-heat-weight type(<percentage>), 0%);
+  background: color-mix(in oklab, #202a31, #80400d var(--heat-weight));
+}
 table[data-publication-state="current"] td[data-state="current"][data-palette="range"] {
   color: #e7eef5;
   background: #202a31;
@@ -41,6 +47,5 @@ table[data-publication-state="current"] td[data-state="current"][data-palette="r
 }
 table[data-publication-state="noncurrent"] tbody { background: #111a21; }
 td[data-state="retained"] { color: #91a0aa; }
-td small { display: block; color: #8298a8; font-size: 8px; line-height: 9px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; } }
