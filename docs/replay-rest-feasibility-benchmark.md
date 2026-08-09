@@ -1,11 +1,30 @@
 # REST replay acquisition feasibility benchmark
 
-**Status:** Proposed evidence plan and future assignment; not product authority,
-not an implementation specification, and not credential/provider authorization
+**Status:** Local subset harness implemented and deterministic fake-HTTPS
+verification clean under the owner's 2026-08-09 authorization; provider
+execution remains pending. This document is evidence planning, not product
+authority or C12 approval.
 
 **Related proposed component:** [Historical replay product mode](specifications/historical-replay-product-mode.md)
 
 **Accepted dependency:** [Component 4 aggregate replay](specifications/aggregate-replay.md)
+
+## Authorization boundary
+
+The owner's 2026-08-09 authorization permits only the benchmark-local code and
+ordinary deterministic tests needed to construct a strict subset binding,
+invoke the sealed C4 `massive.OfflineDownloader`, and report its existing
+measurements honestly. It permits no production CLI flag, downloader/retry/
+worker-limit change, artifact-schema change, scanner-runtime change, C12
+product implementation, credential read, provider request, licensed-data
+download, or B0-B4 execution.
+
+Implementation authorization and provider-execution authorization are
+separate. The local harness may exist and pass fake-HTTPS tests before the C12
+boundary is approved. Every real stage still requires a later owner message
+naming the exact stage, trading date, interval, population, workers, hard
+timeout, and permission to read `MASSIVE_API_KEY`. C12 approval by itself does
+not supply those facts or authorize a provider request.
 
 ## Decision this benchmark supports
 
@@ -25,14 +44,36 @@ known, host, and command commit.
 
 `cmd/aggregate-replay` accepts a shorter `--from/--to` interval but always
 resolves and downloads the complete binding universe before compiling an
-artifact. It has no subset flag. Adding an unreviewed production `--symbols`
-option would weaken complete-binding evidence and is prohibited.
+artifact. It has no subset flag, and this benchmark does not add one.
 
-The benchmark therefore requires one narrow explicitly selected harness that
-constructs a valid benchmark-only subset binding and calls the existing sealed
-`massive.OfflineDownloader` directly. Subset results never publish a complete-
-universe artifact or acceptance claim. The production downloader, normalizer,
-request limits, retries, and accounting remain unchanged.
+The authorized local harness derives an evenly spaced strict subset from the
+sorted accepted binding, constructs a valid callback-confined subset binding,
+and calls the existing sealed `massive.OfflineDownloader` directly. Its sealed
+report has fixed `deterministic_subset` scope, fixed false complete-universe/
+artifact/acceptance eligibility, and no binding value, normalized rows,
+`DownloadResult`, artifact identity, or path. The production downloader,
+normalizer, request limits, retries, accounting, CLI, and scanner remain
+unchanged. Full-binding stages and artifact compilation stay outside this
+local-harness authorization.
+
+### Local implementation evidence
+
+`internal/reference/benchmark_subset.go` derives the strict subset from the
+accepted binding's schedule, universe, and prior-close facts, then re-enters
+the ordinary binding assembler. `internal/massive/offline_benchmark.go` applies
+the fixed evenly-spaced selection, hard timeout, and existing downloader, then
+seals only the measurement report described above. It contains no credential
+lookup or provider-stage runner.
+
+The ordinary fake-HTTPS proof covers deterministic selection identity;
+successful nonempty and empty symbols; pagination, retry attempts, response
+bytes, and normalized-row counts; exact failed/canceled terminal accounting;
+in-flight timeout cancellation; and rejection of complete-binding scope before
+HTTPS. Focused and repository-short verification pass. No independent review
+was triggered: this milestone changes no product/component contract or
+production trust/interface semantics, and the strict-subset/false-success risk
+is directly constrained by construction and the ordinary proof. B0-B4 remain
+unexecuted.
 
 ## Required measurements
 
@@ -53,14 +94,24 @@ For each trial record:
   measure them without credentials or payload logging; and
 - whether accounting reconciles exactly.
 
+The existing sealed downloader supports exact aggregate and per-symbol
+terminal state, record, page, attempt, and response-byte measurements. It does
+not expose successful-attempt HTTP status or retry-reason history, separate
+network acquisition from local parsing/postprocessing time, or measure process
+CPU, peak RSS, and host facts. The subset harness labels those fields
+unavailable; it does not infer them from terminal reason, wall time, or response
+size. Artifact and temporary bytes are also unavailable because the subset
+harness cannot compile or publish an artifact.
+
 Never record an API key, Authorization header, continuation credential, raw
 response body, or licensed provider rows in a committed artifact.
 
 ## Sequential trial matrix
 
-Every stage requires the preceding result to be complete and reconciled. A
-failure records evidence and stops escalation; it does not justify broadening
-scope or raising limits automatically.
+This matrix is a future provider-execution sequence, not authorization. Every
+stage requires its own exact owner authorization and the preceding result to be
+complete and reconciled. A failure records evidence and stops escalation; it
+does not justify broadening scope or raising limits automatically.
 
 | Stage | Population and interval | Workers | Hard timeout | Question answered |
 | --- | --- | --- | --- | --- |
@@ -99,28 +150,34 @@ The thirty-minute boundary is a proposed investigation trigger, not a product
 requirement. The benchmark reports evidence; the owner selects the acquisition
 path.
 
-## Draft implementation assignment for the benchmark harness
+## Authorized local-harness implementation assignment
 
-This assignment becomes executable only after C12 boundary approval and an
-explicit owner authorization for the exact provider trial.
+This assignment is executable under the owner's 2026-08-09 message only for
+local code and deterministic fake-HTTPS ordinary tests. Its presence does not
+authorize any provider trial.
 
 1. **Authority and requirements:** Read `AGENTS.md`, `README.md`, the
    specification map, C4 parent and REST/artifact detail, the proposed C12
    skeleton, and this plan. Preserve every C4 request, normalization, terminal,
    coverage, and credential-containment rule.
 2. **Outcome and owner:** Add one benchmark-only harness that measures the
-   existing downloader over an authentic full or deterministic subset binding.
-   The harness owns no production state or semantics.
+   existing downloader over a deterministic strict subset of an accepted
+   binding. The harness owns no production state or semantics and returns no
+   artifact-capable value.
 3. **Allowed boundary:** Prefer a long-running Go test or narrowly named local
    benchmark command colocated with C4 acquisition. Do not change production
    CLI flags, downloader behavior, retry policy, worker maximum, artifact
    schema, reference caches, or scanner runtime.
-4. **Evidence inputs:** Exact owner-authorized date, interval, subset size,
-   `MASSIVE_API_KEY` environment access, accepted reference cache/resolver, and
-   official provider endpoint documentation. No V2 or raw flat-file source.
-5. **Primary evidence:** `B-C12-REST` is one staged measurement record covering
-   B0-B3; B4 is a separately authorized acceptance trial. Semantic unit tests
-   remain C4 evidence and are not duplicated.
+4. **Evidence inputs:** For local implementation, repository-owned synthetic
+   bindings and fake HTTPS only. A future real stage additionally requires the
+   exact owner-authorized date, interval, population, workers, timeout,
+   `MASSIVE_API_KEY` access, and accepted reference source. No V2 or raw
+   flat-file source.
+5. **Primary evidence:** Ordinary tests prove only selection identity,
+   accounting/measurement preservation, bounded terminal containment, and the
+   subset-only claim boundary. `B-C12-REST` begins only when B0 is separately
+   authorized; B4 remains a distinct acceptance trial. Existing C4 semantics
+   are consumed rather than re-proved.
 6. **Verification tier:** Harness unit tests use fake HTTPS and run ordinary;
    provider trials are explicitly selected, skipped under `testing.Short()`,
    and bounded by the table timeouts. Ordinary command remains
@@ -137,9 +194,9 @@ explicit owner authorization for the exact provider trial.
    host does not prove future SLA.
 10. **Correction and stop conditions:** Invalid binding/subset identity,
     provider schema mismatch, unbounded wait, repeated terminal failure,
-    unexpected pagination, credential exposure, or inability to distinguish
-    acquisition from compile work stops the stage and returns evidence to the
-    owner. It does not authorize implementation expansion.
+    unexpected pagination, credential exposure, or an unsupported measurement
+    stops that stage and records the limitation. It does not authorize
+    production changes, invented data, or implementation expansion.
 
 ## Provider-execution authorization template
 
@@ -153,4 +210,5 @@ timeout. You may read MASSIVE_API_KEY only for this trial. Do not commit provide
 data or credentials and stop at the stage boundary.
 ```
 
-Approval of the C12 specification does not itself authorize this execution.
+Approval of the C12 specification or of the local harness does not itself
+authorize this execution.
