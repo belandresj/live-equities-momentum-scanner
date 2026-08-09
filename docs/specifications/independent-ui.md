@@ -164,12 +164,15 @@ Display conversion is presentation only:
 
 Genuine numeric zero remains visible. A non-current status hides its numeric
 slot and shows its exact status/reason; color never overrides that state.
-Presentation bands are stable and deliberately non-semantic: return magnitude
-at 0, 1, 2.5, 5, and 10 percentage points; range/Activity at 0, 25, 50, 75,
-and 100%; Tape at 0, 1, 5, 15, and 30 trades/second; Spread at 0, 5, 10, 25,
-and 50 bps. Values outside a visual band remain numerically visible. These
-bands do not create alerts, qualification, ranking, readiness, or capacity
-claims.
+Day %, From 4AM %, and HOD drawdown remain numerically uncolored because equal
+magnitudes can have different symbol-relative meaning. The three range-position
+columns alone use a directional palette at 0, 25, 50, 75, and 100%: low values
+run bright red through muted red, 50% is neutral gray, and high values run muted
+through bright green. Activity retains intensity bands at 0, 25, 50, 75, and
+100%; Tape at 0, 1, 5, 15, and 30 trades/second; Spread at 0, 5, 10, 25, and
+50 bps pending owner evaluation of those three existing palettes. Values
+outside a visual band remain numerically visible. These bands do not create
+alerts, qualification, ranking, readiness, or capacity claims.
 
 ## 10. Authoritative view-state matrix
 
@@ -242,8 +245,8 @@ one viewport without pagination or horizontal clipping at that target. A
 multi-browser behavior are nonclaims.
 
 The main surface is a dense dark scanner table in this exact column order:
-Rank, Symbol, Last, Day %, From 4AM %, HOD DD %, Day Range %, 60m Range %, 30m
-Range %, Activity, Tape Rate, Spread. Stable compact rows use tabular numerals,
+Rank, Symbol, Last, Day %, From 4AM %, HOD DD %, Day Range %, 60 MIN Range %, 30
+MIN Range %, Activity, Tape Rate, Spread. Stable compact rows use tabular numerals,
 right-aligned values, sticky headers, subdued grid lines, and hue-plus-text or
 shape redundancy. Row order changes only when a new response changes it; no
 decorative motion occurs on polling.
@@ -446,6 +449,16 @@ unchanged publication identity, and the degraded corpus explicitly reconciles
 correction re-review are clean after fixing alpha-composed retained contrast,
 status-strip wrapping, fixture population, persistent interaction state, rank-
 stable focus, and vanished-row fallback.
+
+Owner visual review on 2026-08-09 revised the lower-level palette without
+changing any market meaning: Day %, From 4AM %, and HOD drawdown no longer
+receive magnitude fills; Day, 60 MIN, and 30 MIN range positions use a dedicated
+red-to-neutral-to-green directional scale; and the synthetic current fixture is
+Day-% descending so it no longer visually contradicts the server-ranking
+contract. Activity, Tape Rate, and Spread retain their prior intensity scales
+pending separate owner evaluation. Focused model, palette, contrast, and fixture
+proofs distinguish these presentation-only decisions; C10 remains the sole
+ranking and value owner.
 
 The required Chrome proof is not claimed. Chrome is installed and running, but
 the ChatGPT browser extension is absent from every Chrome profile, so the

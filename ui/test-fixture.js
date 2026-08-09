@@ -2,7 +2,7 @@ export function snapshotFixture(rowCount = 1) {
   const populationSize = Math.max(rowCount, 2);
   const measurement = value => ({ status: "current", reason: "", value_ratio: value });
   const rows = Array.from({ length: rowCount }, (_, index) => ({
-    rank: index + 1, symbol: `S${String(index + 1).padStart(2, "0")}`, last_usd: 10 + index, day_change_ratio: .0025 + index / 1000, mark_age_ms: 250,
+    rank: index + 1, symbol: `S${String(index + 1).padStart(2, "0")}`, last_usd: 10 + index, day_change_ratio: .0025 + (rowCount - index - 1) / 1000, mark_age_ms: 250,
     from_4am_change: measurement(0), hod_drawdown: measurement(-.01), day_range_position: measurement(.5), range_30m_position: measurement(.25), range_60m_position: measurement(.75), activity: measurement(.8),
     tape_rate: { status: "current", reason: "qualifying_original_prints", trade_coverage: true, one_second: { status: "current", reason: "qualifying_original_prints", trades_per_second: 2 }, five_second: { status: "current", reason: "qualifying_original_prints", trades_per_second: 1.4 }, timestamp_basis: "mixed", lifecycle_records_observed: true },
     spread: { status: "current", reason: "", quote_coverage: true, cents: 1.5, basis_points: 15, valid_duration_ms: 10000, quality: "reviewed_ordinary" },

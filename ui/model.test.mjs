@@ -17,7 +17,7 @@ test("P-C11-STATE preserves server order, units, zero, and TQ trust", () => {
   assert.equal(model.sampleID, "9007199254740999");
   assert.deepEqual(model.rows.map(row => row.rank), Array.from({ length: 20 }, (_, index) => index + 1));
   assert.equal(model.rows[0].symbol, `<img src=x onerror=alert(1)>`);
-  assert.equal(model.rows[0].day, "0.25%");
+  assert.equal(model.rows[0].day, "2.15%");
   assert.equal(model.rows[0].from4am.text, "0.00%");
   assert.equal(model.rows[0].activity.text, "80.00%");
   assert.match(model.rows[0].tape.detail, /coverage yes; timestamp mixed; lifecycle records observed/);
@@ -26,6 +26,7 @@ test("P-C11-STATE preserves server order, units, zero, and TQ trust", () => {
   assert.equal(model.tqKnownPresent, 20); assert.equal(model.tqUnknown, 0); assert.equal(model.tqRetainedBoundHit, false);
   assert.ok(model.diagnostics.some(([name, value]) => name === "operations.deliveries" && value === "10"));
   assert.deepEqual(model.rows.map(row => row.symbol), snapshot.rows.map(row => row.symbol));
+  assert.ok(model.rows.every((row, index) => index === 0 || Number.parseFloat(model.rows[index - 1].day) >= Number.parseFloat(row.day)), "visual fixture must be plausible Day-% descending server order");
 });
 
 test("P-C11-STATE distinguishes exact empty, fewer, noncurrent, and independent TQ", () => {
@@ -241,6 +242,11 @@ test("P-C11-STATE detached renderer degrades retained rows and commits atomicall
   assert.match(document.body.textContent, /<script>owned\(\)<\/script>/);
   assert.equal(find(document.body, node => node.tagName === "TABLE")[0].dataset.publicationState, "current");
   assert.equal(find(document.body, node => node.tagName === "TD")[0].dataset.state, "current");
+  const renderedCells = find(document.body, node => node.tagName === "TBODY")[0].children[0].children;
+  assert.deepEqual(renderedCells.slice(3, 6).map(node => node.dataset.palette), [undefined, undefined, undefined], "return and drawdown cells received a palette");
+  assert.deepEqual(renderedCells.slice(6, 9).map(node => node.dataset.palette), ["range", "range", "range"]);
+  assert.deepEqual(renderedCells.slice(9, 12).map(node => node.dataset.palette), ["intensity", "intensity", "intensity"]);
+  assert.match(document.body.textContent, /60 MIN Range %30 MIN Range %/);
 
   assert.throws(() => renderDashboard(document, { transport: "connected", model: buildViewModel(snapshotFixture()) }, { beforeCommit: () => { throw new Error("injected render failure"); } }), /injected/);
   assert.equal(document.body.children[0], committed, "failure replaced the prior committed DOM");
