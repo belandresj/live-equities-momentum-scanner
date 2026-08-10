@@ -319,3 +319,74 @@ The decision is direct:
 This test does not need live data, does not rerun the failed T1 provider trial,
 and does not prove that batching is the fix. It identifies the smallest code
 boundary that the next implementation should change.
+
+### 2026-08-10 cost-attribution result
+
+**Implementation:** `TestLiveAggregateCostAttribution` uses a 6,000-symbol
+binding and one immutable stream of 400 frames with two valid second
+aggregates per frame. The normalization phase drains the ordinary C5 frame
+cursor through a read-only accounting facade and admits nothing. The
+end-to-end phase sends the exact same frame bytes through a fake WebSocket,
+the production 512-frame/64-MiB C5 queue, `LiveAttempt`, and
+`DeliverNextToEngine`. All 400 frames and 800 aggregate insertions reconciled
+in both phases. No credential, provider request, production flag, alternate
+decoder, timing counter, queue, state owner, or batching path was added.
+
+The single profiled run used Go 1.26.5 on `darwin/arm64`, MacBookPro17,1:
+
+| Phase | Elapsed | Frames/s | Aggregates/s | Allocation bytes | Allocations | Reconciled |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Normalization only | 15.056 ms | 26,567.11 | 53,134.23 | 11,141,112 | 308,432 | 400 frames / 800 aggregates |
+| End to end | 23.661 ms | 16,905.40 | 33,810.79 | 22,379,048 | 339,672 | 400 frames / 800 inserted aggregates |
+
+Normalization consumed 63.6% of end-to-end wall time. The complete additional
+adapter admission, completion wait, canonical/feature update, publication,
+and validation path added 8.605 milliseconds. Normalization also accounted
+for 90.8% of the end-to-end allocation count and 49.8% of allocated bytes.
+
+The CPU profile sampled 20 milliseconds cumulatively under the C5
+normalization phase. `liveFrameCursor.Next` accounted for the complete 20
+milliseconds and `normalizeElement`/`decodeObjectMembers` for 10 milliseconds
+within it. No `internal/engine` function received a CPU sample at the
+profile's 10-millisecond resolution. Runtime allocation/GC and test fixture
+setup account for most remaining global samples, so they are not attributed
+to canonical, feature, or publication work.
+
+The blocking profile's relevant synchronous caller path accumulated 4.13
+milliseconds in `LiveAttempt.DeliverNextToEngine`, including 4.01 milliseconds
+in `DeliverToEngine`, across 800 aggregates (approximately 5.2 microseconds
+per aggregate). The 20.14 milliseconds reported under `Engine.consume` is the
+long-lived consumer goroutine waiting for input, not caller-visible admission
+delay. The rest of the 495.82-millisecond global blocking total is concurrent
+test/runtime HTTP, timer, heartbeat, profile-shutdown, and channel/select wait;
+it does not lie on the measured aggregate-delivery critical path. Admission
+and completion waiting therefore do not dominate this fixture.
+
+| Existing stage | Evidence | Attribution |
+| --- | --- | --- |
+| Frame decoding and normalization | 15.056 ms phase; 20 ms focused CPU samples; 308,432 allocations | Dominant measured stage |
+| Adapter admission, completion waiting, channel/lock overhead | 4.13 ms focused blocking delay across 800 aggregates | Material but not dominant |
+| Canonical aggregate and feature updates | No CPU sample; contained with publication in the 8.605 ms end-to-end increment | No evidence of dominance |
+| Immutable publication construction, cloning, and validation | No CPU sample; contained with canonical work in the 8.605 ms end-to-end increment | No evidence of dominance |
+
+**Decision and smallest next implementation boundary:** optimize only the C5
+decoder/normalizer in `internal/massive/live_normalization.go` before changing
+engine admission or publication cadence. The narrowest evidenced region is
+the frame cursor's bounded first-pass analysis plus per-element decoding,
+especially `liveFrameCursor.Next`, `normalizeElement`, and
+`decodeObjectMembers`. Any implementation must preserve strict recognized-
+member duplicate rejection, exact array/status cardinality, earliest causal
+ambiguity, bounded accounting, and complete immutable aggregate values. This
+evidence does not justify a new queue, another state owner, asynchronous
+aggregate mutation, one-aggregate handoff replacement, or publication
+coalescing.
+
+**Limitation:** the fixed workload finishes in tens of milliseconds, so the
+CPU profile is coarse and cannot separate canonical/feature work from
+publication work inside their combined 8.605-millisecond increment. That does
+not weaken the direct phase result or blocking result, but it means this test
+identifies the C5 boundary rather than a specific decoder rewrite. It is a
+credential-free deterministic attribution fixture, not a live-capacity or
+post-optimization proof. The ignored local profiles are
+`var/live-aggregate-cost/cpu.out` and
+`var/live-aggregate-cost/block.out`.

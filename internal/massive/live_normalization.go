@@ -254,6 +254,22 @@ func (a LiveFrameAccounting) Reconciles() bool {
 	return a.DeclaredArrayElements == 0
 }
 
+// ConsumeLiveFrameForAttribution drains the ordinary live-normalization cursor
+// without retaining normalized market values. It is a read-only diagnostic
+// seam for comparing the existing bounded frame accounting with engine
+// admission; production delivery remains LiveAttempt.DeliverNextToEngine.
+func ConsumeLiveFrameForAttribution(frame LiveFrame, statusContext *StatusContext, options LiveNormalizationOptions) (LiveFrameAccounting, int) {
+	cursor := newLiveFrameCursor(frame, statusContext, options)
+	consumed := 0
+	for {
+		_, ok := cursor.Next()
+		if !ok {
+			return cursor.Accounting(), consumed
+		}
+		consumed++
+	}
+}
+
 type liveFrameAnalysis struct {
 	arrayKnown, statusExact  bool
 	declared, ambiguityIndex int
