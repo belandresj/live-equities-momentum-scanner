@@ -10,9 +10,9 @@ drift audit.
 **Controlling requirements:** Every Phase 1 ID listed by the
 [parent](../aggregate-replay.md), plus `C4-NORM-01`, `C4-COMP-NORM-01`,
 `C4-DL-01`, `C4-ART-01`, `C4-ART-02`, `C4-SCHED-01`, `C4-RUN-01`,
-`C4-FAIL-01`, and `C4-CORE-01`
+`C4-FAIL-01`, `C4-CORE-01`, and `C4-PREFIX-END-01`
 
-**Allocated slices:** `C4-S1`–`C4-S4`
+**Allocated slices:** `C4-S1`–`C4-S5`
 
 **Document dependencies:** [Parent](../aggregate-replay.md),
 [REST normalization and artifact trust](rest-normalization-and-artifact.md),
@@ -58,6 +58,7 @@ credential or live provider request is part of contract or slice acceptance.
 | `C4-RUN-01` | `P-C4-RUN` — replay lifecycle/coverage/commit/end scenario | Valid complete evidence alone moves `initializing -> replaying`, admits through canonical/evaluator path, classifies each finished slot for every binding symbol as present or artifact-proved absent, opens the existing replay commit gate after group completion, and ends after final seal/timer; partial synthetic evidence installs no complete absence and stays commit-ineligible while ordinary duplicate/revision semantics work. Counterexample: caller boolean, unclassified/partial coverage, or timer alone advances `T` or counts an empty symbol, or replay uses a second evaluator/publisher. | Complete run shows exact `LIFE-T03/T23/T24`, presence/absence accounting, nondecreasing supported `T`, Component 3 publication at `T`, replay/TQ-unavailable labels, and terminal ended; partial trace has no complete commit claim. Ownership inspection finds one engine/evaluator/publication. It does not prove live no-print tokens/readiness, checkpoint starts, or full capacity. | Small complete Component 1 binding/artifact with a successful-empty symbol and explicit partial synthetic correction trace. | `C4-S3` |
 | `C4-FAIL-01` | `P-C4-FAIL` — artifact/clock/engine/cancellation containment matrix | Every consequential contradiction produces failed/suppressed terminal replay with no later restoration; cancellation produces canceled/controlled stop without artifact-end success. Counterexample: edited second-pass bytes, wrong ordinal/clock, engine rejection, EOF, or cancellation reports complete. | Exact bounded reason/last boundary, `terminal_replay_failure` for failures, no later admission/current claim, fresh-engine requirement, and distinct canceled result pass. It does not prove process restart orchestration or Component 8 shutdown policy. | Mutated same-open-file artifact, source/clock fault seams, accepted engine containment, cancellation boundaries. | `C4-S3` |
 | `C4-CORE-01` | `P-C4-CORE` — Components 1–4 deterministic aggregate-core comparison | One representative complete artifact and identical binding/engine configuration produce identical logical results at unpaced and finite accelerated playback through the sole Component 1–3 path. Counterexample: pace/goroutine timing changes lifecycle, `T`, canonical state, qualification/features/accounting/rank, publication, or terminal result. | At every logical group, compare lifecycle transition, engine/system sequence, committed `T`, canonical proof view, Component 3 feature/qualification/population/ranking state, publication identity/content including simulated `generated_at`, and final result; require at least one qualified ranked symbol, one sparse symbol, and one successful-empty symbol. It does not establish live/REST ATS parity, provider chronology/latency, T/Q, trading edge, or executable expectancy. | Repository-owned representative complete artifact built through S1/S2; accepted Components 1–3 proof views; unpaced plus finite accelerated pace. | `C4-S4` |
+| `C4-PREFIX-END-01` | `P-C4-PREFIX-END` — complete-source requested-end trust/lifecycle matrix | A complete `[S,R)` artifact can finish successfully at exact `O1`, `S < O1 <= R`, while only records/timers through `O1` reach the engine and full same-open suffix integrity still gates success. Counterexample: a later record is applied, corrupt/missing suffix or prefix evidence passes, a mismatched or wrong-clock end is admitted, cancellation is relabeled, or rejected ordinal/group/clock/engine work retains completion. | Prove exact prefix state and requested-end disposition for `O1<R`; `O1=R` byte/trace behavior and artifact-end disposition parity; no post-`O1` engine aggregate/timer; mutated suffix failure; missing/invalid prefix and requested-end contradiction failure; cancellation before terminal linkage remains canceled while cancellation after linkage cannot displace the accepted terminal result; rejection/suppression has no complete result; and the extended accounting identity closes with an exact intentional suffix count. It does not prove adversarial filesystem immutability, C12 API/UI composition, provider access, retained-B4 behavior, or large-artifact throughput. | Small repository-owned complete artifacts and package-private mutation/admission/terminal-link fault seams; owner authorization. | `C4-S5` |
 
 The milestone comparison deliberately includes nontrivial output. A merely empty
 or fixed-struct run would not show that Component 3's qualification, features,
@@ -67,12 +68,14 @@ the scanner predicts returns or has positive expectancy after costs.
 
 ## 16. Sequential implementation-slice plan
 
-Four slices are required because the component crosses four separately
+The accepted baseline used four slices because the component crossed four separately
 reviewable boundaries in dependency order: a future-shared external row
 mapping, provider I/O plus persisted artifact trust, engine clock/order/lifecycle
 integration, and the runnable Components 1–4 milestone. Combining them would
 make false provider/persistence success difficult to distinguish from engine
-determinism; splitting further would create scaffolding-only changes.
+determinism. The owner-approved additive `C4-S5` is a fifth, focused correction
+because requested-end persisted integrity and lifecycle completion must be
+proved without reopening the accepted provider/compiler or milestone slices.
 
 | Slice | Coherent outcome | Requirement IDs and primary proofs | Dependencies/entry state | Allowed ownership or files/packages | Approved v2 whitelist/fixtures | Acceptance record | Explicitly deferred behavior |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -80,6 +83,7 @@ determinism; splitting further would create scaffolding-only changes.
 | `C4-S2` | A bounded offline fake-testable downloader uses the accepted S1 mapper, compiles the exact canonical versioned artifact, and atomically validates/publishes it with exact complete/empty coverage and partial-synthetic separation. | `C4-COMP-NORM-01`, `C4-DL-01`, `C4-ART-01`, `C4-ART-02`; `P-C4-COMP-NORM`, `P-C4-DL`, `P-C4-ART-BYTES`, `P-C4-ART-TRUST`. | Accepted S1 mapper and unchanged Components 1/2 interfaces. | Focused `internal/massive` offline client, new `internal/replayartifact` (or owner-approved equivalent), compile-mode wiring under `cmd/aggregate-replay`, and their focused tests/fixtures. No engine replay state. | Exact behavior regions/tests and adaptable JSON fixture named in Section 8; no other v2 file. | Sole-mapper consumer trace; query/failure/accounting trace; golden byte/digest/coverage result; persistence/lease/cancellation trust matrix; bounds; secret/path inspection; affected/repository tests plus required race; narrow review; deviations and S3 validity. | Engine start/groups/timers/commit/end, replay command execution, milestone, live calls, and Component 6 hydration/recovery and production-reuse proof. |
 | `C4-S3` | A sequential validated-artifact source and single simulated clock drive typed replay start/aggregate/group-timer/end/failure through the existing engine, including artifact-proved per-slot presence/absence, successful replay `T`, final lifecycle, and containment. | `C4-SCHED-01`, `C4-RUN-01`, `C4-FAIL-01`; `P-C4-SCHED`, `P-C4-RUN`, `P-C4-FAIL`. | Accepted S2 artifact handle; accepted Component 2/3 engine/evaluator. | New focused `internal/replay` source/pacer and the minimum named replay evidence/admission/coverage state extension in `internal/engine`, with focused tests. No new evaluator, publication cell, or public API. | None; v2 runtime materials are rejected evidence. | Logical trace; presence/absence plus lifecycle/commit/end trace; failure/cancel matrix; sequence/state bounds; owner-path walkthrough; affected/repository tests plus required race; narrow review; deviations and S4 validity. | User-facing replay command completion, end-to-end representative milestone, live/TQ/checkpoint/readiness/API/UI and Component 6 no-print/work ownership. |
 | `C4-S4` | The offline tool drives a representative complete binding/artifact through Components 1–3 and proves identical nontrivial immutable output at different paces, completing the deterministic aggregate-core milestone. | `C4-CORE-01`; `P-C4-CORE`. | Accepted S1–S3 and their proofs/reviews; no interface reinterpretation. | Replay-mode wiring under `cmd/aggregate-replay` and narrowly routed integration/proof tests in the Component 4/engine boundary. Production semantics may only compose accepted S1–S3 behavior. | None. | Runnable path; exact cross-speed comparison; nontrivial ranking/accounting output; all Component 4 proofs, repository build/test/race/vet, drift audit, deviations, and readiness for mandatory final review. | Provider credential use/live calls, production capacity/readiness, checkpoints, live/TQ, public API/UI, and any claim of predictive edge. |
+| `C4-S5` | A validated complete artifact truthfully finishes at an exact operator-requested `O1<=R` without applying its suffix, while full source integrity, ordinary engine semantics, and cancellation/failure distinctions remain exact. | `C4-PREFIX-END-01`; `P-C4-PREFIX-END`. | Accepted S1–S4; owner-approved 2026-08-09 additive correction. | `internal/replayartifact/playback`, its `replayartifact.Handle` seam, `internal/replay`, and the minimum typed requested-end extension in `internal/engine`, plus focused tests and necessary local command flag wiring only. No C12 package/API/UI work. | None. | Exact dangerous-counterexample matrix; focused ordinary tests; repository short suite; proportionate race; required persisted-source/lifecycle read-only review and clean focused re-review. | C12 composition, provider requests/credentials, licensed-data reads, retained B4 artifact, live/TQ/API/UI changes, and capacity claims. |
 
 Slice acceptance follows the parent ledger and the repository's delegated gate.
 The advancement mode is `delegated` for every approved slice; no slice is
@@ -99,7 +103,10 @@ changed clock, queue, engine, and replay package. S4 reruns all nine Component
 milestone, repository build/tests, repository
 race tests, and `go vet ./...` before the separate final review. Exact command
 paths may reflect the approved package layout, but none may omit the stated
-claim. No tier accesses credentials or a live endpoint.
+claim. S5 runs `P-C4-PREFIX-END`, the repository short suite with its required
+timeout, and proportionate race verification for the touched artifact/replay/
+engine boundaries before focused re-review. No tier accesses credentials, a
+live endpoint, licensed provider data, or the retained B4 artifact.
 
 Every acceptance record must include:
 
@@ -129,6 +136,10 @@ Every acceptance record must include:
   read-only final Component 4 review examines the complete contract,
   implementation, all proofs, routing, bounds, ownership, and predecessor
   coupling before the parent may become `complete`.
+- `C4-S5` requires a narrow read-only persisted-source/lifecycle review of full
+  suffix trust, requested-end engine admission and cancellation linearization,
+  disposition/accounting separation, and false-success counterexamples, plus a
+  focused clean re-review after any correction.
 
 Required independent reviews use the model/effort and focused re-review policy
 in `AGENTS.md`. They provide evidence; they cannot approve new behavior,
@@ -164,6 +175,9 @@ or trust:
   evaluates Component 3, and publishes; and
 - complete/failed/canceled outcomes and every primary accounting identity are
   exhaustive.
+- requested-end success is available only from a complete artifact after full
+  same-open suffix validation; it has a distinct typed engine and result
+  disposition, and intentional suffix records are explicit source accounting.
 
 **Prohibited changes**
 
@@ -185,6 +199,9 @@ or trust:
 - No modification of Components 1–3 behavior outside the exact Component 4
   typed replay extension already specified; a discovered mismatch returns to
   contract review.
+- No reinterpretation of artifact header end, cancellation, controlled stop,
+  suppression, or failure as requested-end success, and no suffix aggregate or
+  timer admission after the selected requested end.
 
 **Stop/escalation conditions**
 
@@ -254,6 +271,11 @@ or trust:
 - [x] Owner completed-contract/reuse/test/slice-plan approval is recorded.
 - [x] The exact version 2 implementation/fixture whitelist and delegated
       advancement mode received that approval on 2026-08-06.
+- [x] `C4-S5` proves exact prefix success, artifact-end parity, full same-open
+      suffix validation, terminal-fact cancellation linearization, exact
+      requested-end clock admission, and honest intentional-suffix accounting.
+- [x] Focused ordinary, repository short, proportionate race, vet, and required
+      independent review/re-review evidence are clean for the correction.
 
 ## 19. Drift audit
 
@@ -268,8 +290,9 @@ or trust:
 | Did this add machinery without an approved need? | No | JSON Lines, external bounded sorting, typed replay facts, and second-pass validation directly serve deterministic/persisted false-success boundaries; database, fake transport, generic frameworks, and extra queues are rejected. |
 | Did version 2 drive the Phase 1 boundary instead of informing the detailed implementation contract? | No | The owner-approved Sections 1–7 predate inspection. V2 supplied narrow REST evidence; its absent/deferred replay design and legacy deterministic test were rejected. |
 
-The owner approved the complete contract, exact reuse/fixture whitelist,
-primary proofs, four-slice plan, independent-review triggers, and delegated
-advancement mode on 2026-08-06. Current slice acceptance and authorization are
+The owner approved the original complete contract, exact reuse/fixture whitelist,
+nine primary proofs, four-slice plan, independent-review triggers, and delegated
+advancement mode on 2026-08-06, then approved the additive tenth proof and
+`C4-S5` correction on 2026-08-09. Current slice acceptance and authorization are
 recorded only in the authoritative
 [parent delivery-state ledger](../aggregate-replay.md#authoritative-delivery-state-ledger).

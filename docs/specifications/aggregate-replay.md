@@ -1,20 +1,22 @@
 # Aggregate replay
 
-**Status:** Component 4 is complete and finally accepted. `C4-S1` through
-`C4-S4`, all nine primary proofs, cumulative repository verification, the
-drift audit, and the mandatory final read-only component review are clean.
+**Status:** Component 4 is finally accepted including the owner-approved
+additive `C4-S5` requested-end correction. `C4-S1` through `C4-S5`, all ten
+primary proofs, cumulative verification, the original final component review,
+and the required correction review/re-review are clean.
 
 **Owner boundary approval:** approved 2026-08-06 in the owning Codex task;
 includes the Phase 1 boundary, modular document map, and exact future version 2
 reconnaissance scope
 
-**Owner contract/reuse/test/slice-plan approval:** approved 2026-08-06 in the
-owning Codex task, including the exact version 2 whitelist, nine primary
-proofs, four-slice plan, independent-review triggers, and delegated advancement
+**Owner contract/reuse/test/slice-plan approval:** the original nine-proof,
+four-slice plan was approved 2026-08-06 in the owning Codex task. The owner
+approved the additive tenth proof and `C4-S5` correction on 2026-08-09; the
+version 2 whitelist remains unchanged.
 
-**Advancement mode:** `delegated` for `C4-S1`–`C4-S4` and final component
-review. No slice or final gate is `manual`; every failed or ambiguous objective
-gate still stops for the smallest owner decision.
+**Advancement mode:** `delegated` for `C4-S1`–`C4-S5` and required reviews. No
+slice or final gate is `manual`; every failed or ambiguous objective gate still
+stops for the smallest owner decision.
 
 **Controlling Phase 1 requirements:** `PG-REPLAY-01`, `PG-REPLAY-02`,
 `PG-OBS-03`, `ARCH-OWN-01`, `ARCH-OWN-02`, `ARCH-OWN-03`,
@@ -44,8 +46,8 @@ Component 3 passed its mandatory final review and was finally accepted on
 2026-08-06. Component 4 then completed the approved reconnaissance and routed
 Sections 8–19. The owner approved the complete contract, whitelist, proofs,
 slice plan, review triggers, and delegated advancement on 2026-08-06;
-`C4-S1` through `C4-S4` and the mandatory final component review are accepted;
-Component 4 is complete as of 2026-08-06.
+`C4-S1` through `C4-S5`, the original mandatory final component review, and the
+focused correction re-review are accepted.
 
 ## Contract document map
 
@@ -59,8 +61,8 @@ all three without changing that map.
 | --- | --- | --- | --- | --- |
 | This parent | Outcome, ownership/non-scope, cross-cutting invariants, Sections 1–7, routing, approvals, and sole delivery ledger | All controlling Phase 1 IDs; Sections 1–7 | Every Component 4 task | Components 1–3 |
 | [REST normalization and artifact trust](aggregate-replay/rest-normalization-and-artifact.md) | Shared Massive REST row normalization, compiler consumption of that one mapper, offline download/compiler, and artifact trust/bounds | Sections 8–14; `C4-NORM-01`, `C4-COMP-NORM-01`, `C4-DL-01`, `C4-ART-01`, `C4-ART-02`; `P-C4-NORM`, `P-C4-COMP-NORM`, `P-C4-DL`, `P-C4-ART-BYTES`, `P-C4-ART-TRUST`; `C4-S1`, `C4-S2` | Provider mapping, future Component 6 seam obligation, compiler/artifact decisions | Parent; Components 1 and 2 |
-| [Replay source and simulated clock](aggregate-replay/replay-source-and-clock.md) | Validated artifact source, simulated clock/group timers, typed engine admissions, replay lifecycle/completion, and containment | Sections 8–14; `C4-SCHED-01`, `C4-RUN-01`, `C4-FAIL-01`; `P-C4-SCHED`, `P-C4-RUN`, `P-C4-FAIL`; `C4-S3` | Playback, clock, lifecycle, commit, and engine integration | Parent; preceding detail; Components 1–3 |
-| [Deterministic-core delivery](aggregate-replay/deterministic-core-delivery.md) | Complete proof/requirement ledger, Components 1–4 milestone, final slice plan, discretion, acceptance, and drift | Sections 15–19; all nine Component 4 requirements/proofs; `C4-S1`–`C4-S4` | Proof allocation, assignments, completed-contract and final review | Parent and both details; Components 1–3 |
+| [Replay source and simulated clock](aggregate-replay/replay-source-and-clock.md) | Validated artifact source, simulated clock/group timers, typed engine admissions, replay lifecycle/completion including an operator-requested end, and containment | Sections 8–14; `C4-SCHED-01`, `C4-RUN-01`, `C4-FAIL-01`, `C4-PREFIX-END-01`; `P-C4-SCHED`, `P-C4-RUN`, `P-C4-FAIL`, `P-C4-PREFIX-END`; `C4-S3`, `C4-S5` | Playback, clock, lifecycle, commit, engine integration, and requested-end integrity | Parent; preceding detail; Components 1–3 |
+| [Deterministic-core delivery](aggregate-replay/deterministic-core-delivery.md) | Complete proof/requirement ledger, Components 1–4 milestone, correction slice plan, discretion, acceptance, and drift | Sections 15–19; all ten Component 4 requirements/proofs; `C4-S1`–`C4-S5` | Proof allocation, assignments, completed-contract and final review | Parent and both details; Components 1–3 |
 
 **Layout:** Approved modular contract with this parent and the three complete
 detail documents listed above. The parent remains slightly above the template's
@@ -75,25 +77,96 @@ requires owner review.
 
 **Contract-wide coverage and acceptance:** The authoritative
 [proof/requirement ledger and slice plan](aggregate-replay/deterministic-core-delivery.md#15-primary-proof-allocation)
-routes all nine Component 4 requirements and proofs to four sequential slices.
-The [completed-contract checklist](aggregate-replay/deterministic-core-delivery.md#18-completed-contract-acceptance-checklist)
-is complete, including the post-review exact schema, proof-allocation,
-publication-linearization, and retained-temporary corrections. Owner approval
-of the revised contract, exact whitelist, and delegated mode is recorded here;
-`C4-S1` through `C4-S4`, all nine proofs, cumulative verification, the drift
-audit, and the mandatory final review are accepted. No Component 4 delivery
-item remains open.
+routes the nine accepted baseline requirements and the additive requested-end
+requirement to five sequential slices. The original
+[completed-contract checklist](aggregate-replay/deterministic-core-delivery.md#18-completed-contract-acceptance-checklist)
+remains accepted for `C4-S1`–`C4-S4`; the requested-end entries, `C4-S5`,
+cumulative verification, and focused re-review are now also complete.
 
 ## Authoritative delivery-state ledger
 
 | Item | State | Evidence and required review | Recorded at | Next action |
 | --- | --- | --- | --- | --- |
-| Component contract | `accepted` | Owner-approved Sections 1–19, exact version 2 whitelist, all four accepted slices, all nine clean primary proofs, cumulative build/test/race/vet verification, clean drift audit, and clean mandatory final review | 2026-08-06 | Complete |
+| Component contract | `accepted` | Owner-approved Sections 1–19, unchanged version 2 whitelist, five accepted slices, all ten clean primary proofs, cumulative short/race/vet verification, clean drift audit, original final review, and clean requested-end focused re-review | 2026-08-09 | Complete |
 | `C4-S1` | `accepted` | `C4-NORM-01` / `P-C4-NORM`, affected and repository build/tests, conformance/ownership/whitelist inspection, and required `gpt-5.6-sol` medium value-only shared-normalizer review all clean | 2026-08-06 | Complete |
 | `C4-S2` | `accepted` | `C4-COMP-NORM-01`, `C4-DL-01`, `C4-ART-01`, and `C4-ART-02`; four allocated proofs, affected/repository build and tests, focused race, conformance/ownership/whitelist inspection, and required `gpt-5.6-sol` medium external/persisted-boundary re-review all clean | 2026-08-06 | Complete |
 | `C4-S3` | `accepted` | `C4-SCHED-01`, `C4-RUN-01`, and `C4-FAIL-01`; all three allocated proofs, affected/repository build and tests, changed-package race checks, conformance/ownership/whitelist inspection, and required `gpt-5.6-sol` medium order/clock/commit/lifecycle focused re-review clean | 2026-08-06 | Complete |
 | `C4-S4` | `accepted` | `C4-CORE-01` / `P-C4-CORE`, runnable offline replay, all nine Component 4 proofs, affected and repository build/tests/race/vet, conformance and drift audit, and focused final-review confirmation all clean | 2026-08-06 | Complete |
 | Final component review | `accepted` | Mandatory read-only `gpt-5.6-sol` medium review found five actionable issues; all received direct regressions and corrections, the same reviewer found the complete correction set clean, and its focused review confirmed the shortened `R == E` proof preserves `C4-RUN-01` / `P-C4-RUN` without making a deferred capacity claim | 2026-08-06 | Complete |
+| `C4-S5` requested-end correction | `accepted` | `C4-PREFIX-END-01` / `P-C4-PREFIX-END`; exact prefix/artifact-end parity/suffix-integrity/cancellation/clock/rejection/accounting matrix, affected and repository short tests, proportionate race, vet, conformance inspection, and required `gpt-5.6-sol` medium persisted-source/lifecycle focused re-review all clean | 2026-08-09 | Complete |
+
+**C4-S5 correction premise:** Accepted C4 correctly proves artifact-end success
+at `R`, but its source cannot truthfully finish at an operator-requested
+`O1<R`; stopping there is cancellation. The owner approved one additive C4
+correction on 2026-08-09. A validated complete artifact remains authoritative
+for its unchanged header interval `[S,R)`. An exact UTC whole-second
+`O1` with `S < O1 <= R` may separately bound canonical application. Records
+and deterministic timers through `O1` use the ordinary engine path; later
+records never do. Before requested-end success, the same-open second pass must
+consume and validate the unapplied suffix through the canonical coverage,
+summary, digest, final seal, and unchanged-file checks. `O1=R` continues to use
+the existing artifact-end evidence and disposition. Invalid or incompatible
+requested ends fail before replay start; later ordinal/group/clock/engine or
+requested-end contradictions fail/suppress without a complete claim.
+
+The terminal-fact FIFO linkage is the exact cancellation linearization point:
+cancellation observed before requested-end admission remains canceled; after
+admission succeeds, the sealed engine owns that accepted terminal fact and its
+requested-end disposition wins. Admission must be sampled by the engine at
+exactly `O1`; a different engine time fails/suppresses.
+
+The correction owns no C12 API/UI/runtime composition and authorizes no
+provider request, credential access, licensed-data read, or retained B4
+artifact use. It preserves the existing artifact schema and identity, session
+and half-open-window semantics, configured evaluation delay `D`, sole engine/
+clock/evaluator/publication owners, and ordinary cancellation/controlled-stop
+meaning.
+
+**C4-S5 acceptance record:** `NewSourceThrough` and the validated-handle
+playback seam now accept an exact UTC whole-second `O1` in `(S,R]`. At `O1<R`,
+the source applies only prefix records and ordinary group timers through `O1`,
+then the private cursor consumes the remaining groups solely to recheck
+canonical order, coverage, summary, digest, seal, and final file identity. The
+opaque requested-end fact carries full record count plus applied prefix ordinal;
+the engine admits it only when artifact/binding/end, last group/ordinal, and its
+own sampled clock exactly equal the started run and `O1`. It ends through the
+ordinary sole lifecycle/publication owner with completion `requested_end`.
+`O1=R` retains the unchanged artifact-end evidence and `artifact_end`
+completion path.
+
+`P-C4-PREFIX-END` passes in `TestC4PREFIXEND01RequestedEnd`. Its exact-prefix
+success case preserves nonzero evaluation delay `D`, applies no suffix record
+or timer, and closes `artifact_records = completed_record_dispositions +
+intentionally_unapplied_suffix_records + unread_records`. The dangerous cases
+prove that invalid/subsecond/out-of-range/partial ends fail before replay
+mutation; missing prefix evidence is unavailable; a changed suffix, foreign
+requested-end evidence, wrong terminal clock, ordinal/group/engine rejection,
+or suppression cannot retain completion; pre-link cancellation remains
+canceled; and post-link cancellation cannot displace the sealed terminal fact.
+Construction keeps terminal evidence opaque and suffix groups inside the
+cursor; runtime validation owns every representable identity/order/clock/
+disposition contradiction. No accepted C1-C4 owner/interface, artifact schema,
+version 2 whitelist, or C12/API/UI boundary changed.
+
+Focused affected-package tests, `go test -short -timeout 2m ./...`, `go test
+-race -short -timeout 5m ./internal/engine ./internal/replayartifact
+./internal/replay -count=1`, `go vet ./...`, formatting, and diff checks pass.
+The required read-only `gpt-5.6-sol` medium review found four issues: requested-
+end admission was not bound to sampled clock `O1`, cancellation linkage was
+contradictory/unproved, active contract text retained artifact-end-only baseline
+statements, and the same-open proof overclaimed adversarial mutation detection.
+All received direct code/proof/contract corrections; the same reviewer's
+focused re-review is clean and found no false-success, suffix-to-engine,
+accounting, lifecycle, concurrency, C12, or provider-scope problem.
+
+The proof uses only small repository-owned artifacts. It neither reads the
+retained B4 artifact nor establishes large-artifact throughput. Same-open
+integrity assumes a trusted local filesystem: reread-byte and final size/mtime
+checks do not prove an adversarial immutable snapshot if a writer restores
+metadata after changing bytes already buffered or reread. No provider request,
+credentials, or licensed-data read occurred. C12 remains separate and may now
+consume this accepted C4 seam under its own future contract; it was not
+implemented here.
 
 **C4-S1 acceptance record:** One stateless `internal/massive` mapper now turns
 exactly one raw Massive REST second-aggregate row into one value containing the
@@ -545,6 +618,7 @@ Component 3 has passed final component review. The exact approved version 2 and
 finalized Component 2/3 interface reconnaissance is recorded in the detail
 specifications, Sections 8–19 are complete, and the owner has approved the
 complete Component 4 contract. That approval initially authorized only
-`C4-S1`. `C4-S1` through `C4-S4` and the mandatory final review have now passed
-their delegated gates, so Component 4 is complete and finally accepted.
-Broader predecessor inspection and credentials/live calls remain unauthorized.
+`C4-S1`. `C4-S1` through `C4-S5`, the original mandatory final review, and the
+focused correction re-review have passed their delegated gates, so Component 4
+is again complete and finally accepted as of 2026-08-09. Broader predecessor
+inspection and credentials/live calls remain unauthorized.

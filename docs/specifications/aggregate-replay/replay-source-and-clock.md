@@ -16,9 +16,9 @@ and run-local failure/cancellation containment.
 `LIFE-REPLAY-01`–`LIFE-REPLAY-03`, `LIFE-SUPPRESS-01`–`LIFE-SUPPRESS-03`,
 `LIFE-END-01`–`LIFE-END-03`, `LIFE-PUBLISH-02`, `LIFE-T03`,
 `LIFE-T23`–`LIFE-T25`, `LIFE-T28`, `LIFE-T29`; `C4-SCHED-01`,
-`C4-RUN-01`, and `C4-FAIL-01`
+`C4-RUN-01`, `C4-FAIL-01`, and `C4-PREFIX-END-01`
 
-**Allocated slices:** `C4-S3`
+**Allocated slices:** `C4-S3`, `C4-S5`
 
 **Document dependencies:** [Parent](../aggregate-replay.md),
 [REST normalization and artifact trust](rest-normalization-and-artifact.md),
@@ -82,16 +82,18 @@ boundary. The outline and legacy test are evidence to reject, not copy.
 | Playback pace | `unpaced` or a checked positive rational logical-seconds/wall-second setting. It controls only cancelable wall waiting before a logical advance. | Replay-source state only. Wall clock/wait results never enter artifact records, engine facts, source positions, snapshots, or comparison keys. |
 | Replay-start evidence | Typed opaque evidence that the exact binding, canonical artifact bytes, provenance, policy, order, and coverage mode passed validation. It names artifact ID, `[S,R)`, total records, and whether complete-binding commit support is permitted. | One accepted start per initializing replay engine. Only this fact may satisfy `LIFE-T03`; partial synthetic mode enters replaying with commit support permanently false. |
 | Replay aggregate | Existing Component 2 normalized aggregate envelope with source `replay`, exact binding/artifact ID, positive immutable artifact ordinal, artifact logical delivery time, and no live/historical position. | Admitted only through the typed Component 4 replay path while `replaying`. The engine remains canonical/merge/evaluator owner. |
-| Replay group/timer evidence | One typed timer admission for each whole second `t` from `S` through `R`, after all artifact records with logical time `t` have completed. It names the validator-produced expected last ordinal for that group. For complete final bars at `t>S`, it also proves that every binding symbol's slot `[t-1s,t)` is represented by its accepted bar or by artifact-proved absence. The engine assigns admission time and system sequence. | Exactly `R-S+1` timers. It reuses the engine timer transition and central commit gate; the caller cannot provide a different timer timestamp/sequence or a partial-mode absence claim. |
-| Replay-end evidence | Validator/cursor proof that the second pass reached the canonical seal, recomputed the same artifact ID, consumed exactly all records, and completed the timer at `R`. | Exactly one successful terminal fact; the engine owns `LIFE-T24`, final publication, and `ended`. |
+| Replay group/timer evidence | One typed timer admission for each whole second `t` from `S` through the selected application end (`R` normally, `O1` for requested-end replay), after all artifact records with logical time `t` have completed. It names the validator-produced expected last ordinal for that group. For complete final bars at `t>S`, it also proves that every binding symbol's slot `[t-1s,t)` is represented by its accepted bar or by artifact-proved absence. The engine assigns admission time and system sequence. | Exactly `(selected_end-S)/1s+1` timers. It reuses the engine timer transition and central commit gate; the caller cannot provide a different timer timestamp/sequence or a partial-mode absence claim. |
+| Replay-end evidence | Validator/cursor proof that the second pass reached the canonical seal, recomputed the same artifact ID, consumed exactly all records, and completed the timer at `R`. | Exactly one artifact-end terminal fact when selected end is `R`; the engine owns `LIFE-T24`, final publication, and `ended`. |
 | Replay-failure evidence | Bounded artifact/source reason and the last supported artifact/logical/ordinal boundary. It can only remove claims. | At most one terminal failure cause. The engine owns suppression and `terminal_replay_failure`; the instance is never repaired in place. |
 | Run result | Immutable local result: complete, failed, or canceled; binding/artifact IDs when validated; last logical time/ordinal; exact bounded counters/reason; and completion of engine drain. | Component 4 report, not a public snapshot/API schema and not a live-readiness claim. Component 10 remains the public schema owner. |
+| Requested replay end | Optional exact UTC whole-second `O1` with `S < O1 <= R` for a validated `complete_final_bars` artifact whose header remains `[S,R)`. It bounds engine application, not artifact identity or coverage. | Validated before replay start. `O1=R` is the existing artifact-end path; `O1<R` selects requested-end completion and cannot be used with partial evidence. |
+| Requested-end evidence | Opaque validator/cursor proof naming artifact `R`, requested `O1`, the last prefix ordinal applied through `O1`, the full artifact record count, and successful same-open validation of every unapplied suffix record plus coverage, summary, digest, final seal, and unchanged-file identity. | Exactly one C4 producer. It authorizes only the ordinary engine requested-end transition; it is neither artifact-end evidence nor a controlled stop. |
 | Replay source state | Artifact cursor, expected next ordinal/group, simulated clock, pacer, terminal outcome, and bounded counters. | One sequential driver; no record queue, worker pool, copied canonical graph, rank state, or publication cell. |
 
 The required engine extension is a closed set of typed replay admissions:
-start, replay aggregate, group timer, end, and failure. The artifact validator
+start, replay aggregate, group timer, artifact end, requested end, and failure. The artifact validator
 is the only success-evidence producer. Types or unexported construction must
-prevent an arbitrary caller from building complete-coverage/group/end proof;
+prevent an arbitrary caller from building complete-coverage/group/terminal proof;
 source/package ownership inspection must show exactly one producer. A failure
 fact may be callable by the runner because it can only suppress claims.
 
@@ -118,17 +120,19 @@ engine-owned time/system sequence; and replay cannot mutate a live-mode engine.
 
 **Runtime validation still required:** binding/artifact compatibility, ordinal
 continuity, second-pass canonical bytes/digest, group membership and completion,
-clock equality/nonregression, aggregate/timer dispositions, artifact end,
-cancellation races, queue closure, and engine suppression remain representable
-and fail the run when observed.
+clock equality/nonregression including requested-end admission at exact `O1`,
+aggregate/timer dispositions, terminal evidence, cancellation races, queue
+closure, and engine suppression remain representable and fail the run when
+observed.
 
 ## 10. Required behavior
 
 | Requirement | Behavior | Controlling authority and evidence |
 | --- | --- | --- |
-| `C4-SCHED-01` | Starting at `S`, the source processes every whole-second logical group through `R`: apply cancelable wall pacing, advance the single simulated clock to the group time, sequentially admit and await every artifact record at that time in ordinal order, then admit and await exactly one typed group timer. Recordless seconds still receive the timer. It cannot advance to the next group until every disposition/publication in the current group completes. Pace changes no engine input or logical result. | `DTE-CLOCK-03`–`06`, `DTE-TIMER-01`, `DTE-REPLAY-02`, `DTE-REPLAY-03`, `LIFE-REPLAY-03`, `LIFE-T23`; accepted Component 2 injected clock/FIFO. |
+| `C4-SCHED-01` | Starting at `S`, the source processes every whole-second logical group through the selected application end (`R` for ordinary artifact-end replay, `O1` for requested-end replay): apply cancelable wall pacing, advance the single simulated clock to the group time, sequentially admit and await every artifact record at that time in ordinal order, then admit and await exactly one typed group timer. Recordless seconds still receive the timer. It cannot advance to the next group until every disposition/publication in the current group completes. Pace changes no engine input or logical result. | `DTE-CLOCK-03`–`06`, `DTE-TIMER-01`, `DTE-REPLAY-02`, `DTE-REPLAY-03`, `LIFE-REPLAY-03`, `LIFE-T23`; accepted Component 2 injected clock/FIFO. |
 | `C4-RUN-01` | After binding installation and full artifact validation, replay start moves the same engine from `initializing` to `replaying`. Typed replay aggregates use the existing canonical merge/evaluator/publication path. At each complete-final-bar group, the engine atomically classifies every binding symbol's finished slot as accepted presence or artifact-proved absence before applying the timer; only then may the existing replay commit predicates advance `T`. Partial synthetic evidence never installs complete absence or supports commit. After the validated seal and final `R` timer, replay end performs final evaluation/publication and transitions to `ended`. Output is replay-labeled and T/Q-unavailable, never production-live ready. | `PG-REPLAY-01`, `PG-REPLAY-02`, `ARCH-OWN-01`–`04`, `DTE-WINDOW-04`, `DTE-COMMIT-01`–`04`, `DTE-REPLAY-01`, `LIFE-T03`, `LIFE-REPLAY-01`–`03`, `LIFE-T24`; accepted Components 2/3 seams. |
-| `C4-FAIL-01` | Schema/binding/coverage/order/digest/clock/source-position/unexpected-disposition/canonical/end contradiction produces one bounded failed run and the engine's replay-only suppression with `terminal_replay_failure`; no later ordinary fact restores it. Corrected input uses a new engine. Caller cancellation is distinct: it stops future source work, waits linked work, admits controlled stop when possible, returns canceled/ended, and never claims artifact completion. | `DTE-REJECT-01`, `LIFE-MODEL-04`, `LIFE-SUPPRESS-01`–`03`, `LIFE-END-02`, `LIFE-END-03`, `LIFE-T25`, `LIFE-T28`, `LIFE-T29`. |
+| `C4-FAIL-01` | Schema/binding/coverage/order/digest/clock/source-position/unexpected-disposition/canonical/end contradiction produces one bounded failed run and the engine's replay-only suppression with `terminal_replay_failure`; no later ordinary fact restores it. Corrected input uses a new engine. Caller cancellation is distinct: before terminal-fact linkage it stops future source work, waits already-linked nonterminal work, admits controlled stop when possible, returns canceled/ended, and never claims completion; an already-linked terminal fact instead owns the sealed terminal result. | `DTE-REJECT-01`, `LIFE-MODEL-04`, `LIFE-SUPPRESS-01`–`03`, `LIFE-END-02`, `LIFE-END-03`, `LIFE-T25`, `LIFE-T28`, `LIFE-T29`. |
+| `C4-PREFIX-END-01` | For a validated complete artifact `[S,R)`, an operator-requested exact `O1` with `S < O1 <= R` is checked before engine mutation. The source delivers every accepted record and exactly one timer per whole-second group through `O1`, never admits a later record or timer, then validates the entire unapplied suffix on the same-open second pass before admitting a distinct engine requested-end fact. That admission must be sampled by the engine at exact logical time `O1`. `O1=R` preserves the existing artifact-end path. Successful requested end publishes and ends through the sole engine while preserving configured `D`; invalid/mismatched/insufficient/ambiguous ends, suffix mutation, missing prefix evidence, wrong admission time, or requested-end contradiction cannot report success. | Owner-approved 2026-08-09 C4 correction; `PG-REPLAY-01`, `ARCH-OWN-01`–`04`, `DTE-CLOCK-04`–`06`, `DTE-TIMER-01`, `DTE-COMMIT-01`–`04`, `DTE-REPLAY-01`–`03`, `LIFE-REPLAY-01`–`03`, `LIFE-END-02`–`03`. |
 
 ### 10.1 Consequential trust-boundary acceptance
 
@@ -138,16 +142,20 @@ and fail the run when observed.
 | Artifact cursor to aggregate admission | Second-pass line remains canonical; artifact/binding IDs and next ordinal match; logical time equals current simulated clock; values pass existing engine validation. | Any mismatch admits failure/contains the run; no skipped invalid record can be counted delivered. | Skipping, duplicating, swapping, or editing a record after first-pass validation while the run still ends successfully. |
 | Completed group to coverage/commit support | All records certified for the exact next whole second have received dispositions; actual consumed last ordinal equals group proof; complete-final-bar coverage accounts for every binding symbol as present or absent for the finished slot; timer time equals group time; and existing engine accounting/ambiguity gates pass. | Partial mode, unclassified symbol/slot, missing/extra record, wrong time/ordinal, engine rejection, or accounting/integrity failure leaves coverage/advancement unsupported and fails or suppresses as applicable. | Advancing `T` or counting an empty symbol after a timer without complete per-symbol slot evidence. |
 | Artifact end to terminal success | Second-pass digest/seal, total ordinal, final `R` group/timer, engine drain, and final publication all complete exactly once. | Truncation, appended bytes, unread record, missing timer, failed disposition, or canceled context cannot produce complete. | Treating EOF or caller cancellation as a valid artifact-end fact. |
-| Replay result to operator/test | Outcome, mode, artifact ID, logical boundary, and counters agree; complete is possible only after engine `ended` via artifact end. | Failed/canceled is explicit and carries no complete/live/currentness claim beyond last engine publication's own supported state. | A suppressed or partially replayed run being reported as a deterministic successful replay. |
+| Requested end to terminal success | The complete artifact's same-open second pass validates the exact prefix through `O1`, scans but never admits all later records/groups, reconciles full coverage/summary/digest/seal and unchanged-file identity, and the engine accepts the opaque requested-end fact against its last applied group/ordinal at sampled engine time `O1`. | Invalid range/precision/mode fails before start. Missing prefix evidence, suffix corruption, ordinal/group/clock contradiction, engine rejection, pre-link cancellation, or requested-end mismatch fails/suppresses and cannot retain complete. | Treating a prefix EOF, a previously validated but subsequently corrupted suffix, or a caller-supplied end time as successful completion. |
+| Replay result to operator/test | Outcome, mode, artifact ID, logical boundary, counters, and terminal disposition agree; complete is possible only after engine `ended` via artifact-end or requested-end completion. | Failed/canceled is explicit and carries no complete/live/currentness claim beyond last engine publication's own supported state. | A suppressed or partially replayed run being reported as a deterministic successful replay. |
 
 ## 11. Failure and terminal behavior
 
 The artifact receives a complete validation pass before replay start. Playback
 uses the same open read-only file and validates canonical bytes and SHA-256
-again while reading; path replacement cannot switch the file, and concurrent
-in-place modification is detected no later than the affected line or final
-seal. If a failure is discovered before `replaying`, the bound replay engine
-records replay failure from `initializing`. If discovered after start, the next
+again while reading; path replacement cannot switch the file. The second pass
+detects changes in bytes it actually rereads and final size/modification-time
+changes. This proof assumes a trusted local filesystem: it does not prove an
+immutable snapshot against an adversarial writer that changes already-buffered
+or already-reread bytes while restoring size and modification time. If a
+failure is discovered before `replaying`, the bound replay engine records
+replay failure from `initializing`. If discovered after start, the next
 typed failure transition enters `suppressed`, seals the run, and stops future
 artifact delivery. Already linked FIFO nodes drain; no failed output is
 upgraded to success.
@@ -163,16 +171,20 @@ dispositions.
 
 Cancellation is observed before a group and during cancelable wall/admission
 waits. If no group fact has linked, no part of that group is claimed complete.
-If cancellation arrives after linked work, the source stops adding market
-facts, waits all linked completions, and uses the existing ordered controlled
-stop when the engine still accepts it. The final run outcome remains canceled,
-not complete, even if the last logical group happened to finish. Failure takes
-precedence if the engine has already suppressed/sealed.
+After linked nonterminal work, the source stops adding market facts, waits those
+completions, and uses the existing ordered controlled stop when the engine still
+accepts it; that outcome remains canceled even if the last logical group
+finished. Artifact-end or requested-end admission is the terminal
+linearization point. Cancellation before that admission remains canceled; once
+the terminal fact is admitted, the sealed engine owns it, drains it, and its
+accepted success or failure disposition wins over later context cancellation.
+Failure also takes precedence when the engine has already suppressed/sealed.
 
-Successful completion requires the timer at every second `S,S+1,...,R`, a
-verified second-pass seal, one artifact-end transition, engine close/drain, and
-terminal `ended`. With nonzero existing evaluation delay, final committed `T`
-may be less than `R`; Component 4 does not silently change `D`. The deterministic
+Successful completion requires the timer at every second from `S` through the
+selected application end, a verified second-pass seal, exactly one matching
+artifact-end or requested-end transition, engine drain, and terminal `ended`.
+With nonzero existing evaluation delay, final committed `T` may be less than
+that selected end; Component 4 does not silently change `D`. The deterministic
 core proof uses an explicit tested delay and compares only like configuration.
 
 ## 12. Accounting and observability
@@ -180,7 +192,10 @@ core proof uses an explicit tested delay and compares only like configuration.
 The replay source has these exact identities at every observation:
 
 ```text
-artifact_records = completed_record_dispositions + unread_records
+artifact_records
+  = completed_record_dispositions
+  + intentionally_unapplied_suffix_records
+  + unread_records
 planned_groups = completed_groups + active_group + remaining_groups
 terminal_outcomes = completed_runs + failed_runs + canceled_runs = 1
 ```
@@ -198,6 +213,14 @@ artifact end/digest, controlled stop/drain, and canceled. Artifact path, symbol,
 record values, wall timestamps, and errors are not metric labels. Exact
 artifact ID and last ordinal/time may appear in the local run report.
 
+`intentionally_unapplied_suffix_records` becomes nonzero only after the
+same-open suffix and seal validate. It is neither canceled work nor a complete
+engine disposition. `planned_groups` continues to mean engine groups through
+the selected successful end; suffix validation has no engine group/timer
+counter. Exactly one terminal run outcome remains required, and successful
+results carry the distinct completion disposition `artifact_end` or
+`requested_end`.
+
 Progress is the next record disposition or group timer; wall pacing status is
 operational only. A report distinguishes `replaying`, `suppressed`, `ended`
 complete, and `ended` canceled, and never maps replay to backend-ready/live.
@@ -210,8 +233,8 @@ complete, and `ended` canceled, and never maps replay to backend-ready/live.
 - The source is sequential. It retains at most one decoded record and one
   completion at a time; existing engine capacity/backpressure is the only
   mutation queue. There is no replay worker pool or record channel.
-- Timer count is exactly `(R-S)/1s + 1`, at most 57,601 for the approved
-  16-hour session. Records are bounded by the validated artifact/plan. Ordinal,
+- Timer count is exactly `(selected_end-S)/1s + 1`, never more than 57,601 for
+  the approved 16-hour session. Records are bounded by the validated artifact/plan. Ordinal,
   group, timer, and engine sequences use checked positive counters and fail
   before wraparound.
 - Wall pacing uses cumulative logical elapsed time from a fixed wall start and
@@ -244,6 +267,7 @@ complete, and `ended` canceled, and never maps replay to backend-ready/live.
 | Simulated clock regression or pace/wall lateness | `DTE-CLOCK-04`, `DTE-REPLAY-03`; Component 2 clock integrity | Regression suppresses. Wall lateness only shortens waiting and cannot alter clock/order. | `P-C4-SCHED`; `P-C4-FAIL` |
 | Nonzero evaluation delay at `R` | `DTE-COMMIT-01`; Component 2 config | Preserve configured target calculation; do not fabricate final `T=R`. | `P-C4-RUN` |
 | Cancellation before or during a group | `LIFE-END-02`, `LIFE-T29` | Stop new facts, drain linked facts, controlled-stop if possible, and return canceled without artifact-end claim. | `P-C4-FAIL` |
+| Requested `O1<R` with valid/corrupt suffix | Owner-approved 2026-08-09 correction; persisted-source invariant | Apply only records/timers through `O1`; scan the suffix solely for integrity. Valid full source may end with `requested_end`; any suffix mutation fails before requested-end admission. | `P-C4-PREFIX-END` |
 | Canonical/accounting/publication integrity failure | Accepted Components 2/3 containment | Suppress only this replay engine, return failed, and require a fresh run. | `P-C4-FAIL` |
 
 Primary proof definitions and slice allocation are authoritative in

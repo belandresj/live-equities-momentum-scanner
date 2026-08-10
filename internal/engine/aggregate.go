@@ -351,7 +351,7 @@ func (e *Engine) decideAggregateLocked(input frozenAggregateInput, now time.Time
 	if input.Source == AggregateSourceReplay && input.replayProof {
 		state := e.state.replay
 		if !state.validated || state.terminal || input.BindingIdentity != state.bindingID || input.Replay.ArtifactID != state.artifactID ||
-			input.Replay.RecordOrdinal != state.nextOrdinal || input.DeliveryTime != now || input.DeliveryTime.Before(state.nextGroup) || input.DeliveryTime.After(state.end) ||
+			input.Replay.RecordOrdinal != state.nextOrdinal || input.DeliveryTime != now || input.DeliveryTime.Before(state.nextGroup) || input.DeliveryTime.After(state.requestedEnd) ||
 			(state.complete && (input.WindowEnd != input.DeliveryTime || input.WindowStart != input.DeliveryTime.Add(-time.Second))) {
 			return DispositionAggregateRejected, ReasonReplayEvidence
 		}

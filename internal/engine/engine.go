@@ -73,6 +73,7 @@ const (
 	DispositionTerminal                  DispositionCode = "rejected_terminal"
 	DispositionReplayStarted             DispositionCode = "replay_started"
 	DispositionReplayEnded               DispositionCode = "replay_ended"
+	DispositionReplayRequestedEnd        DispositionCode = "replay_requested_end"
 	DispositionReplayFailed              DispositionCode = "replay_failed"
 	DispositionConnectionControlApplied  DispositionCode = "connection_control_applied"
 	DispositionConnectionControlDeferred DispositionCode = "connection_control_consumer_deferred"
@@ -147,6 +148,7 @@ const (
 	lifecycleReasonClosed               lifecycleReason = "closed"
 	lifecycleReasonReplayStart          lifecycleReason = "replay_start"
 	lifecycleReasonReplayEnd            lifecycleReason = "replay_end"
+	lifecycleReasonReplayRequestedEnd   lifecycleReason = "replay_requested_end"
 	lifecycleReasonReplayFailure        lifecycleReason = "replay_failure"
 	lifecycleReasonAggregateAck         lifecycleReason = "aggregate_acknowledged"
 	lifecycleReasonAggregateAckAtStart  lifecycleReason = "aggregate_acknowledged_at_session_start"
@@ -182,6 +184,7 @@ const (
 	lifecycleEventClose
 	lifecycleEventReplayStart
 	lifecycleEventReplayEnd
+	lifecycleEventReplayRequestedEnd
 	lifecycleEventReplayFailure
 	lifecycleEventAggregateAck
 	lifecycleEventAggregateLoss
@@ -213,6 +216,7 @@ const (
 	inputReplayStart
 	inputReplayGroup
 	inputReplayEnd
+	inputReplayRequestedEnd
 	inputReplayFailure
 	inputConnectionControl
 	inputHydrationPlan
@@ -252,6 +256,7 @@ type queueNode struct {
 	replayStart            playback.StartEvidence
 	replayGroup            playback.GroupEvidence
 	replayEnd              playback.EndEvidence
+	replayRequestedEnd     playback.RequestedEndEvidence
 	replayFailure          ReplayFailureInput
 	connectionControl      frozenConnectionControlInput
 	controlCompletion      chan ConnectionControlDisposition
@@ -943,6 +948,10 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 	} else if node.kind == inputReplayEnd {
 		e.mu.Lock()
 		code, reason = e.applyReplayEndLocked(node)
+		e.mu.Unlock()
+	} else if node.kind == inputReplayRequestedEnd {
+		e.mu.Lock()
+		code, reason = e.applyReplayRequestedEndLocked(node)
 		e.mu.Unlock()
 	} else if node.kind == inputReplayFailure {
 		e.mu.Lock()

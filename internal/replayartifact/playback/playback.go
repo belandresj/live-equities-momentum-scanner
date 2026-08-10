@@ -36,6 +36,7 @@ type Plan struct {
 	BindingID, UniverseID, TradingDate string
 	SessionStart, SessionEnd           time.Time
 	Start, End                         time.Time
+	RequestedEnd                       time.Time
 	Mode                               string
 	Symbols                            []string
 	MaximumBytes, MaximumRecords       int64
@@ -107,12 +108,18 @@ type EndEvidence struct {
 	evidence evidence
 	ordinal  uint64
 }
+type RequestedEndEvidence struct {
+	evidence      evidence
+	requestedEnd  time.Time
+	prefixRecords uint64
+}
 
 type evidence struct {
 	valid, complete bool
 	artifactID      string
 	bindingID       string
 	start, end      time.Time
+	requestedEnd    time.Time
 	totalRecords    uint64
 }
 
@@ -122,6 +129,7 @@ func (e StartEvidence) ArtifactID() string        { return e.evidence.artifactID
 func (e StartEvidence) BindingID() string         { return e.evidence.bindingID }
 func (e StartEvidence) Start() time.Time          { return e.evidence.start }
 func (e StartEvidence) End() time.Time            { return e.evidence.end }
+func (e StartEvidence) RequestedEnd() time.Time   { return e.evidence.requestedEnd }
 func (e StartEvidence) TotalRecords() uint64      { return e.evidence.totalRecords }
 func (e StartEvidence) Authority() StartAuthority { return e.authority }
 func (e StartEvidence) WithAuthority(authority StartAuthority) StartEvidence {
@@ -152,6 +160,17 @@ func (e EndEvidence) ArtifactID() string        { return e.evidence.artifactID }
 func (e EndEvidence) BindingID() string         { return e.evidence.bindingID }
 func (e EndEvidence) End() time.Time            { return e.evidence.end }
 func (e EndEvidence) TotalRecords() uint64      { return e.ordinal }
+func (e RequestedEndEvidence) Valid() bool {
+	return e.evidence.valid && e.evidence.complete && e.evidence.start.Before(e.requestedEnd) &&
+		e.requestedEnd.Before(e.evidence.end) && e.prefixRecords <= e.evidence.totalRecords
+}
+func (e RequestedEndEvidence) Complete() bool          { return e.evidence.complete }
+func (e RequestedEndEvidence) ArtifactID() string      { return e.evidence.artifactID }
+func (e RequestedEndEvidence) BindingID() string       { return e.evidence.bindingID }
+func (e RequestedEndEvidence) ArtifactEnd() time.Time  { return e.evidence.end }
+func (e RequestedEndEvidence) RequestedEnd() time.Time { return e.requestedEnd }
+func (e RequestedEndEvidence) TotalRecords() uint64    { return e.evidence.totalRecords }
+func (e RequestedEndEvidence) PrefixRecords() uint64   { return e.prefixRecords }
 
 type Cursor struct {
 	file                *os.File
@@ -239,7 +258,9 @@ func validPlan(plan Plan) bool {
 	if !validArtifactID(plan.ArtifactID) || plan.BindingID == "" || plan.UniverseID == "" || plan.TradingDate == "" ||
 		(plan.Mode != CompleteFinalBars && plan.Mode != PartialSynthetic) || plan.MaximumBytes <= 0 || plan.MaximumRecords <= 0 ||
 		!whole(plan.SessionStart) || !whole(plan.SessionEnd) || !whole(plan.Start) || !whole(plan.End) ||
-		!plan.SessionStart.Before(plan.SessionEnd) || plan.Start.Before(plan.SessionStart) || !plan.Start.Before(plan.End) || plan.End.After(plan.SessionEnd) || len(plan.Symbols) == 0 {
+		!whole(plan.RequestedEnd) || !plan.SessionStart.Before(plan.SessionEnd) || plan.Start.Before(plan.SessionStart) || !plan.Start.Before(plan.End) ||
+		!plan.Start.Before(plan.RequestedEnd) || plan.RequestedEnd.After(plan.End) || plan.End.After(plan.SessionEnd) ||
+		(plan.RequestedEnd.Before(plan.End) && plan.Mode != CompleteFinalBars) || len(plan.Symbols) == 0 {
 		return false
 	}
 	prior := ""
@@ -281,7 +302,7 @@ func (c *Cursor) Start() (StartEvidence, error) {
 	}
 	c.digest.Write(line)
 	c.started = true
-	c.evidence = evidence{valid: true, complete: c.plan.Mode == CompleteFinalBars, artifactID: c.validatedArtifactID, bindingID: c.plan.BindingID, start: c.plan.Start, end: c.plan.End, totalRecords: c.expectedRecords}
+	c.evidence = evidence{valid: true, complete: c.plan.Mode == CompleteFinalBars, artifactID: c.validatedArtifactID, bindingID: c.plan.BindingID, start: c.plan.Start, end: c.plan.End, requestedEnd: c.plan.RequestedEnd, totalRecords: c.expectedRecords}
 	return StartEvidence{evidence: c.evidence}, nil
 }
 
@@ -452,6 +473,37 @@ func (c *Cursor) End() (EndEvidence, error) {
 			return EndEvidence{}, classified(ErrorSchemaCanonical, "playback artifact phase is invalid")
 		}
 	}
+}
+
+// RequestedEnd validates every remaining artifact byte on the same-open second
+// pass without exposing suffix records as engine-admissible evidence. The
+// returned opaque fact distinguishes a requested application boundary from the
+// artifact header end and is available only for complete artifacts.
+func (c *Cursor) RequestedEnd() (RequestedEndEvidence, error) {
+	if c == nil || !c.started || c.sealed || c.plan.Mode != CompleteFinalBars ||
+		!c.plan.RequestedEnd.Before(c.plan.End) || c.lastGroup != c.plan.RequestedEnd {
+		return RequestedEndEvidence{}, classified(ErrorArtifactEnd, "requested playback end is unavailable")
+	}
+	prefixRecords := c.ordinal
+	for group := c.plan.RequestedEnd.Add(time.Second); !group.After(c.plan.End); group = group.Add(time.Second) {
+		for {
+			_, ok, err := c.NextRecord(group)
+			if err != nil {
+				return RequestedEndEvidence{}, err
+			}
+			if !ok {
+				break
+			}
+		}
+		if _, err := c.FinishGroup(group); err != nil {
+			return RequestedEndEvidence{}, err
+		}
+	}
+	end, err := c.End()
+	if err != nil {
+		return RequestedEndEvidence{}, err
+	}
+	return RequestedEndEvidence{evidence: end.evidence, requestedEnd: c.plan.RequestedEnd, prefixRecords: prefixRecords}, nil
 }
 
 func (c *Cursor) readLine() ([]byte, error) {

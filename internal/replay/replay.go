@@ -62,6 +62,13 @@ const (
 	OutcomeCanceled Outcome = "canceled"
 )
 
+type CompletionDisposition string
+
+const (
+	CompletionArtifactEnd  CompletionDisposition = "artifact_end"
+	CompletionRequestedEnd CompletionDisposition = "requested_end"
+)
+
 type Reason string
 
 const (
@@ -74,15 +81,16 @@ const (
 	ReasonAggregate          Reason = "aggregate_admission_disposition"
 	ReasonTimer              Reason = "timer_admission_disposition"
 	ReasonArtifactEnd        Reason = "artifact_end_digest"
+	ReasonRequestedEnd       Reason = "requested_end"
 	ReasonEngine             Reason = "engine_integrity_suppression"
 	ReasonCanceled           Reason = "canceled"
 	ReasonDrain              Reason = "controlled_stop_drain"
 )
 
 type Accounting struct {
-	ArtifactRecords, CompletedRecordDispositions, UnreadRecords  uint64
-	PlannedGroups, CompletedGroups, ActiveGroup, RemainingGroups uint64
-	CompletedRuns, FailedRuns, CanceledRuns                      uint64
+	ArtifactRecords, CompletedRecordDispositions, IntentionallyUnappliedSuffixRecords, UnreadRecords uint64
+	PlannedGroups, CompletedGroups, ActiveGroup, RemainingGroups                                     uint64
+	CompletedRuns, FailedRuns, CanceledRuns                                                          uint64
 }
 
 type GroupResult struct {
@@ -94,6 +102,7 @@ type GroupResult struct {
 
 type Result struct {
 	Outcome         Outcome
+	Completion      CompletionDisposition
 	Reason          Reason
 	ArtifactID      string
 	LastLogicalTime time.Time
@@ -111,11 +120,16 @@ type Source struct {
 	startAuthority playback.StartAuthority
 	cursor         *playback.Cursor
 	start          playback.StartEvidence
+	requestedEnd   time.Time
 	nextGroup      time.Time
 	accounting     Accounting
 	terminal       bool
 	failureReason  Reason
 	pacer          wallPacer
+	// These package-private hooks expose only the requested-end terminal-fact
+	// linkage boundary to deterministic lifecycle tests.
+	beforeRequestedEndAdmission func()
+	afterRequestedEndAdmission  func()
 }
 
 type wallPacer struct {
@@ -126,11 +140,25 @@ type wallPacer struct {
 }
 
 func NewSource(handle *replayartifact.Handle, owner *engine.Engine, clock *SimulatedClock, pace Pace) (*Source, error) {
+	if handle == nil {
+		return nil, errors.New("replay source requires an artifact")
+	}
+	return NewSourceThrough(handle, owner, clock, pace, handle.Metadata().ReplayEnd)
+}
+
+// NewSourceThrough selects an exact application boundary without changing the
+// complete artifact's trusted header interval or allowing partial evidence.
+func NewSourceThrough(handle *replayartifact.Handle, owner *engine.Engine, clock *SimulatedClock, pace Pace, requestedEnd time.Time) (*Source, error) {
 	if handle == nil || owner == nil || clock == nil || !pace.valid() {
 		return nil, errors.New("replay source requires handle, engine, clock, and valid pace")
 	}
+	metadata := handle.Metadata()
+	if !wholeSecond(requestedEnd) || !metadata.ReplayStart.Before(requestedEnd) || requestedEnd.After(metadata.ReplayEnd) ||
+		(requestedEnd.Before(metadata.ReplayEnd) && metadata.Mode != replayartifact.CompleteFinalBars) {
+		return nil, errors.New("invalid requested replay end")
+	}
 	p := wallPacer{pace: pace, now: time.Now, wait: waitDuration}
-	return &Source{handle: handle, artifactID: handle.Metadata().ArtifactID, engine: owner, clock: clock, pace: pace, pacer: p}, nil
+	return &Source{handle: handle, artifactID: metadata.ArtifactID, engine: owner, clock: clock, pace: pace, requestedEnd: requestedEnd, pacer: p}, nil
 }
 
 // NewCheckpointSource binds an already-installed semantic baseline to one
@@ -174,7 +202,7 @@ func (s *Source) Start(ctx context.Context) error {
 	if s == nil || ctx == nil || s.cursor != nil || s.terminal {
 		return errors.New("replay start is unavailable")
 	}
-	cursor, err := s.handle.BeginPlayback()
+	cursor, err := s.handle.BeginPlaybackThrough(s.requestedEnd)
 	if err != nil {
 		s.failPlayback(err)
 		return err
@@ -188,7 +216,7 @@ func (s *Source) Start(ctx context.Context) error {
 	s.cursor, s.start, s.nextGroup = cursor, start, start.Start()
 	s.accounting.ArtifactRecords = start.TotalRecords()
 	s.accounting.UnreadRecords = start.TotalRecords()
-	s.accounting.PlannedGroups = uint64(start.End().Sub(start.Start())/time.Second) + 1
+	s.accounting.PlannedGroups = uint64(start.RequestedEnd().Sub(start.Start())/time.Second) + 1
 	s.accounting.RemainingGroups = s.accounting.PlannedGroups
 	admission, completion := s.engine.AdmitReplayStart(ctx, start)
 	if admission != engine.AdmissionAdmitted || completion == nil {
@@ -211,7 +239,7 @@ func (s *Source) Start(ctx context.Context) error {
 }
 
 func (s *Source) Step(ctx context.Context) (GroupResult, error) {
-	if s == nil || ctx == nil || s.cursor == nil || s.terminal || s.nextGroup.After(s.start.End()) {
+	if s == nil || ctx == nil || s.cursor == nil || s.terminal || s.nextGroup.After(s.start.RequestedEnd()) {
 		return GroupResult{}, errors.New("replay group is unavailable")
 	}
 	group := s.nextGroup
@@ -277,37 +305,67 @@ func (s *Source) Step(ctx context.Context) (GroupResult, error) {
 }
 
 func (s *Source) Finish(ctx context.Context) (Result, error) {
-	if s == nil || ctx == nil || s.cursor == nil || s.terminal || !s.nextGroup.After(s.start.End()) {
+	if s == nil || ctx == nil || s.cursor == nil || s.terminal || !s.nextGroup.After(s.start.RequestedEnd()) {
 		return Result{}, errors.New("replay finish is unavailable")
 	}
-	end, err := s.cursor.End()
-	if err != nil {
-		s.failPlayback(err)
-		return s.result(OutcomeFailed, s.currentReason()), err
+	var admission engine.AdmissionResult
+	var completion <-chan engine.Disposition
+	completionDisposition := CompletionArtifactEnd
+	failureReason, engineFailureReason := ReasonArtifactEnd, engine.ReplayFailureArtifactEnd
+	if s.start.RequestedEnd() == s.start.End() {
+		end, err := s.cursor.End()
+		if err != nil {
+			s.failPlayback(err)
+			return s.result(OutcomeFailed, s.currentReason()), err
+		}
+		admission, completion = s.engine.AdmitReplayEnd(ctx, end)
+	} else {
+		end, err := s.cursor.RequestedEnd()
+		if err != nil {
+			s.failPlayback(err)
+			return s.result(OutcomeFailed, s.currentReason()), err
+		}
+		if end.PrefixRecords() != s.accounting.CompletedRecordDispositions || end.TotalRecords() < end.PrefixRecords() {
+			s.fail(ReasonRequestedEnd, engine.ReplayFailureRequestedEnd)
+			return s.result(OutcomeFailed, ReasonRequestedEnd), errors.New("requested replay end accounting contradicted")
+		}
+		s.accounting.IntentionallyUnappliedSuffixRecords = end.TotalRecords() - end.PrefixRecords()
+		s.accounting.UnreadRecords = 0
+		completionDisposition = CompletionRequestedEnd
+		failureReason, engineFailureReason = ReasonRequestedEnd, engine.ReplayFailureRequestedEnd
+		if s.beforeRequestedEndAdmission != nil {
+			s.beforeRequestedEndAdmission()
+		}
+		admission, completion = s.engine.AdmitReplayRequestedEnd(ctx, end)
+		if s.afterRequestedEndAdmission != nil {
+			s.afterRequestedEndAdmission()
+		}
 	}
-	admission, completion := s.engine.AdmitReplayEnd(ctx, end)
 	if admission != engine.AdmissionAdmitted || completion == nil {
 		if ctx.Err() != nil {
 			return s.canceled(), ctx.Err()
 		}
-		s.fail(ReasonArtifactEnd, engine.ReplayFailureArtifactEnd)
-		return s.result(OutcomeFailed, ReasonArtifactEnd), errors.New("replay end was not admitted")
+		s.fail(failureReason, engineFailureReason)
+		return s.result(OutcomeFailed, failureReason), errors.New("replay end was not admitted")
 	}
 	disposition, completed := awaitDisposition(context.Background(), completion)
-	if !completed || disposition.Code != engine.DispositionReplayEnded {
+	want := engine.DispositionReplayEnded
+	if completionDisposition == CompletionRequestedEnd {
+		want = engine.DispositionReplayRequestedEnd
+	}
+	if !completed || disposition.Code != want {
 		s.fail(ReasonEngine, engine.ReplayFailureEngine)
 		return s.result(OutcomeFailed, ReasonEngine), errors.New("replay end failed")
 	}
-	if ctx.Err() != nil {
-		return s.canceled(), ctx.Err()
-	}
-	if err := s.engine.Wait(ctx); err != nil {
+	if err := s.engine.Wait(context.Background()); err != nil {
 		s.terminal = true
 		return s.result(OutcomeFailed, ReasonDrain), err
 	}
 	s.terminal = true
 	s.accounting.CompletedRuns = 1
-	return s.result(OutcomeComplete, ReasonNone), nil
+	result := s.result(OutcomeComplete, ReasonNone)
+	result.Completion = completionDisposition
+	return result, nil
 }
 
 func (s *Source) Run(ctx context.Context) Result {
@@ -317,7 +375,7 @@ func (s *Source) Run(ctx context.Context) Result {
 		}
 		return s.result(OutcomeFailed, s.currentReason())
 	}
-	for !s.nextGroup.After(s.start.End()) {
+	for !s.nextGroup.After(s.start.RequestedEnd()) {
 		if _, err := s.Step(ctx); err != nil {
 			if ctx.Err() != nil {
 				return s.canceled()

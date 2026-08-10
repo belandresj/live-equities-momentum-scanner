@@ -21,6 +21,7 @@ const (
 	ReplayFailureTimer              ReplayFailureReason = "timer_admission_disposition"
 	ReplayFailureEngine             ReplayFailureReason = "engine_integrity_suppression"
 	ReplayFailureArtifactEnd        ReplayFailureReason = "artifact_end_digest"
+	ReplayFailureRequestedEnd       ReplayFailureReason = "requested_end"
 	ReplayFailureDrain              ReplayFailureReason = "controlled_stop_drain"
 )
 
@@ -34,7 +35,7 @@ type ReplayFailureInput struct {
 type replayState struct {
 	validated, complete, terminal bool
 	artifactID, bindingID         string
-	start, end                    time.Time
+	start, end, requestedEnd      time.Time
 	totalRecords, nextOrdinal     uint64
 	presentSlots, absentSlots     uint64
 	nextGroup, lastGroup          time.Time
@@ -42,7 +43,16 @@ type replayState struct {
 	failureReason                 ReplayFailureReason
 	failureLogical                time.Time
 	failureOrdinal                uint64
+	completion                    ReplayCompletionDisposition
 }
+
+type ReplayCompletionDisposition string
+
+const (
+	ReplayCompletionNone         ReplayCompletionDisposition = ""
+	ReplayCompletionArtifactEnd  ReplayCompletionDisposition = "artifact_end"
+	ReplayCompletionRequestedEnd ReplayCompletionDisposition = "requested_end"
+)
 
 type ReplayStatus struct {
 	RunMode                 RunMode
@@ -71,6 +81,7 @@ type ReplayStatus struct {
 	AggregateExactDuplicate uint64
 	Evaluation              ReplayEvaluationView
 	Publication             ReplayPublicationView
+	Completion              ReplayCompletionDisposition
 }
 
 func (e *Engine) AdmitReplayStart(ctx context.Context, evidence playback.StartEvidence) (AdmissionResult, <-chan Disposition) {
@@ -120,6 +131,14 @@ func (e *Engine) AdmitReplayEnd(ctx context.Context, evidence playback.EndEviden
 	return e.admit(ctx, &queueNode{kind: inputReplayEnd, replayEnd: evidence, sealOnLink: true}, false)
 }
 
+func (e *Engine) AdmitReplayRequestedEnd(ctx context.Context, evidence playback.RequestedEndEvidence) (AdmissionResult, <-chan Disposition) {
+	e.beginAdmission()
+	if ctx == nil || !evidence.Valid() || !evidence.Complete() || !validReplayArtifactID(evidence.ArtifactID()) {
+		return e.finishNonAdmission(AdmissionNotAdmittedInvalid), nil
+	}
+	return e.admit(ctx, &queueNode{kind: inputReplayRequestedEnd, replayRequestedEnd: evidence, sealOnLink: true}, false)
+}
+
 // AdmitReplayFailure is intentionally constructible by the runner: it can
 // only remove claims and seal the failed replay instance.
 func (e *Engine) AdmitReplayFailure(ctx context.Context, input ReplayFailureInput) (AdmissionResult, <-chan Disposition) {
@@ -134,6 +153,7 @@ func (e *Engine) applyReplayStartLocked(node *queueNode) (DispositionCode, Dispo
 	v := node.replayStart
 	if e.mode != RunModeReplay || e.state.binding == nil || e.state.lifecycle != lifecycleInitializing || e.state.replay.validated ||
 		!v.Valid() || v.BindingID() != e.state.binding.identity || v.Start().Before(e.state.binding.sessionStart) || !v.Start().Before(v.End()) || v.End().After(e.state.binding.sessionEnd) ||
+		!v.Start().Before(v.RequestedEnd()) || v.RequestedEnd().After(v.End()) || (v.RequestedEnd().Before(v.End()) && !v.Complete()) ||
 		v.Start() != v.Start().UTC() || v.End() != v.End().UTC() || v.Start().Nanosecond() != 0 || v.End().Nanosecond() != 0 {
 		return DispositionReplayFailed, ReasonReplayEvidence
 	}
@@ -145,7 +165,7 @@ func (e *Engine) applyReplayStartLocked(node *queueNode) (DispositionCode, Dispo
 	} else if v.Authority() == playback.InstalledCheckpoint || v.Authority() == playback.FreshSession && v.Start() != e.state.binding.sessionStart {
 		return DispositionReplayFailed, ReasonReplayEvidence
 	}
-	e.state.replay = replayState{validated: true, complete: v.Complete(), artifactID: v.ArtifactID(), bindingID: v.BindingID(), start: v.Start(), end: v.End(), totalRecords: v.TotalRecords(), nextOrdinal: 1, nextGroup: v.Start()}
+	e.state.replay = replayState{validated: true, complete: v.Complete(), artifactID: v.ArtifactID(), bindingID: v.BindingID(), start: v.Start(), end: v.End(), requestedEnd: v.RequestedEnd(), totalRecords: v.TotalRecords(), nextOrdinal: 1, nextGroup: v.Start()}
 	e.state.replayArtifact = v.ArtifactID()
 	if v.Complete() && !checkpointContinuation {
 		if e.state.aggregateEvaluator.coverage == nil {
@@ -164,7 +184,7 @@ func (e *Engine) applyReplayStartLocked(node *queueNode) (DispositionCode, Dispo
 func (e *Engine) applyReplayGroupLocked(node *queueNode) (DispositionCode, DispositionReason) {
 	v, state := node.replayGroup, &e.state.replay
 	if e.mode != RunModeReplay || !state.validated || state.terminal || e.state.lifecycle != lifecycleReplaying || !v.Valid() ||
-		v.ArtifactID() != state.artifactID || v.BindingID() != state.bindingID || v.Complete() != state.complete || v.LogicalTime() != state.nextGroup ||
+		v.ArtifactID() != state.artifactID || v.BindingID() != state.bindingID || v.Complete() != state.complete || v.LogicalTime() != state.nextGroup || v.LogicalTime().After(state.requestedEnd) ||
 		v.LastOrdinal()+1 != state.nextOrdinal || node.admissionTime != v.LogicalTime() {
 		return DispositionReplayFailed, ReasonReplayEvidence
 	}
@@ -223,7 +243,24 @@ func (e *Engine) applyReplayEndLocked(node *queueNode) (DispositionCode, Disposi
 	if !e.transitionLifecycleLocked(lifecycleEventReplayEnd, node, lifecycleReasonReplayEnd) {
 		return DispositionReplayFailed, ReasonLifecycle
 	}
+	state.completion = ReplayCompletionArtifactEnd
 	return DispositionReplayEnded, ReasonNone
+}
+
+func (e *Engine) applyReplayRequestedEndLocked(node *queueNode) (DispositionCode, DispositionReason) {
+	v, state := node.replayRequestedEnd, &e.state.replay
+	if e.mode != RunModeReplay || !state.validated || !state.complete || state.terminal || e.state.lifecycle != lifecycleReplaying || !v.Valid() ||
+		v.ArtifactID() != state.artifactID || v.BindingID() != state.bindingID || v.ArtifactEnd() != state.end || v.RequestedEnd() != state.requestedEnd ||
+		!v.RequestedEnd().Before(v.ArtifactEnd()) || node.admissionTime != state.requestedEnd || v.TotalRecords() != state.totalRecords ||
+		v.PrefixRecords()+1 != state.nextOrdinal || state.lastGroup != state.requestedEnd {
+		return DispositionReplayFailed, ReasonReplayEvidence
+	}
+	state.terminal = true
+	if !e.transitionLifecycleLocked(lifecycleEventReplayRequestedEnd, node, lifecycleReasonReplayRequestedEnd) {
+		return DispositionReplayFailed, ReasonLifecycle
+	}
+	state.completion = ReplayCompletionRequestedEnd
+	return DispositionReplayRequestedEnd, ReasonNone
 }
 
 func (e *Engine) applyReplayFailureLocked(node *queueNode) (DispositionCode, DispositionReason) {
@@ -268,6 +305,7 @@ func (e *Engine) ObserveReplay() ReplayStatus {
 	result.FailureReason = e.state.replay.failureReason
 	result.FailureLogicalTime = e.state.replay.failureLogical
 	result.FailureOrdinal = e.state.replay.failureOrdinal
+	result.Completion = e.state.replay.completion
 	result.AggregateInserted = e.state.aggregates.inserted
 	result.AggregateRevised = e.state.aggregates.revised
 	result.AggregateExactDuplicate = e.state.aggregates.exactDuplicate
@@ -287,7 +325,7 @@ func validReplayArtifactID(value string) bool {
 func validReplayFailure(input ReplayFailureInput) bool {
 	switch input.Reason {
 	case ReplayFailureArtifactValidation, ReplayFailureBindingCoverage, ReplayFailureSchemaCanonical, ReplayFailureOrdinalGroup, ReplayFailureClock,
-		ReplayFailureAggregate, ReplayFailureTimer, ReplayFailureEngine, ReplayFailureArtifactEnd, ReplayFailureDrain:
+		ReplayFailureAggregate, ReplayFailureTimer, ReplayFailureEngine, ReplayFailureArtifactEnd, ReplayFailureRequestedEnd, ReplayFailureDrain:
 	default:
 		return false
 	}

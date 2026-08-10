@@ -79,14 +79,28 @@ func (h *Handle) Metadata() Metadata { return h.metadata }
 // BeginPlayback validates and rewinds the same already-open file description,
 // then returns the only producer of opaque replay success evidence.
 func (h *Handle) BeginPlayback() (*playback.Cursor, error) {
+	if h == nil {
+		return nil, os.ErrClosed
+	}
+	return h.BeginPlaybackThrough(h.metadata.ReplayEnd)
+}
+
+// BeginPlaybackThrough keeps the artifact's validated [S,R) identity intact
+// while selecting an exact engine application boundary in (S,R].
+func (h *Handle) BeginPlaybackThrough(requestedEnd time.Time) (*playback.Cursor, error) {
 	if h == nil || h.file == nil {
 		return nil, os.ErrClosed
+	}
+	if requestedEnd.IsZero() || requestedEnd != requestedEnd.UTC() || requestedEnd.Nanosecond() != 0 ||
+		!h.metadata.ReplayStart.Before(requestedEnd) || requestedEnd.After(h.metadata.ReplayEnd) ||
+		(requestedEnd.Before(h.metadata.ReplayEnd) && h.metadata.Mode != CompleteFinalBars) {
+		return nil, errors.New("invalid requested replay end")
 	}
 	mode := string(h.plan.ExpectedMode)
 	return playback.New(h.file, playback.Plan{
 		ArtifactID: h.metadata.ArtifactID,
 		BindingID:  h.plan.Binding.Identity(), UniverseID: h.plan.Binding.UniverseIdentity(), TradingDate: h.plan.Binding.TradingDate(),
-		SessionStart: h.plan.Binding.SessionStart(), SessionEnd: h.plan.Binding.SessionEnd(), Start: h.plan.Start, End: h.plan.End,
+		SessionStart: h.plan.Binding.SessionStart(), SessionEnd: h.plan.Binding.SessionEnd(), Start: h.plan.Start, End: h.plan.End, RequestedEnd: requestedEnd,
 		Mode: mode, Symbols: h.plan.Binding.UniverseSymbols(), MaximumBytes: h.plan.MaximumBytes, MaximumRecords: h.plan.MaximumRecords,
 	})
 }

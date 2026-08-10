@@ -340,7 +340,7 @@ func classifyCompletedTransition(counters *transitionCounters, code DispositionC
 	switch code {
 	case DispositionAggregateInserted, DispositionAggregateRevised, DispositionAggregateWithdrawn:
 		counters.appliedMarket++
-	case DispositionBindingInstalled, DispositionControlApplied, DispositionTimerApplied, DispositionReplayStarted, DispositionReplayEnded,
+	case DispositionBindingInstalled, DispositionControlApplied, DispositionTimerApplied, DispositionReplayStarted, DispositionReplayEnded, DispositionReplayRequestedEnd,
 		DispositionConnectionControlApplied, DispositionConnectionControlDeferred, DispositionHydrationPlanApplied, DispositionHydrationChunkApplied,
 		DispositionAggregateIngressFenceApplied, DispositionCheckpointProjected, DispositionCheckpointInstalled, DispositionCheckpointTerminalApplied:
 		counters.appliedNonmarket++

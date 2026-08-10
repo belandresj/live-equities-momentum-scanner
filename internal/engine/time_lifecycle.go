@@ -205,6 +205,11 @@ func (e *Engine) transitionLifecycleLocked(event lifecycleEvent, node *queueNode
 			return false
 		}
 		next, reason = lifecycleEnded, lifecycleReasonReplayEnd
+	case lifecycleEventReplayRequestedEnd:
+		if e.mode != RunModeReplay || previous != lifecycleReplaying || !e.state.replay.terminal {
+			return false
+		}
+		next, reason = lifecycleEnded, lifecycleReasonReplayRequestedEnd
 	case lifecycleEventReplayFailure:
 		if e.mode != RunModeReplay || previous == lifecycleEnded {
 			return false

@@ -140,7 +140,7 @@ func stepCore(t *testing.T, source *Source) ([]coreGroupTrace, Result, engine.Re
 		t.Fatal(err)
 	}
 	trace := make([]coreGroupTrace, 0, source.accounting.PlannedGroups)
-	for !source.nextGroup.After(source.start.End()) {
+	for !source.nextGroup.After(source.start.RequestedEnd()) {
 		logical := source.nextGroup
 		group, err := source.Step(ctx)
 		if err != nil {
@@ -512,6 +512,272 @@ func TestC4FAIL01Containment(t *testing.T) {
 	})
 }
 
+// TestC4PREFIXEND01RequestedEnd is P-C4-PREFIX-END. It proves that a complete
+// source remains fully trusted while only its exact requested prefix reaches
+// the engine, and that cancellation or any prefix/suffix/end contradiction
+// cannot retain a successful completion claim.
+func TestC4PREFIXEND01RequestedEnd(t *testing.T) {
+	t.Run("exact prefix success never applies suffix", func(t *testing.T) {
+		source, _, cleanup := requestedCompleteSourceWithDelay(t, time.Second, time.Second)
+		defer cleanup()
+		trace, result := stepAll(t, source)
+		requested := source.start.RequestedEnd()
+		a := result.Accounting
+		if result.Outcome != OutcomeComplete || result.Completion != CompletionRequestedEnd || result.Reason != ReasonNone ||
+			result.Status.Completion != engine.ReplayCompletionRequestedEnd || result.Status.Lifecycle != "ended" ||
+			result.Status.LastLogicalTime != requested || result.Status.CommittedT == nil || *result.Status.CommittedT != requested.Add(-time.Second) ||
+			result.Status.LastOrdinal != 1 || result.Status.AggregateInserted != 1 || result.Status.PresentSlots != 1 || result.Status.ProvenAbsentSlots != 1 ||
+			len(trace) != 2 || trace[0].LogicalTime != source.start.Start() || trace[1].LogicalTime != requested ||
+			a.ArtifactRecords != 2 || a.CompletedRecordDispositions != 1 || a.IntentionallyUnappliedSuffixRecords != 1 || a.UnreadRecords != 0 ||
+			a.ArtifactRecords != a.CompletedRecordDispositions+a.IntentionallyUnappliedSuffixRecords+a.UnreadRecords ||
+			a.PlannedGroups != 2 || a.CompletedGroups != 2 || a.ActiveGroup != 0 || a.RemainingGroups != 0 || a.CompletedRuns != 1 {
+			t.Fatalf("requested prefix success = result=%+v trace=%+v", result, trace)
+		}
+		view := source.engine.ObserveReplayDeterministic()
+		for _, symbol := range view.Canonical {
+			if symbol.Symbol == "AAA" && len(symbol.Records) != 1 {
+				t.Fatalf("suffix aggregate reached canonical state: %+v", symbol)
+			}
+		}
+	})
+
+	t.Run("artifact end parity", func(t *testing.T) {
+		ordinary, ordinaryCleanup := completeSource(t, Unpaced())
+		defer ordinaryCleanup()
+		explicitBase, _, explicitCleanup := completeSourceWithPath(t, Unpaced())
+		defer explicitCleanup()
+		explicit, err := NewSourceThrough(explicitBase.handle, explicitBase.engine, explicitBase.clock, Unpaced(), explicitBase.handle.Metadata().ReplayEnd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ordinaryTrace, ordinaryResult := stepAll(t, ordinary)
+		explicitTrace, explicitResult := stepAll(t, explicit)
+		if ordinaryResult.Completion != CompletionArtifactEnd || explicitResult.Completion != CompletionArtifactEnd ||
+			ordinaryResult.Status.Completion != engine.ReplayCompletionArtifactEnd || explicitResult.Status.Completion != engine.ReplayCompletionArtifactEnd ||
+			!reflect.DeepEqual(ordinaryTrace, explicitTrace) || !reflect.DeepEqual(ordinaryResult, explicitResult) {
+			t.Fatalf("O1=R changed artifact end:\nordinary=%+v\nexplicit=%+v", ordinaryResult, explicitResult)
+		}
+	})
+
+	t.Run("invalid ends fail before replay mutation", func(t *testing.T) {
+		base, _, cleanup := completeSourceWithPath(t, Unpaced())
+		defer cleanup()
+		start, end := base.handle.Metadata().ReplayStart, base.handle.Metadata().ReplayEnd
+		ambiguous := start.Add(time.Second).In(time.FixedZone("not-utc", 3600))
+		for name, requested := range map[string]time.Time{
+			"zero": {}, "at start": start, "subsecond": start.Add(time.Second + time.Nanosecond),
+			"after artifact": end.Add(time.Second), "non-UTC": ambiguous,
+		} {
+			t.Run(name, func(t *testing.T) {
+				if source, err := NewSourceThrough(base.handle, base.engine, base.clock, Unpaced(), requested); err == nil || source != nil {
+					t.Fatalf("invalid requested end accepted: %s", requested)
+				}
+				status := base.engine.ObserveReplay()
+				if status.Lifecycle != "initializing" || status.LastOrdinal != 0 || status.AggregateInserted != 0 || status.Completion != engine.ReplayCompletionNone {
+					t.Fatalf("invalid end mutated replay state: %+v", status)
+				}
+			})
+		}
+		partial, partialCleanup := partialSource(t)
+		defer partialCleanup()
+		if source, err := NewSourceThrough(partial.handle, partial.engine, partial.clock, Unpaced(), partial.handle.Metadata().ReplayStart.Add(time.Second)); err == nil || source != nil {
+			t.Fatal("partial artifact accepted a prefix requested end")
+		}
+	})
+
+	t.Run("missing prefix evidence is unavailable", func(t *testing.T) {
+		source, _, cleanup := requestedCompleteSource(t, time.Second)
+		defer cleanup()
+		if err := source.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if result, err := source.Finish(context.Background()); err == nil || result.Outcome != "" || result.Completion != "" {
+			t.Fatalf("missing prefix evidence reached terminal result: err=%v result=%+v", err, result)
+		}
+		status := source.engine.ObserveReplay()
+		if status.Lifecycle != "replaying" || status.Completion != engine.ReplayCompletionNone || status.AggregateInserted != 0 {
+			t.Fatalf("missing prefix evidence mutated completion: %+v", status)
+		}
+	})
+
+	t.Run("mutated suffix cannot yield success", func(t *testing.T) {
+		source, path, cleanup := requestedCompleteSource(t, time.Second)
+		defer cleanup()
+		if err := source.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		for !source.nextGroup.After(source.start.RequestedEnd()) {
+			if _, err := source.Step(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		value, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mutated := []byte(strings.Replace(string(value), `"ordinal":2`, `"ordinal":3`, 1))
+		if slices.Equal(value, mutated) || len(value) != len(mutated) {
+			t.Fatal("suffix ordinal mutation was not exact")
+		}
+		if err := os.WriteFile(path, mutated, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		result, err := source.Finish(context.Background())
+		if err == nil || result.Outcome != OutcomeFailed || result.Completion != "" || result.Reason != ReasonArtifactEnd ||
+			result.Status.Lifecycle != "suppressed" || result.Status.Completion != engine.ReplayCompletionNone ||
+			result.Status.FailureReason != engine.ReplayFailureArtifactEnd ||
+			result.Status.AggregateInserted != 1 || result.Status.LastOrdinal != 1 || result.Accounting.UnreadRecords != 1 ||
+			result.Accounting.IntentionallyUnappliedSuffixRecords != 0 {
+			t.Fatalf("mutated suffix retained success: err=%v result=%+v", err, result)
+		}
+	})
+
+	t.Run("requested-end contradiction suppresses", func(t *testing.T) {
+		source, _, cleanup := requestedCompleteSource(t, time.Second)
+		defer cleanup()
+		foreign, _, foreignCleanup := requestedCompleteSource(t, 2*time.Second)
+		defer foreignCleanup()
+		if source.artifactID != foreign.artifactID {
+			t.Fatalf("contradiction fixtures differ: %s %s", source.artifactID, foreign.artifactID)
+		}
+		if err := source.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		for !source.nextGroup.After(source.start.RequestedEnd()) {
+			if _, err := source.Step(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cursor, err := foreign.handle.BeginPlaybackThrough(foreign.requestedEnd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		startEvidence, err := cursor.Start()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for group := startEvidence.Start(); !group.After(startEvidence.RequestedEnd()); group = group.Add(time.Second) {
+			for {
+				if _, ok, err := cursor.NextRecord(group); err != nil {
+					t.Fatal(err)
+				} else if !ok {
+					break
+				}
+			}
+			if _, err := cursor.FinishGroup(group); err != nil {
+				t.Fatal(err)
+			}
+		}
+		contradiction, err := cursor.RequestedEnd()
+		if err != nil {
+			t.Fatal(err)
+		}
+		admission, completion := source.engine.AdmitReplayRequestedEnd(context.Background(), contradiction)
+		if admission != engine.AdmissionAdmitted || completion == nil {
+			t.Fatalf("contradictory evidence admission = %s", admission)
+		}
+		disposition := <-completion
+		status := source.engine.ObserveReplay()
+		if disposition.Code != engine.DispositionReplayFailed || status.Lifecycle != "suppressed" ||
+			status.Suppression != engine.SuppressionTerminalReplayFailure || status.Completion != engine.ReplayCompletionNone {
+			t.Fatalf("requested-end contradiction retained completion: disposition=%+v status=%+v", disposition, status)
+		}
+	})
+
+	t.Run("cancellation before terminal linkage remains canceled", func(t *testing.T) {
+		source, _, cleanup := requestedCompleteSource(t, time.Second)
+		defer cleanup()
+		if err := source.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		for !source.nextGroup.After(source.start.RequestedEnd()) {
+			if _, err := source.Step(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		source.beforeRequestedEndAdmission = cancel
+		result, err := source.Finish(ctx)
+		if !errors.Is(err, context.Canceled) || result.Outcome != OutcomeCanceled || result.Completion != "" ||
+			result.Accounting.CanceledRuns != 1 || result.Accounting.CompletedRuns != 0 || result.Status.Completion != engine.ReplayCompletionNone {
+			t.Fatalf("requested-end cancellation = err=%v result=%+v", err, result)
+		}
+	})
+
+	t.Run("cancellation after terminal linkage preserves requested-end success", func(t *testing.T) {
+		source, _, cleanup := requestedCompleteSource(t, time.Second)
+		defer cleanup()
+		if err := source.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		for !source.nextGroup.After(source.start.RequestedEnd()) {
+			if _, err := source.Step(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		source.afterRequestedEndAdmission = cancel
+		result, err := source.Finish(ctx)
+		if err != nil || ctx.Err() != context.Canceled || result.Outcome != OutcomeComplete || result.Completion != CompletionRequestedEnd ||
+			result.Accounting.CompletedRuns != 1 || result.Accounting.CanceledRuns != 0 || result.Status.Completion != engine.ReplayCompletionRequestedEnd {
+			t.Fatalf("post-link cancellation displaced terminal result: err=%v ctx=%v result=%+v", err, ctx.Err(), result)
+		}
+	})
+
+	t.Run("terminal admission at a clock other than requested end fails", func(t *testing.T) {
+		source, _, cleanup := requestedCompleteSource(t, time.Second)
+		defer cleanup()
+		if err := source.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		for !source.nextGroup.After(source.start.RequestedEnd()) {
+			if _, err := source.Step(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := source.clock.advance(source.start.RequestedEnd().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		result, err := source.Finish(context.Background())
+		if err == nil || result.Outcome != OutcomeFailed || result.Completion != "" || result.Reason != ReasonEngine ||
+			result.Accounting.CompletedRuns != 0 || result.Status.Completion != engine.ReplayCompletionNone || result.Status.Lifecycle != "suppressed" {
+			t.Fatalf("wrong-clock terminal admission retained completion: err=%v result=%+v", err, result)
+		}
+	})
+
+	t.Run("clock and engine rejection retain no completion", func(t *testing.T) {
+		clockSource, _, clockCleanup := requestedCompleteSource(t, time.Second)
+		defer clockCleanup()
+		if err := clockSource.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if err := clockSource.clock.advance(clockSource.start.Start().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := clockSource.Step(context.Background()); err == nil {
+			t.Fatal("requested-end clock contradiction succeeded")
+		}
+		clockResult := clockSource.result(OutcomeFailed, clockSource.currentReason())
+		if clockResult.Completion != "" || clockResult.Status.Completion != engine.ReplayCompletionNone || clockResult.Status.Lifecycle != "suppressed" {
+			t.Fatalf("clock contradiction retained completion: %+v", clockResult)
+		}
+
+		engineSource, _, engineCleanup := requestedCompleteSource(t, time.Second)
+		defer engineCleanup()
+		if err := engineSource.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		engineSource.engine.Close()
+		if _, err := engineSource.Step(context.Background()); err == nil {
+			t.Fatal("closed engine accepted requested prefix group")
+		}
+		engineResult := engineSource.result(OutcomeFailed, engineSource.currentReason())
+		if engineResult.Completion != "" || engineResult.Status.Completion != engine.ReplayCompletionNone || engineResult.Accounting.CompletedRuns != 0 {
+			t.Fatalf("engine rejection retained completion: %+v", engineResult)
+		}
+	})
+}
+
 func stepAll(t *testing.T, source *Source) ([]GroupResult, Result) {
 	t.Helper()
 	ctx := context.Background()
@@ -519,7 +785,7 @@ func stepAll(t *testing.T, source *Source) ([]GroupResult, Result) {
 		t.Fatal(err)
 	}
 	var trace []GroupResult
-	for !source.nextGroup.After(source.start.End()) {
+	for !source.nextGroup.After(source.start.RequestedEnd()) {
 		logical := source.nextGroup
 		group, err := source.Step(ctx)
 		if err != nil {
@@ -539,6 +805,10 @@ func completeSource(t *testing.T, pace Pace) (*Source, func()) {
 	return source, cleanup
 }
 func completeSourceWithPath(t *testing.T, pace Pace) (*Source, string, func()) {
+	return completeSourceWithPathAndDelay(t, pace, 0)
+}
+
+func completeSourceWithPathAndDelay(t *testing.T, pace Pace, delay time.Duration) (*Source, string, func()) {
 	t.Helper()
 	binding := replayBinding(t, []string{"AAA", "BBB"})
 	start, end := binding.SessionStart(), binding.SessionStart().Add(3*time.Second)
@@ -569,7 +839,6 @@ func completeSourceWithPath(t *testing.T, pace Pace) (*Source, string, func()) {
 		t.Fatal(err)
 	}
 	clock, _ := NewSimulatedClock(start)
-	delay := time.Duration(0)
 	owner, err := engine.New(engine.Config{Mode: engine.RunModeReplay, Clock: clock.Now, Capacity: 16, RequiredReserve: 2, EvaluationDelay: &delay})
 	if err != nil {
 		t.Fatal(err)
@@ -586,6 +855,26 @@ func completeSourceWithPath(t *testing.T, pace Pace) (*Source, string, func()) {
 		t.Fatal(err)
 	}
 	return source, compiled.Path, func() { handle.Close(); server.Close() }
+}
+
+func requestedCompleteSource(t *testing.T, offset time.Duration) (*Source, string, func()) {
+	return requestedCompleteSourceWithDelay(t, offset, 0)
+}
+
+func requestedCompleteSourceWithDelay(t *testing.T, offset, delay time.Duration) (*Source, string, func()) {
+	t.Helper()
+	base, path, cleanup := completeSourceWithPathAndDelay(t, Unpaced(), delay)
+	requested := base.handle.Metadata().ReplayStart.Add(offset)
+	source, err := NewSourceThrough(base.handle, base.engine, base.clock, Unpaced(), requested)
+	if err != nil {
+		cleanup()
+		t.Fatal(err)
+	}
+	return source, path, func() {
+		base.engine.Close()
+		_ = base.engine.Wait(context.Background())
+		cleanup()
+	}
 }
 
 func sessionEndEmptySource(t *testing.T) (*Source, func()) {
