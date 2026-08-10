@@ -84,7 +84,7 @@ func TestC7REPLAY01CheckpointContinuationDifferential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result := foreignSource.Run(context.Background()); result.Outcome == OutcomeComplete {
+	if result, _ := foreignSource.Run(context.Background()); result.Outcome == OutcomeComplete {
 		t.Fatalf("foreign checkpoint fact authorized partial replay: %+v", result)
 	}
 	installedOwner, installedClock := boundReplayEngine(t, binding, t0)
@@ -96,13 +96,14 @@ func TestC7REPLAY01CheckpointContinuationDifferential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result := fullOnCheckpoint.Run(context.Background()); result.Outcome == OutcomeComplete {
+	if result, _ := fullOnCheckpoint.Run(context.Background()); result.Outcome == OutcomeComplete {
 		t.Fatalf("installed checkpoint accepted mismatched full replay: %+v", result)
 	}
 
 	fallbackOwner, fallbackClock := boundReplayEngine(t, binding, s)
 	fallback, err := NewCompleteFallbackSource(full, fallbackOwner, fallbackClock, Unpaced())
-	if err != nil || fallback.Run(context.Background()).Outcome != OutcomeComplete {
+	result, runErr := fallback.Run(context.Background())
+	if err != nil || runErr != nil || result.Outcome != OutcomeComplete {
 		t.Fatalf("complete fallback err=%v", err)
 	}
 	partial := partialC7ReplayArtifact(t, binding, s, end)

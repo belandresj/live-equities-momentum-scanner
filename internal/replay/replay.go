@@ -112,25 +112,58 @@ type Result struct {
 }
 
 type Source struct {
-	handle         *replayartifact.Handle
-	artifactID     string
-	engine         *engine.Engine
-	clock          *SimulatedClock
-	pace           Pace
-	startAuthority playback.StartAuthority
-	cursor         *playback.Cursor
-	start          playback.StartEvidence
-	requestedEnd   time.Time
-	nextGroup      time.Time
-	accounting     Accounting
-	terminal       bool
-	failureReason  Reason
-	pacer          wallPacer
+	handle                  *replayartifact.Handle
+	artifactID              string
+	engine                  *engine.Engine
+	clock                   *SimulatedClock
+	pace                    Pace
+	startAuthority          playback.StartAuthority
+	cursor                  *playback.Cursor
+	start                   playback.StartEvidence
+	requestedEnd            time.Time
+	nextGroup               time.Time
+	accounting              Accounting
+	terminal                bool
+	failureReason           Reason
+	pacer                   wallPacer
+	operation               chan struct{}
+	lifetime                context.Context
+	cancelLifetime          context.CancelFunc
+	cancelOnce              sync.Once
+	terminalLinked          bool
+	terminalCompletion      <-chan engine.Disposition
+	terminalWant            engine.DispositionCode
+	terminalCompletionKind  CompletionDisposition
+	terminalOutcome         Outcome
+	terminalDispositionDone bool
+	terminalDispositionFail bool
+	pendingLinked           linkedOperation
+	pendingDisposition      <-chan engine.Disposition
+	pendingAggregate        <-chan engine.AggregateDisposition
+	pendingTimer            <-chan engine.TimerDisposition
+	pendingGroup            time.Time
+	stopCompletion          <-chan engine.Disposition
+	stopCompleted           bool
+	engineClosed            bool
+	sealedResult            Result
+	resultSealed            bool
 	// These package-private hooks expose only the requested-end terminal-fact
-	// linkage boundary to deterministic lifecycle tests.
+	// and already-linked nonterminal boundaries to deterministic lifecycle tests.
 	beforeRequestedEndAdmission func()
 	afterRequestedEndAdmission  func()
+	afterNonterminalAdmission   func()
+	beforeFailureAdmission      func()
+	afterFailureAdmission       func()
 }
+
+type linkedOperation uint8
+
+const (
+	linkedNone linkedOperation = iota
+	linkedReplayStart
+	linkedReplayAggregate
+	linkedReplayTimer
+)
 
 type wallPacer struct {
 	pace    Pace
@@ -158,7 +191,11 @@ func NewSourceThrough(handle *replayartifact.Handle, owner *engine.Engine, clock
 		return nil, errors.New("invalid requested replay end")
 	}
 	p := wallPacer{pace: pace, now: time.Now, wait: waitDuration}
-	return &Source{handle: handle, artifactID: metadata.ArtifactID, engine: owner, clock: clock, pace: pace, requestedEnd: requestedEnd, pacer: p}, nil
+	lifetime, cancelLifetime := context.WithCancel(context.Background())
+	operation := make(chan struct{}, 1)
+	operation <- struct{}{}
+	return &Source{handle: handle, artifactID: metadata.ArtifactID, engine: owner, clock: clock, pace: pace, requestedEnd: requestedEnd, pacer: p,
+		operation: operation, lifetime: lifetime, cancelLifetime: cancelLifetime}, nil
 }
 
 // NewCheckpointSource binds an already-installed semantic baseline to one
@@ -198,18 +235,75 @@ func NewCompleteFallbackSource(handle *replayartifact.Handle, owner *engine.Engi
 	return source, err
 }
 
-func (s *Source) Start(ctx context.Context) error {
-	if s == nil || ctx == nil || s.cursor != nil || s.terminal {
-		return errors.New("replay start is unavailable")
+const linkedDispositionLimit = 2 * time.Minute
+
+func (s *Source) beginOperation(ctx context.Context) (context.Context, func(), error) {
+	if s == nil || ctx == nil {
+		return nil, nil, errors.New("replay operation requires a source and context")
 	}
-	cursor, err := s.handle.BeginPlaybackThrough(s.requestedEnd)
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if err := s.lifetime.Err(); err != nil {
+		return nil, nil, err
+	}
+	select {
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	case <-s.lifetime.Done():
+		return nil, nil, context.Canceled
+	case <-s.operation:
+	}
+	if err := ctx.Err(); err != nil {
+		s.operation <- struct{}{}
+		return nil, nil, err
+	}
+	if err := s.lifetime.Err(); err != nil {
+		s.operation <- struct{}{}
+		return nil, nil, err
+	}
+	operationContext, cancel := context.WithCancel(ctx)
+	stopLifetime := context.AfterFunc(s.lifetime, cancel)
+	release := func() {
+		stopLifetime()
+		cancel()
+		s.operation <- struct{}{}
+	}
+	return operationContext, release, nil
+}
+
+func linkedContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if deadline, ok := ctx.Deadline(); ok {
+		return context.WithDeadline(context.Background(), deadline)
+	}
+	return context.WithTimeout(context.Background(), linkedDispositionLimit)
+}
+
+func cancellationError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func (s *Source) Start(ctx context.Context) error {
+	operationContext, release, err := s.beginOperation(ctx)
 	if err != nil {
-		s.failPlayback(err)
 		return err
 	}
-	start, err := cursor.Start()
+	defer release()
+	if s.cursor != nil || s.terminal {
+		return errors.New("replay start is unavailable")
+	}
+	cursor, err := s.handle.BeginPlaybackThroughContext(operationContext, s.requestedEnd)
 	if err != nil {
-		s.failPlayback(err)
+		if !cancellationError(err) {
+			s.failPlayback(operationContext, err)
+		}
+		return err
+	}
+	start, err := cursor.StartContext(operationContext)
+	if err != nil {
+		if !cancellationError(err) {
+			s.failPlayback(operationContext, err)
+		}
 		return err
 	}
 	start = start.WithAuthority(s.startAuthority)
@@ -218,94 +312,142 @@ func (s *Source) Start(ctx context.Context) error {
 	s.accounting.UnreadRecords = start.TotalRecords()
 	s.accounting.PlannedGroups = uint64(start.RequestedEnd().Sub(start.Start())/time.Second) + 1
 	s.accounting.RemainingGroups = s.accounting.PlannedGroups
-	admission, completion := s.engine.AdmitReplayStart(ctx, start)
+	admission, completion := s.engine.AdmitReplayStart(operationContext, start)
 	if admission != engine.AdmissionAdmitted || completion == nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if operationContext.Err() != nil {
+			return operationContext.Err()
 		}
-		s.fail(ReasonEngine, engine.ReplayFailureEngine)
+		s.fail(operationContext, ReasonEngine, engine.ReplayFailureEngine)
 		return errors.New("replay start was not admitted")
 	}
-	disposition, ok := awaitDisposition(context.Background(), completion)
+	if s.afterNonterminalAdmission != nil {
+		s.afterNonterminalAdmission()
+	}
+	waitContext, cancelWait := linkedContext(ctx)
+	disposition, ok := awaitDisposition(waitContext, completion)
+	cancelWait()
 	if !ok || disposition.Code != engine.DispositionReplayStarted {
-		s.fail(ReasonEngine, engine.ReplayFailureEngine)
+		if ctx.Err() != nil {
+			s.pendingLinked = linkedReplayStart
+			s.pendingDisposition = completion
+			s.cancelOnce.Do(s.cancelLifetime)
+			return ctx.Err()
+		}
+		s.fail(operationContext, ReasonEngine, engine.ReplayFailureEngine)
 		return errors.New("replay start failed")
 	}
-	if ctx.Err() != nil {
-		return ctx.Err()
+	if operationContext.Err() != nil {
+		return operationContext.Err()
 	}
 	s.pacer.started = s.pacer.now()
 	return nil
 }
 
 func (s *Source) Step(ctx context.Context) (GroupResult, error) {
-	if s == nil || ctx == nil || s.cursor == nil || s.terminal || s.nextGroup.After(s.start.RequestedEnd()) {
+	operationContext, release, err := s.beginOperation(ctx)
+	if err != nil {
+		return GroupResult{}, err
+	}
+	defer release()
+	if s.cursor == nil || s.terminal || s.nextGroup.After(s.start.RequestedEnd()) {
 		return GroupResult{}, errors.New("replay group is unavailable")
 	}
 	group := s.nextGroup
 	s.accounting.ActiveGroup, s.accounting.RemainingGroups = 1, s.accounting.PlannedGroups-s.accounting.CompletedGroups-1
-	if err := s.pacer.waitUntil(ctx, group.Sub(s.start.Start())); err != nil {
-		return GroupResult{}, s.cancelOrFail(err)
+	if err := s.pacer.waitUntil(operationContext, group.Sub(s.start.Start())); err != nil {
+		return GroupResult{}, s.cancelOrFail(operationContext, err)
 	}
 	if err := s.clock.advance(group); err != nil {
-		s.fail(ReasonClock, engine.ReplayFailureClock)
+		s.fail(operationContext, ReasonClock, engine.ReplayFailureClock)
 		return GroupResult{}, err
 	}
 	var records uint64
 	for {
-		record, ok, err := s.cursor.NextRecord(group)
+		record, ok, err := s.cursor.NextRecordContext(operationContext, group)
 		if err != nil {
-			s.failPlayback(err)
+			if !cancellationError(err) {
+				s.failPlayback(operationContext, err)
+			}
 			return GroupResult{}, err
 		}
 		if !ok {
 			break
 		}
-		admission, completion := s.engine.AdmitReplayRecord(ctx, record)
+		admission, completion := s.engine.AdmitReplayRecord(operationContext, record)
 		if admission != engine.AdmissionAdmitted || completion == nil {
-			return GroupResult{}, s.cancelOrFail(errors.New("replay aggregate was not admitted"))
+			return GroupResult{}, s.cancelOrFail(operationContext, errors.New("replay aggregate was not admitted"))
 		}
-		disposition, completed := awaitAggregate(context.Background(), completion)
+		if s.afterNonterminalAdmission != nil {
+			s.afterNonterminalAdmission()
+		}
+		waitContext, cancelWait := linkedContext(ctx)
+		disposition, completed := awaitAggregate(waitContext, completion)
+		cancelWait()
 		if !completed {
-			s.fail(ReasonAggregate, engine.ReplayFailureAggregate)
+			if ctx.Err() != nil {
+				s.pendingLinked = linkedReplayAggregate
+				s.pendingAggregate = completion
+				s.cancelOnce.Do(s.cancelLifetime)
+				return GroupResult{}, ctx.Err()
+			}
+			s.fail(operationContext, ReasonAggregate, engine.ReplayFailureAggregate)
 			return GroupResult{}, errors.New("replay aggregate disposition failed")
 		}
 		s.accounting.CompletedRecordDispositions++
 		s.accounting.UnreadRecords--
 		if !acceptedAggregate(s.start.Complete(), disposition.Code) {
-			s.fail(ReasonAggregate, engine.ReplayFailureAggregate)
+			s.fail(operationContext, ReasonAggregate, engine.ReplayFailureAggregate)
 			return GroupResult{}, errors.New("replay aggregate disposition failed")
 		}
 		records++
-		if ctx.Err() != nil {
-			return GroupResult{}, ctx.Err()
+		if operationContext.Err() != nil {
+			return GroupResult{}, operationContext.Err()
 		}
 	}
-	proof, err := s.cursor.FinishGroup(group)
+	proof, err := s.cursor.FinishGroupContext(operationContext, group)
 	if err != nil {
-		s.failPlayback(err)
+		if !cancellationError(err) {
+			s.failPlayback(operationContext, err)
+		}
 		return GroupResult{}, err
 	}
-	admission, completion := s.engine.AdmitReplayGroup(ctx, proof)
+	admission, completion := s.engine.AdmitReplayGroup(operationContext, proof)
 	if admission != engine.AdmissionAdmitted || completion == nil {
-		return GroupResult{}, s.cancelOrFail(errors.New("replay group timer was not admitted"))
+		return GroupResult{}, s.cancelOrFail(operationContext, errors.New("replay group timer was not admitted"))
 	}
-	timer, completed := awaitTimer(context.Background(), completion)
+	if s.afterNonterminalAdmission != nil {
+		s.afterNonterminalAdmission()
+	}
+	waitContext, cancelWait := linkedContext(ctx)
+	timer, completed := awaitTimer(waitContext, completion)
+	cancelWait()
 	if !completed || timer.Code != engine.DispositionTimerApplied || timer.AdmissionTime != group {
-		s.fail(ReasonTimer, engine.ReplayFailureTimer)
+		if !completed && ctx.Err() != nil {
+			s.pendingLinked = linkedReplayTimer
+			s.pendingTimer = completion
+			s.pendingGroup = group
+			s.cancelOnce.Do(s.cancelLifetime)
+			return GroupResult{}, ctx.Err()
+		}
+		s.fail(operationContext, ReasonTimer, engine.ReplayFailureTimer)
 		return GroupResult{}, errors.New("replay group timer disposition failed")
 	}
 	s.accounting.CompletedGroups++
 	s.accounting.ActiveGroup = 0
 	s.nextGroup = group.Add(time.Second)
-	if ctx.Err() != nil {
-		return GroupResult{}, ctx.Err()
+	if operationContext.Err() != nil {
+		return GroupResult{}, operationContext.Err()
 	}
 	return GroupResult{LogicalTime: group, Records: records, Timer: timer, Status: s.engine.ObserveReplay()}, nil
 }
 
 func (s *Source) Finish(ctx context.Context) (Result, error) {
-	if s == nil || ctx == nil || s.cursor == nil || s.terminal || !s.nextGroup.After(s.start.RequestedEnd()) {
+	operationContext, release, err := s.beginOperation(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	defer release()
+	if s.cursor == nil || s.terminal || !s.nextGroup.After(s.start.RequestedEnd()) {
 		return Result{}, errors.New("replay finish is unavailable")
 	}
 	var admission engine.AdmissionResult
@@ -313,21 +455,25 @@ func (s *Source) Finish(ctx context.Context) (Result, error) {
 	completionDisposition := CompletionArtifactEnd
 	failureReason, engineFailureReason := ReasonArtifactEnd, engine.ReplayFailureArtifactEnd
 	if s.start.RequestedEnd() == s.start.End() {
-		end, err := s.cursor.End()
+		end, err := s.cursor.EndContext(operationContext)
 		if err != nil {
-			s.failPlayback(err)
-			return s.result(OutcomeFailed, s.currentReason()), err
+			if !cancellationError(err) {
+				s.failPlayback(operationContext, err)
+			}
+			return s.terminalResult(), err
 		}
-		admission, completion = s.engine.AdmitReplayEnd(ctx, end)
+		admission, completion = s.engine.AdmitReplayEnd(operationContext, end)
 	} else {
-		end, err := s.cursor.RequestedEnd()
+		end, err := s.cursor.RequestedEndContext(operationContext)
 		if err != nil {
-			s.failPlayback(err)
-			return s.result(OutcomeFailed, s.currentReason()), err
+			if !cancellationError(err) {
+				s.failPlayback(operationContext, err)
+			}
+			return s.terminalResult(), err
 		}
 		if end.PrefixRecords() != s.accounting.CompletedRecordDispositions || end.TotalRecords() < end.PrefixRecords() {
-			s.fail(ReasonRequestedEnd, engine.ReplayFailureRequestedEnd)
-			return s.result(OutcomeFailed, ReasonRequestedEnd), errors.New("requested replay end accounting contradicted")
+			s.fail(operationContext, ReasonRequestedEnd, engine.ReplayFailureRequestedEnd)
+			return s.terminalResult(), errors.New("requested replay end accounting contradicted")
 		}
 		s.accounting.IntentionallyUnappliedSuffixRecords = end.TotalRecords() - end.PrefixRecords()
 		s.accounting.UnreadRecords = 0
@@ -336,66 +482,55 @@ func (s *Source) Finish(ctx context.Context) (Result, error) {
 		if s.beforeRequestedEndAdmission != nil {
 			s.beforeRequestedEndAdmission()
 		}
-		admission, completion = s.engine.AdmitReplayRequestedEnd(ctx, end)
+		admission, completion = s.engine.AdmitReplayRequestedEnd(operationContext, end)
 		if s.afterRequestedEndAdmission != nil {
 			s.afterRequestedEndAdmission()
 		}
 	}
 	if admission != engine.AdmissionAdmitted || completion == nil {
-		if ctx.Err() != nil {
-			return s.canceled(), ctx.Err()
+		if operationContext.Err() != nil {
+			return Result{}, operationContext.Err()
 		}
-		s.fail(failureReason, engineFailureReason)
-		return s.result(OutcomeFailed, failureReason), errors.New("replay end was not admitted")
-	}
-	disposition, completed := awaitDisposition(context.Background(), completion)
-	want := engine.DispositionReplayEnded
-	if completionDisposition == CompletionRequestedEnd {
-		want = engine.DispositionReplayRequestedEnd
-	}
-	if !completed || disposition.Code != want {
-		s.fail(ReasonEngine, engine.ReplayFailureEngine)
-		return s.result(OutcomeFailed, ReasonEngine), errors.New("replay end failed")
-	}
-	if err := s.engine.Wait(context.Background()); err != nil {
-		s.terminal = true
-		return s.result(OutcomeFailed, ReasonDrain), err
+		s.fail(operationContext, failureReason, engineFailureReason)
+		return s.terminalResult(), errors.New("replay end was not admitted")
 	}
 	s.terminal = true
-	s.accounting.CompletedRuns = 1
-	result := s.result(OutcomeComplete, ReasonNone)
-	result.Completion = completionDisposition
-	return result, nil
+	s.terminalLinked = true
+	s.terminalCompletion = completion
+	s.terminalWant = engine.DispositionReplayEnded
+	if completionDisposition == CompletionRequestedEnd {
+		s.terminalWant = engine.DispositionReplayRequestedEnd
+	}
+	s.terminalCompletionKind = completionDisposition
+	s.terminalOutcome = OutcomeComplete
+	waitContext, cancelWait := linkedContext(ctx)
+	result, terminalErr := s.completeLinkedTerminal(waitContext)
+	cancelWait()
+	return result, terminalErr
 }
 
-func (s *Source) Run(ctx context.Context) Result {
+func (s *Source) Run(ctx context.Context) (Result, error) {
 	if err := s.Start(ctx); err != nil {
-		if ctx != nil && ctx.Err() != nil {
-			return s.canceled()
-		}
-		return s.result(OutcomeFailed, s.currentReason())
+		return s.sealedResultWithin(ctx), err
 	}
 	for !s.nextGroup.After(s.start.RequestedEnd()) {
 		if _, err := s.Step(ctx); err != nil {
-			if ctx.Err() != nil {
-				return s.canceled()
-			}
-			return s.result(OutcomeFailed, s.currentReason())
+			return s.sealedResultWithin(ctx), err
 		}
 	}
 	result, err := s.Finish(ctx)
 	if err != nil {
-		if ctx.Err() != nil {
-			return s.canceled()
+		if result.Outcome != "" {
+			return result, err
 		}
-		return result
+		return s.sealedResultWithin(ctx), err
 	}
-	return result
+	return result, nil
 }
 
-func (s *Source) fail(reason Reason, engineReason engine.ReplayFailureReason) {
+func (s *Source) fail(ctx context.Context, reason Reason, engineReason engine.ReplayFailureReason) error {
 	if s == nil || s.terminal {
-		return
+		return nil
 	}
 	s.failureReason = reason
 	status := s.engine.ObserveReplay()
@@ -404,55 +539,294 @@ func (s *Source) fail(reason Reason, engineReason engine.ReplayFailureReason) {
 		artifactID = s.artifactID
 	}
 	input := engine.ReplayFailureInput{Reason: engineReason, ArtifactID: artifactID, LogicalTime: status.LastLogicalTime, Ordinal: status.LastOrdinal}
-	admission, completion := s.engine.AdmitReplayFailure(context.Background(), input)
-	if admission == engine.AdmissionAdmitted && completion != nil {
-		_, _ = awaitDisposition(context.Background(), completion)
+	if s.beforeFailureAdmission != nil {
+		s.beforeFailureAdmission()
+	}
+	admission, completion := s.engine.AdmitReplayFailure(ctx, input)
+	if admission != engine.AdmissionAdmitted || completion == nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if s.engine.ObserveReplay().Suppression == engine.SuppressionTerminalReplayFailure {
+			return s.completeSuppressedFailure(ctx)
+		}
+		return errors.New("replay failure was not admitted")
 	}
 	s.terminal = true
-	s.accounting.FailedRuns = 1
+	s.terminalLinked = true
+	s.terminalCompletion = completion
+	s.terminalWant = engine.DispositionReplayFailed
+	s.terminalCompletionKind = ""
+	s.terminalOutcome = OutcomeFailed
+	if s.afterFailureAdmission != nil {
+		s.afterFailureAdmission()
+	}
+	waitContext, cancelWait := linkedContext(ctx)
+	_, err := s.completeLinkedTerminal(waitContext)
+	cancelWait()
+	return err
 }
 
-func (s *Source) failPlayback(err error) {
+func (s *Source) failPlayback(ctx context.Context, err error) {
 	switch playback.Classify(err) {
 	case playback.ErrorBindingCoverage:
-		s.fail(ReasonBindingCoverage, engine.ReplayFailureBindingCoverage)
+		s.fail(ctx, ReasonBindingCoverage, engine.ReplayFailureBindingCoverage)
 	case playback.ErrorSchemaCanonical:
-		s.fail(ReasonSchemaCanonical, engine.ReplayFailureSchemaCanonical)
+		s.fail(ctx, ReasonSchemaCanonical, engine.ReplayFailureSchemaCanonical)
 	case playback.ErrorOrdinalGroup:
-		s.fail(ReasonOrdinalGroup, engine.ReplayFailureOrdinalGroup)
+		s.fail(ctx, ReasonOrdinalGroup, engine.ReplayFailureOrdinalGroup)
 	case playback.ErrorArtifactEnd:
-		s.fail(ReasonArtifactEnd, engine.ReplayFailureArtifactEnd)
+		s.fail(ctx, ReasonArtifactEnd, engine.ReplayFailureArtifactEnd)
 	default:
-		s.fail(ReasonArtifactValidation, engine.ReplayFailureArtifactValidation)
+		s.fail(ctx, ReasonArtifactValidation, engine.ReplayFailureArtifactValidation)
 	}
 }
 
-func (s *Source) cancelOrFail(err error) error {
+func (s *Source) cancelOrFail(ctx context.Context, err error) error {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
-	s.fail(ReasonEngine, engine.ReplayFailureEngine)
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if s.lifetime.Err() != nil {
+		return s.lifetime.Err()
+	}
+	s.fail(ctx, ReasonEngine, engine.ReplayFailureEngine)
 	return err
 }
-func (s *Source) canceled() Result {
-	if s == nil {
-		return Result{Outcome: OutcomeCanceled, Reason: ReasonCanceled, Accounting: Accounting{CanceledRuns: 1}}
+
+// Cancel is the sole manual-source shutdown owner. It is idempotent: repeated
+// calls wait for or return the same sealed outcome and never admit a second
+// controlled stop. A caller deadline bounds acquisition, disposition, and
+// engine drain without fabricating a terminal result on timeout.
+func (s *Source) Cancel(ctx context.Context) (Result, error) {
+	if s == nil || ctx == nil {
+		return Result{}, errors.New("replay cancellation requires a source and context")
+	}
+	s.cancelOnce.Do(s.cancelLifetime)
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
+	select {
+	case <-ctx.Done():
+		return Result{}, ctx.Err()
+	case <-s.operation:
+	}
+	if err := ctx.Err(); err != nil {
+		s.operation <- struct{}{}
+		return Result{}, err
+	}
+	defer func() { s.operation <- struct{}{} }()
+	return s.cancelLocked(ctx)
+}
+
+func (s *Source) cancelLocked(ctx context.Context) (Result, error) {
+	if s.resultSealed {
+		return s.sealedResult, nil
+	}
+	if err := s.drainPendingNonterminal(ctx); err != nil {
+		return Result{}, err
+	}
+	if s.resultSealed {
+		return s.sealedResult, nil
+	}
+	if s.terminalLinked && s.terminalOutcome != "" {
+		return s.completeLinkedTerminal(ctx)
 	}
 	if s.engine.ObserveReplay().Suppression == engine.SuppressionTerminalReplayFailure {
-		s.accounting.FailedRuns = 1
-		return s.result(OutcomeFailed, ReasonEngine)
-	}
-	if !s.terminal {
-		admission, completion := s.engine.Stop(context.Background())
-		if admission == engine.AdmissionAdmitted && completion != nil {
-			_, _ = awaitDisposition(context.Background(), completion)
+		if err := s.completeSuppressedFailure(ctx); err != nil {
+			return Result{}, err
 		}
+		return s.sealedResult, nil
+	}
+	if s.terminal {
+		result := s.result(OutcomeFailed, ReasonDrain)
+		s.sealResult(result)
+		return result, nil
+	}
+	if s.stopCompletion == nil && !s.stopCompleted {
+		admission, completion := s.engine.Stop(ctx)
+		if admission != engine.AdmissionAdmitted || completion == nil {
+			if err := ctx.Err(); err != nil {
+				return Result{}, err
+			}
+			return Result{}, errors.New("replay controlled stop was not admitted")
+		}
+		s.terminalLinked = true
+		s.stopCompletion = completion
+	}
+	if !s.stopCompleted {
+		disposition, ok := awaitDisposition(ctx, s.stopCompletion)
+		if !ok {
+			return Result{}, ctx.Err()
+		}
+		if disposition.Code != engine.DispositionControlApplied {
+			return Result{}, errors.New("replay controlled stop disposition failed")
+		}
+		s.stopCompletion = nil
+		s.stopCompleted = true
+	}
+	if !s.engineClosed {
 		s.engine.Close()
-		_ = s.engine.Wait(context.Background())
+		s.engineClosed = true
+	}
+	if err := s.engine.Wait(ctx); err != nil {
+		return Result{}, err
 	}
 	s.terminal = true
+	s.clearActiveGroup()
 	s.accounting.CanceledRuns = 1
-	return s.result(OutcomeCanceled, ReasonCanceled)
+	result := s.result(OutcomeCanceled, ReasonCanceled)
+	s.sealResult(result)
+	return result, nil
+}
+
+func (s *Source) drainPendingNonterminal(ctx context.Context) error {
+	switch s.pendingLinked {
+	case linkedNone:
+		return nil
+	case linkedReplayStart:
+		disposition, ok := awaitDisposition(ctx, s.pendingDisposition)
+		if !ok {
+			return ctx.Err()
+		}
+		s.pendingDisposition = nil
+		s.pendingLinked = linkedNone
+		if disposition.Code != engine.DispositionReplayStarted {
+			s.fail(ctx, ReasonEngine, engine.ReplayFailureEngine)
+		}
+	case linkedReplayAggregate:
+		disposition, ok := awaitAggregate(ctx, s.pendingAggregate)
+		if !ok {
+			return ctx.Err()
+		}
+		s.pendingAggregate = nil
+		s.pendingLinked = linkedNone
+		s.accounting.CompletedRecordDispositions++
+		if s.accounting.UnreadRecords > 0 {
+			s.accounting.UnreadRecords--
+		}
+		if !acceptedAggregate(s.start.Complete(), disposition.Code) {
+			s.fail(ctx, ReasonAggregate, engine.ReplayFailureAggregate)
+		}
+	case linkedReplayTimer:
+		disposition, ok := awaitTimer(ctx, s.pendingTimer)
+		if !ok {
+			return ctx.Err()
+		}
+		group := s.pendingGroup
+		s.pendingTimer = nil
+		s.pendingGroup = time.Time{}
+		s.pendingLinked = linkedNone
+		if disposition.Code != engine.DispositionTimerApplied || disposition.AdmissionTime != group {
+			s.fail(ctx, ReasonTimer, engine.ReplayFailureTimer)
+			return nil
+		}
+		s.accounting.CompletedGroups++
+		s.accounting.ActiveGroup = 0
+		s.nextGroup = group.Add(time.Second)
+	default:
+		return errors.New("unknown linked replay operation")
+	}
+	return nil
+}
+
+func (s *Source) completeLinkedTerminal(ctx context.Context) (Result, error) {
+	if s.resultSealed {
+		return s.sealedResult, nil
+	}
+	if !s.terminalLinked || s.terminalCompletion == nil && !s.terminalDispositionDone {
+		return Result{}, errors.New("replay terminal completion is unavailable")
+	}
+	if !s.terminalDispositionDone {
+		disposition, ok := awaitDisposition(ctx, s.terminalCompletion)
+		if !ok {
+			return Result{}, ctx.Err()
+		}
+		s.terminalCompletion = nil
+		s.terminalDispositionDone = true
+		if disposition.Code != s.terminalWant {
+			s.failureReason = ReasonEngine
+			s.terminalOutcome = OutcomeFailed
+			s.terminalDispositionFail = true
+		}
+	}
+	if err := s.engine.Wait(ctx); err != nil {
+		return Result{}, err
+	}
+	s.terminal = true
+	s.clearActiveGroup()
+	if s.terminalOutcome == OutcomeFailed {
+		s.accounting.FailedRuns = 1
+		result := s.result(OutcomeFailed, s.currentReason())
+		s.sealResult(result)
+		if s.terminalDispositionFail {
+			return result, errors.New("replay terminal disposition failed")
+		}
+		return result, nil
+	}
+	s.accounting.CompletedRuns = 1
+	result := s.result(OutcomeComplete, ReasonNone)
+	result.Completion = s.terminalCompletionKind
+	s.sealResult(result)
+	return result, nil
+}
+
+func (s *Source) completeSuppressedFailure(ctx context.Context) error {
+	if !s.engineClosed {
+		s.engine.Close()
+		s.engineClosed = true
+	}
+	if err := s.engine.Wait(ctx); err != nil {
+		return err
+	}
+	s.terminal = true
+	s.clearActiveGroup()
+	s.accounting.FailedRuns = 1
+	s.sealResult(s.result(OutcomeFailed, s.currentReason()))
+	return nil
+}
+
+func (s *Source) clearActiveGroup() {
+	s.accounting.ActiveGroup = 0
+	if s.accounting.PlannedGroups >= s.accounting.CompletedGroups {
+		s.accounting.RemainingGroups = s.accounting.PlannedGroups - s.accounting.CompletedGroups
+	}
+}
+
+func (s *Source) sealResult(result Result) {
+	if s.resultSealed {
+		return
+	}
+	s.sealedResult = result
+	s.resultSealed = true
+}
+
+func (s *Source) terminalResult() Result {
+	if s != nil && s.resultSealed {
+		return s.sealedResult
+	}
+	return Result{}
+}
+
+func (s *Source) sealedResultWithin(ctx context.Context) Result {
+	if s == nil || ctx == nil {
+		return Result{}
+	}
+	select {
+	case <-s.operation:
+		defer func() { s.operation <- struct{}{} }()
+		return s.terminalResult()
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return Result{}
+	case <-s.operation:
+		defer func() { s.operation <- struct{}{} }()
+		return s.terminalResult()
+	}
 }
 func (s *Source) currentReason() Reason {
 	if s.failureReason != ReasonNone {
@@ -508,6 +882,9 @@ func waitDuration(ctx context.Context, duration time.Duration) error {
 	}
 }
 func awaitDisposition(ctx context.Context, ch <-chan engine.Disposition) (engine.Disposition, bool) {
+	if ctx == nil || ctx.Err() != nil {
+		return engine.Disposition{}, false
+	}
 	select {
 	case v, ok := <-ch:
 		return v, ok
@@ -516,6 +893,9 @@ func awaitDisposition(ctx context.Context, ch <-chan engine.Disposition) (engine
 	}
 }
 func awaitAggregate(ctx context.Context, ch <-chan engine.AggregateDisposition) (engine.AggregateDisposition, bool) {
+	if ctx == nil || ctx.Err() != nil {
+		return engine.AggregateDisposition{}, false
+	}
 	select {
 	case v, ok := <-ch:
 		return v, ok
@@ -524,6 +904,9 @@ func awaitAggregate(ctx context.Context, ch <-chan engine.AggregateDisposition) 
 	}
 }
 func awaitTimer(ctx context.Context, ch <-chan engine.TimerDisposition) (engine.TimerDisposition, bool) {
+	if ctx == nil || ctx.Err() != nil {
+		return engine.TimerDisposition{}, false
+	}
 	select {
 	case v, ok := <-ch:
 		return v, ok

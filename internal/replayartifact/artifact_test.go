@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -23,6 +24,93 @@ import (
 	"github.com/belandresj/live-equities-momentum-scanner/internal/reference"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/session"
 )
+
+type cancelOnCheckContext struct {
+	context.Context
+	mu       sync.Mutex
+	done     chan struct{}
+	checks   int
+	cancelOn int
+	canceled bool
+}
+
+func newCancelOnCheckContext(cancelOn int) *cancelOnCheckContext {
+	return &cancelOnCheckContext{Context: context.Background(), done: make(chan struct{}), cancelOn: cancelOn}
+}
+
+func (c *cancelOnCheckContext) Done() <-chan struct{} { return c.done }
+func (c *cancelOnCheckContext) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.checks++
+	if c.cancelOn > 0 && c.checks >= c.cancelOn && !c.canceled {
+		c.canceled = true
+		close(c.done)
+	}
+	if c.canceled {
+		return context.Canceled
+	}
+	return nil
+}
+func (c *cancelOnCheckContext) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.checks
+}
+
+// TestC4BoundedCandidateAndValidation is the persisted-scan portion of
+// P-C4-BOUNDED-CANCEL. Candidate fields never become a trusted handle, and
+// cancellation at the final validation check returns no handle.
+func TestC4BoundedCandidateAndValidation(t *testing.T) {
+	binding := replayArtifactTestBinding(t, []string{"AAA"})
+	start, end := binding.SessionStart(), binding.SessionStart().Add(2*time.Second)
+	value, _, err := BuildPartial(PartialInput{Binding: binding, Start: start, End: end, DeclaredSymbols: []string{"AAA"},
+		Records: []SyntheticRecord{{LogicalDeliveryTime: end, Symbol: "AAA", WindowStart: start, WindowEnd: start.Add(time.Second),
+			Values: engine.AggregateValues{Open: 10, High: 11, Low: 9, Close: 10, Volume: 1, VWAP: 10, AverageTradeSize: 1, ATSProvenance: engine.ATSLiveProviderAverage}}},
+		MaximumBytes: 1 << 20, MaximumRecords: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "candidate.jsonl")
+	if err := os.WriteFile(path, value, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan := ValidationPlan{Binding: binding, Start: start, End: end, ExpectedMode: PartialSynthetic, MaximumBytes: 1 << 20, MaximumRecords: 1}
+
+	candidateCounter := newCancelOnCheckContext(0)
+	candidate, err := ProbeCandidateHeader(candidateCounter, path, int64(len(value)))
+	if err != nil || candidate.Schema != SchemaV1 || candidate.CompileFormat != SchemaV1 || candidate.Mode != PartialSynthetic ||
+		candidate.BindingIdentity != binding.Identity() || candidate.UniverseIdentity != binding.UniverseIdentity() || candidate.TradingDate != binding.TradingDate() ||
+		candidate.SessionStart != binding.SessionStart() || candidate.SessionEnd != binding.SessionEnd() || candidate.ReplayStart != start || candidate.ReplayEnd != end {
+		t.Fatalf("candidate = %+v err=%v", candidate, err)
+	}
+	if candidateCounter.count() < 3 {
+		t.Fatalf("candidate probe lacked bounded checkpoints: %d", candidateCounter.count())
+	}
+	lastCandidateCheck := newCancelOnCheckContext(candidateCounter.count())
+	if canceled, err := ProbeCandidateHeader(lastCandidateCheck, path, int64(len(value))); !errors.Is(err, context.Canceled) || canceled != (CandidateHeader{}) {
+		t.Fatalf("canceled candidate reached success: %+v err=%v", canceled, err)
+	}
+
+	validationCounter := newCancelOnCheckContext(0)
+	handle, err := OpenValidatedContext(validationCounter, path, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle.Close()
+	if validationCounter.count() <= candidateCounter.count() {
+		t.Fatalf("validation did not check between artifact lines: candidate=%d validation=%d", candidateCounter.count(), validationCounter.count())
+	}
+	lastValidationCheck := newCancelOnCheckContext(validationCounter.count())
+	if canceled, err := OpenValidatedContext(lastValidationCheck, path, plan); !errors.Is(err, context.Canceled) || canceled != nil {
+		t.Fatalf("canceled validation returned a handle: %v err=%v", canceled, err)
+	}
+	before, cancel := context.WithCancel(context.Background())
+	cancel()
+	if canceled, err := OpenValidatedContext(before, path, plan); !errors.Is(err, context.Canceled) || canceled != nil {
+		t.Fatalf("pre-canceled validation returned a handle: %v err=%v", canceled, err)
+	}
+}
 
 // TestCompilerConsumesRESTNormalizer is P-C4-COMP-NORM. The complete compiler
 // can receive provider data only through the sealed DownloadResult produced by

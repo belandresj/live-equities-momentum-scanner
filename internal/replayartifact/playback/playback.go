@@ -5,6 +5,7 @@ package playback
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -204,6 +205,16 @@ func (h *hashWriter) Sum() string {
 // New validates the complete same-open file once without retaining records,
 // rewinds it, and returns a streaming second-pass cursor.
 func New(file *os.File, plan Plan) (*Cursor, error) {
+	return NewContext(context.Background(), file, plan)
+}
+
+func NewContext(ctx context.Context, file *os.File, plan Plan) (*Cursor, error) {
+	if ctx == nil {
+		return nil, errors.New("playback requires a context")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if file == nil || !validPlan(plan) {
 		return nil, classified(ErrorArtifactValidation, "invalid playback plan")
 	}
@@ -211,12 +222,12 @@ func New(file *os.File, plan Plan) (*Cursor, error) {
 		return nil, errors.New("rewind playback artifact")
 	}
 	first := newCursor(file, plan)
-	if _, err := first.Start(); err != nil {
+	if _, err := first.StartContext(ctx); err != nil {
 		return nil, err
 	}
 	for group := plan.Start; !group.After(plan.End); group = group.Add(time.Second) {
 		for {
-			record, ok, err := first.NextRecord(group)
+			record, ok, err := first.NextRecordContext(ctx, group)
 			if err != nil {
 				return nil, err
 			}
@@ -225,11 +236,11 @@ func New(file *os.File, plan Plan) (*Cursor, error) {
 			}
 			_ = record
 		}
-		if _, err := first.FinishGroup(group); err != nil {
+		if _, err := first.FinishGroupContext(ctx, group); err != nil {
 			return nil, err
 		}
 	}
-	endEvidence, err := first.End()
+	endEvidence, err := first.EndContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -247,6 +258,9 @@ func New(file *os.File, plan Plan) (*Cursor, error) {
 		return nil, errors.New("stat validated playback artifact")
 	}
 	second.validatedSize, second.validatedModTime = info.Size(), info.ModTime()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return second, nil
 }
 
@@ -282,6 +296,13 @@ func validArtifactID(value string) bool {
 }
 
 func (c *Cursor) Start() (StartEvidence, error) {
+	return c.StartContext(context.Background())
+}
+
+func (c *Cursor) StartContext(ctx context.Context) (StartEvidence, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return StartEvidence{}, context.Canceled
+	}
 	if c == nil || c.started {
 		return StartEvidence{}, classified(ErrorOrdinalGroup, "playback start is unavailable")
 	}
@@ -289,7 +310,7 @@ func (c *Cursor) Start() (StartEvidence, error) {
 	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > c.plan.MaximumBytes {
 		return StartEvidence{}, classified(ErrorArtifactValidation, "artifact size or type changed")
 	}
-	line, err := c.readLine()
+	line, err := c.readLine(ctx)
 	if err != nil {
 		return StartEvidence{}, err
 	}
@@ -300,6 +321,9 @@ func (c *Cursor) Start() (StartEvidence, error) {
 	if !validHeader(header, c.plan) {
 		return StartEvidence{}, classified(ErrorBindingCoverage, "playback header is incompatible with binding")
 	}
+	if err := ctx.Err(); err != nil {
+		return StartEvidence{}, err
+	}
 	c.digest.Write(line)
 	c.started = true
 	c.evidence = evidence{valid: true, complete: c.plan.Mode == CompleteFinalBars, artifactID: c.validatedArtifactID, bindingID: c.plan.BindingID, start: c.plan.Start, end: c.plan.End, requestedEnd: c.plan.RequestedEnd, totalRecords: c.expectedRecords}
@@ -307,11 +331,18 @@ func (c *Cursor) Start() (StartEvidence, error) {
 }
 
 func (c *Cursor) NextRecord(group time.Time) (RecordEvidence, bool, error) {
+	return c.NextRecordContext(context.Background(), group)
+}
+
+func (c *Cursor) NextRecordContext(ctx context.Context, group time.Time) (RecordEvidence, bool, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return RecordEvidence{}, false, context.Canceled
+	}
 	if c == nil || !c.started || c.sealed || !whole(group) || group.Before(c.plan.Start) || group.After(c.plan.End) || (!c.lastGroup.IsZero() && !group.Equal(c.lastGroup.Add(time.Second))) {
 		return RecordEvidence{}, false, classified(ErrorOrdinalGroup, "invalid playback group")
 	}
 	if c.nextLine == nil {
-		line, err := c.readLine()
+		line, err := c.readLine(ctx)
 		if err != nil {
 			return RecordEvidence{}, false, err
 		}
@@ -347,6 +378,9 @@ func (c *Cursor) NextRecord(group time.Time) (RecordEvidence, bool, error) {
 	if record.logicalTime.After(group) {
 		return RecordEvidence{}, false, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return RecordEvidence{}, false, err
+	}
 	c.ordinal++
 	copyRecord := record
 	c.priorRecord = &copyRecord
@@ -359,11 +393,18 @@ func (c *Cursor) NextRecord(group time.Time) (RecordEvidence, bool, error) {
 }
 
 func (c *Cursor) FinishGroup(group time.Time) (GroupEvidence, error) {
+	return c.FinishGroupContext(context.Background(), group)
+}
+
+func (c *Cursor) FinishGroupContext(ctx context.Context, group time.Time) (GroupEvidence, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return GroupEvidence{}, context.Canceled
+	}
 	if c == nil || !c.started || c.sealed || !whole(group) || group.Before(c.plan.Start) || group.After(c.plan.End) || (!c.lastGroup.IsZero() && !group.Equal(c.lastGroup.Add(time.Second))) {
 		return GroupEvidence{}, classified(ErrorOrdinalGroup, "invalid completed playback group")
 	}
 	if c.nextLine == nil {
-		line, err := c.readLine()
+		line, err := c.readLine(ctx)
 		if err != nil {
 			return GroupEvidence{}, err
 		}
@@ -381,6 +422,9 @@ func (c *Cursor) FinishGroup(group time.Time) (GroupEvidence, error) {
 			return GroupEvidence{}, classified(ErrorOrdinalGroup, "playback group was not fully consumed")
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return GroupEvidence{}, err
+	}
 	c.lastGroup = group
 	e := c.evidence
 	e.totalRecords = c.ordinal
@@ -388,6 +432,13 @@ func (c *Cursor) FinishGroup(group time.Time) (GroupEvidence, error) {
 }
 
 func (c *Cursor) End() (EndEvidence, error) {
+	return c.EndContext(context.Background())
+}
+
+func (c *Cursor) EndContext(ctx context.Context) (EndEvidence, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return EndEvidence{}, context.Canceled
+	}
 	if c == nil || !c.started || c.sealed || c.lastGroup != c.plan.End {
 		return EndEvidence{}, classified(ErrorArtifactEnd, "playback end is unavailable")
 	}
@@ -401,7 +452,7 @@ func (c *Cursor) End() (EndEvidence, error) {
 		line := c.nextLine
 		if line == nil {
 			var err error
-			line, err = c.readLine()
+			line, err = c.readLine(ctx)
 			if err != nil {
 				return EndEvidence{}, err
 			}
@@ -448,7 +499,7 @@ func (c *Cursor) End() (EndEvidence, error) {
 				}
 			}
 			c.digest.Write(line)
-			seal, readErr := c.readLine()
+			seal, readErr := c.readLine(ctx)
 			if readErr != nil {
 				return EndEvidence{}, readErr
 			}
@@ -465,6 +516,9 @@ func (c *Cursor) End() (EndEvidence, error) {
 					return EndEvidence{}, classified(ErrorArtifactEnd, "playback artifact changed during second pass")
 				}
 			}
+			if err := ctx.Err(); err != nil {
+				return EndEvidence{}, err
+			}
 			c.sealed = true
 			c.evidence.artifactID = sealValue.ArtifactID
 			c.evidence.totalRecords = c.ordinal
@@ -480,6 +534,13 @@ func (c *Cursor) End() (EndEvidence, error) {
 // returned opaque fact distinguishes a requested application boundary from the
 // artifact header end and is available only for complete artifacts.
 func (c *Cursor) RequestedEnd() (RequestedEndEvidence, error) {
+	return c.RequestedEndContext(context.Background())
+}
+
+func (c *Cursor) RequestedEndContext(ctx context.Context) (RequestedEndEvidence, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return RequestedEndEvidence{}, context.Canceled
+	}
 	if c == nil || !c.started || c.sealed || c.plan.Mode != CompleteFinalBars ||
 		!c.plan.RequestedEnd.Before(c.plan.End) || c.lastGroup != c.plan.RequestedEnd {
 		return RequestedEndEvidence{}, classified(ErrorArtifactEnd, "requested playback end is unavailable")
@@ -487,7 +548,7 @@ func (c *Cursor) RequestedEnd() (RequestedEndEvidence, error) {
 	prefixRecords := c.ordinal
 	for group := c.plan.RequestedEnd.Add(time.Second); !group.After(c.plan.End); group = group.Add(time.Second) {
 		for {
-			_, ok, err := c.NextRecord(group)
+			_, ok, err := c.NextRecordContext(ctx, group)
 			if err != nil {
 				return RequestedEndEvidence{}, err
 			}
@@ -495,21 +556,27 @@ func (c *Cursor) RequestedEnd() (RequestedEndEvidence, error) {
 				break
 			}
 		}
-		if _, err := c.FinishGroup(group); err != nil {
+		if _, err := c.FinishGroupContext(ctx, group); err != nil {
 			return RequestedEndEvidence{}, err
 		}
 	}
-	end, err := c.End()
+	end, err := c.EndContext(ctx)
 	if err != nil {
 		return RequestedEndEvidence{}, err
 	}
 	return RequestedEndEvidence{evidence: end.evidence, requestedEnd: c.plan.RequestedEnd, prefixRecords: prefixRecords}, nil
 }
 
-func (c *Cursor) readLine() ([]byte, error) {
+func (c *Cursor) readLine(ctx context.Context) ([]byte, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return nil, context.Canceled
+	}
 	line, err := c.reader.ReadBytes('\n')
 	if err != nil || len(line) == 0 || line[len(line)-1] != '\n' {
 		return nil, classified(ErrorArtifactEnd, "playback artifact is truncated")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return line, nil
 }

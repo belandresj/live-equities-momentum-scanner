@@ -3,6 +3,7 @@ package replayartifact
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -33,6 +34,16 @@ type Handle struct {
 }
 
 func OpenValidated(path string, plan ValidationPlan) (*Handle, error) {
+	return OpenValidatedContext(context.Background(), path, plan)
+}
+
+func OpenValidatedContext(ctx context.Context, path string, plan ValidationPlan) (*Handle, error) {
+	if ctx == nil {
+		return nil, errors.New("artifact validation requires a context")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if !validValidationPlan(plan) {
 		return nil, errors.New("invalid artifact validation plan")
 	}
@@ -40,7 +51,7 @@ func OpenValidated(path string, plan ValidationPlan) (*Handle, error) {
 	if err != nil {
 		return nil, errors.New("open artifact")
 	}
-	metadata, err := validateOpenFile(file, plan)
+	metadata, err := validateOpenFile(ctx, file, plan)
 	if err != nil {
 		file.Close()
 		return nil, err
@@ -49,7 +60,72 @@ func OpenValidated(path string, plan ValidationPlan) (*Handle, error) {
 		file.Close()
 		return nil, errors.New("rewind validated artifact")
 	}
+	if err := ctx.Err(); err != nil {
+		file.Close()
+		return nil, err
+	}
 	return &Handle{file: file, plan: plan, metadata: metadata}, nil
+}
+
+// CandidateHeader is deliberately untrusted. It contains only the canonical
+// first-line fields needed to select candidate reference data; it proves no
+// artifact identity, coverage, seal, or playback success.
+type CandidateHeader struct {
+	Schema, CompileFormat             string
+	Mode                              ArtifactMode
+	BindingIdentity, UniverseIdentity string
+	TradingDate                       string
+	SessionStart, SessionEnd          time.Time
+	ReplayStart, ReplayEnd            time.Time
+}
+
+func ProbeCandidateHeader(ctx context.Context, path string, maximumBytes int64) (CandidateHeader, error) {
+	if ctx == nil || maximumBytes <= 0 {
+		return CandidateHeader{}, errors.New("invalid artifact candidate probe")
+	}
+	if err := ctx.Err(); err != nil {
+		return CandidateHeader{}, err
+	}
+	file, err := openRegularReadOnly(path)
+	if err != nil {
+		return CandidateHeader{}, errors.New("open artifact candidate")
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || info.Size() <= 0 || info.Size() > maximumBytes {
+		return CandidateHeader{}, errors.New("artifact candidate size is invalid")
+	}
+	reader := bufio.NewReader(io.LimitReader(file, maximumBytes))
+	if err := ctx.Err(); err != nil {
+		return CandidateHeader{}, err
+	}
+	line, err := reader.ReadBytes('\n')
+	if err != nil || len(line) == 0 || line[len(line)-1] != '\n' {
+		return CandidateHeader{}, errors.New("artifact candidate header is truncated")
+	}
+	if err := ctx.Err(); err != nil {
+		return CandidateHeader{}, err
+	}
+	var header headerLine
+	if strictCanonicalLine(line, &header) != nil || header.Kind != "header" {
+		return CandidateHeader{}, errors.New("invalid artifact candidate header")
+	}
+	sessionStart, err1 := parseCanonicalTime(header.SessionStart)
+	sessionEnd, err2 := parseCanonicalTime(header.SessionEnd)
+	replayStart, err3 := parseCanonicalTime(header.ReplayStart)
+	replayEnd, err4 := parseCanonicalTime(header.ReplayEnd)
+	mode := ArtifactMode(header.ArtifactMode)
+	if err1 != nil || err2 != nil || err3 != nil || err4 != nil || header.Schema == "" || header.CompileFormat == "" ||
+		(mode != CompleteFinalBars && mode != PartialSynthetic) || header.BindingID == "" || header.UniverseID == "" || header.TradingDate == "" ||
+		!sessionStart.Before(sessionEnd) || replayStart.Before(sessionStart) || !replayStart.Before(replayEnd) || replayEnd.After(sessionEnd) {
+		return CandidateHeader{}, errors.New("artifact candidate header fields are invalid")
+	}
+	if err := ctx.Err(); err != nil {
+		return CandidateHeader{}, err
+	}
+	return CandidateHeader{Schema: header.Schema, CompileFormat: header.CompileFormat, Mode: mode, BindingIdentity: header.BindingID,
+		UniverseIdentity: header.UniverseID, TradingDate: header.TradingDate, SessionStart: sessionStart, SessionEnd: sessionEnd,
+		ReplayStart: replayStart, ReplayEnd: replayEnd}, nil
 }
 
 func openRegularReadOnly(path string) (*os.File, error) {
@@ -79,15 +155,23 @@ func (h *Handle) Metadata() Metadata { return h.metadata }
 // BeginPlayback validates and rewinds the same already-open file description,
 // then returns the only producer of opaque replay success evidence.
 func (h *Handle) BeginPlayback() (*playback.Cursor, error) {
+	return h.BeginPlaybackContext(context.Background())
+}
+
+func (h *Handle) BeginPlaybackContext(ctx context.Context) (*playback.Cursor, error) {
 	if h == nil {
 		return nil, os.ErrClosed
 	}
-	return h.BeginPlaybackThrough(h.metadata.ReplayEnd)
+	return h.BeginPlaybackThroughContext(ctx, h.metadata.ReplayEnd)
 }
 
 // BeginPlaybackThrough keeps the artifact's validated [S,R) identity intact
 // while selecting an exact engine application boundary in (S,R].
 func (h *Handle) BeginPlaybackThrough(requestedEnd time.Time) (*playback.Cursor, error) {
+	return h.BeginPlaybackThroughContext(context.Background(), requestedEnd)
+}
+
+func (h *Handle) BeginPlaybackThroughContext(ctx context.Context, requestedEnd time.Time) (*playback.Cursor, error) {
 	if h == nil || h.file == nil {
 		return nil, os.ErrClosed
 	}
@@ -97,7 +181,7 @@ func (h *Handle) BeginPlaybackThrough(requestedEnd time.Time) (*playback.Cursor,
 		return nil, errors.New("invalid requested replay end")
 	}
 	mode := string(h.plan.ExpectedMode)
-	return playback.New(h.file, playback.Plan{
+	return playback.NewContext(ctx, h.file, playback.Plan{
 		ArtifactID: h.metadata.ArtifactID,
 		BindingID:  h.plan.Binding.Identity(), UniverseID: h.plan.Binding.UniverseIdentity(), TradingDate: h.plan.Binding.TradingDate(),
 		SessionStart: h.plan.Binding.SessionStart(), SessionEnd: h.plan.Binding.SessionEnd(), Start: h.plan.Start, End: h.plan.End, RequestedEnd: requestedEnd,
@@ -111,13 +195,16 @@ func (h *Handle) Read(destination []byte) (int, error) {
 	return h.file.Read(destination)
 }
 func (h *Handle) ValidateAgain() error {
+	return h.ValidateAgainContext(context.Background())
+}
+func (h *Handle) ValidateAgainContext(ctx context.Context) error {
 	if h == nil || h.file == nil {
 		return os.ErrClosed
 	}
 	if _, err := h.file.Seek(0, io.SeekStart); err != nil {
 		return errors.New("rewind artifact for validation")
 	}
-	metadata, err := validateOpenFile(h.file, h.plan)
+	metadata, err := validateOpenFile(ctx, h.file, h.plan)
 	if err != nil {
 		return err
 	}
@@ -125,6 +212,9 @@ func (h *Handle) ValidateAgain() error {
 		return errors.New("artifact metadata changed between validations")
 	}
 	_, err = h.file.Seek(0, io.SeekStart)
+	if err == nil {
+		err = ctx.Err()
+	}
 	return err
 }
 func (h *Handle) Close() error {
@@ -141,16 +231,28 @@ func validValidationPlan(plan ValidationPlan) bool {
 		(plan.ExpectedMode == CompleteFinalBars || plan.ExpectedMode == PartialSynthetic) && plan.MaximumBytes > 0 && plan.MaximumRecords > 0
 }
 
-func validateOpenFile(file *os.File, plan ValidationPlan) (Metadata, error) {
+func validateOpenFile(ctx context.Context, file *os.File, plan ValidationPlan) (Metadata, error) {
+	if ctx == nil {
+		return Metadata{}, errors.New("artifact validation requires a context")
+	}
+	if err := ctx.Err(); err != nil {
+		return Metadata{}, err
+	}
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > plan.MaximumBytes {
 		return Metadata{}, errors.New("artifact size or file type is invalid")
 	}
 	reader := bufio.NewReader(file)
 	readLine := func() ([]byte, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		line, readErr := reader.ReadBytes('\n')
 		if readErr != nil || len(line) == 0 || line[len(line)-1] != '\n' {
 			return nil, errors.New("artifact is truncated")
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		return line, nil
 	}
@@ -276,6 +378,9 @@ func validateOpenFile(file *os.File, plan ValidationPlan) (Metadata, error) {
 			}
 			if extra, readErr := reader.ReadByte(); readErr != io.EOF || extra != 0 {
 				return Metadata{}, errors.New("seal is not the final artifact line")
+			}
+			if err := ctx.Err(); err != nil {
+				return Metadata{}, err
 			}
 			return Metadata{plan.ExpectedMode, seal.ArtifactID, header.BindingID, header.UniverseID, header.TradingDate,
 				context.sessionStart, context.sessionEnd, context.replayStart, context.replayEnd,

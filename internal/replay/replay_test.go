@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +22,38 @@ import (
 	"github.com/belandresj/live-equities-momentum-scanner/internal/replayartifact"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/session"
 )
+
+type scanCancelContext struct {
+	context.Context
+	mu       sync.Mutex
+	done     chan struct{}
+	checks   int
+	cancelOn int
+	canceled bool
+}
+
+func newScanCancelContext(cancelOn int) *scanCancelContext {
+	return &scanCancelContext{Context: context.Background(), done: make(chan struct{}), cancelOn: cancelOn}
+}
+func (c *scanCancelContext) Done() <-chan struct{} { return c.done }
+func (c *scanCancelContext) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.checks++
+	if c.cancelOn > 0 && c.checks >= c.cancelOn && !c.canceled {
+		c.canceled = true
+		close(c.done)
+	}
+	if c.canceled {
+		return context.Canceled
+	}
+	return nil
+}
+func (c *scanCancelContext) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.checks
+}
 
 // TestC4CORE01DeterministicAggregateCore is P-C4-CORE. A representative
 // complete artifact built through the accepted downloader/normalizer/compiler
@@ -247,7 +280,10 @@ func TestC4RUN01LifecycleCoverageCommit(t *testing.T) {
 	t.Run("short tail R equals E ends only after replay evidence", func(t *testing.T) {
 		source, cleanup := sessionEndEmptySource(t)
 		defer cleanup()
-		result := source.Run(context.Background())
+		result, err := source.Run(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
 		if result.Outcome != OutcomeComplete || result.Status.Lifecycle != "ended" || result.Status.CommittedT == nil || *result.Status.CommittedT != source.start.End() ||
 			result.Status.LastLogicalTime != source.start.End() || result.Status.UniverseTotal != 1 ||
 			result.Accounting.PlannedGroups != 3 || result.Accounting.CompletedGroups != 3 || result.Accounting.CompletedRecordDispositions != 0 {
@@ -259,7 +295,7 @@ func TestC4RUN01LifecycleCoverageCommit(t *testing.T) {
 // TestC4FAIL01Containment is P-C4-FAIL. It covers changed second-pass bytes,
 // clock contradiction, and cancellation without artifact-end success.
 func TestC4FAIL01Containment(t *testing.T) {
-	t.Run("direct finish cancellation closes and accounts", func(t *testing.T) {
+	t.Run("direct finish cancellation requires explicit bounded cancel", func(t *testing.T) {
 		source, cleanup := completeSource(t, Unpaced())
 		defer cleanup()
 		ctx := context.Background()
@@ -274,10 +310,15 @@ func TestC4FAIL01Containment(t *testing.T) {
 		canceled, cancel := context.WithCancel(ctx)
 		cancel()
 		result, err := source.Finish(canceled)
-		if !errors.Is(err, context.Canceled) || result.Outcome != OutcomeCanceled || result.Reason != ReasonCanceled ||
-			result.Accounting.CompletedRuns != 0 || result.Accounting.FailedRuns != 0 || result.Accounting.CanceledRuns != 1 ||
-			!source.terminal || result.Status.Lifecycle != "ended" {
+		if !errors.Is(err, context.Canceled) || !reflect.DeepEqual(result, Result{}) || source.terminal || source.engine.ObserveReplay().Lifecycle != "replaying" {
 			t.Fatalf("direct finish cancellation = err=%v result=%+v terminal=%v", err, result, source.terminal)
+		}
+		cancelContext, cancelSource := context.WithTimeout(context.Background(), time.Second)
+		defer cancelSource()
+		result, err = source.Cancel(cancelContext)
+		if err != nil || result.Outcome != OutcomeCanceled || result.Reason != ReasonCanceled || result.Status.Lifecycle != "ended" ||
+			result.Accounting.CompletedRuns != 0 || result.Accounting.FailedRuns != 0 || result.Accounting.CanceledRuns != 1 {
+			t.Fatalf("explicit finish cancel = err=%v result=%+v", err, result)
 		}
 	})
 
@@ -335,7 +376,7 @@ func TestC4FAIL01Containment(t *testing.T) {
 			t.Fatal(err)
 		}
 		source := sourceFromHandle(t, handle, binding, start, Unpaced())
-		result := source.Run(context.Background())
+		result, _ := source.Run(context.Background())
 		if result.Outcome != OutcomeFailed || result.Reason != ReasonArtifactValidation || result.ArtifactID != validatedArtifactID || result.Status.ArtifactID != validatedArtifactID ||
 			result.Status.FailureReason != engine.ReplayFailureArtifactValidation ||
 			!result.Status.FailureLogicalTime.IsZero() || result.Status.FailureOrdinal != 0 || result.Status.Lifecycle != "suppressed" {
@@ -452,7 +493,7 @@ func TestC4FAIL01Containment(t *testing.T) {
 	t.Run("valid artifact record rejected by engine", func(t *testing.T) {
 		source, cleanup := latePartialSource(t)
 		defer cleanup()
-		result := source.Run(context.Background())
+		result, _ := source.Run(context.Background())
 		status := source.engine.ObserveReplay()
 		if result.Outcome != OutcomeFailed || result.Accounting.ArtifactRecords != 1 || result.Accounting.CompletedRecordDispositions != 1 || result.Accounting.UnreadRecords != 0 ||
 			status.Lifecycle != "suppressed" || status.Suppression != engine.SuppressionTerminalReplayFailure || status.FailureReason != engine.ReplayFailureAggregate {
@@ -483,9 +524,15 @@ func TestC4FAIL01Containment(t *testing.T) {
 		defer cleanup()
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		result := source.Run(ctx)
-		if result.Outcome != OutcomeCanceled || result.Accounting.CanceledRuns != 1 || result.Accounting.CompletedRuns != 0 || result.Status.CommittedT != nil {
-			t.Fatalf("cancellation claimed completion: %+v", result)
+		result, runErr := source.Run(ctx)
+		if !errors.Is(runErr, context.Canceled) || !reflect.DeepEqual(result, Result{}) || source.engine.ObserveReplay().Lifecycle != "initializing" {
+			t.Fatalf("canceled run fabricated terminal result: result=%+v err=%v", result, runErr)
+		}
+		cancelContext, cancelSource := context.WithTimeout(context.Background(), time.Second)
+		defer cancelSource()
+		result, err := source.Cancel(cancelContext)
+		if err != nil || result.Outcome != OutcomeCanceled || result.Accounting.CanceledRuns != 1 || result.Accounting.CompletedRuns != 0 || result.Status.CommittedT != nil {
+			t.Fatalf("explicit pre-start cancel: result=%+v err=%v", result, err)
 		}
 	})
 
@@ -504,10 +551,344 @@ func TestC4FAIL01Containment(t *testing.T) {
 		if _, err := source.Step(ctx); err == nil {
 			t.Fatal("paced cancellation succeeded")
 		}
-		result := source.canceled()
+		cancelContext, cancelSource := context.WithTimeout(context.Background(), time.Second)
+		defer cancelSource()
+		result, err := source.Cancel(cancelContext)
 		a := result.Accounting
-		if result.Outcome != OutcomeCanceled || a.ArtifactRecords != a.CompletedRecordDispositions+a.UnreadRecords || a.PlannedGroups != a.CompletedGroups+a.ActiveGroup+a.RemainingGroups || a.CanceledRuns != 1 {
-			t.Fatalf("paced cancellation accounting: %+v", result)
+		if err != nil || result.Outcome != OutcomeCanceled || a.ArtifactRecords != a.CompletedRecordDispositions+a.UnreadRecords ||
+			a.PlannedGroups != a.CompletedGroups+a.ActiveGroup+a.RemainingGroups || a.ActiveGroup != 0 || a.CanceledRuns != 1 {
+			t.Fatalf("paced cancellation accounting: %+v err=%v", result, err)
+		}
+	})
+}
+
+// TestC4BOUNDEDCANCEL01ManualSource is the lifecycle/playback portion of
+// P-C4-BOUNDED-CANCEL. It distinguishes pre-link cancellation from sealed
+// terminal outcomes and proves the sole Cancel operation is bounded and
+// idempotent.
+func TestC4BOUNDEDCANCEL01ManualSource(t *testing.T) {
+	t.Run("cancel before start is one controlled stop", func(t *testing.T) {
+		source, cleanup := completeSource(t, Unpaced())
+		defer cleanup()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		first, err := source.Cancel(ctx)
+		if err != nil || first.Outcome != OutcomeCanceled || first.Reason != ReasonCanceled || first.Status.Lifecycle != "ended" ||
+			first.Accounting.CanceledRuns != 1 || first.Accounting.CompletedRuns != 0 || first.Accounting.FailedRuns != 0 {
+			t.Fatalf("first cancel = %+v err=%v", first, err)
+		}
+		second, err := source.Cancel(ctx)
+		if err != nil || !reflect.DeepEqual(first, second) {
+			t.Fatalf("repeated cancel changed result: first=%+v second=%+v err=%v", first, second, err)
+		}
+		if err := source.Start(context.Background()); !errors.Is(err, context.Canceled) {
+			t.Fatalf("post-cancel source admitted new work: %v", err)
+		}
+	})
+
+	t.Run("cancel before step closes started source", func(t *testing.T) {
+		source, cleanup := completeSource(t, Unpaced())
+		defer cleanup()
+		if err := source.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		result, err := source.Cancel(ctx)
+		if err != nil || result.Outcome != OutcomeCanceled || result.Status.Lifecycle != "ended" ||
+			result.Accounting.ArtifactRecords != result.Accounting.CompletedRecordDispositions+result.Accounting.IntentionallyUnappliedSuffixRecords+result.Accounting.UnreadRecords {
+			t.Fatalf("pre-step cancel = %+v err=%v", result, err)
+		}
+	})
+
+	t.Run("already linked nonterminal work drains before cancel", func(t *testing.T) {
+		source, cleanup := completeSource(t, Unpaced())
+		defer cleanup()
+		if err := source.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		stepContext, cancelStep := context.WithCancel(context.Background())
+		var once sync.Once
+		source.afterNonterminalAdmission = func() { once.Do(cancelStep) }
+		if _, err := source.Step(stepContext); !errors.Is(err, context.Canceled) {
+			t.Fatalf("linked step did not observe cancellation after disposition: %v", err)
+		}
+		source.afterNonterminalAdmission = nil
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		result, err := source.Cancel(ctx)
+		a := result.Accounting
+		if err != nil || result.Outcome != OutcomeCanceled || result.Status.Lifecycle != "ended" ||
+			a.PlannedGroups != a.CompletedGroups+a.ActiveGroup+a.RemainingGroups || a.CompletedGroups != 1 || a.ActiveGroup != 0 {
+			t.Fatalf("linked disposition cancel = %+v err=%v", result, err)
+		}
+	})
+
+	t.Run("expired operation deadline is joined by cancel", func(t *testing.T) {
+		source, cleanup := completeSource(t, Unpaced())
+		defer cleanup()
+		if err := source.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		stepContext, cancelStep := context.WithTimeout(context.Background(), 5*time.Millisecond)
+		defer cancelStep()
+		var once sync.Once
+		source.afterNonterminalAdmission = func() { once.Do(func() { <-stepContext.Done() }) }
+		if _, err := source.Step(stepContext); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("step deadline = %v", err)
+		}
+		source.afterNonterminalAdmission = nil
+		join, cancelJoin := context.WithTimeout(context.Background(), time.Second)
+		defer cancelJoin()
+		result, err := source.Cancel(join)
+		a := result.Accounting
+		if err != nil || result.Outcome != OutcomeCanceled || a.CompletedGroups != 1 || a.ActiveGroup != 0 ||
+			a.PlannedGroups != a.CompletedGroups+a.ActiveGroup+a.RemainingGroups {
+			t.Fatalf("deadline join = %+v err=%v", result, err)
+		}
+	})
+
+	t.Run("suffix scan cancellation returns no end evidence", func(t *testing.T) {
+		countSource, _, countCleanup := requestedCompleteSource(t, time.Second)
+		defer countCleanup()
+		if err := countSource.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		for !countSource.nextGroup.After(countSource.start.RequestedEnd()) {
+			if _, err := countSource.Step(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		counter := newScanCancelContext(0)
+		if evidence, err := countSource.cursor.RequestedEndContext(counter); err != nil || !evidence.Valid() {
+			t.Fatalf("count suffix scan = valid=%v err=%v", evidence.Valid(), err)
+		}
+		checks := counter.count()
+		if checks < 6 {
+			t.Fatalf("suffix scan lacked per-line checks: %d", checks)
+		}
+
+		for _, cancelOn := range []int{checks / 2, checks} {
+			source, _, cleanup := requestedCompleteSource(t, time.Second)
+			if err := source.Start(context.Background()); err != nil {
+				cleanup()
+				t.Fatal(err)
+			}
+			for !source.nextGroup.After(source.start.RequestedEnd()) {
+				if _, err := source.Step(context.Background()); err != nil {
+					cleanup()
+					t.Fatal(err)
+				}
+			}
+			cancelScan := newScanCancelContext(cancelOn)
+			evidence, err := source.cursor.RequestedEndContext(cancelScan)
+			if !errors.Is(err, context.Canceled) || evidence.Valid() {
+				cleanup()
+				t.Fatalf("canceled suffix check %d returned end evidence: valid=%v err=%v", cancelOn, evidence.Valid(), err)
+			}
+			cancelCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			result, cancelErr := source.Cancel(cancelCtx)
+			cancel()
+			cleanup()
+			if cancelErr != nil || result.Outcome != OutcomeCanceled || result.Completion != "" || result.Accounting.CompletedRuns != 0 {
+				t.Fatalf("suffix cancellation check %d = %+v err=%v", cancelOn, result, cancelErr)
+			}
+		}
+	})
+
+	t.Run("first playback pass cancellation returns no cursor", func(t *testing.T) {
+		countSource, countCleanup := completeSource(t, Unpaced())
+		defer countCleanup()
+		counter := newScanCancelContext(0)
+		cursor, err := countSource.handle.BeginPlaybackContext(counter)
+		if err != nil || cursor == nil {
+			t.Fatalf("count first pass = %v err=%v", cursor, err)
+		}
+		checks := counter.count()
+		if checks < 10 {
+			t.Fatalf("first playback pass lacked scan checks: %d", checks)
+		}
+
+		for _, cancelOn := range []int{checks / 2, checks} {
+			source, cleanup := completeSource(t, Unpaced())
+			cancelScan := newScanCancelContext(cancelOn)
+			cursor, err := source.handle.BeginPlaybackContext(cancelScan)
+			if !errors.Is(err, context.Canceled) || cursor != nil {
+				cleanup()
+				t.Fatalf("canceled first pass check %d returned cursor: %v err=%v", cancelOn, cursor, err)
+			}
+			cancelContext, cancel := context.WithTimeout(context.Background(), time.Second)
+			result, cancelErr := source.Cancel(cancelContext)
+			cancel()
+			cleanup()
+			if cancelErr != nil || result.Outcome != OutcomeCanceled || result.Accounting.CanceledRuns != 1 {
+				t.Fatalf("first-pass cancellation check %d = %+v err=%v", cancelOn, result, cancelErr)
+			}
+		}
+	})
+
+	t.Run("cancel timeout fabricates no terminal and retry joins", func(t *testing.T) {
+		pace, _ := FinitePace(1, 1)
+		source, cleanup := completeSource(t, pace)
+		defer cleanup()
+		if err := source.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := source.Step(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		entered, release := make(chan struct{}), make(chan struct{})
+		source.pacer.wait = func(ctx context.Context, _ time.Duration) error {
+			close(entered)
+			<-release
+			return ctx.Err()
+		}
+		stepDone := make(chan error, 1)
+		go func() {
+			_, err := source.Step(context.Background())
+			stepDone <- err
+		}()
+		<-entered
+		timeout, cancelTimeout := context.WithTimeout(context.Background(), 5*time.Millisecond)
+		result, err := source.Cancel(timeout)
+		cancelTimeout()
+		if !errors.Is(err, context.DeadlineExceeded) || result.Outcome != "" || result.Accounting != (Accounting{}) {
+			t.Fatalf("timed-out cancel fabricated result: %+v err=%v", result, err)
+		}
+		close(release)
+		if err := <-stepDone; !errors.Is(err, context.Canceled) {
+			t.Fatalf("active step did not stop: %v", err)
+		}
+		join, cancelJoin := context.WithTimeout(context.Background(), time.Second)
+		defer cancelJoin()
+		result, err = source.Cancel(join)
+		if err != nil || result.Outcome != OutcomeCanceled || result.Status.Lifecycle != "ended" || result.Accounting.CanceledRuns != 1 ||
+			result.Accounting.ActiveGroup != 0 || result.Accounting.PlannedGroups != result.Accounting.CompletedGroups+result.Accounting.RemainingGroups {
+			t.Fatalf("cancel retry = %+v err=%v", result, err)
+		}
+	})
+
+	t.Run("cancellation before failure linkage remains canceled", func(t *testing.T) {
+		source, cleanup := completeSource(t, Unpaced())
+		defer cleanup()
+		if err := source.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if err := source.clock.advance(source.start.Start().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		stepContext, cancelStep := context.WithCancel(context.Background())
+		source.beforeFailureAdmission = cancelStep
+		if _, err := source.Step(stepContext); err == nil {
+			t.Fatal("clock contradiction succeeded")
+		}
+		source.beforeFailureAdmission = nil
+		if source.resultSealed || source.engine.ObserveReplay().Lifecycle != "replaying" {
+			t.Fatalf("unlinked failure sealed: result=%+v status=%+v", source.sealedResult, source.engine.ObserveReplay())
+		}
+		cancelContext, cancelSource := context.WithTimeout(context.Background(), time.Second)
+		defer cancelSource()
+		result, err := source.Cancel(cancelContext)
+		if err != nil || result.Outcome != OutcomeCanceled || result.Accounting.FailedRuns != 0 || result.Accounting.CanceledRuns != 1 ||
+			result.Accounting.ActiveGroup != 0 || result.Status.Lifecycle != "ended" {
+			t.Fatalf("pre-link failure cancellation = %+v err=%v", result, err)
+		}
+	})
+
+	t.Run("linked failure deadline is joined as failed", func(t *testing.T) {
+		source, cleanup := completeSource(t, Unpaced())
+		defer cleanup()
+		if err := source.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if err := source.clock.advance(source.start.Start().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		stepContext, cancelStep := context.WithTimeout(context.Background(), 5*time.Millisecond)
+		defer cancelStep()
+		source.afterFailureAdmission = func() { <-stepContext.Done() }
+		if _, err := source.Step(stepContext); err == nil {
+			t.Fatal("clock contradiction succeeded")
+		}
+		source.afterFailureAdmission = nil
+		if source.resultSealed {
+			t.Fatalf("deadline fabricated failure: %+v", source.sealedResult)
+		}
+		join, cancelJoin := context.WithTimeout(context.Background(), time.Second)
+		defer cancelJoin()
+		result, err := source.Cancel(join)
+		if err != nil || result.Outcome != OutcomeFailed || result.Reason != ReasonClock || result.Accounting.FailedRuns != 1 ||
+			result.Accounting.CanceledRuns != 0 || result.Accounting.ActiveGroup != 0 || result.Status.Lifecycle != "suppressed" {
+			t.Fatalf("linked failure join = %+v err=%v", result, err)
+		}
+	})
+
+	t.Run("run and concurrent cancel return one sealed result", func(t *testing.T) {
+		pace, _ := FinitePace(1, 1)
+		source, cleanup := completeSource(t, pace)
+		defer cleanup()
+		entered := make(chan struct{})
+		var once sync.Once
+		source.pacer.wait = func(ctx context.Context, _ time.Duration) error {
+			once.Do(func() { close(entered) })
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		type runReply struct {
+			result Result
+			err    error
+		}
+		runDone := make(chan runReply, 1)
+		go func() {
+			result, err := source.Run(context.Background())
+			runDone <- runReply{result: result, err: err}
+		}()
+		<-entered
+		cancelContext, cancelSource := context.WithTimeout(context.Background(), time.Second)
+		defer cancelSource()
+		canceled, err := source.Cancel(cancelContext)
+		runResult := <-runDone
+		if err != nil || !errors.Is(runResult.err, context.Canceled) || canceled.Outcome != OutcomeCanceled ||
+			!reflect.DeepEqual(runResult.result, canceled) || canceled.Accounting.ActiveGroup != 0 {
+			t.Fatalf("run/cancel disagreement: run=%+v runErr=%v cancel=%+v cancelErr=%v", runResult.result, runResult.err, canceled, err)
+		}
+	})
+
+	t.Run("post-link terminal result wins", func(t *testing.T) {
+		source, cleanup := completeSource(t, Unpaced())
+		defer cleanup()
+		_, completed := stepAll(t, source)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		result, err := source.Cancel(ctx)
+		if err != nil || result.Outcome != OutcomeComplete || !reflect.DeepEqual(result, completed) || result.Accounting.CanceledRuns != 0 {
+			t.Fatalf("post-terminal cancel displaced success: completed=%+v cancel=%+v err=%v", completed, result, err)
+		}
+	})
+
+	t.Run("post-link terminal deadline retry preserves success", func(t *testing.T) {
+		source, _, cleanup := requestedCompleteSource(t, time.Second)
+		defer cleanup()
+		if err := source.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		for !source.nextGroup.After(source.start.RequestedEnd()) {
+			if _, err := source.Step(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		finishContext, cancelFinish := context.WithTimeout(context.Background(), 5*time.Millisecond)
+		source.afterRequestedEndAdmission = func() { <-finishContext.Done() }
+		result, err := source.Finish(finishContext)
+		cancelFinish()
+		if !errors.Is(err, context.DeadlineExceeded) || result.Outcome != "" {
+			t.Fatalf("terminal deadline fabricated result: %+v err=%v", result, err)
+		}
+		join, cancelJoin := context.WithTimeout(context.Background(), time.Second)
+		defer cancelJoin()
+		result, err = source.Cancel(join)
+		if err != nil || result.Outcome != OutcomeComplete || result.Completion != CompletionRequestedEnd || result.Accounting.CanceledRuns != 0 {
+			t.Fatalf("terminal deadline retry displaced result: %+v err=%v", result, err)
 		}
 	})
 }
@@ -698,9 +1079,15 @@ func TestC4PREFIXEND01RequestedEnd(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		source.beforeRequestedEndAdmission = cancel
 		result, err := source.Finish(ctx)
-		if !errors.Is(err, context.Canceled) || result.Outcome != OutcomeCanceled || result.Completion != "" ||
-			result.Accounting.CanceledRuns != 1 || result.Accounting.CompletedRuns != 0 || result.Status.Completion != engine.ReplayCompletionNone {
+		if !errors.Is(err, context.Canceled) || !reflect.DeepEqual(result, Result{}) || source.resultSealed {
 			t.Fatalf("requested-end cancellation = err=%v result=%+v", err, result)
+		}
+		cancelContext, cancelSource := context.WithTimeout(context.Background(), time.Second)
+		defer cancelSource()
+		result, err = source.Cancel(cancelContext)
+		if err != nil || result.Outcome != OutcomeCanceled || result.Completion != "" || result.Accounting.CanceledRuns != 1 ||
+			result.Accounting.CompletedRuns != 0 || result.Status.Completion != engine.ReplayCompletionNone {
+			t.Fatalf("requested-end explicit cancel = err=%v result=%+v", err, result)
 		}
 	})
 

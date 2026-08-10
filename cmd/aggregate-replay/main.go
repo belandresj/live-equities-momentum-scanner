@@ -190,12 +190,26 @@ func runOfflineReplay(ctx context.Context, config offlineReplayConfig) error {
 	if err != nil {
 		return errors.New("construct replay source")
 	}
-	result := source.Run(ctx)
+	result, runErr := source.Run(ctx)
+	if runErr != nil && result.Outcome == "" {
+		cleanupContext, cancelCleanup := context.WithTimeout(context.Background(), 2*time.Minute)
+		result, err = source.Cancel(cleanupContext)
+		cancelCleanup()
+		if err != nil {
+			return fmt.Errorf("cancel replay source after run error: %w", err)
+		}
+	}
 	if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
 		return errors.New("encode replay result")
 	}
 	if result.Outcome != replay.OutcomeComplete {
+		if runErr != nil {
+			return fmt.Errorf("aggregate replay ended %s/%s: %w", result.Outcome, result.Reason, runErr)
+		}
 		return fmt.Errorf("aggregate replay ended %s/%s", result.Outcome, result.Reason)
+	}
+	if runErr != nil {
+		return fmt.Errorf("aggregate replay completed after run error: %w", runErr)
 	}
 	return nil
 }
