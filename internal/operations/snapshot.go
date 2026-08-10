@@ -22,6 +22,7 @@ type SnapshotCaptureView struct {
 	Engine      engine.SnapshotView
 	Status      Status
 	Metrics     Metrics
+	Replay      *ReplayCaptureView
 }
 
 type sealedSnapshotCapture struct{ view SnapshotCaptureView }
@@ -65,6 +66,10 @@ func cloneSnapshotCaptureView(value SnapshotCaptureView) SnapshotCaptureView {
 	result.Status.CausalTarget = cloneTime(value.Status.CausalTarget)
 	result.Metrics.Engine.Watermark = cloneTime(value.Metrics.Engine.Watermark)
 	result.Metrics.Engine.Hydration.SupportedThrough = cloneTime(value.Metrics.Engine.Hydration.SupportedThrough)
+	if value.Replay != nil {
+		copyValue := ReplayCaptureView(cloneReplayCaptureContext(ReplayCaptureContext(*value.Replay)))
+		result.Replay = &copyValue
+	}
 	return result
 }
 

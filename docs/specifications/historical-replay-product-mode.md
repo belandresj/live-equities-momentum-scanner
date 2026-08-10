@@ -85,14 +85,41 @@ B4 S2 read on 2026-08-09. This approval makes no V1 completion claim.
 
 | Item | State | Evidence and required review | Recorded at | Next action |
 | --- | --- | --- | --- | --- |
-| Component contract | `owner_approved_queued` | Owner approved the boundary and corrected Sections 8-19 contract, empty-V2/current-code whitelist, six proofs, two slices, exact assignments, delegated sequential advancement, and S2-only retained B4 read after clean review/re-reviews | 2026-08-09 | Finish C11/private V1 RC, then accepted C4-S6, before activating C12-S1 |
+| Component contract | `implementation_active` | Owner-approved boundary and delegated sequence are active. C11/private V1 RC, C4-S6, and C12-S1 are accepted in order; the retained B4 read remains restricted to the now-authorized C12-S2 assignment. | 2026-08-09 | Execute C12-S2, then final component review/conformance |
 | `B-C12-REST` | `complete` | B0-B4 completed under exact owner authorizations. B4 produced one independently reopened complete 2026-08-07 artifact: 5,691/5,691 symbols terminal-complete, 7,671,171 records, 2,584,011,150 artifact bytes; compile 12:28.835 plus reopen validation 1:32.697. REST is retained for C12; the 11.58 GB peak Go heap is a known C4 routine-use limitation, not a C12 semantic change. Licensed bytes remain ignored and uncommitted. | 2026-08-09 | Use the retained validated artifact as the first local C12 acceptance input; do not hard-code its path or identity |
 | C4 requested-end correction | `complete` | Accepted `C4-S5` supplies the C4-owned requested-end seam: exact prefix application, full same-open suffix integrity, distinct engine lifecycle disposition, and intentional-suffix accounting; focused ordinary/short/race/vet verification and clean independent re-review are recorded in the C4 parent | 2026-08-09 | Consume only through the accepted C4 boundary during future C12 contract work; do not duplicate it in C12 |
-| C4 bounded manual-driver correction | `approved_queued_prerequisite` | C4 parent/source/delivery route owner-approved `C4-BOUNDED-CANCEL-01`, `P-C4-BOUNDED-CANCEL`, and `C4-S6`; no implementation evidence exists yet | 2026-08-09 | After C11/private V1 RC acceptance, implement and separately accept C4-S6 before C12-S1 |
+| C4 bounded manual-driver correction | `accepted` | Commit `7d550f7` records accepted `C4-BOUNDED-CANCEL-01`, `P-C4-BOUNDED-CANCEL`, and `C4-S6`: context-bounded candidate/full validation, source-owned idempotent manual cancellation, retained terminal ordering, exact accounting, and the explicit `Run` result/error seam passed focused short/race proof and clean correction re-review. | 2026-08-09 | C12 consumes the accepted C4 boundary without editing C4 packages |
 | Completed-contract review | `clean` | Initial required read-only `gpt-5.6-sol` medium review found one P1 and two P2s; the first focused re-review closed those and found one P2 authority-placement defect. C4 now owns the approved requirement/proof/S6 correction; the same reviewer found the focused correction clean with no remaining P1/P2 issue. | 2026-08-09 | Reuse this evidence unless implementation reopens a reviewed premise |
-| Implementation | `authorized_queued` | Owner authorized exact C4-S6, C12-S1, and C12-S2 sequential execution and required reviews; no code is implemented yet | 2026-08-09 | Finish C11 and integrated private V1 RC, then activate C4-S6 |
-| `C12-S1` backend observation composition/API | `authorized_queued` | Exact assignment and four deterministic primary proofs in Sections 15-17; consequential source/phase/snapshot boundary requires focused slice review | 2026-08-09 | Activate only after accepted C4-S6 and final C11/private V1 RC |
-| `C12-S2` dashboard/real-artifact acceptance | `authorized_queued` | Exact assignment and UI/B4 proofs in Sections 15-17; owner authorizes reading the retained artifact in place only after S1 acceptance; licensed rows remain unread and Chrome/B4 evidence unrun | 2026-08-09 | Activate only after accepted S1; do not copy or persist path/identity/rows |
+| Implementation | `in_progress` | Commit `3644ed1` accepted C11 and the integrated private V1 RC; commit `7d550f7` accepted C4-S6; C12-S1 is accepted below. Sequential implementation has advanced to C12-S2. | 2026-08-09 | Complete S2 and final C12 acceptance |
+| `C12-S1` backend observation composition/API | `accepted` | `P-C12-WINDOW`, `P-C12-DETERMINISM`, `P-C12-RUNTIME`, and `P-C12-CONTAINMENT` pass. Focused review found terminal-publication identity, output-shutdown, and containment-proof defects; corrections retain C4's exact terminal publication, withdraw failed sentinel capture, join every CLI/API exit, and add active-Step/source-engine/API/CLI/timeout cases. The same reviewer found no remaining P1/P2. Full short, changed-package short race, vet, and diff checks pass. | 2026-08-09 | C12-S2 is authorized; retain backend boundary unless S2 evidence reopens it |
+| `C12-S2` dashboard/real-artifact acceptance | `authorized_active` | Accepted S1 supplies the replay API. The exact assignment now authorizes opening the retained B4 artifact in place for the first local acceptance; copying, path/identity/row persistence, credentials, and provider calls remain prohibited. Chrome/B4 evidence is not yet run. | 2026-08-09 | Implement replay presentation, run `P-C12-INDEPENDENCE` and the one bounded `P-C12-B4`, then obtain focused review |
+
+### C12-S1 acceptance record
+
+The cache-only replay command now fully validates one same-open C4 artifact and
+exact date/universe/prior-close binding before engine mutation, reconstructs
+`[S,O0]` unpaced, and observes `(O0,O1]` against cumulative monotonic wall
+deadlines. One immutable C8 capture binds the engine publication to warming,
+observing, finalizing, retained, or non-success replay context; the additive
+C10 schema rejects mixed phase/publication/accounting identities. Complete and
+canceled terminal paths retain C4's exact terminal publication identity.
+Because C4 intentionally exposes only publication ID zero for a replay-failure
+sentinel, failure removes the prior capture and makes the API unavailable
+instead of fabricating a C10-valid publication.
+
+The four allocated proofs cover nonzero evaluation delay, `O0=S`, `O1<R`,
+`O1=R`, quiet seconds, cache/header/artifact rejection, cross-schedule semantic
+identity and post-disposition lag, atomic phase/API retention, paced-wait and
+active-Step cancellation, finalization, source/engine sentinel failure, API
+and CLI-output failure, and bounded join timeout. The implementation calls only
+C4 `Cancel(ctx)` for replay containment and branches into replay before live
+credential, provider, hydration, checkpoint, or T/Q construction. Focused
+short tests, `go test -short -timeout 2m ./...`, changed-package
+`go test -race -short -count=1 -timeout 5m`, `go vet ./...`, and
+`git diff --check` pass. The focused `gpt-5.6-sol` medium correction re-review
+is clean. Compact synthetic proof does not establish B4 scale, Chrome behavior,
+provider performance, market edge, or executable expectancy; those first two
+claims remain allocated to S2.
 
 ## Sections 1-4 — outcome, scope, ownership, and settled boundary
 

@@ -1,9 +1,11 @@
 package snapshotapi
 
 import (
+	"encoding/hex"
 	"errors"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/belandresj/live-equities-momentum-scanner/internal/engine"
@@ -51,6 +53,9 @@ func mapCaptureView(capture operations.SnapshotCaptureView) (Snapshot, error) {
 		Checkpoint: mapCheckpoint(operational.InstalledCheckpoint, capture.Metrics),
 		Operations: mapOperations(capture.Metrics, operational),
 	}
+	if capture.Replay != nil {
+		result.Replay = mapReplay(*capture.Replay)
+	}
 	if publication.Watermark != nil {
 		lag := capture.Status.WatermarkLag.Milliseconds()
 		if lag < 0 {
@@ -73,10 +78,60 @@ func mapCaptureView(capture operations.SnapshotCaptureView) (Snapshot, error) {
 		}
 		result.Rows[index] = mapped
 	}
+	if result.Replay != nil {
+		applyReplayPresentation(&result)
+	}
 	if err := validateSnapshot(result); err != nil {
 		return Snapshot{}, err
 	}
 	return result, nil
+}
+
+func mapReplay(value operations.ReplayCaptureView) *Replay {
+	result := &Replay{Phase: string(value.Phase), ArtifactID: value.ArtifactID, ArtifactEnd: timestamp(value.ArtifactEnd),
+		ObservationStart: timestamp(value.ObservationStart), ObservationEnd: timestamp(value.ObservationEnd), LogicalTime: timestamp(value.LogicalTime),
+		Completion: string(value.Completion),
+		Source: ReplaySource{ArtifactRecords: decimal(value.Source.ArtifactRecords), CompletedRecordDispositions: decimal(value.Source.CompletedRecordDispositions),
+			IntentionallyUnappliedSuffixRecords: decimal(value.Source.IntentionallyUnappliedSuffixRecords), UnreadRecords: decimal(value.Source.UnreadRecords),
+			PlannedGroups: decimal(value.Source.PlannedGroups), CompletedGroups: decimal(value.Source.CompletedGroups), ActiveGroup: decimal(value.Source.ActiveGroup),
+			RemainingGroups: decimal(value.Source.RemainingGroups), CompletedRuns: decimal(value.Source.CompletedRuns), FailedRuns: decimal(value.Source.FailedRuns), CanceledRuns: decimal(value.Source.CanceledRuns)},
+		Window: ReplayWindow{WarmupGroupsPlanned: decimal(value.Window.WarmupGroupsPlanned), WarmupGroupsCompleted: decimal(value.Window.WarmupGroupsCompleted),
+			WarmupGroupActive: decimal(value.Window.WarmupGroupActive), WarmupGroupsRemaining: decimal(value.Window.WarmupGroupsRemaining),
+			ObservationSecondsPlanned: decimal(value.Window.ObservationSecondsPlanned), ObservationSecondsCompleted: decimal(value.Window.ObservationSecondsCompleted),
+			ObservationSecondActive: decimal(value.Window.ObservationSecondActive), ObservationSecondsRemaining: decimal(value.Window.ObservationSecondsRemaining),
+			ObservationBoundariesPublished: decimal(value.Window.ObservationBoundariesPublished)}}
+	if value.ScheduleLag != nil {
+		lag := durationMilliseconds(*value.ScheduleLag)
+		result.ScheduleLagMS = &lag
+	}
+	return result
+}
+
+func applyReplayPresentation(value *Snapshot) {
+	value.Status.BackendReady = false
+	value.Status.ReadinessReason = "not_live_mode"
+	value.TQ.DesiredSymbols = []string{}
+	for index := range value.Rows {
+		value.Rows[index].TapeRate = TapeRate{Status: "unavailable", Reason: "replay_unavailable", OneSecond: RateMeasurement{Status: "unavailable", Reason: "replay_unavailable"}, FiveSecond: RateMeasurement{Status: "unavailable", Reason: "replay_unavailable"}}
+		value.Rows[index].Spread = Spread{Status: "unavailable", Reason: "replay_unavailable"}
+		value.Rows[index].TQMembership = TQMembership{}
+	}
+	switch value.Replay.Phase {
+	case "warming":
+		value.Ranking = Ranking{Mode: "unavailable", Reason: "replay_warming"}
+		value.Rows = []Row{}
+		value.Status.RankingCurrent = false
+	case "canceling", "shutting_down":
+		value.Ranking = Ranking{Mode: "unavailable", Reason: "no_committed_watermark"}
+		value.Rows = []Row{}
+		value.Status.RankingCurrent = false
+	case "suppressed":
+		value.Ranking = Ranking{Mode: "suppressed", Reason: "global_suppression"}
+		value.Rows = []Row{}
+		value.Status.RankingCurrent = false
+	case "retained_success":
+		value.Status.RankingCurrent = false
+	}
 }
 
 func mapPublication(p engine.ReplayPublicationView, operational engine.OperationalView) Publication {
@@ -216,11 +271,11 @@ func validateSnapshot(value Snapshot) error {
 		!validDecimal(value.Operations.ConnectionRecoveryAttempts) ||
 		!oneOf(value.Publication.RunMode, "live", "replay") ||
 		!oneOf(value.Publication.Lifecycle, "initializing", "awaiting_session", "awaiting_aggregate_ack", "hydrating", "live", "recovering", "replaying", "suppressed", "ended") ||
-		!oneOf(value.Publication.LifecycleReason, "", "binding_before_session", "binding_in_session", "binding_after_session", "session_start_without_aggregate_ack", "session_end", "controlled_stop", "sequence_exhaustion", "clock_regression", "canonical_integrity", "publication_integrity", "accounting_integrity", "closed", "replay_start", "replay_end", "replay_failure", "aggregate_acknowledged", "aggregate_acknowledged_at_session_start", "aggregate_epoch_lost", "ingress_integrity", "hydration_complete", "recovery_exhausted") ||
+		!oneOf(value.Publication.LifecycleReason, "", "binding_before_session", "binding_in_session", "binding_after_session", "session_start_without_aggregate_ack", "session_end", "controlled_stop", "sequence_exhaustion", "clock_regression", "canonical_integrity", "publication_integrity", "accounting_integrity", "closed", "replay_start", "replay_end", "replay_requested_end", "replay_failure", "aggregate_acknowledged", "aggregate_acknowledged_at_session_start", "aggregate_epoch_lost", "ingress_integrity", "hydration_complete", "recovery_exhausted") ||
 		!oneOf(value.Publication.Suppression, "", "same_binding_recovery_allowed", "clean_reinitialization_required", "restart_required", "terminal_replay_failure") ||
 		!oneOf(value.Status.ReadinessReason, "", "runtime_unavailable", "binding_mismatch", "not_live_mode", "lifecycle_not_ready", "suppressed", "aggregate_unacknowledged", "fence_pending", "ranking_noncurrent", "watermark_missing", "watermark_stale", "accounting_invalid") ||
 		!oneOf(value.Ranking.Mode, "unavailable", "qualified_current", "degraded_bootstrap", "stale", "suppressed") ||
-		!oneOf(value.Ranking.Reason, "", "no_committed_watermark", "no_trusted_marks", "incomplete_population", "qualification_incomplete", "global_suppression") ||
+		!oneOf(value.Ranking.Reason, "", "no_committed_watermark", "no_trusted_marks", "incomplete_population", "qualification_incomplete", "global_suppression", "replay_warming") ||
 		!oneOf(value.Recovery.Purpose, "", "fresh_bootstrap", "checkpoint_catchup", "gap_recovery") ||
 		!oneOf(value.TQ.PressureMode, "normal", "taq_degraded", "aggregate_only") || value.Status.TQPressureMode != value.TQ.PressureMode || value.Status.TQShed != value.TQ.Shed ||
 		value.TQ.AggregateOnly != (value.TQ.PressureMode == "aggregate_only") || value.TQ.Shed != (value.TQ.PressureMode != "normal") ||
@@ -237,7 +292,8 @@ func validateSnapshot(value Snapshot) error {
 		!sumDecimalEquals(hr.Consumed, hr.Inserted, hr.Duplicate, hr.ConflictOrWithdrawal, hr.Rejected, hr.Fenced, hr.Integrity) ||
 		!sumDecimalEquals(tq.Consumed, tq.Applied, tq.Duplicate, tq.Rejected, tq.Fenced, tq.PressureShed, tq.Integrity) ||
 		!sumDecimalEquals(commands.Issued, commands.Pending, commands.Acknowledged, commands.Failed, commands.Fenced) ||
-		!sumDecimalEquals(checkpoint.Submitted, checkpoint.InProgress, checkpoint.Pending, checkpoint.Completed, checkpoint.Failed, checkpoint.Canceled, checkpoint.Superseded) {
+		!sumDecimalEquals(checkpoint.Submitted, checkpoint.InProgress, checkpoint.Pending, checkpoint.Completed, checkpoint.Failed, checkpoint.Canceled, checkpoint.Superseded) ||
+		!validReplaySnapshot(value) {
 		return errors.New("snapshot accounting identity failed")
 	}
 	for _, count := range []uint64{p.UniverseTotal, p.ValidPriorClose, p.InvalidOrMissingPriorClose, p.TrustedRankableMark, p.TrustedBelowPriceMark,
@@ -312,7 +368,120 @@ func tqStatus(value string) bool {
 }
 
 func tqReason(value string) bool {
-	return oneOf(value, "", "coverage", "coverage_warming", "five_second_warming", "qualifying_original_prints", "unequal_repeat", "one_sided_quote", "crossed_quote", "stale_quote", "insufficient_coverage", "pressure")
+	return oneOf(value, "", "coverage", "coverage_warming", "five_second_warming", "qualifying_original_prints", "unequal_repeat", "one_sided_quote", "crossed_quote", "stale_quote", "insufficient_coverage", "pressure", "replay_unavailable")
+}
+
+func validReplaySnapshot(value Snapshot) bool {
+	if value.Publication.RunMode == "live" {
+		return value.Replay == nil
+	}
+	if value.Replay == nil || value.Status.BackendReady || value.Status.ReadinessReason != "not_live_mode" || !validArtifactID(value.Replay.ArtifactID) ||
+		!validTimestamp(value.Replay.ArtifactEnd) || !validTimestamp(value.Replay.ObservationStart) || !validTimestamp(value.Replay.ObservationEnd) || !validTimestamp(value.Replay.LogicalTime) {
+		return false
+	}
+	r := value.Replay
+	artifactEnd, _ := time.Parse(time.RFC3339Nano, r.ArtifactEnd)
+	start, _ := time.Parse(time.RFC3339Nano, r.ObservationStart)
+	end, _ := time.Parse(time.RFC3339Nano, r.ObservationEnd)
+	logical, _ := time.Parse(time.RFC3339Nano, r.LogicalTime)
+	generated, _ := time.Parse(time.RFC3339Nano, value.Publication.GeneratedAt)
+	if !start.Before(end) || end.After(artifactEnd) || generated.After(logical) || logical.Before(start) && !oneOf(r.Phase, "warming", "canceling", "suppressed", "shutting_down") || logical.After(end) ||
+		!oneOf(r.Phase, "warming", "observing", "finalizing", "retained_success", "canceling", "suppressed", "shutting_down") {
+		return false
+	}
+	switch r.Phase {
+	case "warming":
+		if logical.After(start) || value.Publication.Lifecycle != "replaying" || value.Status.RankingCurrent || len(value.Rows) != 0 || value.Ranking.Mode != "unavailable" || value.Ranking.Reason != "replay_warming" {
+			return false
+		}
+	case "observing":
+		if logical.Before(start) || !logical.Before(end) || value.Publication.Lifecycle != "replaying" {
+			return false
+		}
+	case "finalizing":
+		if logical != end || value.Publication.Lifecycle != "replaying" {
+			return false
+		}
+	case "retained_success":
+		artifactCompletion := r.Completion == "artifact_end"
+		requestedCompletion := r.Completion == "requested_end"
+		if !oneOf(r.Completion, "artifact_end", "requested_end") || artifactCompletion != end.Equal(artifactEnd) ||
+			artifactCompletion != (value.Publication.LifecycleReason == "replay_end") || requestedCompletion != (value.Publication.LifecycleReason == "replay_requested_end") ||
+			value.Publication.Lifecycle != "ended" || logical != end || generated != logical {
+			return false
+		}
+	case "canceling":
+		if value.Publication.Lifecycle != "ended" || value.Publication.LifecycleReason != "controlled_stop" || value.Status.RankingCurrent || len(value.Rows) != 0 {
+			return false
+		}
+	case "suppressed":
+		if value.Publication.Lifecycle != "suppressed" || value.Publication.LifecycleReason != "replay_failure" || value.Publication.Suppression != "terminal_replay_failure" || value.Status.RankingCurrent || len(value.Rows) != 0 {
+			return false
+		}
+	case "shutting_down":
+		if value.Status.RankingCurrent || len(value.Rows) != 0 {
+			return false
+		}
+	}
+	if r.Phase != "retained_success" && r.Completion != "" {
+		return false
+	}
+	if (r.ScheduleLagMS == nil) != oneOf(r.Phase, "warming", "canceling", "suppressed", "shutting_down") {
+		return false
+	}
+	s := r.Source
+	if !sumDecimalEquals(s.ArtifactRecords, s.CompletedRecordDispositions, s.IntentionallyUnappliedSuffixRecords, s.UnreadRecords) ||
+		!sumDecimalEquals(s.PlannedGroups, s.CompletedGroups, s.ActiveGroup, s.RemainingGroups) {
+		return false
+	}
+	switch r.Phase {
+	case "retained_success":
+		if s.CompletedRuns != "1" || s.FailedRuns != "0" || s.CanceledRuns != "0" || s.ActiveGroup != "0" || s.RemainingGroups != "0" || s.UnreadRecords != "0" ||
+			r.Completion == "artifact_end" && s.IntentionallyUnappliedSuffixRecords != "0" {
+			return false
+		}
+	case "canceling":
+		if s.CompletedRuns != "0" || s.FailedRuns != "0" || s.CanceledRuns != "1" {
+			return false
+		}
+	case "suppressed":
+		if s.CompletedRuns != "0" || s.FailedRuns != "1" || s.CanceledRuns != "0" {
+			return false
+		}
+	}
+	w := r.Window
+	if !sumDecimalEquals(w.WarmupGroupsPlanned, w.WarmupGroupsCompleted, w.WarmupGroupActive, w.WarmupGroupsRemaining) ||
+		!sumDecimalEquals(w.ObservationSecondsPlanned, w.ObservationSecondsCompleted, w.ObservationSecondActive, w.ObservationSecondsRemaining) {
+		return false
+	}
+	if r.Phase == "warming" {
+		planned, plannedErr := strconv.ParseUint(w.WarmupGroupsPlanned, 10, 64)
+		completedWarmup, completedErr := strconv.ParseUint(w.WarmupGroupsCompleted, 10, 64)
+		if plannedErr != nil || completedErr != nil || completedWarmup >= planned {
+			return false
+		}
+	}
+	if r.Phase == "retained_success" && (w.WarmupGroupActive != "0" || w.WarmupGroupsRemaining != "0" || w.ObservationSecondActive != "0" || w.ObservationSecondsRemaining != "0") {
+		return false
+	}
+	completed, err1 := strconv.ParseUint(w.ObservationSecondsCompleted, 10, 64)
+	boundaries, err2 := strconv.ParseUint(w.ObservationBoundariesPublished, 10, 64)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	if boundaries == 0 {
+		return completed == 0 && !oneOf(r.Phase, "observing", "finalizing", "retained_success")
+	}
+	return boundaries == completed+1 && r.Phase != "warming"
+}
+
+func validArtifactID(value string) bool {
+	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") {
+		return false
+	}
+	digest := strings.TrimPrefix(value, "sha256:")
+	decoded, err := hex.DecodeString(digest)
+	return err == nil && hex.EncodeToString(decoded) == digest
 }
 
 func validPosition(present bool, value Position) bool {

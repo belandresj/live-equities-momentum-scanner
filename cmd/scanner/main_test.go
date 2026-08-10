@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/belandresj/live-equities-momentum-scanner/internal/operations"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/reference"
+	"github.com/belandresj/live-equities-momentum-scanner/internal/replay"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/session"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/snapshotapi"
 )
@@ -60,6 +62,72 @@ func TestC10OriginFlagsPreserveExactRepeatedValues(t *testing.T) {
 	if values.String() != "" || values.Set("http://127.0.0.1:3000") != nil || values.Set("https://scanner.example") != nil || values.String() != "http://127.0.0.1:3000,https://scanner.example" {
 		t.Fatalf("origin flags = %q", values.String())
 	}
+}
+
+func TestC12RunModeConfigurationIsMutuallyExclusive(t *testing.T) {
+	t.Setenv("MASSIVE_API_KEY", "")
+	for _, test := range []struct {
+		name      string
+		arguments []string
+		contains  string
+	}{
+		{"unknown mode", []string{"--run-mode=paper", "--trading-date=2026-08-07"}, "live mode"},
+		{"replay missing bounds", []string{"--run-mode=replay", "--replay-artifact=/private/missing"}, "requires artifact"},
+		{"replay trading date", []string{"--run-mode=replay", "--replay-artifact=/private/missing", "--observation-start=09:30:00", "--observation-end=09:35:00", "--trading-date=2026-08-07"}, "live-only"},
+		{"replay checkpoint", []string{"--run-mode=replay", "--replay-artifact=/private/missing", "--observation-start=09:30:00", "--observation-end=09:35:00", "--checkpoint-dir=/tmp/checkpoints"}, "live-only"},
+		{"live replay flag", []string{"--trading-date=2026-08-07", "--observation-start=09:30:00"}, "rejects replay"},
+		{"duplicate scalar", []string{"--trading-date=2026-08-07", "--trading-date=2026-08-08"}, "duplicate --trading-date"},
+		{"position", []string{"--trading-date=2026-08-07", "extra"}, "flags are invalid"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := run(context.Background(), test.arguments)
+			if err == nil || !strings.Contains(err.Error(), test.contains) {
+				t.Fatalf("run error = %v, want %q", err, test.contains)
+			}
+		})
+	}
+	provided, err := scalarFlags([]string{"--allow-origin=http://127.0.0.1:3000", "--allow-origin", "http://127.0.0.1:4173", "--api-address=127.0.0.1:0"})
+	if err != nil || !provided["api-address"] || provided["allow-origin"] {
+		t.Fatalf("repeatable origin parse = %v err=%v", provided, err)
+	}
+}
+
+func TestC12ReplayCompositionContainsOutputAndAPIFailures(t *testing.T) {
+	result := replay.Result{Outcome: replay.OutcomeComplete, Completion: replay.CompletionRequestedEnd}
+	completed := &replayRunReply{result: result}
+	t.Run("final output", func(t *testing.T) {
+		runtime, api := &shutdownProbe{}, &shutdownProbe{}
+		apiDone := make(chan error, 1)
+		apiDone <- nil
+		canceled := false
+		err := completeReplayOutput(func(any) error { return errors.New("closed output") }, result, runtime, api, nil, apiDone, func() { canceled = true }, completed)
+		if err == nil || !strings.Contains(err.Error(), "encode replay result") || !canceled || runtime.calls != 1 || api.calls != 1 {
+			t.Fatalf("output containment err=%v canceled=%t runtime=%d api=%d", err, canceled, runtime.calls, api.calls)
+		}
+	})
+	t.Run("API terminal", func(t *testing.T) {
+		runtime, api := &shutdownProbe{}, &shutdownProbe{}
+		canceled := false
+		err := containReplayAPIFailure(errors.New("accept failed"), runtime, api, nil, nil, func() { canceled = true }, completed)
+		if err == nil || !strings.Contains(err.Error(), "replay snapshot API") || !canceled || runtime.calls != 1 || api.calls != 1 {
+			t.Fatalf("API containment err=%v canceled=%t runtime=%d api=%d", err, canceled, runtime.calls, api.calls)
+		}
+	})
+	t.Run("join timeout", func(t *testing.T) {
+		done := make(chan replayRunReply)
+		started := time.Now()
+		err := shutdownReplayWithin(nil, nil, done, nil, func() {}, nil, false, 5*time.Millisecond)
+		if err == nil || !strings.Contains(err.Error(), "observation shutdown deadline") || time.Since(started) > 100*time.Millisecond {
+			t.Fatalf("bounded join err=%v elapsed=%s", err, time.Since(started))
+		}
+	})
+}
+
+type shutdownProbe struct{ calls int }
+
+func (p *shutdownProbe) Shutdown(context.Context) error {
+	p.calls++
+	return nil
 }
 
 func scannerTestBinding(t *testing.T) reference.Binding {
