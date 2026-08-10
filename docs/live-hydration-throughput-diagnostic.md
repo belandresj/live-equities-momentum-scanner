@@ -160,3 +160,46 @@ The live deliverable is the per-second numeric artifact, the five-row-or-fewer
 comparison table, the T4 classification, and the narrowest next implementation
 boundary. Do not run replay, the dashboard, repository-wide acceptance,
 benchmarks, soak tests, repeated live trials, or retained-artifact work.
+
+## Implementation record
+
+**Harness state:** implemented and pre-live verification complete on 2026-08-10.
+
+`TestLiveHydrationThroughputDiagnostic` in
+`internal/operations/live_hydration_diagnostic_test.go` owns only test-time
+orchestration. Each level creates a fresh production runtime, adapter, and REST
+worker; opens exactly one aggregate attempt; measures from the accepted
+aggregate acknowledgement; stops without entering `RunLive`'s recovery loop;
+and joins hydration, delivery, adapter, and engine work within one ten-second
+cleanup boundary. The live-only level leaves hydration intentionally unstarted.
+
+The implementation uses the production 512-frame/64-MiB C5 queue, C6 budgets
+and chunking, C8 engine configuration, one-second samples, and a separate
+10-millisecond scalar safety probe so a dangerous queue/age/accounting change
+does not wait for the next persisted sample. Output is one create-only,
+maximum-1-MiB `summary.json` with at most five trials and 31 numeric samples per
+trial. It contains no credential, URL, provider body, raw frame, symbol, or
+market-data row. Classification and outcome values are bounded numeric enums;
+the test log renders the required comparison values without provider data.
+
+Reference binding is cache-only: the live test requires validated current
+same-date universe and prior-close caches under `var/reference` and makes no
+reference-data provider request. Thus each measured trial contains only the
+one WebSocket attempt and, for worker levels, ordinary aggregate REST
+hydration.
+
+Pre-live proof passed exactly as prescribed:
+
+```text
+go test -short -timeout 2m ./internal/operations ./cmd/scanner
+go test -race -run TestLiveHydrationThroughputHarness -timeout 2m ./internal/operations
+```
+
+The fake-source race proof covers bounded sampling, every safety predicate,
+numeric-only serialization, cancellation of an active REST request, and joined
+REST/WebSocket/engine cleanup. It does not establish live throughput.
+
+**Live evidence state:** pending. No provider request or credential access was
+performed because no exact trading date has yet been authorized. The
+comparison table, T4 classification, and next implementation boundary remain
+unresolved until that single authorized run.
