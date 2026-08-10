@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { buildViewModel, PollController, readBoundedJSON, validateSnapshot } from "./model.js";
 import { renderDashboard } from "./render.js";
-import { snapshotFixture } from "./test-fixture.js";
+import { replaySnapshotFixture, snapshotFixture } from "./test-fixture.js";
 
 const clone = value => structuredClone(value);
 
@@ -248,6 +248,29 @@ class FakeDocument {
 }
 function find(node, predicate, result = []) { if (predicate(node)) result.push(node); for (const child of node.children) find(child, predicate, result); return result; }
 globalThis.CSS ??= { escape: value => String(value).replace(/["\\]/g, "\\$&") };
+
+test("replay UI MVP renders three changing synthetic-artifact publications", () => {
+  const snapshots = [0, 1, 2].map(replaySnapshotFixture);
+  [snapshots[1].rows[0], snapshots[1].rows[1]] = [snapshots[1].rows[1], snapshots[1].rows[0]];
+  snapshots[1].rows.forEach((row, index) => { row.rank = index + 1; });
+  snapshots[1].rows[0].last_usd = 12.5; snapshots[1].rows[0].day_change_ratio = .02;
+  snapshots[2].rows[0].symbol = "S03"; snapshots[2].rows[0].last_usd = 15; snapshots[2].rows[0].day_change_ratio = .03; snapshots[2].rows[0].activity.value_ratio = 1;
+
+  const models = snapshots.map(snapshot => buildViewModel(snapshot));
+  assert.deepEqual(models.map(model => model.publicationID), ["200", "201", "202"]);
+  assert.deepEqual(models.map(model => model.replayLogicalTime), ["2026-08-08T16:00:00Z", "2026-08-08T16:00:01Z", "2026-08-08T16:00:02Z"]);
+  assert.deepEqual(models.map(model => model.rows.map(row => row.symbol)), [["S01", "S02"], ["S02", "S01"], ["S03", "S02"]]);
+  assert.deepEqual(models.map(model => model.rows[0].last), ["$10", "$12.5", "$15"]);
+  assert.ok(models.every(model => model.replay && !model.current && model.rowsCurrent));
+  assert.ok(models.every(model => model.rows.every(row => row.tape.state === "unavailable" && row.spread.state === "unavailable")));
+
+  const document = new FakeDocument();
+  renderDashboard(document, { transport: "connected", model: models[2] });
+  assert.match(document.body.textContent, /HISTORICAL · NONLIVE/);
+  assert.match(document.body.textContent, /Replay time2026-08-08T16:00:02Z/);
+  assert.equal(find(document.body, node => node.tagName === "TABLE")[0].dataset.publicationState, "current");
+  assert.equal(find(document.body, node => node.dataset.palette === "heat")[0].dataset.state, "current");
+});
 
 test("P-C11-STATE detached renderer degrades retained rows and commits atomically", () => {
   const document = new FakeDocument();

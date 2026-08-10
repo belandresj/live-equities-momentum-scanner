@@ -21,19 +21,19 @@ function cell(document, value, state, detail, overallCurrent, band = 0, focusKey
 }
 function buildTable(document, model) {
   const shell = element(document, "div", "table-shell");
-  const table = element(document, "table"); table.id = "scanner-table"; table.dataset.publicationState = model.current ? "current" : "noncurrent";
+  const table = element(document, "table"); table.id = "scanner-table"; table.dataset.publicationState = model.rowsCurrent ? "current" : "noncurrent";
   table.append(textElement(document, "caption", "Server-ranked top 20 qualifying equities"));
   const thead = element(document, "thead"), header = element(document, "tr");
   for (const label of ["Rank", "Symbol", "Last", "Day %", "From 4AM %", "HOD DD %", "Day Range %", "60 MIN Range %", "30 MIN Range %", "Activity", "Tape Rate", "Spread"]) { const th = textElement(document, "th", label); th.setAttribute("scope", "col"); header.append(th); }
   thead.append(header); table.append(thead);
   const tbody = element(document, "tbody"); tbody.id = "rows";
   for (const row of model.rows) {
-    const tr = element(document, "tr"); tr.dataset.publicationState = model.current ? "current" : "noncurrent";
+    const tr = element(document, "tr"); tr.dataset.publicationState = model.rowsCurrent ? "current" : "noncurrent";
     const key = row.symbol;
-    tr.append(cell(document, String(row.rank), "current", "", model.current), cell(document, row.symbol, "current", "", model.current), cell(document, row.last, "current", `mark age ${row.markAgeMS} ms`, model.current, 0, `${key}:last`), cell(document, row.day, "current", "", model.current, row.dayBand),
-      cell(document, row.from4am.text, row.from4am.state, row.from4am.reason, model.current, row.from4am.band, `${key}:from4am`), cell(document, row.hod.text, row.hod.state, row.hod.reason, model.current, row.hod.band, `${key}:hod`), cell(document, row.dayRange.text, row.dayRange.state, row.dayRange.reason, model.current, row.dayRange.band, `${key}:dayrange`, "range", row.dayRange.position),
-      cell(document, row.range60.text, row.range60.state, row.range60.reason, model.current, row.range60.band, `${key}:range60`, "range", row.range60.position), cell(document, row.range30.text, row.range30.state, row.range30.reason, model.current, row.range30.band, `${key}:range30`, "range", row.range30.position), cell(document, row.activity.text, row.activity.state, row.activity.reason, model.current, row.activity.band, `${key}:activity`, "heat", row.activity.position),
-      cell(document, row.tape.primary, row.tape.state, row.tape.detail, model.current, 0, `${key}:tape`, "heat", row.tape.position), cell(document, row.spread.primary, row.spread.state, row.spread.detail, model.current, row.spread.band, `${key}:spread`, "spread"));
+    tr.append(cell(document, String(row.rank), "current", "", model.rowsCurrent), cell(document, row.symbol, "current", "", model.rowsCurrent), cell(document, row.last, "current", `mark age ${row.markAgeMS} ms`, model.rowsCurrent, 0, `${key}:last`), cell(document, row.day, "current", "", model.rowsCurrent, row.dayBand),
+      cell(document, row.from4am.text, row.from4am.state, row.from4am.reason, model.rowsCurrent, row.from4am.band, `${key}:from4am`), cell(document, row.hod.text, row.hod.state, row.hod.reason, model.rowsCurrent, row.hod.band, `${key}:hod`), cell(document, row.dayRange.text, row.dayRange.state, row.dayRange.reason, model.rowsCurrent, row.dayRange.band, `${key}:dayrange`, "range", row.dayRange.position),
+      cell(document, row.range60.text, row.range60.state, row.range60.reason, model.rowsCurrent, row.range60.band, `${key}:range60`, "range", row.range60.position), cell(document, row.range30.text, row.range30.state, row.range30.reason, model.rowsCurrent, row.range30.band, `${key}:range30`, "range", row.range30.position), cell(document, row.activity.text, row.activity.state, row.activity.reason, model.rowsCurrent, row.activity.band, `${key}:activity`, "heat", row.activity.position),
+      cell(document, row.tape.primary, row.tape.state, row.tape.detail, model.rowsCurrent, 0, `${key}:tape`, "heat", row.tape.position), cell(document, row.spread.primary, row.spread.state, row.spread.detail, model.rowsCurrent, row.spread.band, `${key}:spread`, "spread"));
     tbody.append(tr);
   }
   table.append(tbody); shell.append(table); return shell;
@@ -52,22 +52,23 @@ export function renderDashboard(document, event, options = {}) {
   const focusKey = document.activeElement?.dataset?.focusKey || "";
   const main = element(document, "main"), model = event.model;
   const header = element(document, "header"), title = element(document, "div"); title.append(textElement(document, "p", "LIVE EQUITIES", "eyebrow"), textElement(document, "h1", "Momentum Scanner"));
-  const live = textElement(document, "div", model ? `${model.current ? "CURRENT" : event.transport === "refresh_delayed" ? "REFRESH DELAYED" : event.transport === "disconnected" ? "FROZEN · DISCONNECTED" : model.backendReady && model.rankingMode === "degraded_bootstrap" ? "DEGRADED" : "NONCURRENT"} · publication ${model.publicationID} · ${model.rows.length} ranked` : event.error ? `Scanner API disconnected: ${event.error}` : "Connecting to scanner API", "status-live");
-  live.id = "status-live"; live.dataset.state = model?.current ? "current" : "warning"; header.append(title, live); main.append(header);
+  const replayState = event.transport === "refresh_delayed" ? " · REFRESH DELAYED" : event.transport === "disconnected" ? " · FROZEN · DISCONNECTED" : "";
+  const live = textElement(document, "div", model ? `${model.replay ? `HISTORICAL · NONLIVE${replayState}` : model.current ? "CURRENT" : event.transport === "refresh_delayed" ? "REFRESH DELAYED" : event.transport === "disconnected" ? "FROZEN · DISCONNECTED" : model.backendReady && model.rankingMode === "degraded_bootstrap" ? "DEGRADED" : "NONCURRENT"} · publication ${model.publicationID} · ${model.rows.length} ranked` : event.error ? `Scanner API disconnected: ${event.error}` : "Connecting to scanner API", "status-live");
+  live.id = "status-live"; live.dataset.state = model?.current && !model.replay ? "current" : "warning"; header.append(title, live); main.append(header);
   const grid = element(document, "section", "status-grid"); grid.setAttribute("aria-label", "Scanner status");
   grid.append(statusItem(document, "Transport", event.transport, event.transport === "connected" ? "current" : "warning"),
-    statusItem(document, "Process", model ? model.processLive ? "live" : "not live" : "unknown", model?.processLive ? "current" : "warning"),
+    statusItem(document, "Process", model ? model.processLive ? model.replay ? "running" : "live" : "not live" : "unknown", model?.processLive ? "current" : "warning"),
     statusItem(document, "Backend", model ? model.backendReady ? "ready" : model.readinessReason || "not ready" : "unknown", model?.backendReady ? "current" : "warning"),
     statusItem(document, "Ops sample", model ? model.sampleAccountingValid ? "accounting valid" : "accounting invalid" : "unknown", model?.sampleAccountingValid ? "current" : "warning"),
     statusItem(document, "Ranking", model ? `${model.rankingMode}${model.rankingReason ? ` · ${model.rankingReason}` : ""}` : "unknown"),
-    statusItem(document, "Watermark", model?.committedT ? `${new Date(model.committedT).toLocaleTimeString()} · ${model.watermarkLagMS} ms` : "unavailable"),
+    statusItem(document, model?.replay ? "Replay time" : "Watermark", model?.replayLogicalTime || (model?.committedT ? `${new Date(model.committedT).toLocaleTimeString()} · ${model.watermarkLagMS} ms` : "unavailable")),
     statusItem(document, "T/Q", model ? `${model.tqPressure}${model.tqAggregateOnly ? " · aggregate only" : ""}${model.tqRetainedBoundHit ? " · retained bound" : ""} · ${model.tqUnknown} unknown` : "unknown", model?.tqPressure === "normal" && !model?.tqRetainedBoundHit && model?.tqUnknown === 0 ? "current" : "warning"),
     statusItem(document, "Sample", model ? `${new Date(model.sampledAt).toLocaleTimeString()} · #${model.sampleID}` : "—"));
   main.append(grid);
   if (model) main.append(buildDiagnostics(document, model, detailsOpen));
   const message = element(document, "div", "message"); message.id = "message";
   if (!model) message.textContent = "No valid scanner snapshot is available.";
-  else if (model.rows.length === 0) message.textContent = model.current && model.rankingMode === "qualified_current" ? "No symbols currently qualify." : `No rows in retained noncurrent publication · ${model.rankingMode}${model.rankingReason ? ` · ${model.rankingReason}` : ""}.`;
+  else if (model.rows.length === 0) message.textContent = model.rowsCurrent && model.rankingMode === "qualified_current" ? "No symbols currently qualify." : `No rows in retained noncurrent publication · ${model.rankingMode}${model.rankingReason ? ` · ${model.rankingReason}` : ""}.`;
   else message.hidden = true;
   main.append(message);
   if (model) main.append(buildTable(document, model));

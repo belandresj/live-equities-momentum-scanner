@@ -23,3 +23,53 @@ export function snapshotFixture(rowCount = 1) {
     operations: { sample_accounting_valid: true, queue_capacity_frames: 64, queue_current_frames: 0, queue_high_frames: 2, queue_current_bytes: 0, queue_high_bytes: 2048, deliveries: "10", consumer_deferred: "0", mean_processing_delay_ms: 1, max_processing_delay_ms: 2, max_processing_delay_one_second_ms: 2, heap_alloc_bytes: "1024", heap_in_use_bytes: "2048", goroutines: 8, connection_recovery_attempts: "0" },
   };
 }
+
+export function replaySnapshotFixture(sequence = 0) {
+  const snapshot = snapshotFixture(2);
+  const logicalSecond = String(sequence).padStart(2, "0");
+  const logicalTime = `2026-08-08T16:00:${logicalSecond}Z`;
+  snapshot.sample = { id: String(100 + sequence), sampled_at: logicalTime };
+  snapshot.publication = {
+    ...snapshot.publication,
+    id: String(200 + sequence), run_mode: "replay", lifecycle: "replaying", lifecycle_reason: "replay_start",
+    generated_at: logicalTime, committed_t: logicalTime, last_engine_sequence: String(300 + sequence), connection_epoch: "0",
+    connection_active: false, aggregate_acknowledged: false,
+    aggregate_ack_position: { connection_epoch: "0", frame_sequence: "0", array_index: 0 },
+    hydration_fence: { reconciled: false, connection_epoch: "0", through_frame_sequence: "0", marker_ordinal: "0", supported_through: null },
+  };
+  snapshot.status = { ...snapshot.status, backend_ready: false, readiness_reason: "not_live_mode", ranking_current: true, causal_target: logicalTime };
+  snapshot.recovery = {
+    purpose: "", generation: "0", start: null, end: null, supported_through: null, fence_reconciled: false, policy_waiting: false,
+    work: { planned: "0", open: "0", completed_value: "0", completed_empty: "0", failed: "0", canceled: "0", fenced: "0" },
+    rows: { consumed: "0", inserted: "0", duplicate: "0", conflict_or_withdrawal: "0", rejected: "0", fenced: "0", integrity: "0" },
+  };
+  snapshot.tq = {
+    ...snapshot.tq, desired_symbols: [], known_present: 0, known_absent: 0, unknown: 0, retained_trades: 0, retained_quotes: 0, retained_fingerprints: 0,
+    facts: { consumed: "0", applied: "0", duplicate: "0", rejected: "0", fenced: "0", pressure_shed: "0", integrity: "0" },
+    commands: { issued: "0", pending: "0", acknowledged: "0", failed: "0", fenced: "0", result_fenced: "0" },
+  };
+  for (const row of snapshot.rows) {
+    row.tape_rate = { status: "unavailable", reason: "replay_unavailable", trade_coverage: false, one_second: { status: "unavailable", reason: "replay_unavailable", trades_per_second: null }, five_second: { status: "unavailable", reason: "replay_unavailable", trades_per_second: null }, timestamp_basis: "", lifecycle_records_observed: false };
+    row.spread = { status: "unavailable", reason: "replay_unavailable", quote_coverage: false, cents: null, basis_points: null, valid_duration_ms: 0, quality: "" };
+    row.tq_membership = { desired: false, provider_present: false, provider_membership_unknown: false };
+  }
+  snapshot.replay = {
+    phase: "observing",
+    artifact_id: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    artifact_end: "2026-08-08T20:00:00Z",
+    observation_start: "2026-08-08T16:00:00Z",
+    observation_end: "2026-08-08T16:00:03Z",
+    logical_time: logicalTime,
+    completion: "",
+    schedule_lag_ms: 0,
+    source: {
+      artifact_records: "3", completed_record_dispositions: String(sequence + 1), intentionally_unapplied_suffix_records: "0", unread_records: String(2 - sequence),
+      planned_groups: "4", completed_groups: String(sequence + 1), active_group: "0", remaining_groups: String(3 - sequence), completed_runs: "0", failed_runs: "0", canceled_runs: "0",
+    },
+    window: {
+      warmup_groups_planned: "1", warmup_groups_completed: "1", warmup_group_active: "0", warmup_groups_remaining: "0",
+      observation_seconds_planned: "3", observation_seconds_completed: String(sequence), observation_second_active: "0", observation_seconds_remaining: String(3 - sequence), observation_boundaries_published: String(sequence + 1),
+    },
+  };
+  return snapshot;
+}

@@ -128,6 +128,23 @@ per second with one request in flight. Restarting the dashboard does not stop
 or relink the scanner. This is a private/local configuration; it does not add
 public binding, authentication, TLS, hosting, or credentialed live validation.
 
+### Historical replay visualization
+
+For local development, point the existing replay CLI at a previously downloaded
+complete one-second aggregate artifact and its exact-date reference cache. The
+scanner validates both, fast-forwards to the New York observation start, then
+publishes the selected interval at ordinary playback pace:
+
+```text
+go run ./cmd/scanner --run-mode replay --replay-artifact /absolute/path/session.replay --reference-dir /absolute/path/reference --observation-start 09:30:00 --observation-end 09:35:00 --api-address 127.0.0.1:8080 --allow-origin http://127.0.0.1:4173
+go run ./cmd/dashboard --address 127.0.0.1:4173 --api-origin http://127.0.0.1:8080 --assets ui
+```
+
+Open `http://127.0.0.1:4173`. Replay rows use the ordinary scanner table and
+formatting, with `HISTORICAL · NONLIVE` and the backend's logical replay time
+shown explicitly. This is a visualization harness, not live market data or a
+trader replay product; it has no browser replay controls.
+
 ## Predecessor evidence
 
 The version 2 predecessor is retained separately as a source of Massive protocol

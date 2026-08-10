@@ -6,7 +6,7 @@ const TRADING_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const KNOWN_FIELD_STATUS = new Set(["warming", "current", "unavailable", "invalid"]);
 const KNOWN_FIELD_REASON = new Set(["", "before_first_print", "history_incomplete", "prior_close_unavailable", "no_aggregate_in_target", "rolling_warmup", "reference_warmup", "zero_width", "historical_conflict", "invalid_input", "state_bound_exceeded"]);
 const KNOWN_TQ_STATUS = new Set(["unselected", "warming", "current", "stale", "unavailable", "invalid", "pressure_shed"]);
-const KNOWN_TQ_REASON = new Set(["", "coverage", "coverage_warming", "five_second_warming", "qualifying_original_prints", "unequal_repeat", "one_sided_quote", "crossed_quote", "stale_quote", "insufficient_coverage", "pressure"]);
+const KNOWN_TQ_REASON = new Set(["", "coverage", "coverage_warming", "five_second_warming", "qualifying_original_prints", "unequal_repeat", "one_sided_quote", "crossed_quote", "stale_quote", "insufficient_coverage", "pressure", "replay_unavailable"]);
 const CURRENT_LIFECYCLE = new Set(["live", "hydrating"]);
 const BACKEND_READY_RANKING_MODE = new Set(["qualified_current", "degraded_bootstrap"]);
 const TIMESTAMP_BASIS = new Set(["", "none", "participant", "sip_fallback", "mixed"]);
@@ -70,7 +70,7 @@ function validateRate(value, name) {
   if (KNOWN_TQ_STATUS.has(value.status) && ((value.status === "current") !== (value.trades_per_second !== null))) fail(`${name} status/value conflict`);
 }
 
-function validateTape(value, name) {
+function validateTape(value, name, replay) {
   fields(value, ["status", "reason", "trade_coverage", "one_second", "five_second", "timestamp_basis", "lifecycle_records_observed"], name);
   string(value.status, `${name}.status`); string(value.reason, `${name}.reason`); bool(value.trade_coverage, `${name}.trade_coverage`); string(value.timestamp_basis, `${name}.timestamp_basis`); bool(value.lifecycle_records_observed, `${name}.lifecycle_records_observed`);
   validateRate(value.one_second, `${name}.one_second`); validateRate(value.five_second, `${name}.five_second`);
@@ -80,7 +80,7 @@ function validateTape(value, name) {
   let legal = false;
   switch (value.status) {
     case "unselected": legal = !value.trade_coverage && value.reason === "" && value.timestamp_basis === "" && same("unselected", ""); break;
-    case "unavailable": legal = !value.trade_coverage && value.reason === "coverage" && value.timestamp_basis === "" && same("unavailable", "coverage"); break;
+    case "unavailable": legal = !value.trade_coverage && value.timestamp_basis === "" && (value.reason === "coverage" && !replay || value.reason === "replay_unavailable" && replay) && same("unavailable", value.reason); break;
     case "invalid": legal = value.trade_coverage && value.reason === "unequal_repeat" && value.timestamp_basis === "" && same("invalid", "unequal_repeat"); break;
     case "warming":
       legal = value.trade_coverage && (value.reason === "coverage_warming" && value.timestamp_basis === "" && same("warming", "coverage_warming") || value.reason === "five_second_warming" && value.one_second.status === "current" && value.one_second.reason === "qualifying_original_prints" && value.five_second.status === "warming" && value.five_second.reason === "coverage_warming" && TIMESTAMP_BASIS.has(value.timestamp_basis) && value.timestamp_basis !== "");
@@ -91,7 +91,7 @@ function validateTape(value, name) {
   if (!legal) fail(`${name} trust tuple conflict`);
 }
 
-function validateSpread(value, name) {
+function validateSpread(value, name, replay) {
   fields(value, ["status", "reason", "quote_coverage", "cents", "basis_points", "valid_duration_ms", "quality"], name);
   string(value.status, `${name}.status`); string(value.reason, `${name}.reason`); bool(value.quote_coverage, `${name}.quote_coverage`); uint(value.valid_duration_ms, `${name}.valid_duration_ms`); string(value.quality, `${name}.quality`);
   if (value.valid_duration_ms > 5000) fail(`${name} trust tuple conflict: duration exceeds five-second window`);
@@ -110,21 +110,21 @@ function validateSpread(value, name) {
     case "current": legal = value.quote_coverage && value.reason === "" && value.valid_duration_ms >= 4000 && value.quality !== ""; break;
     case "stale": legal = value.quote_coverage && value.reason === "stale_quote"; break;
     case "invalid": legal = value.quote_coverage && value.reason === "crossed_quote"; break;
-    case "unavailable": legal = !value.quote_coverage && value.reason === "coverage" && value.valid_duration_ms === 0 && value.quality === "" || value.quote_coverage && new Set(["one_sided_quote", "insufficient_coverage"]).has(value.reason); break;
+    case "unavailable": legal = !value.quote_coverage && value.valid_duration_ms === 0 && value.quality === "" && (value.reason === "coverage" && !replay || value.reason === "replay_unavailable" && replay) || value.quote_coverage && new Set(["one_sided_quote", "insufficient_coverage"]).has(value.reason); break;
     case "pressure_shed": legal = value.reason === "pressure" && value.valid_duration_ms === 0 && value.quality === ""; break;
   }
   if (!legal) fail(`${name} trust tuple conflict`);
 }
 
-function validateRow(row, index, seen) {
+function validateRow(row, index, seen, replay) {
   const name = `rows[${index}]`;
   fields(row, ["rank", "symbol", "last_usd", "day_change_ratio", "mark_age_ms", "from_4am_change", "hod_drawdown", "day_range_position", "range_30m_position", "range_60m_position", "activity", "tape_rate", "spread", "tq_membership"], name);
   uint(row.rank, `${name}.rank`); string(row.symbol, `${name}.symbol`); finite(row.last_usd, `${name}.last_usd`); finite(row.day_change_ratio, `${name}.day_change_ratio`); uint(row.mark_age_ms, `${name}.mark_age_ms`);
   if (row.rank !== index + 1 || row.symbol === "" || seen.has(row.symbol)) fail(`${name} rank/symbol invalid`);
   seen.add(row.symbol);
   for (const field of ["from_4am_change", "hod_drawdown", "day_range_position", "range_30m_position", "range_60m_position", "activity"]) validateMeasurement(row[field], `${name}.${field}`);
-  validateTape(row.tape_rate, `${name}.tape_rate`);
-  validateSpread(row.spread, `${name}.spread`);
+  validateTape(row.tape_rate, `${name}.tape_rate`, replay);
+  validateSpread(row.spread, `${name}.spread`, replay);
   fields(row.tq_membership, ["desired", "provider_present", "provider_membership_unknown"], `${name}.tq_membership`);
   bool(row.tq_membership.desired, `${name}.tq_membership.desired`); bool(row.tq_membership.provider_present, `${name}.tq_membership.provider_present`); bool(row.tq_membership.provider_membership_unknown, `${name}.tq_membership.provider_membership_unknown`);
 }
@@ -140,6 +140,7 @@ export function validateSnapshot(snapshot) {
   for (const name of ["binding_identity", "trading_date", "run_mode", "lifecycle", "lifecycle_reason", "suppression"]) string(p[name], `publication.${name}`);
   const date = TRADING_DATE.exec(p.trading_date);
   if (p.id === "0" || p.binding_identity === "" || !date || !calendar(Number(date[1]), Number(date[2]), Number(date[3]))) fail("invalid publication identity");
+  if (p.run_mode !== "live" && p.run_mode !== "replay") fail("unknown publication run mode");
   timestamp(p.generated_at, "publication.generated_at"); optionalTimestamp(p.committed_t, "publication.committed_t"); bool(p.connection_active, "publication.connection_active"); bool(p.aggregate_acknowledged, "publication.aggregate_acknowledged");
   fields(p.aggregate_ack_position, ["connection_epoch", "frame_sequence", "array_index"], "publication.aggregate_ack_position");
   decimal(p.aggregate_ack_position.connection_epoch, "aggregate_ack_position.connection_epoch"); decimal(p.aggregate_ack_position.frame_sequence, "aggregate_ack_position.frame_sequence"); uint(p.aggregate_ack_position.array_index, "aggregate_ack_position.array_index");
@@ -167,7 +168,8 @@ export function validateSnapshot(snapshot) {
   for (const name of ["total_passers", "known_rankable_count", "day_invalid_rankable", "qualified_day_invalid"]) uint(ranking[name], `ranking.${name}`);
 
   if (!Array.isArray(snapshot.rows) || snapshot.rows.length > 20) fail("rows must contain at most 20 values");
-  const seen = new Set(); snapshot.rows.forEach((row, index) => validateRow(row, index, seen));
+  const replay = p.run_mode === "replay";
+  const seen = new Set(); snapshot.rows.forEach((row, index) => validateRow(row, index, seen, replay));
 
   fields(snapshot.accounting, ["population", "qualification", "uncertainty"], "accounting");
   const population = snapshot.accounting.population;
@@ -201,6 +203,11 @@ export function validateSnapshot(snapshot) {
   if (!sumDecimal(snapshot.checkpoint.submitted, snapshot.checkpoint.in_progress, snapshot.checkpoint.pending, snapshot.checkpoint.completed, snapshot.checkpoint.failed, snapshot.checkpoint.canceled, snapshot.checkpoint.superseded)) fail("checkpoint conflict");
   fields(snapshot.operations, ["sample_accounting_valid", ...OPERATION_UINT_FIELDS, ...OPERATION_DECIMAL_FIELDS], "operations"); bool(snapshot.operations.sample_accounting_valid, "operations.sample_accounting_valid"); OPERATION_UINT_FIELDS.forEach(name => uint(snapshot.operations[name], `operations.${name}`)); OPERATION_DECIMAL_FIELDS.forEach(name => decimal(snapshot.operations[name], `operations.${name}`));
 
+  if (replay) {
+    if (snapshot.replay === undefined || snapshot.replay === null) fail("replay context conflict");
+    fields(snapshot.replay, ["logical_time"], "replay"); timestamp(snapshot.replay.logical_time, "replay.logical_time");
+    if (status.backend_ready || status.readiness_reason !== "not_live_mode") fail("contradictory replay status");
+  } else if (snapshot.replay !== undefined && snapshot.replay !== null) fail("live snapshot includes replay context");
   const coherentReady = status.process_live && status.backend_ready && status.ranking_current && status.readiness_reason === "" && status.accounting_valid && BACKEND_READY_RANKING_MODE.has(ranking.mode) && p.run_mode === "live" && p.committed_t !== null && CURRENT_LIFECYCLE.has(p.lifecycle) && p.suppression === "" && p.connection_active && p.aggregate_acknowledged && fence.reconciled;
   if (status.backend_ready && !coherentReady) fail("contradictory current status");
   if (!status.backend_ready && status.readiness_reason === "") fail("missing noncurrent readiness reason");
@@ -221,6 +228,8 @@ function rateView(rate, outerCurrent) { return outerCurrent && knownCurrentTQ(ra
 export function buildViewModel(input, transport = "connected") {
   const snapshot = validateSnapshot(input);
   const current = snapshot.status.backend_ready && snapshot.ranking.mode === "qualified_current" && transport === "connected";
+  const replay = snapshot.publication.run_mode === "replay";
+  const rowsCurrent = current || replay && snapshot.status.ranking_current && snapshot.ranking.mode === "qualified_current" && transport === "connected";
   const rows = snapshot.rows.map(row => {
     const tapeCurrent = knownCurrentTQ(row.tape_rate.status, row.tape_rate.reason);
     const fiveSecondCurrent = tapeCurrent && knownCurrentTQ(row.tape_rate.five_second.status, row.tape_rate.five_second.reason);
@@ -234,7 +243,8 @@ export function buildViewModel(input, transport = "connected") {
   }; });
   return {
     schemaVersion: snapshot.schema_version, sampleID: snapshot.sample.id, sampledAt: snapshot.sample.sampled_at, publicationID: snapshot.publication.id,
-    transport, current, processLive: snapshot.status.process_live, backendReady: snapshot.status.backend_ready, readinessReason: snapshot.status.readiness_reason,
+    transport, current, rowsCurrent, replay, replayLogicalTime: replay ? snapshot.replay.logical_time : null,
+    processLive: snapshot.status.process_live, backendReady: snapshot.status.backend_ready, readinessReason: snapshot.status.readiness_reason,
     lifecycle: snapshot.publication.lifecycle, rankingMode: snapshot.ranking.mode, rankingReason: snapshot.ranking.reason, committedT: snapshot.publication.committed_t,
     watermarkLagMS: snapshot.status.watermark_lag_ms, accountingValid: snapshot.status.accounting_valid, sampleAccountingValid: snapshot.operations.sample_accounting_valid, tqPressure: snapshot.tq.pressure_mode, tqAggregateOnly: snapshot.tq.aggregate_only,
     tqUnknown: snapshot.tq.unknown, tqRetainedBoundHit: snapshot.tq.retained_bound_hit, tqKnownPresent: snapshot.tq.known_present, tqKnownAbsent: snapshot.tq.known_absent,
@@ -255,6 +265,7 @@ function diagnosticEntries(snapshot) {
   };
   add("sample", snapshot.sample); add("publication", snapshot.publication); add("status", snapshot.status); add("ranking", snapshot.ranking);
   add("accounting", snapshot.accounting); add("recovery", snapshot.recovery); add("tq", snapshot.tq); add("checkpoint", snapshot.checkpoint); add("operations", snapshot.operations);
+  if (snapshot.replay) add("replay", snapshot.replay);
   return entries;
 }
 
