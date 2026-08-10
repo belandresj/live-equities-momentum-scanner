@@ -607,6 +607,73 @@ func TestPC5CommandWriteAcknowledgementLinearization(t *testing.T) {
 	})
 }
 
+func TestPC5CommandDeadlineWakesBlockedDequeue(t *testing.T) {
+	socket := newFakeLiveSocket()
+	enqueueHandshake(socket)
+	adapter, open := testLiveAdapter(t, socket, []string{"AAA"})
+	attempt, _, _ := startHandshake(t, adapter, open)
+	// Receipt evidence may deliberately use a deterministic market clock that
+	// is unrelated to process time; command I/O bounds must not inherit it.
+	adapter.clock = func() time.Time { return time.Date(2099, 1, 2, 3, 4, 5, 0, time.UTC) }
+	attempt.durations.HandshakeStep = 20 * time.Millisecond
+
+	type deliveryResult struct {
+		delivery AdapterDelivery
+		ok       bool
+	}
+	proofCtx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	result := make(chan deliveryResult, 1)
+	go func() {
+		delivery, ok := attempt.nextForProof(proofCtx)
+		result <- deliveryResult{delivery: delivery, ok: ok}
+	}()
+	waitForNextDrainOwner(t, attempt)
+
+	started := time.Now()
+	write, err := attempt.ChangeTQ(proofCtx, ChangeTQCommand{
+		BindingIdentity: open.BindingIdentity,
+		ConnectionEpoch: attempt.Epoch(),
+		CommandToken:    2,
+		Action:          TQSubscribe,
+		Symbols:         []string{"AAA"},
+	})
+	if err != nil || write.Control.Outcome != engine.ControlSucceeded {
+		t.Fatalf("command write = %+v err=%v", write, err)
+	}
+
+	var completed deliveryResult
+	select {
+	case completed = <-result:
+	case <-proofCtx.Done():
+		t.Fatal("blocked dequeue did not observe the pending command deadline")
+	}
+	if !completed.ok || completed.delivery.Control.Kind != engine.TradeQuoteSubscriptionResult ||
+		completed.delivery.Control.Outcome != engine.ControlAmbiguous || completed.delivery.ExpectedStatusCount != 2 ||
+		completed.delivery.ObservedStatusCount != 0 || completed.delivery.Control.Position != (engine.LivePosition{}) {
+		t.Fatalf("no-response command result = %+v ok=%v", completed.delivery, completed.ok)
+	}
+	if elapsed := time.Since(started); elapsed >= 200*time.Millisecond {
+		t.Fatalf("command deadline completed too late: %s", elapsed)
+	}
+	if accounting := adapter.Accounting(); !accounting.Reconciles() || accounting.CommandsStarted != 2 ||
+		accounting.CommandsPendingWrite != 0 || accounting.CommandsPendingAck != 0 || accounting.CommandsAmbiguous != 1 {
+		t.Fatalf("command accounting = %+v", accounting)
+	}
+	if accounting := attempt.QueueAccounting(); !accounting.Reconciles() || accounting.FramesRead != accounting.FramesDispositioned {
+		t.Fatalf("queue accounting = %+v", accounting)
+	}
+
+	if err := attempt.Close(CloseEpochCommand{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: 3, Cause: CloseControlledStop}); err != nil {
+		t.Fatal(err)
+	}
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer waitCancel()
+	if err := attempt.Wait(waitCtx); err != nil {
+		t.Fatalf("cleanup = %v", err)
+	}
+}
+
 func TestPC5BoundRawFIFOAccountingAndDrain(t *testing.T) {
 	if validateLiveQueueConfig(LiveQueueConfig{}) || validateLiveQueueConfig(LiveQueueConfig{FrameSlots: 513, MaxFrameBytes: 1, TotalFrameBytes: 1}) ||
 		validateLiveQueueConfig(LiveQueueConfig{FrameSlots: 1, MaxFrameBytes: MaximumLiveFrameBytes + 1, TotalFrameBytes: MaximumLiveQueueBytes}) ||

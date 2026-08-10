@@ -81,6 +81,7 @@ type queuedLiveFrame struct {
 type liveFrameQueue struct {
 	mu              sync.Mutex
 	changed         chan struct{}
+	recheck         chan struct{}
 	config          LiveQueueConfig
 	frames          []queuedLiveFrame
 	bytes           int
@@ -101,12 +102,22 @@ func validateLiveQueueConfig(config LiveQueueConfig) bool {
 }
 
 func newLiveFrameQueue(config LiveQueueConfig) *liveFrameQueue {
-	return &liveFrameQueue{config: config, frames: make([]queuedLiveFrame, 0, config.FrameSlots+2), changed: make(chan struct{}), gateOpen: true, next: 1, nextFenceMarker: 1, now: func() time.Time { return time.Now().UTC() }}
+	return &liveFrameQueue{config: config, frames: make([]queuedLiveFrame, 0, config.FrameSlots+2), changed: make(chan struct{}), recheck: make(chan struct{}), gateOpen: true, next: 1, nextFenceMarker: 1, now: func() time.Time { return time.Now().UTC() }}
 }
 
 func (q *liveFrameQueue) notifyLocked() {
 	close(q.changed)
 	q.changed = make(chan struct{})
+}
+
+// requestRecheck wakes a delivery loop without fabricating or accounting a
+// provider frame. The caller uses it when command state changes while the
+// loop may already be blocked on an empty queue.
+func (q *liveFrameQueue) requestRecheck() {
+	q.mu.Lock()
+	close(q.recheck)
+	q.recheck = make(chan struct{})
+	q.mu.Unlock()
 }
 
 func (q *liveFrameQueue) tryEnqueue(epoch uint64, messageType socketMessageType, receivedAt time.Time, data []byte) (queuedLiveFrame, FrameAdmissionReason) {
@@ -332,6 +343,11 @@ func (q *liveFrameQueue) waitForClassifier() {
 }
 
 func (q *liveFrameQueue) pop(ctx context.Context) (queuedLiveFrame, bool) {
+	frame, ok, _ := q.popOrRecheck(ctx)
+	return frame, ok
+}
+
+func (q *liveFrameQueue) popOrRecheck(ctx context.Context) (queuedLiveFrame, bool, bool) {
 	for {
 		q.mu.Lock()
 		if len(q.frames) > 0 {
@@ -354,17 +370,20 @@ func (q *liveFrameQueue) pop(ctx context.Context) (queuedLiveFrame, bool) {
 			}
 			q.notifyLocked()
 			q.mu.Unlock()
-			return frame, true
+			return frame, true, false
 		}
 		if !q.gateOpen {
 			q.mu.Unlock()
-			return queuedLiveFrame{}, false
+			return queuedLiveFrame{}, false, false
 		}
 		changed := q.changed
+		recheck := q.recheck
 		q.mu.Unlock()
 		select {
 		case <-ctx.Done():
-			return queuedLiveFrame{}, false
+			return queuedLiveFrame{}, false, false
+		case <-recheck:
+			return queuedLiveFrame{}, false, true
 		case <-changed:
 		}
 	}

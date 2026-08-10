@@ -52,7 +52,7 @@ export function renderDashboard(document, event, options = {}) {
   const focusKey = document.activeElement?.dataset?.focusKey || "";
   const main = element(document, "main"), model = event.model;
   const header = element(document, "header"), title = element(document, "div"); title.append(textElement(document, "p", "LIVE EQUITIES", "eyebrow"), textElement(document, "h1", "Momentum Scanner"));
-  const live = textElement(document, "div", model ? `${model.current ? "CURRENT" : event.transport === "refresh_delayed" ? "REFRESH DELAYED" : event.transport === "disconnected" ? "FROZEN · DISCONNECTED" : "NONCURRENT"} · publication ${model.publicationID} · ${model.rows.length} ranked` : event.error ? `Scanner API disconnected: ${event.error}` : "Connecting to scanner API", "status-live");
+  const live = textElement(document, "div", model ? `${model.current ? "CURRENT" : event.transport === "refresh_delayed" ? "REFRESH DELAYED" : event.transport === "disconnected" ? "FROZEN · DISCONNECTED" : model.backendReady && model.rankingMode === "degraded_bootstrap" ? "DEGRADED" : "NONCURRENT"} · publication ${model.publicationID} · ${model.rows.length} ranked` : event.error ? `Scanner API disconnected: ${event.error}` : "Connecting to scanner API", "status-live");
   live.id = "status-live"; live.dataset.state = model?.current ? "current" : "warning"; header.append(title, live); main.append(header);
   const grid = element(document, "section", "status-grid"); grid.setAttribute("aria-label", "Scanner status");
   grid.append(statusItem(document, "Transport", event.transport, event.transport === "connected" ? "current" : "warning"),

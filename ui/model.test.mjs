@@ -41,9 +41,14 @@ test("P-C11-STATE distinguishes exact empty, fewer, noncurrent, and independent 
   assert.equal(empty.current, true); assert.deepEqual(empty.rows, []);
 
   const degradedSnapshot = snapshotFixture(1);
-  degradedSnapshot.status.backend_ready = false; degradedSnapshot.status.ranking_current = false; degradedSnapshot.status.readiness_reason = "ranking_noncurrent";
   degradedSnapshot.ranking.mode = "degraded_bootstrap"; degradedSnapshot.ranking.reason = "incomplete_population";
-  assert.equal(buildViewModel(degradedSnapshot).current, false);
+  const degraded = buildViewModel(degradedSnapshot);
+  assert.equal(degraded.current, false, "backend-ready degraded output is never presented as qualified current");
+  assert.equal(degraded.backendReady, true, "legal degraded bootstrap preserves the server readiness fact");
+  assert.equal(degraded.rankingMode, "degraded_bootstrap");
+  const degradedDocument = new FakeDocument(); renderDashboard(degradedDocument, { transport: "connected", model: degraded });
+  assert.match(degradedDocument.body.textContent, /DEGRADED.*Backendready.*Rankingdegraded_bootstrap · incomplete_population/s);
+  assert.doesNotMatch(degradedDocument.body.textContent, /NONCURRENT/);
 
   const ended = snapshotFixture(1);
   ended.publication.lifecycle = "ended"; ended.publication.lifecycle_reason = "session_end"; ended.status.backend_ready = false; ended.status.readiness_reason = "lifecycle_not_ready";
@@ -160,6 +165,7 @@ test("P-C11-STATE rejects malformed row/value/null boundaries", () => {
     snapshot => { snapshot.rows[0].activity.value_ratio = null; },
     snapshot => { snapshot.rows[0].spread.cents = null; },
     snapshot => { snapshot.sample.id = "01"; },
+    snapshot => { snapshot.sample.id = "0"; },
   ];
   for (const edit of edits) { const snapshot = snapshotFixture(); edit(snapshot); assert.throws(() => validateSnapshot(snapshot)); }
   const tooMany = snapshotFixture(20); tooMany.rows.push(clone(tooMany.rows[19])); tooMany.rows[20].rank = 21; assert.throws(() => validateSnapshot(tooMany), /at most 20/);

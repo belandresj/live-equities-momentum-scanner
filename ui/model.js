@@ -8,6 +8,7 @@ const KNOWN_FIELD_REASON = new Set(["", "before_first_print", "history_incomplet
 const KNOWN_TQ_STATUS = new Set(["unselected", "warming", "current", "stale", "unavailable", "invalid", "pressure_shed"]);
 const KNOWN_TQ_REASON = new Set(["", "coverage", "coverage_warming", "five_second_warming", "qualifying_original_prints", "unequal_repeat", "one_sided_quote", "crossed_quote", "stale_quote", "insufficient_coverage", "pressure"]);
 const CURRENT_LIFECYCLE = new Set(["live", "hydrating"]);
+const BACKEND_READY_RANKING_MODE = new Set(["qualified_current", "degraded_bootstrap"]);
 const TIMESTAMP_BASIS = new Set(["", "none", "participant", "sip_fallback", "mixed"]);
 const SPREAD_QUALITY = new Set(["", "reviewed_ordinary", "known_special", "unclassified"]);
 
@@ -132,6 +133,7 @@ export function validateSnapshot(snapshot) {
   fields(snapshot, ["schema_version", "sample", "publication", "status", "ranking", "rows", "accounting", "recovery", "tq", "checkpoint", "operations"], "root");
   if (snapshot.schema_version !== "scanner.snapshot.v1") fail("unsupported schema");
   fields(snapshot.sample, ["id", "sampled_at"], "sample"); decimal(snapshot.sample.id, "sample.id"); timestamp(snapshot.sample.sampled_at, "sample.sampled_at");
+  if (snapshot.sample.id === "0") fail("invalid sample identity");
   const p = snapshot.publication;
   fields(p, ["id", "binding_identity", "trading_date", "run_mode", "lifecycle", "lifecycle_reason", "suppression", "generated_at", "committed_t", "last_engine_sequence", "connection_epoch", "connection_active", "aggregate_acknowledged", "aggregate_ack_position", "hydration_fence"], "publication");
   for (const name of ["id", "last_engine_sequence", "connection_epoch"]) decimal(p[name], `publication.${name}`);
@@ -199,8 +201,8 @@ export function validateSnapshot(snapshot) {
   if (!sumDecimal(snapshot.checkpoint.submitted, snapshot.checkpoint.in_progress, snapshot.checkpoint.pending, snapshot.checkpoint.completed, snapshot.checkpoint.failed, snapshot.checkpoint.canceled, snapshot.checkpoint.superseded)) fail("checkpoint conflict");
   fields(snapshot.operations, ["sample_accounting_valid", ...OPERATION_UINT_FIELDS, ...OPERATION_DECIMAL_FIELDS], "operations"); bool(snapshot.operations.sample_accounting_valid, "operations.sample_accounting_valid"); OPERATION_UINT_FIELDS.forEach(name => uint(snapshot.operations[name], `operations.${name}`)); OPERATION_DECIMAL_FIELDS.forEach(name => decimal(snapshot.operations[name], `operations.${name}`));
 
-  const coherentCurrent = status.process_live && status.backend_ready && status.ranking_current && status.readiness_reason === "" && status.accounting_valid && ranking.mode === "qualified_current" && p.run_mode === "live" && p.committed_t !== null && CURRENT_LIFECYCLE.has(p.lifecycle) && p.suppression === "" && p.connection_active && p.aggregate_acknowledged && fence.reconciled;
-  if (status.backend_ready && !coherentCurrent) fail("contradictory current status");
+  const coherentReady = status.process_live && status.backend_ready && status.ranking_current && status.readiness_reason === "" && status.accounting_valid && BACKEND_READY_RANKING_MODE.has(ranking.mode) && p.run_mode === "live" && p.committed_t !== null && CURRENT_LIFECYCLE.has(p.lifecycle) && p.suppression === "" && p.connection_active && p.aggregate_acknowledged && fence.reconciled;
+  if (status.backend_ready && !coherentReady) fail("contradictory current status");
   if (!status.backend_ready && status.readiness_reason === "") fail("missing noncurrent readiness reason");
   return snapshot;
 }
@@ -218,7 +220,7 @@ function rateView(rate, outerCurrent) { return outerCurrent && knownCurrentTQ(ra
 
 export function buildViewModel(input, transport = "connected") {
   const snapshot = validateSnapshot(input);
-  const current = snapshot.status.backend_ready && transport === "connected";
+  const current = snapshot.status.backend_ready && snapshot.ranking.mode === "qualified_current" && transport === "connected";
   const rows = snapshot.rows.map(row => {
     const tapeCurrent = knownCurrentTQ(row.tape_rate.status, row.tape_rate.reason);
     const fiveSecondCurrent = tapeCurrent && knownCurrentTQ(row.tape_rate.five_second.status, row.tape_rate.five_second.reason);

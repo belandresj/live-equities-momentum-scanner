@@ -1,8 +1,8 @@
 # Independent UI
 
-**Status:** C11-S1 is accepted after a manual-Chrome transport correction;
-C11-S2 implementation and deterministic proofs are complete, with the required
-Chrome visual/interaction/independence proof pending
+**Status:** Component 11 finally accepted after clean mandatory final review,
+two corrected cross-component boundary findings, clean focused re-reviews, and
+accepted integrated private V1 RC proof/review
 
 **Boundary approval:** Approved 2026-08-07 by the owner through the Version 1
 Release Program revision
@@ -33,9 +33,9 @@ Sections 8-19 are completed here after just-in-time V2 UI reconnaissance.
 | --- | --- | --- | --- |
 | Boundary/reconnaissance plan | `accepted` | Direct owner V1 program revision; exact source list recorded before bounded content inspection | Complete |
 | Completed contract | `accepted_current_plan` | Focused review corrections add full T/Q trust disclosure, fail-closed semantic coherence, additive compatibility, C10-matching response bounds, exact accessibility assertions, and delayed-refresh containment; focused re-review clean | Begin C11-S1 |
-| `C11-S1` API/view-state integration | `accepted_after_correction` | Manual Chrome exposed an unbound native-fetch receiver before the first API request; the production default is now explicitly bound to the browser global and a receiver-sensitive `P-C11-STATE` regression brings the focused suite to 20 passing tests | Rerun the corrected production path in Chrome as part of C11-S2 proof |
-| `C11-S2` visual/interaction/accessibility | `proof_blocked_tooling` | Visual implementation and 20 deterministic state/transport/contrast/focus/fixture checks pass, including five-second-only Tape Rate and fail-closed five-second Spread duration/nonnegative T/Q validation; focused static correction re-review clean; automated Chrome control remains unavailable | Connect the ChatGPT Chrome extension, then run `P-C11-VISUAL` |
-| Final component review | `pending` | Mandatory read-only review after both proofs and verification | Then integrated V1 RC review |
+| `C11-S1` API/view-state integration | `accepted_after_final_review_correction` | The validator accepts the two backend-ready ranking modes permitted by Phase 1 while only `qualified_current` receives current presentation; response-sample zero is rejected. Direct model/render and identity regressions, all 20 focused tests, ordinary verification, affected race, and diff checks pass; same-reviewer re-review is clean | Complete |
+| `C11-S2` visual/interaction/accessibility | `accepted` | `P-C11-VISUAL` passes in production Chrome at 1440x900: six required states, exact 12-column/20-row fit, computed contrast/focus/semantics, safe hostile text, delayed/disconnected freeze, exact-origin CORS, and UI-only restart all pass; final-review corrections did not invalidate those observations | Complete |
+| Final component review | `accepted_after_correction` | Mandatory read-only review found the ready/degraded and sample-identity boundary defects; both were corrected with distinguishing proofs, and two focused same-reviewer re-reviews found no remaining P1/P2 | Complete; integrated private V1 RC later accepted |
 
 ## 1-4. Outcome, scope, ownership, and settled boundary
 
@@ -181,14 +181,22 @@ alerts, qualification, ranking, readiness, or capacity claims.
 ## 10. Authoritative view-state matrix
 
 One captured response produces one render model. Before state selection, the
-client enforces the C10 normative type/null, rank/order, decimal-string,
+client enforces the C10 normative type/null, rank/order, positive response-
+sample identity, decimal-string,
 full-accounting-identity, publication/fence, lifecycle/status, and readiness
 relationships. Unknown additive root or nested properties are ignored for
 within-major compatibility; required properties and known meanings remain
 mandatory. Any contradictory known facts reject the whole response atomically.
-In particular, overall current requires `process_live`, `backend_ready`, and
-`ranking_current` true, `ranking.mode=qualified_current`, a present committed
-watermark/lag, valid accounting, and a C10-permitted live/hydrating lifecycle.
+In particular, backend-ready coherence requires `process_live`,
+`backend_ready`, and `ranking_current` true, `ranking.mode` equal to either
+`qualified_current` or `degraded_bootstrap`, a present committed watermark/lag,
+valid accounting, and a C10-permitted live/hydrating lifecycle. Only
+`qualified_current` receives the green/current presentation. A legal
+backend-ready `degraded_bootstrap` response is accepted without changing the
+server readiness fact, but its rows and publication remain prominently
+non-qualified/degraded in the presentation. Its connected primary label is
+`DEGRADED`, not the false claim `NONCURRENT`; transport delay or loss still
+takes precedence as `REFRESH DELAYED` or `FROZEN · DISCONNECTED`.
 Any known noncurrent fact takes fail-closed precedence; a response claiming
 ready/current simultaneously with ended, suppressed, stale, unavailable,
 missing-watermark, invalid accounting, or false process-live is invalid rather
@@ -197,10 +205,10 @@ inference:
 
 | C10 fact | Required UI consequence |
 | --- | --- |
-| All current-coherence predicates above | Current status; render 0..20 rows in exact order. |
+| All backend-ready coherence predicates above with `ranking.mode=qualified_current` | Current status; render 0..20 rows in exact order. |
 | Qualified current with zero rows | Explicit “No symbols currently qualify”; never loading or error. |
 | Qualified current with 1..19 rows | Render only those rows; no placeholders or client backfill. |
-| `ranking.mode=degraded_bootstrap` | Prominent incomplete-population band; rows may be shown only as degraded, never current. |
+| `ranking.mode=degraded_bootstrap`, including legal backend-ready output | Preserve the server backend-ready fact but show a prominent incomplete-population band; rows may be shown only as degraded, never qualified current. |
 | `stale`, `suppressed`, `ended`, or `unavailable` ranking/lifecycle | Exact server mode/reason in a persistent noncurrent band; retained rows, if supplied, remain visibly noncurrent. |
 | Aggregate field `warming`, `unavailable`, or `invalid` | Per-cell status token and keyboard/focus-accessible reason; no fabricated zero. |
 | T/Q `warming`, `unavailable`, `invalid`, `pressure_shed`, or uncovered | Tape/Spread cell independently noncurrent; aggregate rank and aggregate fields remain intact. Tape detail still states coverage, timestamp basis, and lifecycle observation; Spread detail still states coverage, duration, and quality. |
@@ -441,6 +449,23 @@ correct receiver. All 20 focused tests pass. This correction changes no API,
 polling cadence, state meaning, or market logic; corrected real-Chrome
 observation remains allocated to `P-C11-VISUAL`.
 
+Mandatory final review on 2026-08-09 reopened S1 again after distinguishing two
+cross-component boundary cases that the prior corpus omitted. First, the
+validator treated `qualified_current` as the only legal backend-ready ranking
+mode, although `LIFE-PUBLISH-02` permits a causally current, backend-ready
+`degraded_bootstrap` publication. The corrected validator accepts exactly those
+two ready ranking modes; the view model still reserves green/current
+presentation for `qualified_current`, preserves the backend-ready server fact,
+and renders ready/degraded rows under the distinct `DEGRADED` primary label with
+`degraded_bootstrap · incomplete_population`. Second, the response-sample
+validator now rejects identity `0`, matching C10's positive decimal sequence
+contract rather than merely its uint64 shape. Direct regressions exercise both
+dangerous counterexamples. All 20 focused tests, `go test -short -timeout 2m
+./...`, `go test -race -short -timeout 5m ./internal/ui ./cmd/dashboard
+-count=1`, and `git diff --check` pass. The retained Chrome proof is unaffected:
+these findings concern omitted wire-validity distinctions, not its measured
+layout, accessibility, transport, CORS, or restart observations.
+
 `C11-S2` now implements the fixed presentation bands, compact 20-row desktop
 allocation, eight-part status hierarchy, retained/noncurrent suppression,
 WCAG-AA token palette, reduced-motion override, semantic table, persistent
@@ -468,13 +493,42 @@ evaluation. Focused model, palette, contrast, and fixture
 proofs distinguish these presentation-only decisions; C10 remains the sole
 ranking and value owner.
 
-The required Chrome proof is not claimed. Chrome is installed and running, but
-the ChatGPT browser extension is absent from every Chrome profile, so the
-required browser-control surface cannot connect. Per the browser-control trust
-rules no in-app, shell, or alternate automation surface substitutes for Chrome.
-Until the extension is installed/enabled, screenshots, 1440x900 computed fit,
-computed browser contrast, real keyboard/focus/live-region behavior, reduced-
-motion behavior, browser CORS, and browser-observed UI-restart/API-continuity
-remain pending. Following the S1 transport correction above, this tooling block
-creates no product/owner decision gate; S2 and final C11 acceptance remain
-incomplete.
+`P-C11-VISUAL` passed on 2026-08-09 through the production static server and
+poller in current Chrome at the exact 1440x900 CSS viewport and 100% zoom. The
+current-20 surface rendered all 12 columns and 20 rows inside one viewport:
+the table occupied `x=[20,1420]`, `y=[148,819]`, the table shell had equal
+1,400-pixel client/scroll widths, and the document had no horizontal or
+vertical overflow. Exact-empty, aggregate-degraded, T/Q-degraded,
+`refresh_delayed`, disconnected/frozen, and hostile-string states were captured
+from the deterministic loopback C10 fixture. Genuine current zero remained
+`0.00%`; pressure-shed Tape/Spread values were hidden as em dashes while their
+complete coverage, timestamp/duration/quality, lifecycle, membership, status,
+and reason details remained focus-accessible. The hostile symbol was literal
+text, produced no image/HTML node, and its unavailable Activity remained an
+explicit dash plus `history_incomplete`.
+
+Browser-computed inspection found one caption, 12 scoped column headers, 20
+consecutive server ranks, a persistent polite announcer, native keyboard-
+operable disclosure, and visible two-pixel focus outlines on the disclosure and
+Tape/Spread cells. All 521 visible text/token samples met WCAG AA under their
+computed colors; the minimum recorded contrast was 6.18:1. The reduced-motion
+media rule was present, and the current surface had no nonzero animation,
+transition, or smooth-scroll duration. During a hung fixture response, the
+surface first became `refresh_delayed` and atomically retained noncurrent rows,
+then became disconnected/frozen after the bounded request timeout without
+changing the retained sample. Stopping only the UI server left the fixture API
+reachable with exact-origin CORS, schema `scanner.snapshot.v1`, publication 20,
+and 20 rows; restarting and reloading only the UI reconnected from sample 176
+to sample 204 while preserving publication 20 and all 20 rows. Chrome logged no
+warning or error.
+
+The focused `node --test ui/model.test.mjs ui/visual.test.mjs` run passes all 20
+tests; `go test -short -timeout 2m ./...` and `go test -race -short -timeout 5m
+./internal/ui ./cmd/dashboard -count=1` are clean. The proof is deterministic
+local Chrome/loopback evidence only: it establishes neither another browser,
+mobile layout, provider/market-hours behavior, public-network behavior, formal
+accessibility certification, nor an SLA. No production code, C10 meaning,
+market calculation, ranking order, poll cadence, or ownership changed. C11-S2
+is accepted. The mandatory final review and focused correction re-reviews are
+clean; Component 11 is finally accepted. The later integrated private V1 RC
+production-path proof and read-only review are also accepted.

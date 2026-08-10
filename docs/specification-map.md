@@ -1,7 +1,7 @@
 # Specification map
 
-**Status:** Approved Phase 1 authority index, Phase 2 sequence, Version 1
-Release Program map, and C12 follow-on sequence activation.
+**Status:** Approved Phase 1 authority index, Phase 2 sequence, accepted
+private/local V1 RC, and active C12 follow-on sequence.
 
 **Phase 1 approved:** 2026-08-05
 
@@ -101,13 +101,13 @@ ledgers.
 | 2 | [ScannerStateEngine and canonical state](specifications/scanner-state-engine-and-canonical-state.md) | Finally accepted 2026-08-05. Owns sole ordered mutation, canonical aggregate state, committed watermark, immutable publication, and typed extension seams. |
 | 3 | [Aggregate features, qualification, ranking, and accounting](specifications/aggregate-features-qualification-ranking-and-accounting.md) | Finally accepted 2026-08-06. Owns formulas, correction-aware qualification, exact order/top 20, independent availability, and population accounting. |
 | 4 | [Aggregate replay](specifications/aggregate-replay.md) | Finally accepted 2026-08-09 including the additive requested-end correction. Owner-approved `C4-S6` bounded manual-driver correction is queued after C11/private V1 RC as a C12 prerequisite and changes no accepted runtime behavior until implementation. Owns offline downloader/compiler, normalized artifact, deterministic source/clock, shared aggregate path, and full-source-trusted prefix completion with distinct lifecycle/accounting. |
-| 5 | [Massive live adapter](specifications/massive-live-adapter.md) | Finally accepted 2026-08-06. Owns bounded A/T/Q/control classification, normalization, causal positions, epochs, commands, and acknowledgements. |
+| 5 | [Massive live adapter](specifications/massive-live-adapter.md) | Finally accepted 2026-08-09 after the integrated V1 RC reopened and corrected blocked-dequeue T/Q acknowledgement/deadline correlation with clean focused re-review. Owns bounded A/T/Q/control classification, normalization, causal positions, epochs, commands, and acknowledgements. |
 | 6 | [Aggregate REST hydration and recovery](specifications/aggregate-rest-hydration-and-recovery.md) | Finally accepted 2026-08-07. Owns production pagination/workers, fresh/checkpoint/gap plans, exact terminal outcomes, ingress fencing, and REST/live reconciliation. |
 | 7 | [Checkpoints and restart](specifications/checkpoints-and-restart.md) | Finally accepted 2026-08-07 under the V1 program. S1-S3 and all eight proofs pass; the corrected 6,000-symbol restart median is 10.286 seconds versus 36.641 seconds fresh (71.9% faster), with clean focused final re-review. |
 | 8 | [Readiness and operations](specifications/readiness-and-operations.md) | Finally accepted 2026-08-07. Runnable composition, honest readiness/staleness, engine-owned bounded recovery/exhaustion, joined shutdown, continuous live coverage fences, fixed-cardinality measurements, and controlled 6,000-symbol mixed load pass with a clean corrected final review. |
 | 9 | [Top-20 T/Q coverage and features](specifications/top-20-tq-coverage-and-features.md) | Finally accepted 2026-08-08. Opaque paired membership authority, causal coverage, bounded Tape Rate/Spread state, aggregate-independent pressure shedding to known zero/explicit unknown, continuous-health ranked restoration, and exact accounting pass with clean final re-review. |
 | 10 | [Versioned snapshot API](specifications/versioned-snapshot-api.md) | Finally accepted 2026-08-08. One sealed immutable capture maps to the exact versioned schema; loopback HTTP, exact-origin CORS, liveness/readiness, bounded transport, and joined scanner composition pass with clean focused final re-review. |
-| 11 | [Independent UI](specifications/independent-ui.md) | S1 accepted; S2 implementation and deterministic proofs complete. Required Chrome visual/interaction/independence proof, final component review, and integrated private V1 RC review remain pending. Independent Chrome-desktop UI has every V1 field/status and no browser-owned market logic. |
+| 11 | [Independent UI](specifications/independent-ui.md) | Finally accepted 2026-08-09. Production Chrome visual/interaction/accessibility/independence proof, final correction review, and integrated private V1 RC review are clean. Independent Chrome-desktop UI has every V1 field/status and no browser-owned market logic. |
 | 12 | [Historical replay product mode](specifications/historical-replay-product-mode.md) | Owner-approved 2026-08-09 implementation-ready contract with clean review/re-reviews and delegated sequential execution. It is queued after C11/private V1 RC and accepted C4-S6, then implements deterministic warm-up, cumulative 1x observation through the sole engine/API/dashboard path, explicit replay/nonlive aggregate-only meaning, and retained terminal inspection. It is not part of the C7-C11 V1 RC gate. |
 
 Implementation is sequential. C8-C11 detailed contracts are completed just in
@@ -124,8 +124,9 @@ concurrent implementation or a competing owner.
    restart, runnable readiness/recovery, and local operational evidence.
 3. **T/Q enrichment:** C9, including normal top-20 coverage and complete
    aggregate-protecting shedding/restoration.
-4. **Private/local V1 RC:** C10-C11, loopback API, independent Chrome UI,
-   deterministic integrated evidence, and one final read-only review.
+4. **Private/local V1 RC:** Accepted 2026-08-09. C10-C11, loopback API,
+   independent Chrome UI, deterministic production-path integrated evidence,
+   and the final read-only review are clean.
 
 The private/local V1 RC can complete while the market is closed. Credentialed
 market-hours observation remains pending under

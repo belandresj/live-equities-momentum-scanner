@@ -326,6 +326,7 @@ type pendingCommand struct {
 	kind          CommandKind
 	token         uint64
 	expectedCount int
+	afterSequence uint64
 	deadline      time.Time
 	writeFailed   bool
 	writeDone     chan struct{}
@@ -699,7 +700,10 @@ func (a *LiveAttempt) ChangeTQ(ctx context.Context, command ChangeTQCommand) (Ad
 	if command.Action == TQUnsubscribe {
 		kind = CommandTradeQuoteUnsubscribe
 	}
-	a.pending = &pendingCommand{kind: kind, token: command.CommandToken, expectedCount: 2 * len(command.Symbols), deadline: a.adapter.now().Add(a.durations.HandshakeStep), writeDone: make(chan struct{}), action: command.Action, symbols: append([]string(nil), command.Symbols...), engineCommand: command.engineCommand}
+	// Operational deadlines use the process clock, not the injected market
+	// receipt clock. A deterministic or replay clock may be static or skewed
+	// relative to wall time and must not shorten or extend command I/O bounds.
+	a.pending = &pendingCommand{kind: kind, token: command.CommandToken, expectedCount: 2 * len(command.Symbols), afterSequence: a.queue.snapshot().FramesRead, deadline: time.Now().Add(a.durations.HandshakeStep), writeDone: make(chan struct{}), action: command.Action, symbols: append([]string(nil), command.Symbols...), engineCommand: command.engineCommand}
 	a.workers.Add(1)
 	a.adapter.mu.Lock()
 	a.adapter.lastToken = command.CommandToken
@@ -735,6 +739,10 @@ func (a *LiveAttempt) ChangeTQ(ctx context.Context, command ChangeTQCommand) (Ad
 		a.adapter.accounting.CommandsPendingAck++
 	}
 	a.adapter.mu.Unlock()
+	// next may have entered an empty-queue wait before this command existed.
+	// Wake it after write accounting is settled so it can install the command
+	// deadline even when the provider sends no acknowledgement or later frame.
+	a.queue.requestRecheck()
 	delivery := controlDelivery(a.binding.Identity(), a.epoch, engineKind, command.CommandToken, outcome, engine.LivePosition{}, a.adapter.now())
 	delivery.TQAction = command.Action
 	delivery.TQSymbols = append([]string(nil), command.Symbols...)
@@ -846,7 +854,7 @@ func (a *LiveAttempt) next(ctx context.Context) (AdapterDelivery, bool) {
 		}
 		var statusContext *StatusContext
 		if a.pending != nil {
-			if !a.adapter.now().Before(a.pending.deadline) {
+			if !time.Now().Before(a.pending.deadline) {
 				pending := a.pending
 				a.mu.Unlock()
 				if !a.detachAndAccountPending(pending, engine.ControlAmbiguous) {
@@ -869,9 +877,12 @@ func (a *LiveAttempt) next(ctx context.Context) (AdapterDelivery, bool) {
 			a.mu.Unlock()
 			popCtx, cancel = context.WithDeadline(ctx, deadline)
 		}
-		frame, ok := a.queue.pop(popCtx)
+		frame, ok, recheck := a.queue.popOrRecheck(popCtx)
 		if cancel != nil {
 			cancel()
+		}
+		if recheck {
+			continue
 		}
 		if !ok {
 			a.mu.Lock()
@@ -919,6 +930,17 @@ func (a *LiveAttempt) next(ctx context.Context) (AdapterDelivery, bool) {
 			a.queue.complete(frame, true)
 			continue
 		}
+		// A delivery loop may already be blocked in queue.pop when another
+		// goroutine writes a T/Q command. Re-evaluate the pending command after
+		// the frame arrives so its response receives correlation context, while
+		// never correlating a frame that was read before the command write.
+		statusContext = nil
+		a.mu.Lock()
+		pendingNow := a.pending
+		if pendingNow != nil && frame.sequence > pendingNow.afterSequence && time.Now().Before(pendingNow.deadline) {
+			statusContext = &StatusContext{ConnectionEpoch: a.epoch, ExpectedPhase: StatusPhaseSuccess, CommandKind: pendingNow.kind, CommandToken: strconv.FormatUint(pendingNow.token, 10), ExpectedCount: pendingNow.expectedCount}
+		}
+		a.mu.Unlock()
 		a.currentFrame = &frame
 		a.currentCursor = newLiveFrameCursor(LiveFrame{Binding: a.binding, ConnectionEpoch: a.epoch, FrameSequence: frame.sequence, ReceivedAt: frame.receivedAt, Data: frame.data}, statusContext, LiveNormalizationOptions{ShedTradesQuotes: a.shedTQ.Load()})
 		a.currentFrameCompleted = false

@@ -1,9 +1,9 @@
 # Massive live adapter
 
-**Status:** Finally owner-accepted 2026-08-06 after all three implementation
-slices, all eleven primary proofs, complete final-tier verification, correction
-of the mandatory independent final-review findings, and clean focused re-review;
-no Component 5 acceptance item remains open
+**Status:** Finally accepted after the 2026-08-09 integrated V1 RC reopened the
+dynamic T/Q correlation boundary; both blocked-dequeue corrections, allocated
+proofs, and focused same-reviewer re-review are clean, with original unaffected
+S1-S3 evidence preserved
 
 **Owner boundary approval:** Pre-approved 2026-08-06 by the owner in the
 initiating Component 5 task, subject to the exact boundary and reconnaissance
@@ -86,11 +86,12 @@ the component is finally owner-accepted.
 
 | Item | State | Evidence and required review | Recorded at | Next action |
 | --- | --- | --- | --- | --- |
-| Component contract | `finally accepted` | Owner-approved Sections 1–19, acknowledged display-only reconnaissance variance, exact v2 whitelist, sole dependency, eleven proofs, three slices, review triggers, delegated mode, clean substantive drift audit, and clean mandatory final review after focused corrections | 2026-08-06 | Complete; advance to the already-approved Component 6 `C6-S1` implementation assignment |
+| Component contract | `finally accepted_after_integrated_correction` | Owner-approved Sections 1–19, acknowledged display-only reconnaissance variance, exact v2 whitelist, sole dependency, eleven original proofs, three slices, clean original final review, and clean 2026-08-09 focused integrated re-review after the bounded T/Q correlation correction | 2026-08-09 | Complete |
 | `C5-S1` | `accepted` | All five normalization proofs, affected-package and repository build/test/vet checks, formatting, ownership/dependency inspection, complete-value/rejection walkthrough, owner-acknowledged display-only whitelist variance, clean drift audit, and required `gpt-5.6-sol` medium external-trust review after one corrected P1 causal-prefix finding are clean | 2026-08-06 | Complete; C5-S2 later accepted |
 | `C5-S2` | `accepted` | `P-C5-ENGINE`, all affected Component 2/3 and repository tests, build/vet, engine race, formatting, ownership/whitelist inspection, conformance walkthrough, clean drift audit, and required `gpt-5.6-sol` medium sole-owner review after four focused corrections are clean | 2026-08-06 | Complete; C5-S3 later accepted |
 | `C5-S3` | `accepted` | All five allocated proofs; affected, complete-ledger, repository, race, build, test, vet, dependency, credential-containment, ownership, whitelist, walkthrough, and drift gates; and the required narrow `gpt-5.6-sol` medium concurrency review are clean after focused corrections | 2026-08-06 | Complete; final component review later accepted |
 | Final component review | `accepted` | All eleven allocated proofs and every final-tier verification gate pass. The mandatory `gpt-5.6-sol` medium independent review found bounded-memory, causal-prefix, attempt-progress, drain-order, command-accounting, exact-accounting, UTC-boundary, proof-quality, and documentation findings; every finding received the smallest in-contract correction, and the same reviewer reports the focused re-review clean with no remaining blocking or nonblocking finding. | 2026-08-06 | Complete; Component 5 is finally owner-accepted and `C6-S1` is the next authorized implementation slice |
+| Integrated V1 RC T/Q correlation correction | `accepted_after_clean_re_review` | Production `RunLive` exposed a blocked-dequeue race in which a valid post-command T/Q acknowledgement was classified without the concurrently installed status context. The adapter now correlates only frames strictly after the pre-write raw sequence and re-evaluates the pending command after dequeue. Focused re-review exposed the no-response complement: an already-blocked dequeue could miss the new command deadline forever when no later frame arrived. A command-state-only queue wake now makes that deadline observable without fabricating or accounting a frame, and the I/O deadline uses process monotonic time rather than the injectable market/receipt clock. `TestPC5CommandDeadlineWakesBlockedDequeue` starts `next` first, displaces the market clock to 2099, installs a command whose write succeeds, sends no response, and proves bounded ambiguity, zero fabricated position, zero pending commands, and reconciled command/frame accounting. The two focused command tests pass 20 consecutive runs; those tests plus raw-queue accounting pass ten race runs. The production vertical passes ten consecutive runs and race; ordinary, vet, downstream API/UI, and diff evidence are clean. The same `gpt-5.6-sol` medium reviewer reports no remaining P1/P2. | 2026-08-09 | Complete; Component 5 re-accepted |
 
 **C5-S1 stopped-gate record:** The in-scope implementation currently adds only
 pure `internal/massive` normalization code and focused tests; no socket,

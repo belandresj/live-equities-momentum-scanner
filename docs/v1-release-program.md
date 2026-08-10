@@ -313,3 +313,87 @@ goal. Do not push, rebase, amend, rewrite history, delete branches, or use
 destructive reset operations. A failed gate is recorded before correction; it
 does not justify combining unrelated work. Apply Section 3's containment rule
 when safe exact-path committing is unavailable and continue to the RC outcome.
+
+## 11. Private/local V1 RC acceptance ledger
+
+**State:** accepted 2026-08-09 after the production vertical proof, corrected
+C5 concurrency boundary, complete verification, and clean focused final-review
+re-review.
+
+`P-V1-RC-VERTICAL` is the compact acceptance-only scenario
+`TestPV1RCVertical`. One synthetic eligible symbol is advanced through the sole
+live scanner engine and projected to the real private checkpoint store. A new
+`operations.NewWithCheckpoint` runtime then uses production `Runtime.RunLive`,
+`LiveAdapter`, `HydrationWorker`, automatic candidate discovery/install, and
+production hydration-purpose selection against deterministic local WebSocket
+and HTTPS fixtures. The automatic checkpoint catch-up preserves qualified
+aggregate ranking, acquires post-ack Trade/Quote coverage and current Tape
+Rate/Spread, seals one immutable C10 sample, serves it through the loopback HTTP
+route with exact-origin CORS, and passes those exact response bytes to C11's
+production validator/view model.
+The final view is current, checkpoint-installed, and contains the server-ranked
+`AAA` row with five-second Tape Rate `0.2/s` and Spread `16.7 bps / 2.00¢`.
+
+The initial final review correctly rejected a lower-level harness that manually
+installed the checkpoint and injected successful recovery/T/Q facts around the
+production scanner composition. It also found that helper disposition waits
+used background contexts rather than the proof's 30-second deadline. Replacing
+those shortcuts exposed a real C5/C8 integration race: a delivery loop already
+blocked in the raw queue before a concurrent T/Q command write captured a nil
+status context and rejected the later valid acknowledgement as ambiguous. The
+adapter now records the raw-frame sequence observed before the command write
+and re-evaluates correlation after a frame is popped; only a strictly later
+frame can receive that pending context. This preserves fail-closed treatment of
+pre-command statuses while accepting the causally later provider response. A
+focused re-review then found the complementary no-response case: if the
+provider accepted the write but sent neither an acknowledgement nor another
+frame, an already-blocked dequeue could not discover the pending deadline. The
+queue now has a command-state recheck signal that changes no frame or queue
+accounting. `ChangeTQ` sends it after write accounting is settled, so the
+blocked delivery loop installs the existing command deadline and emits a
+bounded ambiguous result with zero provider position when no response arrives.
+Operational command deadlines use process monotonic time rather than the
+injected market/receipt clock, which may be static or deliberately displaced
+in deterministic proofs.
+`TestPC5CommandDeadlineWakesBlockedDequeue` starts `next` before the command,
+sends no provider response under a market clock displaced to 2099, and proves
+bounded completion plus reconciled command and frame accounting. All proof
+helper admissions and completions now use the common bounded context.
+
+The corrected acceptance command
+`go test -v -run '^TestPV1RCVertical$' -timeout 2m ./cmd/scanner -count=1`
+passes in 0.27 seconds, ten consecutive ordinary runs pass, and the same proof
+under `-race` with a three-minute command timeout passes. The two focused C5
+command-correlation tests pass 20 consecutive ordinary runs, and those tests
+plus bounded raw-queue accounting pass ten consecutive race runs. The final
+20-test C11 model/visual suite,
+`go test -short -timeout 2m ./...`, `go vet ./...`, and `git diff --check` are
+clean. The ordinary suite skips this cross-language acceptance path. The
+production Chrome `P-C11-VISUAL` proof already establishes the distinct
+renderer/layout/accessibility/transport and UI-only restart claims against C10
+fixtures; it is reused unchanged. Accepted C1-C4 and C6-C10 primary proofs and
+the recorded C7/C8 6,000-symbol capacity evidence are reused because their
+production boundaries did not change. C5 was reopened narrowly: the two
+blocked-dequeue T/Q correlation counterexamples invalidate its prior complete
+concurrency claim while preserving its other ten primary proofs. The focused
+C5 timeout regression, affected adapter tests, their race executions, the
+production vertical proof, and the same integrated reviewer are the allocated
+correction and re-acceptance evidence.
+
+The required `gpt-5.6-sol` medium integrated read-only review first rejected
+the manual checkpoint/fact shortcuts and unbounded proof waits, then found the
+blocked-dequeue correlation and silent-provider deadline counterexamples. After
+the production-path, causal-sequence, command-state wake, and process-clock
+corrections, the same reviewer found no remaining P1/P2. Component 5 is
+re-accepted for the corrected command boundary, Component 11 remains finally
+accepted, and the private/local V1 RC is accepted.
+
+Every capability remains routed exactly once through Section 6. This vertical
+proof asserts only cross-component identity, status/field preservation,
+checkpoint catch-up wiring, T/Q independence/enrichment, loopback API/CORS,
+and production UI consumption. It does not establish current provider
+population or timing, provider entitlements, live chronology, public-network
+security/availability, another browser/mobile layout, trading edge, or
+executable expectancy. Market-hours validation remains `pending` under
+[`market-hours-validation.md`](market-hours-validation.md); no credential or
+provider request was used.
