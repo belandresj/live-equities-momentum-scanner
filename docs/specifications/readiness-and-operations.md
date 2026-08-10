@@ -37,9 +37,9 @@ Sections 8-19 are completed here after its just-in-time V2 reconnaissance.
 | --- | --- | --- | --- |
 | Boundary/reconnaissance plan | `accepted` | Direct owner V1 program revision; C7 finally accepted; recorded V2 scope inspected | Complete |
 | Completed contract | `accepted_current_plan` | Two slices and two primary proofs preserve the existing engine-owned lifecycle/readiness boundary; no new competing owner or consequential interface requires pre-implementation review | Implement `C8-S1` |
-| `C8-S1` runtime/lifecycle | `accepted` | `P-C8-RUNTIME` covers initial bootstrap retry/exhaustion, two live-gap-live recoveries followed by exact post-live exhaustion, checkpoint pre-plan false-ready rejection, active-live shutdown join, and timeout without a false joined claim; affected race clean | Complete |
+| `C8-S1` runtime/lifecycle | `accepted_after_correction` | 2026-08-10 live-start evidence invalidated the use of one 60-second wall-clock deadline for both connection establishment and full-population hydration. Corrected `P-C8-RUNTIME` proves the connection deadline is handshake-only, finite C6 hydration can outlive it, the subscribed live tail is consumed concurrently, and every causal predecessor is drained through the ingress fence before readiness; affected race clean. | Complete |
 | `C8-S2` measurements/load | `accepted_after_correction` | `P-C8-LOAD`: 6,000-symbol bound population, 100 active aggregate symbols, 20 corrections, 20 duplicates, 20 rejects, and 60 normalized T/Q facts correctly fenced without acknowledged membership; 53.67 s end-to-end and exact accounting | Complete |
-| Final component review | `accepted` | Focused final re-review found no remaining P1/P2 finding after the recovery, shutdown, and checkpoint false-ready corrections; ordinary and affected race suites passed uncached. Unchanged non-short load evidence was reused. | Begin C9 contract completion |
+| Final component review | `accepted_after_2026-08-10_correction` | Focused re-review confirmed the hydration-deadline/live-tail correction plus synchronized concurrent-terminal diagnostics and an explicit active-attempt shutdown join. No P1/P2 finding remains; uncached ordinary, focused race, vet, UI-model, and diff checks pass. Unchanged non-short load evidence is reused. | Complete |
 
 ## 1-4. Outcome, scope, ownership, and settled boundary
 
@@ -162,13 +162,17 @@ pre-ack, post-admission, and stale-epoch facts are fenced. This realizes
 `LIFE-LIVE-02`/`03` without adding a watermark or adapter-owned currentness.
 
 Current local settings are: engine capacity 8,192 with 128 required-input
-reserve; C5 queue 512 frames (the accepted C5 hard limit), 64 MiB total, 8 MiB per frame; four-second
-evaluation delay; one-second sampler cadence; two-second readiness tolerance
-past the exact causal target; three recovery attempts; 60 seconds to establish
-each attempt (C7 measured fresh bootstrap at about 36.6 seconds);
-and ten-second controlled shutdown. Constructors reject nonpositive, inverted,
-or above-component-hard-limit settings. These are V1 delivery settings and may
-be revised from measured evidence without changing readiness meaning.
+reserve; C5 queue 512 frames (the accepted C5 hard limit), 64 MiB total, 8 MiB
+per frame; four-second evaluation delay; one-second sampler cadence; two-second
+readiness tolerance past the exact causal target; three recovery attempts; 60
+seconds to establish and acknowledge each connection attempt; C6's finite
+full-population hydration plan with eight workers, at most two pages and three
+15-second attempts per page, explicit byte/record limits, and parent/shutdown
+cancellation; and ten-second controlled shutdown. Hydration has no unrelated
+whole-plan wall-clock success deadline. Constructors reject nonpositive,
+inverted, or above-component-hard-limit settings. These are V1 delivery
+settings and may be revised from measured evidence without changing readiness
+meaning.
 
 ## 10. Required behavior
 
@@ -237,24 +241,44 @@ correction loop and updates this sole delivery ledger without an owner stop.
 
 `C8-S1` now provides the runnable `cmd/scanner` composition, bounded binding
 installation, lazy C7 latest-to-previous installation, up to three consecutive
-failed connection/hydration establishment attempts with an independent
-60-second deadline for each attempt, a live
-connection lifetime rooted separately from those establishment deadlines,
-explicit retry or exhaustion policy facts, one-second engine timers,
-engine-issued C5 live-coverage fences, and a ten-second joined shutdown. The
+failed recovery attempts, a 60-second connection establishment/acknowledgement
+deadline, finite C6 hydration whose lifetime is rooted in the live operation
+rather than that connection deadline, concurrent subscribed-live-tail delivery
+during hydration, explicit retry or exhaustion policy facts, one-second engine
+timers, engine-issued C5 live-coverage fences, and a ten-second joined shutdown. The
 queue setting was corrected from the provisional 4,096 frames to the accepted
-C5 hard limit of 512. The establishment bound was corrected from 30 to 60
-seconds because C7's accepted fresh-bootstrap median was about 36.6 seconds. A
-single injected C5 clock source, defaulting to UTC wall time, keeps receipts,
+C5 hard limit of 512. The original establishment bound was corrected from 30
+to 60 seconds using C7's accepted fresh-bootstrap median of about 36.6 seconds,
+but 2026-08-10 evidence showed that benchmark did not justify a production
+full-universe hydration deadline. The deadline now ends after the WebSocket
+handshake; C6's per-request retries/deadlines and finite plan bound hydration.
+A single injected C5 clock source, defaulting to UTC wall time, keeps receipts,
 deadlines, terminals, and fence capture causally coherent without changing
 production time semantics.
 
 `P-C8-RUNTIME` rejects process-live-as-ready, T/Q-as-readiness, a stale
-watermark, disconnect-as-current, an establishment deadline canceling a healthy
-live connection, caller-forged/replayed continuous-coverage facts, and unjoined
-shutdown. The real local WebSocket/REST trace remained `live` and ready beyond
-its two-second test establishment deadline because ordered live fences and
-timers advanced the sole engine watermark. Focused race verification passed.
+watermark, disconnect-as-current, a connection deadline canceling finite
+hydration or a healthy live connection, queued live input being skipped by the
+hydration fence, caller-forged/replayed continuous-coverage facts, and unjoined
+shutdown. The corrected local WebSocket/REST trace holds REST hydration beyond
+its 250-millisecond connection deadline, admits a subscribed live aggregate
+while hydration is still active, then becomes ready only after hydration and
+the exact ingress fence reconcile. Focused race verification passed.
+
+The focused review found two failure-path defects in that correction. First,
+up to eight concurrent C6 terminal callbacks could race while recording a
+rejected or fenced terminal diagnostic after connection loss. The sink now
+synchronizes terminal-error and fence state, aggregates rejected terminal
+diagnostics, and exposes one post-worker-join result. An eight-worker test holds
+all REST requests active, drops the live epoch, and proves terminal exhaustion
+plus reconciled adapter cleanup under the race detector. Second, parent
+cancellation could pre-cancel `closeAndDrain`, allowing `liveDone` to close
+before the C5 attempt cleanup goroutine joined. Attempt cleanup now uses an
+independent bounded context and waits for the attempt; `Shutdown` independently
+requires the active attempt to join before timer, engine, writer, or
+`joined=true`. A second eight-worker test shuts down with every REST request
+blocked and proves RunLive, requests, adapter queue, and attempt cleanup are
+joined. Focused re-review found both issues resolved with no new P1/P2 finding.
 
 Final review reopened two claims. First, retry purpose and exhaustion were
 selected from the supervisor's total attempt ordinal, so a failed initial

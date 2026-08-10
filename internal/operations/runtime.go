@@ -14,22 +14,22 @@ import (
 )
 
 type Config struct {
-	EngineCapacity, RequiredReserve           int
-	RecoveryAttempts                          int
-	EvaluationDelay, ReadinessTolerance       time.Duration
-	SampleCadence                             time.Duration
-	RecoveryAttemptDeadline, ShutdownDeadline time.Duration
+	EngineCapacity, RequiredReserve             int
+	RecoveryAttempts                            int
+	EvaluationDelay, ReadinessTolerance         time.Duration
+	SampleCadence                               time.Duration
+	ConnectionAttemptDeadline, ShutdownDeadline time.Duration
 }
 
 func DefaultConfig() Config {
-	return Config{EngineCapacity: 8192, RequiredReserve: 128, RecoveryAttempts: 3, EvaluationDelay: 4 * time.Second, ReadinessTolerance: 2 * time.Second, SampleCadence: time.Second, RecoveryAttemptDeadline: 60 * time.Second, ShutdownDeadline: 10 * time.Second}
+	return Config{EngineCapacity: 8192, RequiredReserve: 128, RecoveryAttempts: 3, EvaluationDelay: 4 * time.Second, ReadinessTolerance: 2 * time.Second, SampleCadence: time.Second, ConnectionAttemptDeadline: 60 * time.Second, ShutdownDeadline: 10 * time.Second}
 }
 
 func (c Config) valid() bool {
 	return c.EngineCapacity > 1 && c.RequiredReserve > 0 && c.RequiredReserve < c.EngineCapacity && c.RecoveryAttempts > 0 && c.RecoveryAttempts <= 10 &&
 		c.EvaluationDelay >= 0 && c.ReadinessTolerance >= 0 && c.ReadinessTolerance <= 10*time.Second &&
 		c.SampleCadence > 0 && c.SampleCadence <= 10*time.Minute &&
-		c.RecoveryAttemptDeadline > 0 && c.RecoveryAttemptDeadline <= 2*time.Minute &&
+		c.ConnectionAttemptDeadline > 0 && c.ConnectionAttemptDeadline <= 2*time.Minute &&
 		c.ShutdownDeadline > 0 && c.ShutdownDeadline <= time.Minute
 }
 
@@ -297,6 +297,14 @@ func (r *Runtime) Shutdown(ctx context.Context) error {
 		case <-liveDone:
 		case <-deadline.Done():
 			return errors.New("live composition shutdown deadline exceeded")
+		}
+	}
+	r.metricsMu.Lock()
+	attempt := r.attempt
+	r.metricsMu.Unlock()
+	if attempt != nil {
+		if err := attempt.Wait(deadline); err != nil {
+			return errors.New("live adapter cleanup deadline exceeded")
 		}
 	}
 	if r.timerCancel != nil {

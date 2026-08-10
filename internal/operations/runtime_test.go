@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -198,9 +199,10 @@ func TestPC9PressureBroadAccountingRoutesGlobalIngressIntegrity(t *testing.T) {
 	}
 }
 
-// TestC8RUNTIME02HealthyLifetimeOutlivesRecoveryDeadline proves the bounded
-// establishment context is not the lifetime of a healthy live connection.
-func TestC8RUNTIME02HealthyLifetimeOutlivesRecoveryDeadline(t *testing.T) {
+// TestC8RUNTIME02HydrationOutlivesConnectionDeadline proves the connection
+// establishment deadline neither cancels finite hydration nor prevents the
+// subscribed live tail from being consumed while REST work remains active.
+func TestC8RUNTIME02HydrationOutlivesConnectionDeadline(t *testing.T) {
 	binding := operationsBinding(t)
 	base := binding.SessionStart().Add(20 * time.Minute)
 	startedClock := time.Now()
@@ -209,21 +211,27 @@ func TestC8RUNTIME02HealthyLifetimeOutlivesRecoveryDeadline(t *testing.T) {
 	config.EvaluationDelay = 50 * time.Millisecond
 	config.ReadinessTolerance = time.Second
 	config.SampleCadence = 20 * time.Millisecond
-	config.RecoveryAttemptDeadline = 2 * time.Second
+	config.ConnectionAttemptDeadline = 250 * time.Millisecond
 	ctx := context.Background()
 	run, err := New(ctx, binding, config, clock)
 	if err != nil {
 		t.Fatal(err)
 	}
-	release := make(chan struct{})
-	close(release)
-	websocketServer := capacityWebSocketServer(t, release, nil)
+	releaseLive := make(chan struct{})
+	liveWindow := base.Add(-config.EvaluationDelay).Truncate(time.Second)
+	websocketServer := capacityWebSocketServer(t, releaseLive, []string{"[" + capacityAggregateJSON("AAA", liveWindow, 11, 12) + "]"})
 	defer websocketServer.Close()
 	adapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{Endpoint: "ws" + strings.TrimPrefix(websocketServer.URL, "http"), Credential: "fixture", Queue: massive.LiveQueueConfig{FrameSlots: 8, MaxFrameBytes: 4096, TotalFrameBytes: 16384}, Clock: clock})
 	if err != nil {
 		t.Fatal(err)
 	}
-	hydrationServer := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	releaseHydration := make(chan struct{})
+	hydrationServer := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		select {
+		case <-request.Context().Done():
+			return
+		case <-releaseHydration:
+		}
 		fmt.Fprint(writer, `{"status":"OK","ticker":"AAA","adjusted":false,"results":[]}`)
 	}))
 	defer hydrationServer.Close()
@@ -234,6 +242,22 @@ func TestC8RUNTIME02HealthyLifetimeOutlivesRecoveryDeadline(t *testing.T) {
 	components := LiveComponents{Adapter: adapter, Hydrator: hydrator, Workers: 1, RowsPerChunk: 1, MaximumResponseBytes: 1 << 20, MaximumNormalizedRecords: 57_600, MaximumResidentRecords: 57_600, Durations: capacityDurations()}
 	joined := make(chan error, 1)
 	go func() { joined <- run.RunLive(ctx, components) }()
+	close(releaseLive)
+	deliveryDeadline := time.After(2 * time.Second)
+	for run.Engine().ObserveOperational().Aggregates.Inserted == 0 {
+		select {
+		case err := <-joined:
+			t.Fatalf("live composition ended during hydration: %v", err)
+		case <-deliveryDeadline:
+			t.Fatalf("live tail was not consumed during hydration: %+v", run.Metrics().LiveQueue)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	time.Sleep(config.ConnectionAttemptDeadline + 100*time.Millisecond)
+	if got := run.Engine().ObserveOperational(); got.Lifecycle != "hydrating" || !got.Connection.Active {
+		t.Fatalf("connection deadline canceled active hydration: %+v", got)
+	}
+	close(releaseHydration)
 	deadline := time.After(3 * time.Second)
 	for !run.Status().BackendReady {
 		select {
@@ -244,7 +268,7 @@ func TestC8RUNTIME02HealthyLifetimeOutlivesRecoveryDeadline(t *testing.T) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	time.Sleep(config.RecoveryAttemptDeadline + 100*time.Millisecond)
+	time.Sleep(config.ConnectionAttemptDeadline + 100*time.Millisecond)
 	if got := run.Status(); !got.BackendReady || got.Lifecycle != "live" {
 		t.Fatalf("healthy connection inherited establishment deadline: %+v", got)
 	}
@@ -260,6 +284,152 @@ func TestC8RUNTIME02HealthyLifetimeOutlivesRecoveryDeadline(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("Shutdown returned before the live composition joined")
+	}
+}
+
+func TestC8RUNTIME02MultiWorkerDisconnectDuringHydration(t *testing.T) {
+	symbols := make([]string, 8)
+	for index := range symbols {
+		symbols[index] = fmt.Sprintf("S%02d", index)
+	}
+	binding := capacityBinding(t, symbols)
+	base := binding.SessionStart().Add(20 * time.Minute)
+	startedClock := time.Now()
+	clock := func() time.Time { return base.Add(time.Since(startedClock)).UTC() }
+	config := DefaultConfig()
+	config.RecoveryAttempts = 1
+	config.ConnectionAttemptDeadline = 2 * time.Second
+	config.ShutdownDeadline = 2 * time.Second
+	config.SampleCadence = 10 * time.Minute
+	run, err := New(context.Background(), binding, config, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allActive := make(chan struct{})
+	var active atomic.Int32
+	var activeOnce sync.Once
+	hydrationServer := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		if active.Add(1) == int32(len(symbols)) {
+			activeOnce.Do(func() { close(allActive) })
+		}
+		defer active.Add(-1)
+		<-request.Context().Done()
+	}))
+	defer hydrationServer.Close()
+	hydrator, err := massive.NewHydrationWorker(hydrationServer.URL, func() (string, error) { return "fixture", nil }, hydrationServer.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var connections atomic.Int32
+	var failNew atomic.Bool
+	websocketServer := recoverableWebSocketServer(t, &connections, &failNew, allActive)
+	defer websocketServer.Close()
+	adapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{Endpoint: "ws" + strings.TrimPrefix(websocketServer.URL, "http"), Credential: "fixture", Queue: massive.LiveQueueConfig{FrameSlots: 8, MaxFrameBytes: 4096, TotalFrameBytes: 16384}, Clock: clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	components := LiveComponents{Adapter: adapter, Hydrator: hydrator, Workers: 8, RowsPerChunk: 1, MaximumResponseBytes: 8 << 20, MaximumNormalizedRecords: int64(len(symbols)) * 57_600, MaximumResidentRecords: int64(len(symbols)) * 57_600, Durations: capacityDurations()}
+	done := make(chan error, 1)
+	go func() { done <- run.RunLive(context.Background(), components) }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "recovery attempts exhausted") {
+			t.Fatalf("disconnect during hydration = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("disconnect did not terminate hydration: active=%d view=%+v", active.Load(), run.Engine().ObserveOperational())
+	}
+	shutdown, cancelShutdown := context.WithTimeout(context.Background(), config.ShutdownDeadline)
+	defer cancelShutdown()
+	if err := run.Shutdown(shutdown); err != nil {
+		t.Fatal(err)
+	}
+	waitForNoActiveHydration(t, &active)
+	if got := adapter.Accounting(); !got.Reconciles() || got.AttemptsActive != 0 || got.AttemptsConnected != 0 || active.Load() != 0 {
+		t.Fatalf("disconnect cleanup did not join: adapter=%+v active_hydration=%d", got, active.Load())
+	}
+}
+
+func TestC8RUNTIME02ShutdownJoinsBlockedHydrationAndAttempt(t *testing.T) {
+	symbols := make([]string, 8)
+	for index := range symbols {
+		symbols[index] = fmt.Sprintf("S%02d", index)
+	}
+	binding := capacityBinding(t, symbols)
+	base := binding.SessionStart().Add(20 * time.Minute)
+	startedClock := time.Now()
+	clock := func() time.Time { return base.Add(time.Since(startedClock)).UTC() }
+	config := DefaultConfig()
+	config.ConnectionAttemptDeadline = 2 * time.Second
+	config.ShutdownDeadline = 2 * time.Second
+	config.SampleCadence = 10 * time.Minute
+	run, err := New(context.Background(), binding, config, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allActive := make(chan struct{})
+	var active atomic.Int32
+	var activeOnce sync.Once
+	hydrationServer := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		if active.Add(1) == int32(len(symbols)) {
+			activeOnce.Do(func() { close(allActive) })
+		}
+		defer active.Add(-1)
+		<-request.Context().Done()
+	}))
+	defer hydrationServer.Close()
+	hydrator, err := massive.NewHydrationWorker(hydrationServer.URL, func() (string, error) { return "fixture", nil }, hydrationServer.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var connections atomic.Int32
+	var failNew atomic.Bool
+	disconnect := make(chan struct{})
+	websocketServer := recoverableWebSocketServer(t, &connections, &failNew, disconnect)
+	defer websocketServer.Close()
+	adapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{Endpoint: "ws" + strings.TrimPrefix(websocketServer.URL, "http"), Credential: "fixture", Queue: massive.LiveQueueConfig{FrameSlots: 8, MaxFrameBytes: 4096, TotalFrameBytes: 16384}, Clock: clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	components := LiveComponents{Adapter: adapter, Hydrator: hydrator, Workers: 8, RowsPerChunk: 1, MaximumResponseBytes: 8 << 20, MaximumNormalizedRecords: int64(len(symbols)) * 57_600, MaximumResidentRecords: int64(len(symbols)) * 57_600, Durations: capacityDurations()}
+	done := make(chan error, 1)
+	go func() { done <- run.RunLive(context.Background(), components) }()
+	select {
+	case <-allActive:
+	case err := <-done:
+		t.Fatalf("live composition ended before shutdown: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatalf("hydration workers did not all start: active=%d", active.Load())
+	}
+	shutdown, cancelShutdown := context.WithTimeout(context.Background(), config.ShutdownDeadline)
+	defer cancelShutdown()
+	if err := run.Shutdown(shutdown); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("shutdown live result = %v", err)
+		}
+	default:
+		t.Fatal("Shutdown returned before RunLive joined")
+	}
+	waitForNoActiveHydration(t, &active)
+	metrics := run.Metrics()
+	if got := adapter.Accounting(); !run.joined.Load() || !got.Reconciles() || got.AttemptsActive != 0 || got.AttemptsConnected != 0 || active.Load() != 0 || !metrics.LiveQueue.Reconciles() {
+		t.Fatalf("shutdown cleanup did not join: joined=%t adapter=%+v active_hydration=%d queue=%+v", run.joined.Load(), got, active.Load(), metrics.LiveQueue)
+	}
+}
+
+func waitForNoActiveHydration(t *testing.T, active *atomic.Int32) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for active.Load() != 0 {
+		select {
+		case <-deadline:
+			t.Fatalf("hydration request handlers did not exit: active=%d", active.Load())
+		case <-time.After(time.Millisecond):
+		}
 	}
 }
 
@@ -284,7 +454,7 @@ func TestC8RUNTIME03InitialRetryAndExhaustion(t *testing.T) {
 			config.RecoveryAttempts = 2
 			config.EvaluationDelay = 20 * time.Millisecond
 			config.SampleCadence = 10 * time.Millisecond
-			config.RecoveryAttemptDeadline = 3 * time.Second
+			config.ConnectionAttemptDeadline = 3 * time.Second
 			config.ShutdownDeadline = 2 * time.Second
 			run, err := New(context.Background(), binding, config, clock)
 			if err != nil {
@@ -366,7 +536,7 @@ func TestC8RUNTIME04SuccessfulRecoveryResetsBudget(t *testing.T) {
 	config.RecoveryAttempts = 2
 	config.EvaluationDelay = 20 * time.Millisecond
 	config.SampleCadence = 10 * time.Millisecond
-	config.RecoveryAttemptDeadline = 3 * time.Second
+	config.ConnectionAttemptDeadline = 3 * time.Second
 	config.ShutdownDeadline = 2 * time.Second
 	run, err := New(context.Background(), binding, config, clock)
 	if err != nil {

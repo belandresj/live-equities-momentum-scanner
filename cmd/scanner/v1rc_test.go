@@ -115,7 +115,7 @@ func TestPV1RCVertical(t *testing.T) {
 		t.Fatal(err)
 	}
 	config.SampleCadence = 50 * time.Millisecond
-	config.RecoveryAttemptDeadline = 5 * time.Second
+	config.ConnectionAttemptDeadline = 5 * time.Second
 	config.ShutdownDeadline = 2 * time.Second
 	restarted, err := operations.NewWithCheckpoint(proof, binding, config, clock, writer)
 	if err != nil {

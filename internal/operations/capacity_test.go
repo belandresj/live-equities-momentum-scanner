@@ -167,7 +167,7 @@ func TestC8LOAD01CurrentHostMixedLoad(t *testing.T) {
 		runtime.GOOS, runtime.GOARCH, runtime.Version(), runtime.NumCPU(), population, wantFrames, initialRecords, corrections, exactDuplicates, engineRejections, tqFacts, elapsed, throughput,
 		metrics.MeanProcessingDelay, metrics.MaxProcessingDelay, metrics.QueueHighFrames, metrics.QueueHighBytes, int64(metrics.HeapAllocBytes)-int64(baseline.HeapAllocBytes), metrics.Goroutines-baseline.Goroutines, metrics.WatermarkLag)
 
-	run.closeAndDrain(ctx, attempt, 190, massive.CloseControlledStop)
+	run.closeAndDrain(attempt, 190, massive.CloseControlledStop)
 	shutdown, cancelShutdown := context.WithTimeout(context.Background(), config.ShutdownDeadline)
 	defer cancelShutdown()
 	if err := run.Shutdown(shutdown); err != nil {

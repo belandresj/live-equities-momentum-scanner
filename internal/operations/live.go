@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/belandresj/live-equities-momentum-scanner/internal/checkpoint"
@@ -45,12 +46,12 @@ func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error 
 	}
 	var lastErr error
 	for attemptOrdinal := uint64(1); ; attemptOrdinal++ {
-		recoveryCtx, cancelRecovery := context.WithTimeout(ctx, r.config.RecoveryAttemptDeadline)
-		attempt, err := r.openAttempt(ctx, recoveryCtx, components, attemptOrdinal*100)
+		establishmentCtx, cancelEstablishment := context.WithTimeout(ctx, r.config.ConnectionAttemptDeadline)
+		attempt, err := r.openAttempt(ctx, establishmentCtx, components, attemptOrdinal*100)
+		cancelEstablishment()
 		if err != nil {
-			cancelRecovery()
 			if attempt != nil {
-				r.closeAndDrain(ctx, attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
+				r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
 			}
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -64,15 +65,13 @@ func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error 
 		r.setLiveSources(attempt, components.Adapter)
 		purpose, err := hydrationPurpose(r.engine.ObserveOperational())
 		if err != nil {
-			cancelRecovery()
-			r.closeAndDrain(ctx, attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
+			r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
 			return err
 		}
-		fenceCommand, err := r.hydrate(recoveryCtx, components, attempt, purpose)
+		fenceCommand, err := r.hydrate(ctx, components, attempt, purpose)
 		if err != nil {
-			cancelRecovery()
 			lastErr = err
-			r.closeAndDrain(ctx, attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
+			r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -81,17 +80,16 @@ func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error 
 			}
 			continue
 		}
-		cancelRecovery()
 		if r.engine.ObserveOperational().Hydration.PolicyWaiting {
 			action := engine.HydrationPolicyRetry
 			if r.recoveryBudgetExhausted() {
 				action = engine.HydrationPolicyExhaust
 			}
 			if err := r.applyHydrationPolicy(ctx, fenceCommand, action, attemptOrdinal); err != nil {
-				r.closeAndDrain(ctx, attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
+				r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
 				return err
 			}
-			r.closeAndDrain(ctx, attempt, attemptOrdinal*100+90, massive.CloseSuperseded)
+			r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseSuperseded)
 			if action == engine.HydrationPolicyExhaust {
 				return errors.New("aggregate recovery attempts exhausted")
 			}
@@ -109,13 +107,13 @@ func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error 
 			}
 		}
 		if ctx.Err() != nil {
-			r.closeAndDrain(context.Background(), attempt, attemptOrdinal*100+90, massive.CloseControlledStop)
+			r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseControlledStop)
 			return ctx.Err()
 		}
 		// A deadline can stop the caller before the adapter has emitted its
 		// terminal. Close and deliver that terminal so the engine, rather than
 		// the supervisor, owns the transition to recovery.
-		r.closeAndDrain(ctx, attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
+		r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
 	}
 }
 
@@ -161,12 +159,9 @@ func (r *Runtime) finishRecoveryExhaustion(ctx context.Context, cause error) err
 	return errors.Join(errors.New("aggregate recovery attempts exhausted"), cause)
 }
 
-func (r *Runtime) closeAndDrain(parent context.Context, attempt *massive.LiveAttempt, token uint64, cause massive.CloseCause) {
-	if parent == nil {
-		parent = context.Background()
-	}
+func (r *Runtime) closeAndDrain(attempt *massive.LiveAttempt, token uint64, cause massive.CloseCause) {
 	_ = attempt.Close(massive.CloseEpochCommand{BindingIdentity: r.binding.Identity(), ConnectionEpoch: attempt.Epoch(), CommandToken: token, Cause: cause})
-	drainCtx, cancel := context.WithTimeout(parent, r.config.ShutdownDeadline)
+	drainCtx, cancel := context.WithTimeout(context.Background(), r.config.ShutdownDeadline)
 	defer cancel()
 	for {
 		started := time.Now()
@@ -175,6 +170,7 @@ func (r *Runtime) closeAndDrain(parent context.Context, attempt *massive.LiveAtt
 			r.observeDelivery(started, result)
 		}
 		if err != nil || !ok {
+			_ = attempt.Wait(drainCtx)
 			return
 		}
 	}
@@ -260,12 +256,48 @@ func (r *Runtime) hydrate(ctx context.Context, components LiveComponents, attemp
 		return engine.HydrationFenceCommand{}, err
 	}
 	sink := &engineHydrationSink{owner: r.engine, tokens: tokens}
-	result := components.Hydrator.Run(ctx, ctx, plan, sink)
+	workCtx, cancelWork := context.WithCancel(ctx)
+	pumpCtx, cancelPump := context.WithCancel(ctx)
+	pumpDone := make(chan error, 1)
+	go func() {
+		for {
+			started := time.Now()
+			result, ok, err := attempt.DeliverNextToEngine(pumpCtx, r.engine)
+			if ok {
+				r.observeDelivery(started, result)
+			}
+			if err != nil {
+				cancelWork()
+				pumpDone <- err
+				return
+			}
+			if !ok {
+				if pumpCtx.Err() != nil {
+					pumpDone <- pumpCtx.Err()
+				} else {
+					cancelWork()
+					pumpDone <- errors.New("aggregate connection ended during hydration")
+				}
+				return
+			}
+		}
+	}()
+	result := components.Hydrator.Run(workCtx, ctx, plan, sink)
+	cancelWork()
+	cancelPump()
+	pumpErr := <-pumpDone
 	accounting := result.Accounting()
-	if sink.err != nil || accounting.ItemsStarted != accounting.ProviderCompletedValue+accounting.ProviderCompletedEmpty+accounting.ProviderFailed+accounting.ProviderCanceled || sink.fence.CommandToken() == 0 {
+	fence, sinkErr := sink.result()
+	if sinkErr != nil || accounting.ItemsStarted != accounting.ProviderCompletedValue+accounting.ProviderCompletedEmpty+accounting.ProviderFailed+accounting.ProviderCanceled || fence.CommandToken() == 0 {
 		return engine.HydrationFenceCommand{}, errors.New("hydration worker did not terminally reconcile")
 	}
-	return sink.fence, r.finishFence(ctx, attempt, sink.fence, planResult.Plan.End())
+	if pumpErr != nil && !errors.Is(pumpErr, context.Canceled) {
+		return engine.HydrationFenceCommand{}, errors.Join(errors.New("live delivery failed during hydration"), pumpErr)
+	}
+	if ctx.Err() != nil {
+		return engine.HydrationFenceCommand{}, ctx.Err()
+	}
+	return fence, r.finishFence(ctx, attempt, fence, planResult.Plan.End())
 }
 
 func (r *Runtime) applyHydrationPolicy(ctx context.Context, command engine.HydrationFenceCommand, action engine.HydrationPolicyAction, token uint64) error {
@@ -312,21 +344,36 @@ func (r *Runtime) finishFence(ctx context.Context, attempt *massive.LiveAttempt,
 	if err := attempt.CaptureAggregateIngressFence(ctx, r.engine, capture); err != nil {
 		return err
 	}
-	result, ok, err := attempt.DeliverNextToEngine(ctx, r.engine)
-	if err != nil {
-		return errors.Join(errors.New("hydration fence delivery failed"), err)
+	for {
+		started := time.Now()
+		result, ok, err := attempt.DeliverNextToEngine(ctx, r.engine)
+		if ok {
+			r.observeDelivery(started, result)
+		}
+		if err != nil {
+			return errors.Join(errors.New("hydration fence delivery failed"), err)
+		}
+		if !ok {
+			return errors.New("aggregate connection ended before hydration fence reconciliation")
+		}
+		if result.HydrationDisposition.Code == engine.DispositionAggregateIngressFenceApplied {
+			return nil
+		}
 	}
-	if !ok || result.HydrationDisposition.Code != engine.DispositionAggregateIngressFenceApplied {
-		return fmt.Errorf("hydration fence was not reconciled: ok=%v code=%s reason=%s", ok, result.HydrationDisposition.Code, result.HydrationDisposition.Reason)
-	}
-	return nil
 }
 
 type engineHydrationSink struct {
 	owner  *engine.Engine
 	tokens map[uint64]engine.HydrationRequestToken
+	mu     sync.Mutex
 	fence  engine.HydrationFenceCommand
 	err    error
+}
+
+func (s *engineHydrationSink) result() (engine.HydrationFenceCommand, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.fence, s.err
 }
 
 func (s *engineHydrationSink) AdmitHydrationChunk(ctx context.Context, chunk massive.HydrationResultChunk) error {
@@ -371,11 +418,15 @@ func (s *engineHydrationSink) AdmitHydrationTerminal(ctx context.Context, termin
 		return ctx.Err()
 	case result := <-completion:
 		if result.Code != engine.DispositionHydrationTerminalApplied {
-			s.err = errors.New("hydration terminal rejected")
-			return s.err
+			s.mu.Lock()
+			s.err = errors.Join(s.err, errors.New("hydration terminal rejected"))
+			s.mu.Unlock()
+			return nil
 		}
 		if result.FenceCommand.CommandToken() != 0 {
+			s.mu.Lock()
 			s.fence = result.FenceCommand
+			s.mu.Unlock()
 		}
 	}
 	return nil
