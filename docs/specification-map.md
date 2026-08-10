@@ -1,7 +1,7 @@
 # Specification map
 
-**Status:** Approved Phase 1 authority index, Phase 2 sequence, and Version 1
-Release Program map.
+**Status:** Approved Phase 1 authority index, Phase 2 sequence, Version 1
+Release Program map, and C12 follow-on sequence activation.
 
 **Phase 1 approved:** 2026-08-05
 
@@ -9,6 +9,9 @@ Release Program map.
 
 **Version 1 Release Program approved:** 2026-08-07; replaces the former
 C7-C11 unattended program
+
+**C12 follow-on sequence approved:** 2026-08-09; begins only after accepted
+C11/private V1 RC and accepted C4-S6
 
 This map identifies authoritative documents, component entry points,
 dependencies, and coarse completion state. Detailed delivery state lives only
@@ -67,7 +70,8 @@ and review records.
 | [`specifications/focused-component-spec-template.md`](specifications/focused-component-spec-template.md) | Mandatory template, revised 2026-08-07: compact/modular routing, current-plan and correction records, single parent ledger, proof and slice rules. |
 | [`market-hours-validation.md`](market-hours-validation.md) | Procedure approved; execution pending a separate owner authorization. Not a private V1 RC gate and not credential authority by itself. |
 | [`v1-release-follow-on-goal.md`](v1-release-follow-on-goal.md) | Short handoff prompt for the subsequent autonomous C7-C11 goal. |
-| [`replay-rest-feasibility-benchmark.md`](replay-rest-feasibility-benchmark.md) | Proposed non-authoritative C12 acquisition evidence plan and future assignment. It authorizes no credentials, provider request, production change, or capacity claim. |
+| [`replay-rest-feasibility-benchmark.md`](replay-rest-feasibility-benchmark.md) | Completed non-authoritative C12 acquisition evidence record and separately gated rerun protocol. It authorizes no credentials, provider request, production change, rerun, or capacity claim. |
+| [`c12-implementation-goal.md`](c12-implementation-goal.md) | Owner-approved handoff prompt: close C11/private V1 RC, then implement and accept C4-S6, C12-S1, and C12-S2 sequentially. The focused component contracts remain authoritative. |
 
 ## Version 1 Release Program
 
@@ -96,20 +100,15 @@ ledgers.
 | 1 | [Reference data and session binding](specifications/reference-data-and-session-binding.md) | Finally accepted 2026-08-05. Owns immutable trading date/session bounds, eligible universe, required prior session, adjusted prior closes, and binding identity. |
 | 2 | [ScannerStateEngine and canonical state](specifications/scanner-state-engine-and-canonical-state.md) | Finally accepted 2026-08-05. Owns sole ordered mutation, canonical aggregate state, committed watermark, immutable publication, and typed extension seams. |
 | 3 | [Aggregate features, qualification, ranking, and accounting](specifications/aggregate-features-qualification-ranking-and-accounting.md) | Finally accepted 2026-08-06. Owns formulas, correction-aware qualification, exact order/top 20, independent availability, and population accounting. |
-| 4 | [Aggregate replay](specifications/aggregate-replay.md) | Finally accepted 2026-08-09 including the additive requested-end correction. A separately owner-gated `C4-S6` bounded manual-driver correction is proposed as a C12 prerequisite and changes no accepted behavior yet. Owns offline downloader/compiler, normalized artifact, deterministic source/clock, shared aggregate path, and full-source-trusted prefix completion with distinct lifecycle/accounting. |
+| 4 | [Aggregate replay](specifications/aggregate-replay.md) | Finally accepted 2026-08-09 including the additive requested-end correction. Owner-approved `C4-S6` bounded manual-driver correction is queued after C11/private V1 RC as a C12 prerequisite and changes no accepted runtime behavior until implementation. Owns offline downloader/compiler, normalized artifact, deterministic source/clock, shared aggregate path, and full-source-trusted prefix completion with distinct lifecycle/accounting. |
 | 5 | [Massive live adapter](specifications/massive-live-adapter.md) | Finally accepted 2026-08-06. Owns bounded A/T/Q/control classification, normalization, causal positions, epochs, commands, and acknowledgements. |
 | 6 | [Aggregate REST hydration and recovery](specifications/aggregate-rest-hydration-and-recovery.md) | Finally accepted 2026-08-07. Owns production pagination/workers, fresh/checkpoint/gap plans, exact terminal outcomes, ingress fencing, and REST/live reconciliation. |
 | 7 | [Checkpoints and restart](specifications/checkpoints-and-restart.md) | Finally accepted 2026-08-07 under the V1 program. S1-S3 and all eight proofs pass; the corrected 6,000-symbol restart median is 10.286 seconds versus 36.641 seconds fresh (71.9% faster), with clean focused final re-review. |
 | 8 | [Readiness and operations](specifications/readiness-and-operations.md) | Finally accepted 2026-08-07. Runnable composition, honest readiness/staleness, engine-owned bounded recovery/exhaustion, joined shutdown, continuous live coverage fences, fixed-cardinality measurements, and controlled 6,000-symbol mixed load pass with a clean corrected final review. |
 | 9 | [Top-20 T/Q coverage and features](specifications/top-20-tq-coverage-and-features.md) | Finally accepted 2026-08-08. Opaque paired membership authority, causal coverage, bounded Tape Rate/Spread state, aggregate-independent pressure shedding to known zero/explicit unknown, continuous-health ranked restoration, and exact accounting pass with clean final re-review. |
 | 10 | [Versioned snapshot API](specifications/versioned-snapshot-api.md) | Finally accepted 2026-08-08. One sealed immutable capture maps to the exact versioned schema; loopback HTTP, exact-origin CORS, liveness/readiness, bounded transport, and joined scanner composition pass with clean focused final re-review. |
-| 11 | [Independent UI](specifications/independent-ui.md) | Owner-approved V1 boundary/reconnaissance plan; detailed contract is now active after C10 acceptance. Independent Chrome-desktop high-fidelity V2 adaptation with every V1 field/status and no browser-owned market logic. |
-
-### Proposed follow-on component — not yet part of the approved sequence
-
-| Proposed sequence | Focused component | Outcome and current state |
-| --- | --- | --- |
-| 12 | [Historical replay product mode](specifications/historical-replay-product-mode.md) | Owner-approved boundary plus complete implementation-ready Sections 8-19 and clean independent review/re-reviews; completed-contract, proposed C4-S6, sequence activation, and implementation approval remain owner-gated. Defines a selected historical observation window with deterministic warm-up from session start, cumulative 1x playback through the sole engine/API/dashboard path, explicit replay/nonlive aggregate-only meaning, and retained terminal inspection. It is not a V1 RC gate or implementation authority. |
+| 11 | [Independent UI](specifications/independent-ui.md) | S1 accepted; S2 implementation and deterministic proofs complete. Required Chrome visual/interaction/independence proof, final component review, and integrated private V1 RC review remain pending. Independent Chrome-desktop UI has every V1 field/status and no browser-owned market logic. |
+| 12 | [Historical replay product mode](specifications/historical-replay-product-mode.md) | Owner-approved 2026-08-09 implementation-ready contract with clean review/re-reviews and delegated sequential execution. It is queued after C11/private V1 RC and accepted C4-S6, then implements deterministic warm-up, cumulative 1x observation through the sole engine/API/dashboard path, explicit replay/nonlive aggregate-only meaning, and retained terminal inspection. It is not part of the C7-C11 V1 RC gate. |
 
 Implementation is sequential. C8-C11 detailed contracts are completed just in
 time after the preceding final interface unless an already stable dependency

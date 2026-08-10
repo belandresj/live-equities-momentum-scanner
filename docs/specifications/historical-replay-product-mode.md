@@ -1,7 +1,7 @@
 # Historical replay product mode
 
-**Status:** Detailed implementation-ready contract and required independent
-review complete; owner approval pending before any C4-S6 or C12 implementation
+**Status:** Owner-approved implementation-ready contract. Sequential execution
+is authorized after C11 and the integrated private V1 RC are finally accepted.
 
 **Boundary approval authority:** Owner
 
@@ -10,17 +10,26 @@ observation-window workflow recorded below
 
 **Completed-contract approval authority:** Owner
 
-**Contract/reuse/test/slice-plan approval:** Required independent review and
-focused re-reviews are clean; owner decision pending
+**Contract/reuse/test/slice-plan approval:** Owner-approved 2026-08-09 after
+the required independent review and focused re-reviews were clean
 
 **Standing program decisions:** The existing
 [Version 1 Release Program](../v1-release-program.md) controls C7-C11 only. It
 does not authorize C12 approval, implementation, credential access, or changes
-to accepted C4 acquisition semantics.
+to accepted C4 acquisition semantics. The owner's 2026-08-09 C12 approval
+separately authorizes the exact C4-S6, C12-S1, and C12-S2 assignments,
+proportionate reviews, in-scope lower-level corrections, local milestone
+commits, and the retained B4 read described below. It does not authorize new
+product semantics, provider calls, credential access, public deployment,
+artifact copying, pushing, or history rewriting.
 
-**Advancement mode:** Owner-controlled completed-contract and implementation
-gates; the approved boundary permits only the routed reconnaissance and review
-needed to complete this contract
+**Advancement mode:** `delegated_sequential` for C4-S6, C12-S1, C12-S2, and
+their required reviews after C11/private V1 RC acceptance. One write-capable
+slice runs at a time. Routine corrections within the approved requirements,
+whitelists, trust boundaries, and deferrals are recorded and continue without
+another owner message; fixed-authority conflict, new source scope, provider or
+credential action, destructive/external action, or public deployment stops for
+the smallest owner decision.
 
 **Controlling Phase 1 requirements:** `PG-REPLAY-01`, `PG-REPLAY-02`,
 `PG-UI-01`, `PG-UI-02`, `PG-OBS-03`, `ARCH-OWN-01`, `ARCH-OWN-02`,
@@ -33,15 +42,15 @@ needed to complete this contract
 `LIFE-PUBLISH-02`, `LIFE-END-02`, and `LIFE-END-03`
 
 **Dependencies:** Finally accepted C4 aggregate replay including accepted
-`C4-S5` prefix-validation/requested-end completion, and requiring proposed
+`C4-S5` prefix-validation/requested-end completion, and requiring approved queued
 `C4-S6` bounded manual-driver cancellation to be accepted before C12-S1 may start; accepted C8
 operations runtime and C10 snapshot API contracts; and the current C11 dashboard API/view-
 state boundary. C7 checkpoint continuation is an accepted future-compatible
 seam but is not exposed by the first C12 product workflow. C11 final Chrome
 acceptance remains separate. Completed-contract work may use the stable current
 C11 seam, but implementation additionally requires finally accepted C11 and an
-owner-approved specification-map/sequence revision that activates C12, unless
-the owner approves a precise exception to sequential implementation.
+accepted integrated private V1 RC. The owner-approved specification-map
+revision now activates C12 immediately after those prerequisites.
 
 ## Contract document map
 
@@ -67,22 +76,23 @@ not reimplement it in its wall scheduler, forge artifact-end evidence, or become
 a second replay source/clock.
 
 **Contract-wide coverage and acceptance:** The owner approved the Sections 1-7
-boundary below on 2026-08-09. No implementation slice, detailed Sections 8-19,
-V2/current-code whitelist, product proof, or V1 completion claim is approved by
-that boundary decision.
+boundary and, after clean completed-contract review/re-reviews, approved
+Sections 8-19, the current-code/empty-V2 whitelist, six primary proofs, two
+slices, exact assignments, delegated sequential advancement, and the retained
+B4 S2 read on 2026-08-09. This approval makes no V1 completion claim.
 
 ## Authoritative delivery-state ledger
 
 | Item | State | Evidence and required review | Recorded at | Next action |
 | --- | --- | --- | --- | --- |
-| Component contract | `boundary_approved` | Owner approved an accurate historical observation window with hidden accelerated warm-up, ordinary 1x observation, replay labeling, and retained terminal inspection; independent skeleton review and focused correction re-review are clean | 2026-08-09 | Boundary complete; detailed completed-contract approval remains below |
+| Component contract | `owner_approved_queued` | Owner approved the boundary and corrected Sections 8-19 contract, empty-V2/current-code whitelist, six proofs, two slices, exact assignments, delegated sequential advancement, and S2-only retained B4 read after clean review/re-reviews | 2026-08-09 | Finish C11/private V1 RC, then accepted C4-S6, before activating C12-S1 |
 | `B-C12-REST` | `complete` | B0-B4 completed under exact owner authorizations. B4 produced one independently reopened complete 2026-08-07 artifact: 5,691/5,691 symbols terminal-complete, 7,671,171 records, 2,584,011,150 artifact bytes; compile 12:28.835 plus reopen validation 1:32.697. REST is retained for C12; the 11.58 GB peak Go heap is a known C4 routine-use limitation, not a C12 semantic change. Licensed bytes remain ignored and uncommitted. | 2026-08-09 | Use the retained validated artifact as the first local C12 acceptance input; do not hard-code its path or identity |
 | C4 requested-end correction | `complete` | Accepted `C4-S5` supplies the C4-owned requested-end seam: exact prefix application, full same-open suffix integrity, distinct engine lifecycle disposition, and intentional-suffix accounting; focused ordinary/short/race/vet verification and clean independent re-review are recorded in the C4 parent | 2026-08-09 | Consume only through the accepted C4 boundary during future C12 contract work; do not duplicate it in C12 |
-| Proposed C4 bounded manual-driver correction | `prerequisite_not_authorized` | C4 parent/source/delivery route proposed `C4-BOUNDED-CANCEL-01`, `P-C4-BOUNDED-CANCEL`, and `C4-S6`; this contract review does not approve or implement them | 2026-08-09 | Owner approves and separately accepts C4-S6 before C12-S1 can start |
-| Detailed contract | `review_clean_owner_approval_pending` | Initial required read-only `gpt-5.6-sol` medium review found one P1 (manual C4 driver lacked bounded source-owned cancellation) and two P2s (lag authority/sampling contradiction; missing C11-final/sequence prerequisite). The first focused re-review closed those and found one P2 authority-placement defect. C4 now owns the proposed requirement/proof/S6 correction; the same reviewer found the focused correction clean with no remaining P1/P2 issue. | 2026-08-09 | Owner approves or revises before any C4-S6/C12 implementation |
-| Implementation | `not_authorized` | No slices or implementation assignment accepted | 2026-08-09 | Owner approves completed contract before any product change |
-| `C12-S1` backend observation composition/API | `pending_not_authorized` | Exact assignment and four deterministic primary proofs in Sections 15-17; consequential source/phase/snapshot boundary requires focused slice review | 2026-08-09 | Await completed-contract and explicit S1 implementation approval |
-| `C12-S2` dashboard/real-artifact acceptance | `pending_not_authorized` | Exact assignment and UI/B4 proofs in Sections 15-17; licensed rows remain unread and Chrome/B4 evidence unrun | 2026-08-09 | Begins only after accepted S1 and explicit S2 authorization |
+| C4 bounded manual-driver correction | `approved_queued_prerequisite` | C4 parent/source/delivery route owner-approved `C4-BOUNDED-CANCEL-01`, `P-C4-BOUNDED-CANCEL`, and `C4-S6`; no implementation evidence exists yet | 2026-08-09 | After C11/private V1 RC acceptance, implement and separately accept C4-S6 before C12-S1 |
+| Completed-contract review | `clean` | Initial required read-only `gpt-5.6-sol` medium review found one P1 and two P2s; the first focused re-review closed those and found one P2 authority-placement defect. C4 now owns the approved requirement/proof/S6 correction; the same reviewer found the focused correction clean with no remaining P1/P2 issue. | 2026-08-09 | Reuse this evidence unless implementation reopens a reviewed premise |
+| Implementation | `authorized_queued` | Owner authorized exact C4-S6, C12-S1, and C12-S2 sequential execution and required reviews; no code is implemented yet | 2026-08-09 | Finish C11 and integrated private V1 RC, then activate C4-S6 |
+| `C12-S1` backend observation composition/API | `authorized_queued` | Exact assignment and four deterministic primary proofs in Sections 15-17; consequential source/phase/snapshot boundary requires focused slice review | 2026-08-09 | Activate only after accepted C4-S6 and final C11/private V1 RC |
+| `C12-S2` dashboard/real-artifact acceptance | `authorized_queued` | Exact assignment and UI/B4 proofs in Sections 15-17; owner authorizes reading the retained artifact in place only after S1 acceptance; licensed rows remain unread and Chrome/B4 evidence unrun | 2026-08-09 | Activate only after accepted S1; do not copy or persist path/identity/rows |
 
 ## Sections 1-4 — outcome, scope, ownership, and settled boundary
 
@@ -114,7 +124,7 @@ process. Cancellation, integrity suppression, and successful requested end are
 distinct terminal outcomes and never retain a prior apparently current ranking
 under a false ended label.
 
-This proposed mode is a product-review and engineering tool. It makes no claim
+This approved mode is a product-review and engineering tool. It makes no claim
 about live receipt latency, correction-arrival chronology, current provider
 entitlements, predictive edge, or executable trading expectancy.
 
@@ -311,8 +321,9 @@ now satisfies that prerequisite without transferring any meaning to C12.
 
 **Skeleton drift audit:** No competing state owner, fake transport, changed
 market semantics, T/Q-to-ranking dependency, or fabricated live readiness is
-proposed. Adding C12 to the V1 RC gate or authorizing automatic correction
-would require an explicit owner-approved program/map revision.
+introduced. C12 remains outside the V1 RC gate. The owner's later completed-
+contract decision supplies a separate map activation and delegated in-scope
+correction authority without expanding the C7-C11 V1 program.
 
 **Approval decision:** Owner-approved Sections 1-7 boundary. That approval
 authorized the routed current-dependency reconnaissance completed below. It
@@ -329,8 +340,8 @@ licensed rows were not opened, copied, or inspected.
 | Current accepted seam and exact source | SHA-256 | Finding | Decision and required adaptation | Required C12 proof |
 | --- | --- | --- | --- | --- |
 | C4 offline command: `cmd/aggregate-replay/main.go` | `3620d6db...79073` | Cached exact-date Component 1 binding construction already disables fresh acquisition when credentials are empty; validated replay requires explicit queue/reserve/delay and one uniform pace. | Adapt cache-only binding construction into replay product startup. Do not call the compiler/downloader and do not inherit the engineering command's uniform-pace CLI. | `P-C12-WINDOW` |
-| C4 source: `internal/replay/replay.go` | `71ce267a...166ab` | `Start`/`Step`/`Finish`, the one simulated clock, requested-end completion, exact source accounting, cancellation linkage, and cumulative rational pacer are accepted. One source pace begins at `S`, so it cannot directly express unpaced `[S,O0]` followed by 1x `(O0,O1]`. The manual exported path has no bounded source-owned cancellation operation; current cancellation accounting is private to uniform `Run`. | Reuse the unpaced source and opaque terminal facts only after proposed C4-S6 is owner-approved, implemented, proved, reviewed, and accepted. C4-S6 owns the smallest `Cancel(ctx)` seam; C12 then places only a monotonic wall-deadline coordinator around sequential `Step` calls. C12 never edits C4, advances logical time, stops the engine directly, or constructs a C4 terminal fact. | C4 `P-C4-BOUNDED-CANCEL`; C12 `P-C12-WINDOW`, `P-C12-DETERMINISM`, `P-C12-CONTAINMENT` |
-| C4 artifact validator/cursor: `internal/replayartifact/validate.go`, `internal/replayartifact/playback/playback.go` | `23721b2d...c40dfb`, `42bdba80...d5fd11d` | `OpenValidated` requires an already assembled binding and exact header interval, retains the same read-only file description, and later revalidates all prefix/suffix bytes. The artifact header holds the only candidate trading date, but no exported bounded header-probe fact exists. Current validation and terminal/suffix cursor scans do not accept cancellation contexts. | Proposed C4-S6, not C12, owns the read-only candidate-header probe and context-aware first-pass and terminal/suffix validation. The probe remains untrusted and exposes no records, coverage success, artifact identity, or playback handle. C12 consumes only the accepted seam. | C4 `P-C4-BOUNDED-CANCEL`; C12 `P-C12-WINDOW`, `P-C12-CONTAINMENT` |
+| C4 source: `internal/replay/replay.go` | `71ce267a...166ab` | `Start`/`Step`/`Finish`, the one simulated clock, requested-end completion, exact source accounting, cancellation linkage, and cumulative rational pacer are accepted. One source pace begins at `S`, so it cannot directly express unpaced `[S,O0]` followed by 1x `(O0,O1]`. The manual exported path has no bounded source-owned cancellation operation; current cancellation accounting is private to uniform `Run`. | Reuse the unpaced source and opaque terminal facts only after owner-approved C4-S6 is implemented, proved, reviewed, and accepted. C4-S6 owns the smallest `Cancel(ctx)` seam; C12 then places only a monotonic wall-deadline coordinator around sequential `Step` calls. C12 never edits C4, advances logical time, stops the engine directly, or constructs a C4 terminal fact. | C4 `P-C4-BOUNDED-CANCEL`; C12 `P-C12-WINDOW`, `P-C12-DETERMINISM`, `P-C12-CONTAINMENT` |
+| C4 artifact validator/cursor: `internal/replayartifact/validate.go`, `internal/replayartifact/playback/playback.go` | `23721b2d...c40dfb`, `42bdba80...d5fd11d` | `OpenValidated` requires an already assembled binding and exact header interval, retains the same read-only file description, and later revalidates all prefix/suffix bytes. The artifact header holds the only candidate trading date, but no exported bounded header-probe fact exists. Current validation and terminal/suffix cursor scans do not accept cancellation contexts. | Owner-approved C4-S6, not C12, owns the read-only candidate-header probe and context-aware first-pass and terminal/suffix validation. The probe remains untrusted and exposes no records, coverage success, artifact identity, or playback handle. C12 consumes only the accepted seam. | C4 `P-C4-BOUNDED-CANCEL`; C12 `P-C12-WINDOW`, `P-C12-CONTAINMENT` |
 | C8 runtime/capture: `internal/operations/runtime.go`, `snapshot.go`, `status.go` | `42277185...43777`, `69bd6795...50b16`, `29e68f10...37717` | Current construction is live-only, starts wall timers/TQ pressure immediately, and derives `backend_ready=false/not_live_mode` for replay. Its sealed capture proves one publication/time/process sample and its ten-second joined shutdown is reusable. | Add a replay-specific runtime construction with no live adapter, wall evaluation timer, T/Q pressure loop, hydration, or checkpoint writer. Preserve sealed one-capture semantics and false production readiness. C12 owns only phase/schedule/result facts included atomically with that capture. | `P-C12-RUNTIME`, `P-C12-CONTAINMENT` |
 | C10 schema/mapper/HTTP: `internal/snapshotapi/schema.go`, `mapper.go`, `http.go` | `f736609e...c349c`, `632689e6...a6650`, `a83042ea...20a8c` | The API already maps immutable replay publications and serves ended snapshots with HTTP 200. It currently rejects the accepted `replay_requested_end` lifecycle reason, has no observation bounds/phase/schedule context, and maps replay T/Q as `unselected`. | Keep `scanner.snapshot.v1` and add one optional root `replay` object that is mandatory for C12 replay responses and absent for live responses. Accept `replay_requested_end`; map T/Q as `unavailable/replay_unavailable`; suppress warm-up rows at representation time. No second endpoint or post-capture join. | `P-C12-RUNTIME`, `P-C12-CONTAINMENT` |
 | Scanner composition: `cmd/scanner/main.go` | `62f0b31c...e1e38` | The existing command is live-only, requires `MASSIVE_API_KEY`, starts C5/C6/C7, and joins API/live/runtime on cancellation. | Add a mutually exclusive replay run mode to the same backend command. Replay never reads the credential environment variable and constructs none of the live provider/checkpoint path. Reuse loopback API and joined shutdown. | `P-C12-WINDOW`, `P-C12-RUNTIME`, `P-C12-CONTAINMENT` |
@@ -340,7 +351,7 @@ licensed rows were not opened, copied, or inspected.
 implementation may change only the current packages/files named in the two
 assignments below, their focused tests/fixtures, this parent ledger, and the
 minimum README/specification-map text needed to expose the approved workflow.
-The proposed C4-S6 has its own C4-owned whitelist, proof, assignment, and
+The owner-approved C4-S6 has its own C4-owned whitelist, proof, assignment, and
 ledger; it is not part of either C12 slice.
 Any new source area requires a C12 owner-approved contract revision before
 inspection or use.
@@ -639,15 +650,15 @@ evidence, not predictive or executable expectancy.
    mixed phase/publication, and canceled/suppressed state retained as success.
    Passing compact proofs does not establish B4 scale, Chrome behavior, provider
    performance, or trading value.
-10. **Gate/review:** This assignment is inert until C4-S6 and C11 are finally
-    accepted and the owner approves the completed contract plus the
-    specification-map/sequence activation (or precise exception) and activates
-    S1. Its source/
+10. **Gate/review:** Owner approval and sequence activation are recorded. This
+    assignment remains queued until C4-S6, C11, and the integrated private V1
+    RC are finally accepted; the orchestrator then activates S1. Its source/
     cancellation/order/atomic-capture boundary
     requires a `gpt-5.6-sol` medium read-only focused slice review. Correct
-    findings, rerun the narrowest proof, update this sole ledger, and stop for
-    the applicable owner advancement decision because C12 is outside the V1
-    program.
+    findings, rerun the narrowest proof, update this sole ledger, and continue
+    under the separately approved delegated sequential advancement. No per-
+    slice owner stop applies inside the exact assignment; C12 remains outside
+    the C7-C11 V1 program.
 
 #### Exact `C12-S2` implementation assignment
 
@@ -693,10 +704,13 @@ evidence, not predictive or executable expectancy.
    authoritative; T/Q zero shown as data; and UI restart that relinks/stops the backend. One
    historical date/window does not establish broad market behavior or a
    production SLA.
-10. **Gate/review:** S2 begins only after owner acceptance of S1 and explicit
-    authorization to read the retained B4 artifact. The replay/API/browser
+10. **Gate/review:** S2 begins only after accepted S1. The owner authorizes the
+    retained B4 artifact read in place when S2 activates; that authorization
+    does not permit copying, path/identity/row persistence, credentials, or
+    provider calls. The replay/API/browser
     trust boundary requires a focused read-only review; final C12 acceptance
-    additionally requires one final component review and owner decision.
+    additionally requires one final component review and delegated ledger
+    acceptance.
 
 **Independent slice-review trigger:** Both slices are triggered. S1 crosses
 persisted artifact, order/clock, lifecycle, and atomic capture boundaries. S2
@@ -726,9 +740,11 @@ requested-end/cancellation meaning is duplicated, positive lag removes replay
 authority, the B4 run cannot finish within the
 recorded 15-minute local bound, or a failure leaves prior rows apparently
 authoritative reopens the lowest affected contract/slice. Because C12 is
-outside the C7-C11 V1 program, revise the evidence and stop at the applicable
-owner gate; do not silently broaden source scope, raise bounds, or implement a
-different architecture.
+outside the C7-C11 V1 program, use this contract's separate delegated authority:
+revise the lowest in-scope artifact, rerun the distinguishing proof, record the
+correction, and continue. Stop only if correction requires broader source
+scope, a raised fixed bound, changed product semantics/architecture, provider
+or credential access, or another action excluded by the approval.
 
 ## Sections 18-19 — completed-contract checklist, review, approval state, and drift audit
 
@@ -747,27 +763,29 @@ timer disposition while preserving replay authority, and make C11 final plus
 owner specification-map/sequence activation (or a precise exception) explicit
 implementation prerequisites. Focused re-review closed those three findings
 and identified one remaining P2 authority-placement defect: the new C4-owned
-semantics were specified only in C12. The correction is now routed as proposed
-`C4-BOUNDED-CANCEL-01`, `P-C4-BOUNDED-CANCEL`, and `C4-S6` in C4's parent,
-source detail, proof ledger, and exact inactive assignment. Accepted C4-S6 is a
+semantics were specified only in C12. The correction is now routed as owner-
+approved `C4-BOUNDED-CANCEL-01`, `P-C4-BOUNDED-CANCEL`, and `C4-S6` in C4's parent,
+source detail, proof ledger, and exact queued assignment. Accepted C4-S6 is a
 hard C12-S1 prerequisite, C12's containment proof covers only composition
 consequences. The same reviewer completed the final focused re-review and found
 the authority placement clean with no new P1/P2 contradiction or missing
 implementation-critical behavior. The reviewer remained read-only.
 
-**Approval decision:** Pending owner approval. The owner-approved Sections 1-7
-boundary permits this completed-contract/review milestone but no implementation,
-licensed-row read, provider request, or automatic C12 correction authority.
-Even completed-contract approval alone cannot start code until C4-S6, C11, and
-sequence preconditions above are satisfied.
+**Approval decision:** Approved by the owner on 2026-08-09. The approval covers
+the corrected Sections 1-19 contract, current-code/empty-V2 whitelist, proofs,
+two slices, exact assignments, delegated sequential implementation/reviews,
+and the retained B4 read in place only after S1 acceptance. It authorizes no
+provider request, credential access, artifact copy, public deployment, or
+changed product semantics. Work still begins with C11/private V1 RC completion,
+then C4-S6; C12-S1 cannot start until those entry conditions pass.
 
 - [x] This parent is the complete single-file contract and sole mutable ledger;
       the separate B4 document remains non-authoritative evidence.
 - [x] The larger single-file layout is justified by the inseparable phase plus
       atomic market-publication boundary and only two compact slices.
 - [x] Exact C4/C8/C10/C11 dependencies and acyclic routing are recorded,
-      including proposed C4-S6 in C4's own requirement/proof/slice ledger and
-      its acceptance as a hard C12-S1 prerequisite.
+      including owner-approved C4-S6 in C4's own requirement/proof/slice ledger
+      and its acceptance as a hard C12-S1 prerequisite.
 - [x] No Version 2, older V1, provider credentials/requests, or B4 licensed rows
       were inspected; the implementation whitelist is `none` for Version 2.
 - [x] Exact current source paths, hashes, decisions, adaptations, and proof
@@ -785,18 +803,19 @@ sequence preconditions above are satisfied.
       verification tiers, counterexamples, limitations, deferrals, and review
       triggers.
 - [x] C12 implementation is sequenced after accepted C4-S6, finally accepted
-      C11, and an owner-approved specification-map activation or precise
-      recorded exception.
+      C11/private V1 RC, and the owner-approved specification-map activation
+      recorded in this milestone.
 - [x] S2 extends rather than replaces S1 and cannot repair backend semantics in
       the browser.
 - [x] The first acceptance uses the retained B4 artifact in place without path/
       identity coupling, copy, commit, provider call, or credential access.
-- [x] C12's owner-controlled approval/correction gates are explicit; no C7-C11
-      zero-interruption authority is claimed.
+- [x] C12's separately owner-approved delegated correction bounds are explicit;
+      no C7-C11 program authority is claimed or extended.
 - [x] Required independent completed-contract review and focused re-reviews are
       clean; the final pass found no remaining P1/P2 issue.
-- [ ] Owner approves the completed contract, implementation whitelist/evidence,
-      proofs, two slices, exact assignments, and implementation advancement.
+- [x] Owner approves the completed contract, implementation whitelist/evidence,
+      proofs, two slices, exact assignments, delegated sequential advancement,
+      and the S2-only retained B4 read in place.
 
 ### 19. Drift audit
 
@@ -811,5 +830,6 @@ sequence preconditions above are satisfied.
 | Did this add machinery without an approved need? | No | One phase/cumulative-deadline driver and one atomic capture are the minimum needed for hidden warm-up, 1x observation, and retained inspection. |
 | Did Version 2 drive the Phase 1 boundary? | No | Version 2 was not inspected or whitelisted. |
 
-There is no unresolved substantive drift. Any later substantive **yes** requires
-an owner-approved C12 contract correction before implementation continues.
+There is no unresolved substantive drift. Any later substantive **yes** outside
+the approved in-scope correction authority requires owner approval before
+implementation continues.

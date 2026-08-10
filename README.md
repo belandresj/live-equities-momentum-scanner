@@ -65,6 +65,7 @@ approved requirement establishes a concrete need.
 | [`docs/specification-map.md`](docs/specification-map.md) | Current component sequence, document status, dependencies, and implementation milestones. |
 | [`docs/implementation-process.md`](docs/implementation-process.md) | Contract-first research, approval, predecessor-reuse, proof, slice, integration, and release workflow. |
 | [`docs/v1-release-program.md`](docs/v1-release-program.md) | Owner-approved C7-C11 authority, fixed/revisable decisions, zero-interruption correction and containment, capability/proof matrix, test tiers, and private V1 RC completion. |
+| [`docs/c12-implementation-goal.md`](docs/c12-implementation-goal.md) | Owner-approved handoff prompt to close C11/private V1 RC, then implement C4-S6 and C12 sequentially. |
 | [`docs/market-hours-validation.md`](docs/market-hours-validation.md) | Separately authorized post-RC live-provider observation procedure; pending by default. |
 | [`docs/specifications/focused-component-spec-template.md`](docs/specifications/focused-component-spec-template.md) | Mandatory template and modular-layout rules for focused component contracts. |
 | [`docs/history/`](docs/history/) | Non-authoritative Phase 1 drafting and review history. |
@@ -103,6 +104,13 @@ authentication/TLS/hosting, production cutover, pushing, or history rewriting.
 Chrome desktop is the required UI target, and Component 11 is a high-fidelity
 adaptation of the useful V2 scanner UI without V2 browser-owned calculations,
 readiness logic, obsolete state semantics, or backend coupling.
+
+After C11 and the integrated private V1 RC are finally accepted, the owner-
+approved [C12 implementation goal](docs/c12-implementation-goal.md) reopens C4
+only for its bounded manual-driver prerequisite, then implements the historical
+observation replay backend/API and dashboard in two sequential slices. That
+follow-on authorizes no provider request, credential access, public deployment,
+or claim of trading edge.
 
 ## Private local dashboard
 
