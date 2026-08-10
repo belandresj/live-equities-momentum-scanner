@@ -3,7 +3,10 @@
 **Status:** Component 4 is finally accepted including the owner-approved
 additive `C4-S5` requested-end correction. `C4-S1` through `C4-S5`, all ten
 primary proofs, cumulative verification, the original final component review,
-and the required correction review/re-review are clean.
+and the required correction review/re-review are clean. A proposed additive
+`C4-S6` bounded manual-driver correction is recorded below as a C12
+prerequisite; it is not owner-approved, implemented, or accepted and changes
+none of the accepted C4 baseline until separately approved.
 
 **Owner boundary approval:** approved 2026-08-06 in the owning Codex task;
 includes the Phase 1 boundary, modular document map, and exact future version 2
@@ -61,8 +64,8 @@ all three without changing that map.
 | --- | --- | --- | --- | --- |
 | This parent | Outcome, ownership/non-scope, cross-cutting invariants, Sections 1–7, routing, approvals, and sole delivery ledger | All controlling Phase 1 IDs; Sections 1–7 | Every Component 4 task | Components 1–3 |
 | [REST normalization and artifact trust](aggregate-replay/rest-normalization-and-artifact.md) | Shared Massive REST row normalization, compiler consumption of that one mapper, offline download/compiler, and artifact trust/bounds | Sections 8–14; `C4-NORM-01`, `C4-COMP-NORM-01`, `C4-DL-01`, `C4-ART-01`, `C4-ART-02`; `P-C4-NORM`, `P-C4-COMP-NORM`, `P-C4-DL`, `P-C4-ART-BYTES`, `P-C4-ART-TRUST`; `C4-S1`, `C4-S2` | Provider mapping, future Component 6 seam obligation, compiler/artifact decisions | Parent; Components 1 and 2 |
-| [Replay source and simulated clock](aggregate-replay/replay-source-and-clock.md) | Validated artifact source, simulated clock/group timers, typed engine admissions, replay lifecycle/completion including an operator-requested end, and containment | Sections 8–14; `C4-SCHED-01`, `C4-RUN-01`, `C4-FAIL-01`, `C4-PREFIX-END-01`; `P-C4-SCHED`, `P-C4-RUN`, `P-C4-FAIL`, `P-C4-PREFIX-END`; `C4-S3`, `C4-S5` | Playback, clock, lifecycle, commit, engine integration, and requested-end integrity | Parent; preceding detail; Components 1–3 |
-| [Deterministic-core delivery](aggregate-replay/deterministic-core-delivery.md) | Complete proof/requirement ledger, Components 1–4 milestone, correction slice plan, discretion, acceptance, and drift | Sections 15–19; all ten Component 4 requirements/proofs; `C4-S1`–`C4-S5` | Proof allocation, assignments, completed-contract and final review | Parent and both details; Components 1–3 |
+| [Replay source and simulated clock](aggregate-replay/replay-source-and-clock.md) | Validated artifact source, simulated clock/group timers, typed engine admissions, replay lifecycle/completion including an operator-requested end, and containment | Sections 8–14; accepted `C4-SCHED-01`, `C4-RUN-01`, `C4-FAIL-01`, `C4-PREFIX-END-01` plus proposed `C4-BOUNDED-CANCEL-01`; their routed proofs; accepted `C4-S3`, `C4-S5` plus proposed `C4-S6` | Playback, clock, lifecycle, commit, engine integration, requested-end integrity, and the proposed bounded manual-driver seam | Parent; preceding detail; Components 1–3 |
+| [Deterministic-core delivery](aggregate-replay/deterministic-core-delivery.md) | Complete proof/requirement ledger, Components 1–4 milestone, correction slice plan, discretion, acceptance, and drift | Sections 15–19; all ten accepted Component 4 requirements/proofs plus proposed `C4-BOUNDED-CANCEL-01` / `P-C4-BOUNDED-CANCEL`; accepted `C4-S1`–`C4-S5` plus proposed `C4-S6` | Proof allocation, assignments, completed-contract and final review | Parent and both details; Components 1–3 |
 
 **Layout:** Approved modular contract with this parent and the three complete
 detail documents listed above. The parent remains slightly above the template's
@@ -94,6 +97,30 @@ cumulative verification, and focused re-review are now also complete.
 | `C4-S4` | `accepted` | `C4-CORE-01` / `P-C4-CORE`, runnable offline replay, all nine Component 4 proofs, affected and repository build/tests/race/vet, conformance and drift audit, and focused final-review confirmation all clean | 2026-08-06 | Complete |
 | Final component review | `accepted` | Mandatory read-only `gpt-5.6-sol` medium review found five actionable issues; all received direct regressions and corrections, the same reviewer found the complete correction set clean, and its focused review confirmed the shortened `R == E` proof preserves `C4-RUN-01` / `P-C4-RUN` without making a deferred capacity claim | 2026-08-06 | Complete |
 | `C4-S5` requested-end correction | `accepted` | `C4-PREFIX-END-01` / `P-C4-PREFIX-END`; exact prefix/artifact-end parity/suffix-integrity/cancellation/clock/rejection/accounting matrix, affected and repository short tests, proportionate race, vet, conformance inspection, and required `gpt-5.6-sol` medium persisted-source/lifecycle focused re-review all clean | 2026-08-09 | Complete |
+| Proposed `C4-S6` bounded manual-driver correction | `proposed_not_authorized` | `C4-BOUNDED-CANCEL-01` / `P-C4-BOUNDED-CANCEL`; context-aware candidate-header/validation scans and one bounded idempotent source-owned `Cancel(ctx)` are required before C12-S1 may start | 2026-08-09 | Owner approval, then sequential implementation and required focused review; C12-S1 remains blocked until acceptance |
+
+**Proposed C4-S6 correction premise:** C12's manual `Start`/`Step`/`Finish`
+composition must be cancelable without letting C12 become an engine/source
+lifecycle owner. C4 therefore proposes to own a bounded, idempotent
+`Cancel(ctx)` for a started manual source and context-aware candidate-header,
+first-pass, terminal, and suffix scans. The candidate header is expressly
+untrusted and can select a date-specific reference cache only; it cannot prove
+identity, binding, coverage, or playback validity. Cancellation before terminal
+fact linkage uses the existing C4 controlled-stop, source-outcome/accounting,
+and engine close/drain path within the caller's context. Once the accepted
+terminal fact links, its complete or failed disposition wins exactly as today.
+No handle or terminal fact may be returned after the operation context is
+observed canceled and before the corresponding success linearization point.
+
+This proposal owns no C12 wall schedule, phase, snapshot/API/UI behavior,
+provider access, retained B4 execution, or licensed-data read. It does not
+change accepted C4 behavior until the owner approves the correction and its
+proof/slice plan. If approved, `C4-S6` must be implemented and accepted before
+`C12-S1`; C12 may then consume the seam but may not re-prove or reimplement its
+internal cancellation mechanics. Activation first marks Component 4 reopened
+for only the bounded-manual-driver claim while preserving accepted S1-S5
+evidence; clean S6 proof, verification, review/re-review, and conformance return
+the component to accepted before C12 may consume it.
 
 **C4-S5 correction premise:** Accepted C4 correctly proves artifact-end success
 at `R`, but its source cannot truthfully finish at an operator-requested
