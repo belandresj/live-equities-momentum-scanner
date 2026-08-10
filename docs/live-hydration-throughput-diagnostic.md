@@ -199,7 +199,63 @@ The fake-source race proof covers bounded sampling, every safety predicate,
 numeric-only serialization, cancellation of an active REST request, and joined
 REST/WebSocket/engine cleanup. It does not establish live throughput.
 
-**Live evidence state:** pending. No provider request or credential access was
-performed because no exact trading date has yet been authorized. The
-comparison table, T4 classification, and next implementation boundary remain
-unresolved until that single authorized run.
+**Live evidence state:** completed for the authorized 2026-08-10 run. T1 hit
+the oldest-frame safety stop after 6.140 seconds with no REST hydration active,
+so the harness correctly stopped without executing T2 or any higher worker
+level.
+
+The first authorized command on 2026-08-10 stopped during cache-only preflight,
+before any WebSocket or REST connection, because the Go test process resolves
+relative paths from `internal/operations`. The harness now derives
+`var/reference` from the already validated absolute output path. This was a
+test-harness path defect and consumed no live trial; the local gates were rerun
+before continuing with the still-unused authorized provider run.
+
+The next command exposed the complementary preflight defect: output
+containment still anchored `var/` to the package working directory. It also
+stopped before a provider connection. After two failures from the same
+relative-working-directory premise, the harness replaced that premise with a
+bounded upward search for the repository's exact Go module declaration; the
+fake-source proof now checks module-root discovery directly. Reference and
+output paths both derive from that single validated root.
+
+## 2026-08-10 live result
+
+| Workers | Duration | Live frames in/s | Live frames out/s | Max queued | Max oldest age | Rejections | Max delivery delay | Hydration rows/s | Avg CPU cores | Outcome |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 0 | 6.140 s | 143.65 | 96.42 | 290 | 2.089 s | 0 | 2.622 s | 0.00 | 5.146 | saturated: oldest-frame stop |
+
+T1 initially kept up: at one second, 130 frames had entered and 130 had been
+dispositioned with an empty queue. At 2.035 seconds, ingress and disposition
+still matched at 279 frames, although the maximum observed delivery delay had
+risen to 752 milliseconds. By 3.508 seconds, 591 frames had entered, only 457
+had been dispositioned, and 134 were queued with the oldest frame 387
+milliseconds old. At the stop, 882 frames had entered, 592 had been
+dispositioned, and 290 remained queued; accounting still reconciled and there
+had been no frame rejection.
+
+**T4 classification:** the live normalization/admission/evaluation path itself
+falls behind. REST contention and hydration-worker concurrency are excluded as
+causes of this trial because no hydration plan or REST request started. T2 and
+the concurrency sweep would add provider load after the decisive condition and
+were therefore prohibited by the stop rule.
+
+**Narrowest next implementation boundary:** profile and then batch or optimize
+the C5 aggregate-frame normalization through sole-engine admission/evaluation
+path while preserving one canonical state owner, ordering, reconciliation,
+and existing queue limits. Do not cap hydration workers as the primary fix:
+zero workers already saturated.
+
+**Measurement limitation:** the intended one-second sampler itself blocked
+behind the contended production metric/engine path, producing observations at
+0, 1.000, 2.035, 3.508, and 6.140 seconds rather than every exact second. This
+is additional contention evidence but means the artifact is not a complete
+per-second time series. The safety-stop observation, queue accounting, T1/T4
+classification, and no-hydration causal distinction remain valid. Do not
+repeat the live trial to fill the missing samples; the stop is already the
+required diagnostic evidence.
+
+The bounded numeric artifact is
+`var/live-hydration-diagnostic/summary.json` (7,704 bytes, mode `0600`); its
+directory is mode `0700`. It contains one trial and five samples, with no
+credential, URL, provider body, raw frame, symbol, or market-data row.

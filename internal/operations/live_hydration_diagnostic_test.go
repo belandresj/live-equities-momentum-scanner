@@ -128,8 +128,8 @@ func TestLiveHydrationThroughputDiagnostic(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Minute)
 	defer cancel()
-	binding := cachedLiveDiagnosticBinding(t, ctx, tradingDate)
 	output = validatedLiveDiagnosticOutput(t, output)
+	binding := cachedLiveDiagnosticBinding(t, ctx, tradingDate, filepath.Join(filepath.Dir(output), "reference"))
 
 	workers := []int{0, 1, 2, 4}
 	results := make([]liveDiagnosticSummary, 0, 5)
@@ -168,6 +168,13 @@ func TestLiveHydrationThroughputDiagnostic(t *testing.T) {
 func TestLiveHydrationThroughputHarness(t *testing.T) {
 	if testing.Short() {
 		t.Skip("opt-in diagnostic harness proof")
+	}
+	moduleRoot, err := liveDiagnosticModuleRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(moduleRoot, "go.mod")); err != nil {
+		t.Fatalf("module-root discovery: %v", err)
 	}
 	for _, test := range []struct {
 		name string
@@ -476,7 +483,7 @@ func newProviderLiveDiagnosticTrial(t *testing.T, binding reference.Binding, cre
 		config: productionLiveDiagnosticConfig(), components: productionDiagnosticComponents(adapter, hydrator, componentWorkers, len(binding.UniverseSymbols()))}
 }
 
-func cachedLiveDiagnosticBinding(t *testing.T, ctx context.Context, tradingDate string) reference.Binding {
+func cachedLiveDiagnosticBinding(t *testing.T, ctx context.Context, tradingDate, dataDirectory string) reference.Binding {
 	t.Helper()
 	schedule, err := session.Load()
 	if err != nil {
@@ -486,7 +493,6 @@ func cachedLiveDiagnosticBinding(t *testing.T, ctx context.Context, tradingDate 
 	if err != nil {
 		t.Fatal("unsupported LIVE_TRADING_DATE")
 	}
-	dataDirectory := filepath.Join("var", "reference")
 	// Empty credentials deliberately force the resolvers onto validated exact-
 	// date caches without making an additional reference-data provider request.
 	universe, err := (&reference.Resolver{DataDir: dataDirectory, Schedule: schedule}).Resolve(ctx, facts)
@@ -506,7 +512,7 @@ func cachedLiveDiagnosticBinding(t *testing.T, ctx context.Context, tradingDate 
 
 func validatedLiveDiagnosticOutput(t *testing.T, output string) string {
 	t.Helper()
-	working, err := os.Getwd()
+	working, err := liveDiagnosticModuleRoot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -520,6 +526,25 @@ func validatedLiveDiagnosticOutput(t *testing.T, output string) string {
 		t.Fatal("LIVE_DIAGNOSTIC_OUTPUT must be a directory below the current worktree's var directory")
 	}
 	return absolute
+}
+
+func liveDiagnosticModuleRoot() (string, error) {
+	current, err := os.Getwd()
+	if err != nil {
+		return "", errors.New("resolve diagnostic working directory")
+	}
+	for depth := 0; depth < 8; depth++ {
+		body, readErr := os.ReadFile(filepath.Join(current, "go.mod"))
+		if readErr == nil && strings.Contains(string(body), "module github.com/belandresj/live-equities-momentum-scanner\n") {
+			return current, nil
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		current = parent
+	}
+	return "", errors.New("locate diagnostic module root")
 }
 
 func writeLiveDiagnosticArtifact(directory string, artifact liveDiagnosticArtifact) error {
