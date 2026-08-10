@@ -259,3 +259,63 @@ The bounded numeric artifact is
 `var/live-hydration-diagnostic/summary.json` (7,704 bytes, mode `0600`); its
 directory is mode `0700`. It contains one trial and five samples, with no
 credential, URL, provider body, raw frame, symbol, or market-data row.
+
+## Next focused test: live aggregate cost attribution
+
+This is a small diagnostic, not a component spec or production redesign. Its
+only question is: where does the live-only path spend the time that caused T1
+to fall behind?
+
+Add one opt-in, non-short test in `internal/operations` using fake WebSocket
+input and the ordinary C5 adapter, engine, and production queue limits. Use a
+6,000-symbol binding and one fixed stream of 400 frames containing two valid
+second aggregates per frame. This approximates the observed live frame density
+while remaining below the 512-frame queue limit, deterministic, and
+credential-free.
+
+Run the identical aggregate values through two sequential phases:
+
+1. **Normalization only:** decode and classify every frame through the C5 live
+   normalizer, consuming every result but admitting nothing to the engine.
+2. **End to end:** send the same frames through `LiveAttempt` and
+   `DeliverNextToEngine`, including canonical application, feature work,
+   completion waiting, publication construction, and publication validation.
+
+For each phase, record only elapsed time, frames/s, aggregates/s, allocations,
+and reconciled counts. Run the test once with CPU and blocking profiles:
+
+```text
+mkdir -p var/live-aggregate-cost
+go test -count=1 -run '^TestLiveAggregateCostAttribution$' \
+  -timeout 2m \
+  -cpuprofile var/live-aggregate-cost/cpu.out \
+  -blockprofile var/live-aggregate-cost/block.out \
+  ./internal/operations
+go tool pprof -top var/live-aggregate-cost/cpu.out
+go tool pprof -top var/live-aggregate-cost/block.out
+```
+
+Group the result into four existing stages:
+
+- frame decoding and normalization;
+- adapter-to-engine admission, completion waiting, and channel/lock overhead;
+- canonical aggregate and feature updates; and
+- immutable publication construction, cloning, and validation.
+
+Do not add timing counters, a profiling framework, a production flag, a new
+queue, or a batching implementation merely to run this test. The Go profiles
+and the two phase totals are sufficient.
+
+The decision is direct:
+
+| Evidence | Next implementation boundary |
+| --- | --- |
+| Normalization-only time is most of end-to-end time | Optimize the C5 decoder/normalizer without changing engine semantics. |
+| Admission/waiting dominates the block profile | Replace the one-aggregate synchronous handoff with one bounded ordered admission while keeping the same state owner. |
+| Canonical/feature functions dominate CPU | Optimize the identified incremental state or feature update before changing publication cadence. |
+| Publication construction/validation dominates CPU | Coalesce publication work across a bounded ordered aggregate batch; do not weaken validation. |
+| No stage clearly dominates | Preserve the profiles and optimize the smallest combined boundary containing the top contributors; do not guess from T1 alone. |
+
+This test does not need live data, does not rerun the failed T1 provider trial,
+and does not prove that batching is the fix. It identifies the smallest code
+boundary that the next implementation should change.
