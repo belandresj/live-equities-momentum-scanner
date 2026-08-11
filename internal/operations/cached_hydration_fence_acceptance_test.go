@@ -1,0 +1,674 @@
+package operations
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+
+	"github.com/belandresj/live-equities-momentum-scanner/internal/engine"
+	"github.com/belandresj/live-equities-momentum-scanner/internal/massive"
+	"github.com/belandresj/live-equities-momentum-scanner/internal/reference"
+	"github.com/belandresj/live-equities-momentum-scanner/internal/replayartifact"
+	"github.com/belandresj/live-equities-momentum-scanner/internal/session"
+)
+
+const (
+	cachedFenceArtifact       = "/Users/joshuabelandres/Dev/live-equities-momentum-scanner/var/aggregate-replay/aggregate-replay-fce95a904bb37c3d63bfe0a2988ac78aa0e0a2ee4c8d171bdca27fcd00f8808a.jsonl"
+	cachedFenceReference      = "/Users/joshuabelandres/Dev/live-equities-momentum-scanner/var/reference"
+	cachedFenceArtifactID     = "sha256:fce95a904bb37c3d63bfe0a2988ac78aa0e0a2ee4c8d171bdca27fcd00f8808a"
+	cachedFenceRowsPerChunk   = 256
+	cachedFenceObservedPeriod = 30 * time.Second / 5_798
+)
+
+type cachedFenceManifest struct {
+	binding               reference.Binding
+	start, end            time.Time
+	metadata              replayartifact.Metadata
+	handle                *replayartifact.Handle
+	rowsBySymbol          map[string]int64
+	rows, values, empties int64
+	preflight             time.Duration
+}
+
+type cachedFenceRunResult struct {
+	rate                                                        int
+	historical, terminals, fence, firstReady, tailDrain         time.Duration
+	rows, values, empties                                       uint64
+	framesSent, framesRead, framesAdmitted, framesDispositioned uint64
+	framesRejected, maximumQueued                               uint64
+	rowsObserved, rankingRows                                   int
+	lifecycle, rankingMode                                      string
+	accounting, ready, fenceReconciled                          bool
+	heapBefore, heapAtFence, heapAfter                          uint64
+	tq                                                          engine.TQView
+}
+
+// TestCachedHydrationFenceAcceptance is the explicitly selected, no-network
+// production-path acceptance in docs/live-fence-finalization-cached-hydration-correction.md.
+// It is intentionally excluded from ordinary and generic non-short test runs.
+func TestCachedHydrationFenceAcceptance(t *testing.T) {
+	if testing.Short() || os.Getenv("CACHED_HYDRATION_ACCEPTANCE") != "1" {
+		t.Skip("set CACHED_HYDRATION_ACCEPTANCE=1 to run the sealed cached-hydration acceptance")
+	}
+	rate := 1
+	if raw := os.Getenv("CACHED_HYDRATION_RATE_MULTIPLIER"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || (value != 1 && value != 2) {
+			t.Fatal("CACHED_HYDRATION_RATE_MULTIPLIER must be 1 or 2")
+		}
+		rate = value
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 14*time.Minute)
+	defer cancel()
+	manifest := preflightCachedFence(t, ctx)
+	defer manifest.handle.Close()
+	result := runCachedFence(t, ctx, manifest, rate)
+	assertCachedFence(t, manifest, result)
+	t.Logf("cached_fence rate=%dx binding=%s artifact=%s interval=[%s,%s) population=%d rows=%d values=%d empty=%d preflight=%s historical=%s terminals=%s fence=%s first_ready=%s tail_drain=%s lifecycle=%s ranking=%s ranking_rows=%d queue_high=%d rejections=%d frames=%d/%d/%d/%d heap_before=%d heap_fence=%d heap_after_gc=%d tq_mode=%s tq_rows=%d accounting=%t ready=%t",
+		result.rate, manifest.binding.Identity(), manifest.metadata.ArtifactID, manifest.start.Format(time.RFC3339), manifest.end.Format(time.RFC3339),
+		len(manifest.rowsBySymbol), manifest.rows, manifest.values, manifest.empties, manifest.preflight, result.historical, result.terminals,
+		result.fence, result.firstReady, result.tailDrain, result.lifecycle, result.rankingMode, result.rankingRows, result.maximumQueued,
+		result.framesRejected, result.framesSent, result.framesRead, result.framesAdmitted, result.framesDispositioned,
+		result.heapBefore, result.heapAtFence, result.heapAfter, result.tq.Pressure, len(result.tq.Rows), result.accounting, result.ready)
+}
+
+func preflightCachedFence(t *testing.T, ctx context.Context) cachedFenceManifest {
+	t.Helper()
+	started := time.Now()
+	binding, err := cachedFenceBinding(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := binding.SessionStart()
+	end := time.Date(2026, 8, 7, 21, 15, 0, 0, time.UTC) // 17:15 America/New_York.
+	handle, err := replayartifact.OpenValidatedContext(ctx, cachedFenceArtifact, replayartifact.ValidationPlan{
+		Binding: binding, Start: binding.SessionStart(), End: binding.SessionEnd(), ExpectedMode: replayartifact.CompleteFinalBars,
+		MaximumBytes: 3 << 30, MaximumRecords: 8_000_000,
+	})
+	if err != nil {
+		t.Fatalf("validate sealed artifact: %v", err)
+	}
+	metadata := handle.Metadata()
+	if metadata.ArtifactID != cachedFenceArtifactID || metadata.AggregateRecords != 7_671_171 || metadata.CoverageEntries != 5_691 || metadata.EmptySymbols != 172 ||
+		metadata.BindingIdentity != binding.Identity() || metadata.ReplayStart != binding.SessionStart() || metadata.ReplayEnd != binding.SessionEnd() {
+		t.Fatalf("sealed artifact identity mismatch: %+v binding=%s", metadata, binding.Identity())
+	}
+	rowsBySymbol := make(map[string]int64)
+	for _, fact := range binding.PriorCloseFacts() {
+		if fact.Status() == reference.PriorCloseValid {
+			rowsBySymbol[fact.Symbol()] = 0
+		}
+	}
+	if len(rowsBySymbol) != 5_502 {
+		t.Fatalf("valid-prior population=%d want=5502", len(rowsBySymbol))
+	}
+	rows, err := scanCachedFenceRows(ctx, handle, start, end, rowsBySymbol, nil)
+	if err != nil {
+		t.Fatalf("derive cached hydration oracle: %v", err)
+	}
+	values := int64(0)
+	for _, count := range rowsBySymbol {
+		if count > 0 {
+			values++
+		}
+	}
+	if err := handle.ValidateAgainContext(ctx); err != nil {
+		t.Fatalf("artifact changed after oracle scan: %v", err)
+	}
+	return cachedFenceManifest{binding: binding, start: start, end: end, metadata: metadata, handle: handle, rowsBySymbol: rowsBySymbol,
+		rows: rows, values: values, empties: int64(len(rowsBySymbol)) - values, preflight: time.Since(started)}
+}
+
+func cachedFenceBinding(ctx context.Context) (reference.Binding, error) {
+	schedule, err := session.Load()
+	if err != nil {
+		return reference.Binding{}, err
+	}
+	facts, err := schedule.ForTradingDate("2026-08-07")
+	if err != nil {
+		return reference.Binding{}, err
+	}
+	universe, err := (&reference.Resolver{DataDir: cachedFenceReference, Schedule: schedule}).Resolve(ctx, facts)
+	if err != nil {
+		return reference.Binding{}, fmt.Errorf("cached universe: %w", err)
+	}
+	priors, err := (&reference.PriorCloseResolver{DataDir: cachedFenceReference, Schedule: schedule}).Resolve(ctx, facts, universe)
+	if err != nil {
+		return reference.Binding{}, fmt.Errorf("cached prior closes: %w", err)
+	}
+	return reference.AssembleBinding(facts, universe, priors)
+}
+
+type cachedArtifactLine struct {
+	Kind, Symbol, WindowStart, WindowEnd, ATSProvenance string
+	Open, High, Low, Close, Volume, VWAP                float64
+	AverageTradeSize                                    int64 `json:"average_trade_size"`
+}
+
+func (v *cachedArtifactLine) UnmarshalJSON(raw []byte) error {
+	type wire struct {
+		Kind             string  `json:"kind"`
+		Symbol           string  `json:"symbol"`
+		WindowStart      string  `json:"window_start"`
+		WindowEnd        string  `json:"window_end"`
+		Open             float64 `json:"open"`
+		High             float64 `json:"high"`
+		Low              float64 `json:"low"`
+		Close            float64 `json:"close"`
+		Volume           float64 `json:"volume"`
+		VWAP             float64 `json:"vwap"`
+		AverageTradeSize int64   `json:"average_trade_size"`
+		ATSProvenance    string  `json:"ats_provenance"`
+	}
+	var w wire
+	if err := json.Unmarshal(raw, &w); err != nil {
+		return err
+	}
+	*v = cachedArtifactLine{Kind: w.Kind, Symbol: w.Symbol, WindowStart: w.WindowStart, WindowEnd: w.WindowEnd, Open: w.Open, High: w.High, Low: w.Low,
+		Close: w.Close, Volume: w.Volume, VWAP: w.VWAP, AverageTradeSize: w.AverageTradeSize, ATSProvenance: w.ATSProvenance}
+	return nil
+}
+
+func scanCachedFenceRows(ctx context.Context, reader io.Reader, start, end time.Time, counts map[string]int64, consume func(cachedArtifactLine) error) (int64, error) {
+	buffer := bufio.NewReaderSize(reader, 1<<20)
+	var total int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+		line, err := buffer.ReadBytes('\n')
+		if err != nil {
+			return total, err
+		}
+		var kind struct {
+			Kind string `json:"kind"`
+		}
+		if json.Unmarshal(line, &kind) != nil {
+			return total, errors.New("decode artifact line kind")
+		}
+		if kind.Kind == "coverage" {
+			return total, nil
+		}
+		if kind.Kind != "aggregate" {
+			continue
+		}
+		var value cachedArtifactLine
+		if err := json.Unmarshal(line, &value); err != nil {
+			return total, err
+		}
+		if _, selected := counts[value.Symbol]; !selected {
+			continue
+		}
+		window, err := time.Parse(time.RFC3339Nano, value.WindowStart)
+		if err != nil {
+			return total, err
+		}
+		if window.Before(start) || !window.Before(end) {
+			continue
+		}
+		counts[value.Symbol]++
+		total++
+		if consume != nil {
+			if err := consume(value); err != nil {
+				return total, err
+			}
+		}
+	}
+}
+
+type cachedFenceClock struct {
+	mu  sync.RWMutex
+	now time.Time
+}
+
+func (c *cachedFenceClock) read() time.Time     { c.mu.RLock(); defer c.mu.RUnlock(); return c.now }
+func (c *cachedFenceClock) set(value time.Time) { c.mu.Lock(); c.now = value; c.mu.Unlock() }
+
+type cachedFenceServer struct {
+	server  *httptest.Server
+	start   chan struct{}
+	pause   chan struct{}
+	done    chan error
+	frames  []string
+	period  time.Duration
+	catchUp bool
+	sent    atomic.Uint64
+	once    sync.Once
+}
+
+func newCachedFenceServer(t *testing.T, symbols []string, at time.Time, rate int) *cachedFenceServer {
+	t.Helper()
+	frames := make([]string, 64)
+	for index := range frames {
+		left := symbols[(index*2)%len(symbols)]
+		right := symbols[(index*2+1)%len(symbols)]
+		frames[index] = "[" + liveContentionAggregateJSON(left, at, index*2) + "," + liveContentionAggregateJSON(right, at, index*2+1) + "]"
+	}
+	period := cachedFenceObservedPeriod / time.Duration(rate)
+	result := &cachedFenceServer{start: make(chan struct{}), pause: make(chan struct{}), done: make(chan error, 1), frames: frames, period: period}
+	result.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { result.once.Do(func() { result.serve(w, r) }) }))
+	return result
+}
+
+func (s *cachedFenceServer) serve(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	connection, err := websocket.Accept(w, r, nil)
+	if err != nil {
+		s.done <- err
+		return
+	}
+	defer connection.CloseNow()
+	write := func(raw string) error { return connection.Write(ctx, websocket.MessageText, []byte(raw)) }
+	if err := write(`[{"ev":"status","status":"connected"}]`); err != nil {
+		s.done <- err
+		return
+	}
+	if _, _, err := connection.Read(ctx); err != nil {
+		s.done <- err
+		return
+	}
+	if err := write(`[{"ev":"status","status":"auth_success"}]`); err != nil {
+		s.done <- err
+		return
+	}
+	if _, raw, err := connection.Read(ctx); err != nil || !strings.Contains(string(raw), "A.*") {
+		if err == nil {
+			err = errors.New("aggregate subscription missing")
+		}
+		s.done <- err
+		return
+	}
+	if err := write(`[{"ev":"status","status":"success"}]`); err != nil {
+		s.done <- err
+		return
+	}
+	select {
+	case <-ctx.Done():
+		s.done <- ctx.Err()
+		return
+	case <-s.start:
+	}
+	index := 0
+	send := func() bool {
+		if err := write(s.frames[index%len(s.frames)]); err != nil {
+			s.done <- err
+			return false
+		}
+		s.sent.Add(1)
+		index++
+		return true
+	}
+	if s.catchUp {
+		next := time.Now().Add(s.period)
+		for {
+			wait := time.Until(next)
+			if wait <= 0 {
+				select {
+				case <-ctx.Done():
+					s.done <- ctx.Err()
+					return
+				case <-s.pause:
+					s.done <- nil
+					<-ctx.Done()
+					return
+				default:
+				}
+			} else {
+				timer := time.NewTimer(wait)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					s.done <- ctx.Err()
+					return
+				case <-s.pause:
+					timer.Stop()
+					s.done <- nil
+					<-ctx.Done()
+					return
+				case <-timer.C:
+				}
+			}
+			if !send() {
+				return
+			}
+			next = next.Add(s.period)
+		}
+	}
+	ticker := time.NewTicker(s.period)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			s.done <- ctx.Err()
+			return
+		case <-s.pause:
+			s.done <- nil
+			<-ctx.Done()
+			return
+		case <-ticker.C:
+			if !send() {
+				return
+			}
+		}
+	}
+}
+
+type cachedChunkState struct {
+	rows    []engine.HydrationRow
+	emitted int64
+	chunks  int
+}
+
+func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceManifest, rate int) (result cachedFenceRunResult) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	clock := &cachedFenceClock{now: manifest.end}
+	selected := make([]string, 0, 64)
+	for _, symbol := range manifest.binding.UniverseSymbols() {
+		if _, ok := manifest.rowsBySymbol[symbol]; ok {
+			selected = append(selected, symbol)
+		}
+		if len(selected) == 64 {
+			break
+		}
+	}
+	server := newCachedFenceServer(t, selected, manifest.end, rate)
+	defer server.server.Close()
+	adapter, err := massive.NewLiveAdapter(manifest.binding, massive.LiveAdapterConfig{Endpoint: "ws" + strings.TrimPrefix(server.server.URL, "http"), Credential: "cached-fixture",
+		Queue: massive.LiveQueueConfig{FrameSlots: 512, MaxFrameBytes: 8 << 20, TotalFrameBytes: 64 << 20}, Clock: clock.read})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := New(ctx, manifest.binding, DefaultConfig(), clock.read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		shutdown, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stop()
+		if err := run.Shutdown(shutdown); err != nil {
+			t.Errorf("shutdown: %v", err)
+		}
+	}()
+	attempt, started, err := adapter.Start(ctx, massive.OpenAggregateEpoch{BindingIdentity: manifest.binding.Identity(), CommandToken: 100, Durations: capacityDurations()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delivered, err := massive.DeliverToEngine(ctx, run.Engine(), started); err != nil || delivered.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
+		t.Fatalf("open delivery=%+v err=%v", delivered, err)
+	}
+	handshake, err := attempt.Handshake(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, delivery := range handshake {
+		got, deliverErr := massive.DeliverToEngine(ctx, run.Engine(), delivery)
+		if deliverErr != nil || (got.ControlDisposition.Code != engine.DispositionConnectionControlApplied && got.ControlDisposition.Code != engine.DispositionConnectionControlDeferred) {
+			t.Fatalf("handshake delivery=%+v err=%v", got, deliverErr)
+		}
+	}
+	run.setLiveSources(attempt, adapter)
+	queueBase := attempt.QueueAccounting()
+	planAdmission, planCompletion := run.Engine().AdmitHydrationPlan(ctx, engine.HydrationPlanInput{SchemaVersion: engine.HydrationPlanSchemaV1,
+		BindingIdentity: manifest.binding.Identity(), Purpose: engine.HydrationFreshBootstrap, ConnectionEpoch: attempt.Epoch(),
+		Budgets: engine.HydrationPlanBudgets{Workers: 2, RowsPerChunk: cachedFenceRowsPerChunk, MaximumResponseBytes: 2 << 30,
+			MaximumNormalizedRecords: int64(len(manifest.rowsBySymbol)) * 57_600, MaximumResidentRecords: 2 * 57_600}})
+	if planAdmission != engine.AdmissionAdmitted || planCompletion == nil {
+		t.Fatal("production hydration plan not admitted")
+	}
+	planDisposition := <-planCompletion
+	if planDisposition.Code != engine.DispositionHydrationPlanApplied || planDisposition.Plan.Start() != manifest.start || planDisposition.Plan.End() != manifest.end || len(planDisposition.Plan.Requests()) != len(manifest.rowsBySymbol) {
+		t.Fatalf("hydration plan=%+v start=%s end=%s requests=%d", planDisposition, planDisposition.Plan.Start(), planDisposition.Plan.End(), len(planDisposition.Plan.Requests()))
+	}
+	clock.set(manifest.end.Add(5 * time.Second))
+	close(server.start)
+
+	deliveryCtx, cancelDelivery := context.WithCancel(ctx)
+	deliveryDone := make(chan error, 1)
+	fenceDone := make(chan engine.HydrationDisposition, 1)
+	go func() {
+		for {
+			started := time.Now()
+			delivery, ok, deliveryErr := attempt.DeliverNextToEngine(deliveryCtx, run.Engine())
+			if ok {
+				run.observeDelivery(started, delivery)
+				if delivery.HydrationDisposition.Code != "" {
+					select {
+					case fenceDone <- delivery.HydrationDisposition:
+					default:
+					}
+				}
+			}
+			if deliveryErr != nil || !ok {
+				deliveryDone <- deliveryErr
+				return
+			}
+		}
+	}()
+
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	result.rate, result.heapBefore = rate, before.HeapAlloc
+	requests := planDisposition.Plan.Requests()
+	tokens := make(map[string]engine.HydrationRequestToken, len(requests))
+	states := make(map[string]*cachedChunkState, len(requests))
+	for _, token := range requests {
+		tokens[token.Symbol()] = token
+		states[token.Symbol()] = &cachedChunkState{rows: make([]engine.HydrationRow, 0, cachedFenceRowsPerChunk)}
+	}
+	historicalStarted := time.Now()
+	counts := make(map[string]int64, len(manifest.rowsBySymbol))
+	for symbol := range manifest.rowsBySymbol {
+		counts[symbol] = 0
+	}
+	flush := func(symbol string) error {
+		state, token := states[symbol], tokens[symbol]
+		if len(state.rows) == 0 {
+			return nil
+		}
+		total := manifest.rowsBySymbol[symbol]
+		totalChunks := int((total + cachedFenceRowsPerChunk - 1) / cachedFenceRowsPerChunk)
+		input, err := engine.NewHydrationChunkInput(token, token.ResultID(), state.chunks, totalChunks, state.emitted, total, state.rows)
+		if err != nil {
+			return err
+		}
+		admission, completion := run.Engine().AdmitHydrationChunk(ctx, input)
+		if admission != engine.AdmissionAdmitted || completion == nil {
+			return errors.New("hydration chunk not admitted")
+		}
+		got := <-completion
+		if got.Code != engine.DispositionHydrationChunkApplied {
+			return fmt.Errorf("hydration chunk %s=%s/%s queue=%+v operational=%+v", symbol, got.Code, got.Reason, attempt.QueueAccounting(), run.Engine().ObserveOperational())
+		}
+		state.emitted += int64(len(state.rows))
+		state.chunks++
+		state.rows = state.rows[:0]
+		return nil
+	}
+	rows, err := scanCachedFenceRows(ctx, manifest.handle, manifest.start, manifest.end, counts, func(value cachedArtifactLine) error {
+		start, err := time.Parse(time.RFC3339Nano, value.WindowStart)
+		if err != nil {
+			return err
+		}
+		end, err := time.Parse(time.RFC3339Nano, value.WindowEnd)
+		if err != nil {
+			return err
+		}
+		row, err := engine.NewHydrationRow(value.Symbol, start, end, engine.AggregateValues{Open: value.Open, High: value.High, Low: value.Low, Close: value.Close,
+			Volume: value.Volume, VWAP: value.VWAP, AverageTradeSize: value.AverageTradeSize, ATSProvenance: engine.ATSProvenance(value.ATSProvenance)})
+		if err != nil {
+			return err
+		}
+		state := states[value.Symbol]
+		state.rows = append(state.rows, row)
+		if len(state.rows) == cachedFenceRowsPerChunk {
+			return flush(value.Symbol)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for symbol := range states {
+		if err := flush(symbol); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result.historical = time.Since(historicalStarted)
+	if rows != manifest.rows {
+		t.Fatalf("timed rows=%d oracle=%d", rows, manifest.rows)
+	}
+
+	terminalStarted := time.Now()
+	var fenceCommand engine.HydrationFenceCommand
+	for _, token := range requests {
+		state := states[token.Symbol()]
+		terminalState := engine.HydrationCompletedValue
+		if state.emitted == 0 {
+			terminalState = engine.HydrationCompletedEmpty
+		}
+		terminal, err := engine.NewHydrationTerminalInput(token, token.ResultID(), terminalState, engine.HydrationReasonNone, 1, 1, 1, state.emitted, int64(state.chunks), state.emitted)
+		if err != nil {
+			t.Fatal(err)
+		}
+		admission, completion := run.Engine().AdmitHydrationTerminal(ctx, terminal)
+		if admission != engine.AdmissionAdmitted || completion == nil {
+			t.Fatal("hydration terminal not admitted")
+		}
+		got := <-completion
+		if got.Code != engine.DispositionHydrationTerminalApplied {
+			t.Fatalf("terminal %s=%s/%s", token.Symbol(), got.Code, got.Reason)
+		}
+		if got.FenceCommand.CommandToken() != 0 {
+			fenceCommand = got.FenceCommand
+		}
+	}
+	result.terminals = time.Since(terminalStarted)
+	if fenceCommand.CommandToken() == 0 {
+		t.Fatal("engine did not issue the real ingress fence")
+	}
+	capture, err := massive.CaptureAggregateIngressFenceCommandFromEngine(fenceCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fenceStarted := time.Now()
+	if err := attempt.CaptureAggregateIngressFence(ctx, run.Engine(), capture); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	case disposition := <-fenceDone:
+		if disposition.Code != engine.DispositionAggregateIngressFenceApplied {
+			t.Fatalf("fence=%s/%s", disposition.Code, disposition.Reason)
+		}
+	}
+	result.fence = time.Since(fenceStarted)
+	readyStarted := time.Now()
+	for {
+		status := run.Status()
+		if status.BackendReady {
+			result.firstReady = time.Since(readyStarted)
+			break
+		}
+		if time.Since(readyStarted) > 10*time.Second {
+			t.Fatalf("first readiness timeout: %+v engine=%+v", status, run.Engine().ObserveOperational())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	var atFence runtime.MemStats
+	runtime.ReadMemStats(&atFence)
+	result.heapAtFence = atFence.HeapAlloc
+	time.Sleep(2 * time.Second)
+	close(server.pause)
+	select {
+	case err := <-server.done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("paced producer did not pause")
+	}
+	tailStarted := time.Now()
+	for {
+		queue := attempt.QueueAccounting()
+		if queue.FramesQueued == 0 && queue.FramesClassifying == 0 && queue.FramesRead-queueBase.FramesRead == queue.FramesDispositioned-queueBase.FramesDispositioned {
+			break
+		}
+		if time.Since(tailStarted) > 10*time.Second {
+			t.Fatalf("live tail did not drain: %+v", queue)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	result.tailDrain = time.Since(tailStarted)
+	runtime.GC()
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+	result.heapAfter = after.HeapAlloc
+	queue := attempt.QueueAccounting()
+	metrics := run.Metrics()
+	view := run.Engine().ObserveOperational()
+	replay := run.Engine().ObserveReplay()
+	status := run.Status()
+	result.framesSent = server.sent.Load()
+	result.framesRead = queue.FramesRead - queueBase.FramesRead
+	result.framesAdmitted = queue.FramesAdmitted - queueBase.FramesAdmitted
+	result.framesDispositioned = queue.FramesDispositioned - queueBase.FramesDispositioned
+	result.framesRejected = liveContentionFrameRejections(queue, queueBase)
+	result.maximumQueued = metrics.QueueHighFrames
+	result.rows = view.Hydration.Rows.Consumed
+	result.rowsObserved = int(view.Hydration.Rows.Consumed)
+	result.values = view.Hydration.Accounting.CompletedValue
+	result.empties = view.Hydration.Accounting.CompletedEmpty
+	result.rankingRows = replay.Rows
+	result.lifecycle, result.rankingMode = view.Lifecycle, view.RankingMode
+	result.fenceReconciled, result.ready, result.accounting = view.Hydration.FenceReconciled, status.BackendReady && status.RankingCurrent, metrics.AccountingValid && operationalAccountingValid(view) && queue.Reconciles() && metrics.Adapter.Reconciles()
+	result.tq = run.Engine().ObserveTQ()
+
+	closeCommand := massive.CloseEpochCommand{BindingIdentity: manifest.binding.Identity(), ConnectionEpoch: attempt.Epoch(), CommandToken: 999, Cause: massive.CloseControlledStop}
+	_ = attempt.Close(closeCommand)
+	cancelDelivery()
+	select {
+	case <-deliveryDone:
+	case <-time.After(10 * time.Second):
+		t.Error("delivery loop did not join")
+	}
+	run.closeAndDrain(attempt, closeCommand.CommandToken, closeCommand.Cause)
+	return result
+}
+
+func assertCachedFence(t *testing.T, manifest cachedFenceManifest, result cachedFenceRunResult) {
+	t.Helper()
+	problems := make([]string, 0)
+	if result.rows != uint64(manifest.rows) || result.values != uint64(manifest.values) || result.empties != uint64(manifest.empties) {
+		problems = append(problems, fmt.Sprintf("hydration rows/value/empty=%d/%d/%d want=%d/%d/%d", result.rows, result.values, result.empties, manifest.rows, manifest.values, manifest.empties))
+	}
+	if result.framesSent == 0 || result.framesRead != result.framesSent || result.framesAdmitted != result.framesSent || result.framesDispositioned != result.framesSent || result.framesRejected != 0 {
+		problems = append(problems, fmt.Sprintf("frames sent/read/admitted/dispositioned/rejected=%d/%d/%d/%d/%d", result.framesSent, result.framesRead, result.framesAdmitted, result.framesDispositioned, result.framesRejected))
+	}
+	if !result.fenceReconciled || !result.ready || result.lifecycle != "live" || result.rankingMode != "qualified_current" || result.rankingRows < 0 || result.rankingRows > 20 {
+		problems = append(problems, fmt.Sprintf("lifecycle=%s ranking=%s rows=%d fence=%t ready=%t", result.lifecycle, result.rankingMode, result.rankingRows, result.fenceReconciled, result.ready))
+	}
+	if !result.accounting || result.maximumQueued >= 512 {
+		problems = append(problems, fmt.Sprintf("accounting=%t queue_high=%d", result.accounting, result.maximumQueued))
+	}
+	if len(problems) != 0 {
+		t.Fatalf("cached hydration fence acceptance failed: %s", strings.Join(problems, "; "))
+	}
+}

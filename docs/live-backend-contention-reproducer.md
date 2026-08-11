@@ -321,3 +321,6 @@ publication semantics while preventing a complete 6,000-symbol qualification
 proof from running for each aggregate admission. No such production change is
 made by this diagnostic, and another provider run is not justified before that
 boundary is corrected and deterministically re-proved.
+
+The focused implementation specification is
+[`live-engine-evaluation-coalescing-fix.md`](live-engine-evaluation-coalescing-fix.md).

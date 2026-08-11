@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"runtime/trace"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -283,40 +284,41 @@ type queueNode struct {
 }
 
 type engineState struct {
-	lifecycle                 lifecycle
-	binding                   *installedBinding
-	aggregates                aggregateAccounting
-	liveEpoch                 uint64
-	liveEpochActive           bool
-	aggregateWriteToken       uint64
-	aggregateAcknowledged     bool
-	aggregateAckPosition      LivePosition
-	aggregateAckReceivedAt    time.Time
-	greatestIngressPosition   LivePosition
-	connectionControl         connectionControlState
-	connectionAccounting      connectionControlAccounting
-	replayArtifact            string
-	aggregateIntegrity        bool
-	globalFailure             bool
-	exposedRevision           uint64
-	evaluationRevision        uint64
-	aggregateEvaluator        aggregateEvaluatorState
-	clockMonotonic            bool
-	committedT                *time.Time
-	latestTarget              *time.Time
-	latestTransition          *transitionRecord
-	suppressionDisposition    SuppressionDisposition
-	replay                    replayState
-	hydration                 hydrationState
-	liveCoverage              liveCoverageState
-	checkpointSequence        uint64
-	installedCheckpoint       *InstalledCheckpointFact
-	checkpointLastSubmitted   *time.Time
-	checkpointLastAttempted   *time.Time
-	checkpointRequestSequence uint64
-	checkpointOutstanding     map[uint64]checkpoint.Request
-	checkpointOperations      CheckpointOperations
-	tq                        tqState
+	lifecycle                  lifecycle
+	binding                    *installedBinding
+	aggregates                 aggregateAccounting
+	liveEpoch                  uint64
+	liveEpochActive            bool
+	aggregateWriteToken        uint64
+	aggregateAcknowledged      bool
+	aggregateAckPosition       LivePosition
+	aggregateAckReceivedAt     time.Time
+	greatestIngressPosition    LivePosition
+	connectionControl          connectionControlState
+	connectionAccounting       connectionControlAccounting
+	replayArtifact             string
+	aggregateIntegrity         bool
+	globalFailure              bool
+	exposedRevision            uint64
+	evaluationRevision         uint64
+	aggregateEvaluator         aggregateEvaluatorState
+	aggregateProjectionPending bool
+	clockMonotonic             bool
+	committedT                 *time.Time
+	latestTarget               *time.Time
+	latestTransition           *transitionRecord
+	suppressionDisposition     SuppressionDisposition
+	replay                     replayState
+	hydration                  hydrationState
+	liveCoverage               liveCoverageState
+	checkpointSequence         uint64
+	installedCheckpoint        *InstalledCheckpointFact
+	checkpointLastSubmitted    *time.Time
+	checkpointLastAttempted    *time.Time
+	checkpointRequestSequence  uint64
+	checkpointOutstanding      map[uint64]checkpoint.Request
+	checkpointOperations       CheckpointOperations
+	tq                         tqState
 }
 
 type admissionCounters struct {
@@ -788,6 +790,11 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		default:
 			e.state.binding = candidate
 			if e.transitionLifecycleLocked(lifecycleEventBinding, node, "") {
+				// A bound engine owns an explicit noncurrent projection even before
+				// the first committed watermark. This keeps the immutable product
+				// publication coherent and lets read-only consumers distinguish
+				// warm-up from an unavailable API.
+				e.state.aggregateEvaluator.current = e.stageAggregateEvaluationAtLocked(time.Time{}, time.Time{})
 				code = DispositionBindingInstalled
 			} else {
 				e.state.binding = nil
@@ -802,7 +809,12 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 			(e.state.greatestIngressPosition.ConnectionEpoch == 0 || compareLive(node.aggregate.Live, e.state.greatestIngressPosition) > 0) {
 			e.state.greatestIngressPosition = node.aggregate.Live
 		}
-		if code == DispositionAggregateInserted || code == DispositionAggregateRevised || code == DispositionAggregateWithdrawn {
+		if e.mode == RunModeLive {
+			// Canonical mutation and aggregate accounting remain synchronous, but
+			// the immutable market projection is coalesced at the next accepted
+			// timer or aggregate-ingress fence.
+			e.state.aggregateProjectionPending = true
+		} else if code == DispositionAggregateInserted || code == DispositionAggregateRevised || code == DispositionAggregateWithdrawn {
 			e.state.exposedRevision++
 		}
 		if node.aggregate.Source == AggregateSourceLive && (code == DispositionAggregateInserted || code == DispositionAggregateRevised) {
@@ -884,7 +896,9 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 	} else if node.kind == inputHydrationChunk {
 		e.mu.Lock()
 		var rows HydrationRowAccounting
-		code, reason, rows = e.applyHydrationChunkLocked(node)
+		trace.WithRegion(context.Background(), "historical_chunk_processing", func() {
+			code, reason, rows = e.applyHydrationChunkLocked(node)
+		})
 		if code == DispositionHydrationIntegrity {
 			if !e.cancelHydrationGenerationLocked(true) {
 				reason = ReasonAccounting
@@ -1010,7 +1024,10 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 	// aggregate-feature contributor is the first statically named call at this
 	// seam; C3-S2 extends that same call rather than adding another path.
 	e.mu.Lock()
-	stagedEvaluation := e.runAggregateFeatureContributorLocked(node, code, reason)
+	var stagedEvaluation *aggregateEvaluationResult
+	trace.WithRegion(context.Background(), "feature_work", func() {
+		stagedEvaluation = e.runAggregateFeatureContributorLocked(node, code, reason)
+	})
 	if !e.runAggregateEvaluatorLocked(node, code, reason, stagedEvaluation) {
 		code, reason = DispositionAccountingIntegrity, ReasonAccounting
 		e.enterSuppressionLocked(lifecycleEventAccountingIntegrity, node, lifecycleReasonAccountingIntegrity)

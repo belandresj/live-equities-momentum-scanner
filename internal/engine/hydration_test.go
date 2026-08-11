@@ -133,6 +133,70 @@ func TestC6PLAN01DeterministicModeIntervalPopulation(t *testing.T) {
 	})
 }
 
+// TestC6PIN01HydrationPinsOneSymbolWithoutPerRecordPopulationScans is the
+// regression for the 2026-08-10 end-of-day live run. A live aggregate arriving
+// while hydration was active used to walk the symbol's retained tail and scan
+// the complete hydration request population for every record. The active
+// generation now pins the symbol once, and the ordinary ingress-fence
+// contributor compacts the retained record after the generation becomes
+// inactive.
+func TestC6PIN01HydrationPinsOneSymbolWithoutPerRecordPopulationScans(t *testing.T) {
+	binding := testBinding(t)
+	start := binding.SessionStart()
+	now := start.Add(20 * time.Minute)
+	e := acknowledgedHydrationEngine(t, binding, &now, now, lifecycleHydrating)
+	plan := admitHydrationPlan(t, e, HydrationFreshBootstrap, 1, generousHydrationBudgets())
+	requests := plan.Plan.Requests()
+	if plan.Code != DispositionHydrationPlanApplied || len(requests) != 1 {
+		t.Fatalf("plan = %+v requests=%d", plan, len(requests))
+	}
+	e.mu.Lock()
+	requestIndex, indexed := e.state.hydration.generation.requestIndexBySymbol("AAA")
+	e.mu.Unlock()
+	if !indexed || requestIndex != 0 {
+		t.Fatalf("symbol request index = %d/%t", requestIndex, indexed)
+	}
+
+	oldLive := liveAggregate(binding, "AAA", start, 1, 2)
+	e.mu.Lock()
+	symbol := &e.state.binding.symbols[e.state.binding.index["AAA"]]
+	if code, reason := e.installAggregateLocked(symbol, freezeAggregateInput(oldLive), start.Add(time.Second), false); code != DispositionAggregateInserted {
+		e.mu.Unlock()
+		t.Fatalf("old live aggregate = %s/%s", code, reason)
+	}
+	e.state.greatestIngressPosition = oldLive.Live
+	state := symbol.aggregates
+	e.compactSymbolLocked(state, e.state.binding, "AAA", now)
+	_, retainedWhilePinned := state.tail[start.Unix()]
+	e.mu.Unlock()
+	if !retainedWhilePinned {
+		t.Fatal("active hydration did not pin the symbol tail")
+	}
+
+	terminal, err := NewHydrationTerminalInput(requests[0], requests[0].ResultID(), HydrationCompletedEmpty, HydrationReasonNone, 1, 1, 10, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminalResult := admitHydrationTerminal(t, e, terminal)
+	now = now.Add(5 * time.Second)
+	fence, err := NewAggregateIngressFenceInput(terminalResult.FenceCommand, AggregateIngressFenceComplete, 2, 1, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, fenceCompletion := e.AdmitAggregateIngressFence(context.Background(), fence)
+	if got := awaitHydrationDisposition(t, fenceCompletion); got.Code != DispositionAggregateIngressFenceApplied {
+		t.Fatalf("fence = %+v", got)
+	}
+	e.mu.Lock()
+	_, retainedAfterFence := state.tail[start.Unix()]
+	presentAfterFence := state.presence != nil && state.presence.has(sessionSlot(e.state.binding, start))
+	e.mu.Unlock()
+	if retainedAfterFence || !presentAfterFence {
+		t.Fatalf("fence compaction retained=%t present=%t", retainedAfterFence, presentAfterFence)
+	}
+	closeAndWait(t, e)
+}
+
 // TestC6START01FreshCheckpointLifecycleTrace is P-C6-START. It proves that
 // terminal provider work alone cannot leave hydrating, while the exact current
 // ingress fence does, and that epoch loss cancels/deactivates the old generation.
@@ -696,6 +760,24 @@ func TestC6LEDGER01OrderedChunkTerminalSupersession(t *testing.T) {
 				closeAndWait(t, e)
 			})
 		}
+	})
+
+	t.Run("failed terminal may exactly consume the response budget", func(t *testing.T) {
+		now := start.Add(2 * time.Second)
+		e, token := plannedHydrationEngine(t, binding, &now)
+		maximum := e.state.hydration.generation.budgets.MaximumResponseBytes
+		terminal, err := NewHydrationTerminalInput(token, token.ResultID(), HydrationFailed, HydrationReasonResponseSizeSyntax, 0, 1, maximum, 0, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := admitHydrationTerminal(t, e, terminal)
+		if got.Code != DispositionHydrationTerminalApplied || got.Accounting != (HydrationAccounting{Planned: 1, Failed: 1}) {
+			t.Fatalf("exact-budget failure = %+v", got)
+		}
+		if view := e.ObserveOperational(); view.Lifecycle == "suppressed" || view.Suppression != "" {
+			t.Fatalf("bounded provider failure suppressed engine = %+v", view)
+		}
+		closeAndWait(t, e)
 	})
 
 	t.Run("sealed result may cancel before its first chunk", func(t *testing.T) {

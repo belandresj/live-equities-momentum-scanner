@@ -69,6 +69,15 @@ type qualificationState struct {
 	installed, revalidated, revoked, finalizedCount uint64
 	maximumProofOccupancy, maximumDirtyOccupancy    int
 	result                                          qualificationResult
+	hydrationScan                                   *qualificationHydrationScan
+}
+
+type qualificationHydrationScan struct {
+	window          qualificationProofWindow
+	nextProof       time.Time
+	lastBarEnd      time.Time
+	earliestPassing time.Time
+	recentPassing   map[int64]struct{}
 }
 
 func ensureQualificationState(state *symbolAggregateState) *qualificationState {
@@ -166,22 +175,310 @@ func evaluateQualificationThrough(state *symbolAggregateState, binding *installe
 		return
 	}
 	revalidateDirtyQualificationProofs(state, binding)
+	// A proof requires at least 45 distinct aggregate seconds. When the entire
+	// retained canonical/gate-bar population is smaller than that lower bound,
+	// scanning every empty second from 04:00 to T cannot change the result. Mark
+	// the interval accounted so a later insert is handled by the ordinary
+	// aggregate-local correction window rather than by a session-length rescan.
+	if len(qualification.proofs) == 0 && len(qualification.dirty) == 0 && qualificationBarUpperBound(state) < minimumQualificationSeconds {
+		qualification.accountedThrough = at
+		finalizeQualificationProof(state, engineTime)
+		updateQualificationResult(state, binding, at)
+		return
+	}
 	first := binding.sessionStart
 	if !qualification.accountedThrough.IsZero() {
 		first = qualification.accountedThrough.Add(time.Second)
 	}
+	window := newQualificationProofWindow(state, binding, first)
 	for proofEnd := first; !proofEnd.After(at) && !qualification.finalized; proofEnd = proofEnd.Add(time.Second) {
-		evaluateQualificationProof(state, binding, proofEnd, engineTime)
+		coverage := window.coverageTrustworthy()
+		facts := qualificationGateFacts{}
+		if coverage && window.canPossiblyPass() {
+			facts = window.facts()
+		}
+		evaluateQualificationProofWithFacts(state, proofEnd, engineTime, coverage, facts)
 		qualification.accountedThrough = proofEnd
+		window.advance(state, binding, proofEnd)
 	}
 	finalizeQualificationProof(state, engineTime)
 	updateQualificationResult(state, binding, at)
 }
 
-func evaluateQualificationProof(state *symbolAggregateState, binding *installedBinding, proofEnd, engineTime time.Time) {
+// qualificationProofWindow is a transition-local rolling view of the exact
+// 60 one-second identities used by the gate. It retains no canonical market
+// state. The prior implementation rebuilt this same view with 60 map lookups
+// and time calculations for every candidate proof end; a late-session fresh
+// hydration therefore performed billions of redundant lookups while holding
+// the sole engine transition. The ring preserves the original chronological
+// floating-point addition order and exact per-second coverage interpretation.
+type qualificationProofWindow struct {
+	entries                                        [60]qualificationProofWindowEntry
+	head, active, covered, present, unavailableATS int
+}
+
+type qualificationProofWindowEntry struct {
+	bar                      qualificationGateBar
+	present, active, covered bool
+}
+
+func newQualificationProofWindow(state *symbolAggregateState, binding *installedBinding, proofEnd time.Time) qualificationProofWindow {
+	result := qualificationProofWindow{}
+	start := proofEnd.Add(-qualificationWindow)
+	for slot := range result.entries {
+		at := start.Add(time.Duration(slot) * time.Second)
+		result.entries[slot] = qualificationProofWindowEntryAt(state, binding, at)
+		result.add(result.entries[slot])
+	}
+	return result
+}
+
+func (w *qualificationProofWindow) advance(state *symbolAggregateState, binding *installedBinding, priorProofEnd time.Time) {
+	old := w.entries[w.head]
+	w.remove(old)
+	next := qualificationProofWindowEntryAt(state, binding, priorProofEnd)
+	w.entries[w.head] = next
+	w.add(next)
+	w.head = (w.head + 1) % len(w.entries)
+}
+
+func (w *qualificationProofWindow) add(entry qualificationProofWindowEntry) {
+	if entry.active {
+		w.active++
+	}
+	if entry.covered {
+		w.covered++
+	}
+	if entry.present {
+		w.present++
+		if entry.bar.averageTradeSize <= 0 {
+			w.unavailableATS++
+		}
+	}
+}
+
+func (w *qualificationProofWindow) remove(entry qualificationProofWindowEntry) {
+	if entry.active {
+		w.active--
+	}
+	if entry.covered {
+		w.covered--
+	}
+	if entry.present {
+		w.present--
+		if entry.bar.averageTradeSize <= 0 {
+			w.unavailableATS--
+		}
+	}
+}
+
+func (w qualificationProofWindow) coverageTrustworthy() bool { return w.covered == w.active }
+
+func (w qualificationProofWindow) canPossiblyPass() bool {
+	return w.present >= minimumQualificationSeconds && w.unavailableATS == 0
+}
+
+func qualificationProofWindowEntryAt(state *symbolAggregateState, binding *installedBinding, at time.Time) qualificationProofWindowEntry {
+	if at.Before(binding.sessionStart) || !at.Before(binding.sessionEnd) {
+		return qualificationProofWindowEntry{}
+	}
+	entry := qualificationProofWindowEntry{active: true}
+	start := at.Unix()
+	entry.bar, entry.present = qualificationBarAt(state, start)
+	slot, mask := sessionSlot(binding, at), uint64(1)<<uint(sessionSlot(binding, at)%64)
+	word := slot / 64
+	conflict := state.historicalConflict != nil && state.historicalConflict[word]&mask != 0
+	canonical := entry.present || state.presence != nil && state.presence[word]&mask != 0 || state.provenAbsent != nil && state.provenAbsent[word]&mask != 0
+	entry.covered = !conflict && canonical
+	return entry
+}
+
+func (w qualificationProofWindow) facts() qualificationGateFacts {
+	facts := qualificationGateFacts{a60Available: true, a5Available: true, valid: true}
+	present := [60]bool{}
+	totalVolume, maximumVolume := 0.0, 0.0
+	for slot := range w.entries {
+		entry := w.entries[(w.head+slot)%len(w.entries)]
+		if !entry.active || !entry.present {
+			continue
+		}
+		bar := entry.bar
+		present[slot] = true
+		facts.presentSeconds++
+		facts.latestPrice = bar.close
+		facts.liveATS = facts.liveATS || bar.provenance == ATSLiveProviderAverage
+		facts.historicalATS = facts.historicalATS || bar.provenance == ATSRESTFloorVolumeOverTrades
+		if !qualificationFiniteAdd(&totalVolume, bar.volume) || !qualificationFiniteAdd(&facts.dollarVolume60, bar.volume*bar.vwap) {
+			facts.valid = false
+		}
+		maximumVolume = max(maximumVolume, bar.volume)
+		if bar.averageTradeSize <= 0 {
+			facts.a60Available = false
+			if slot >= len(w.entries)-int(qualificationShortWindow/time.Second) {
+				facts.a5Available = false
+			}
+			continue
+		}
+		activity := bar.volume / float64(bar.averageTradeSize)
+		if !qualificationFiniteAdd(&facts.a60, activity) {
+			facts.valid = false
+		}
+		if slot >= len(w.entries)-int(qualificationShortWindow/time.Second) && !qualificationFiniteAdd(&facts.a5, activity) {
+			facts.valid = false
+		}
+	}
+	facts.longestGap = longestQualificationGap(present)
+	if !finiteFeature(totalVolume) || totalVolume <= 0 {
+		facts.valid = false
+		return facts
+	}
+	facts.concentration = maximumVolume / totalVolume
+	facts.valid = facts.valid && finiteFeature(facts.latestPrice) && finiteFeature(facts.a60) && finiteFeature(facts.a5) &&
+		finiteFeature(facts.dollarVolume60) && finiteFeature(facts.concentration)
+	return facts
+}
+
+func qualificationBarUpperBound(state *symbolAggregateState) int {
+	if state == nil {
+		return 0
+	}
+	result := len(state.tail)
+	if state.qualification != nil {
+		result += len(state.qualification.finalizedGateBars)
+	}
+	// These retained marks normally alias a tail or folded gate bar. Counting
+	// them again is conservative: it can only decline the fast path.
+	if state.latest != nil {
+		result++
+	}
+	if state.olderLatest != nil {
+		result++
+	}
+	return result
+}
+
+func advanceFreshHydrationQualification(state *symbolAggregateState, binding *installedBinding, through, generationEnd time.Time) {
 	qualification := ensureQualificationState(state)
-	if !qualificationCoverageTrustworthy(state, binding, proofEnd.Add(-qualificationWindow), proofEnd) ||
-		!passesQualificationGate(calculateQualificationGateFacts(state, binding, proofEnd)) {
+	if qualification.finalized || qualification.boundExceeded || qualification.invalid || through.Before(binding.sessionStart) {
+		return
+	}
+	if through.After(generationEnd) {
+		through = generationEnd
+	}
+	if qualification.hydrationScan == nil {
+		qualification.hydrationScan = &qualificationHydrationScan{
+			window: newQualificationProofWindow(state, binding, binding.sessionStart), nextProof: binding.sessionStart,
+			recentPassing: make(map[int64]struct{}),
+		}
+	}
+	scan := qualification.hydrationScan
+	if through.Before(scan.nextProof) {
+		return
+	}
+	for !scan.nextProof.After(through) {
+		if scan.window.canPossiblyPass() && passesQualificationGate(scan.window.facts()) {
+			if scan.nextProof.Before(generationEnd.Add(-correctionHorizon)) {
+				if scan.earliestPassing.IsZero() {
+					scan.earliestPassing = scan.nextProof
+				}
+			} else if len(scan.recentPassing) < maximumQualificationProofs {
+				scan.recentPassing[scan.nextProof.Unix()] = struct{}{}
+			} else {
+				failQualificationState(qualification, true)
+				qualification.hydrationScan = nil
+				return
+			}
+		}
+		scan.window.advance(state, binding, scan.nextProof)
+		scan.nextProof = scan.nextProof.Add(time.Second)
+	}
+	if through.After(scan.lastBarEnd) {
+		scan.lastBarEnd = through
+	}
+	pruneFreshHydrationGateBars(qualification, scan, generationEnd)
+}
+
+// pruneFreshHydrationGateBars discards only derived arithmetic already consumed
+// by the monotonic fresh-hydration scan and too old to participate in a future
+// accepted correction. Canonical presence remains in the session bitmap. The
+// earlier of the next 60-second proof window and the 16-minute correction
+// overlap is retained, so this changes neither proof arithmetic nor correction
+// admissibility while preventing a full-session map per non-passing symbol.
+func pruneFreshHydrationGateBars(qualification *qualificationState, scan *qualificationHydrationScan, generationEnd time.Time) {
+	if qualification == nil || scan == nil {
+		return
+	}
+	floor := scan.nextProof.Add(-qualificationWindow)
+	correctionFloor := generationEnd.Add(-correctionHorizon - qualificationWindow)
+	if correctionFloor.Before(floor) {
+		floor = correctionFloor
+	}
+	for start := range qualification.finalizedGateBars {
+		if start < floor.Unix() {
+			delete(qualification.finalizedGateBars, start)
+		}
+	}
+}
+
+func completeFreshHydrationQualification(state *symbolAggregateState, binding *installedBinding, at, engineTime time.Time, trusted bool) {
+	qualification := ensureQualificationState(state)
+	scan := qualification.hydrationScan
+	if !trusted || scan == nil || qualification.boundExceeded || qualification.invalid {
+		qualification.hydrationScan = nil
+		if trusted && !qualification.boundExceeded && !qualification.invalid {
+			qualification.accountedThrough = at
+			qualification.unresolvedOrigin = uncertaintyNone
+		} else if !trusted {
+			qualification.unresolvedOrigin = uncertaintyBootstrapOrigin
+		}
+		updateQualificationResult(state, binding, at)
+		return
+	}
+	through := at
+	if limit := scan.lastBarEnd.Add(3 * time.Second); through.After(limit) {
+		through = limit
+	}
+	advanceFreshHydrationQualification(state, binding, through, at)
+	scan = qualification.hydrationScan
+	if scan == nil {
+		updateQualificationResult(state, binding, at)
+		return
+	}
+	if !scan.earliestPassing.IsZero() && engineTime.After(scan.earliestPassing.Add(correctionHorizon)) {
+		qualification.finalized = true
+		qualification.finalProofEnd = scan.earliestPassing
+		qualification.finalizedCount++
+	} else {
+		for proof := range scan.recentPassing {
+			proofEnd := time.Unix(proof, 0).UTC()
+			if engineTime.After(proofEnd.Add(correctionHorizon)) {
+				if !qualification.finalized || proofEnd.Before(qualification.finalProofEnd) {
+					qualification.finalized = true
+					qualification.finalProofEnd = proofEnd
+				}
+				continue
+			}
+			installQualificationProof(qualification, proof)
+		}
+		if qualification.finalized {
+			qualification.finalizedCount++
+			clear(qualification.proofs)
+		}
+	}
+	qualification.accountedThrough = at
+	qualification.hydrationScan = nil
+	updateQualificationResult(state, binding, at)
+}
+
+func evaluateQualificationProof(state *symbolAggregateState, binding *installedBinding, proofEnd, engineTime time.Time) {
+	evaluateQualificationProofWithFacts(state, proofEnd, engineTime,
+		qualificationCoverageTrustworthy(state, binding, proofEnd.Add(-qualificationWindow), proofEnd),
+		calculateQualificationGateFacts(state, binding, proofEnd))
+}
+
+func evaluateQualificationProofWithFacts(state *symbolAggregateState, proofEnd, engineTime time.Time, coverage bool, facts qualificationGateFacts) {
+	qualification := ensureQualificationState(state)
+	if !coverage || !passesQualificationGate(facts) {
 		return
 	}
 	if engineTime.After(proofEnd.Add(correctionHorizon)) {

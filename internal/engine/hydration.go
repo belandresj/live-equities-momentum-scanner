@@ -349,6 +349,7 @@ type hydrationGenerationState struct {
 	budgets        HydrationPlanBudgets
 	requests       []hydrationLedgerEntry
 	requestIndex   map[uint64]int
+	symbolIndex    map[string]int
 	accounting     HydrationAccounting
 	rowAccounting  HydrationRowAccounting
 	responseBytes  int64
@@ -612,6 +613,7 @@ func (e *Engine) applyHydrationPlanLocked(node *queueNode) (DispositionCode, Dis
 	}
 	entries := make([]hydrationLedgerEntry, requestCount)
 	requestIndex := make(map[uint64]int, requestCount)
+	symbolIndex := make(map[string]int, requestCount)
 	requests := make([]HydrationRequestToken, requestCount)
 	for requestOffset := 0; requestOffset < requestCount; requestOffset++ {
 		requestID := e.state.hydration.lastRequestID + uint64(requestOffset) + 1
@@ -623,12 +625,13 @@ func (e *Engine) applyHydrationPlanLocked(node *queueNode) (DispositionCode, Dis
 		}
 		entries[requestOffset] = hydrationLedgerEntry{token: token, coverage: hydrationCoveragePending}
 		requestIndex[requestID] = requestOffset
+		symbolIndex[symbol] = requestOffset
 		requests[requestOffset] = token
 	}
 	candidate := hydrationGenerationState{
 		active: true, generation: generation, purpose: input.Purpose, bindingID: e.state.binding.identity,
 		epoch: e.state.liveEpoch, start: start, end: end, budgets: input.Budgets,
-		requests: entries, requestIndex: requestIndex,
+		requests: entries, requestIndex: requestIndex, symbolIndex: symbolIndex,
 		accounting: HydrationAccounting{Planned: uint64(requestCount), Open: uint64(requestCount)},
 	}
 	if !candidate.accounting.reconciles() {
@@ -801,10 +804,23 @@ func (e *Engine) applyHydrationChunkLocked(node *queueNode) (DispositionCode, Di
 			e.state.hydration.revision++
 			return DispositionHydrationIntegrity, ReasonAccounting, delta
 		}
+		if rowCode == DispositionAggregateInserted || rowCode == DispositionAggregateRevised {
+			if symbolIndex, ok := e.state.binding.index[row.symbol]; ok {
+				state := e.state.binding.symbols[symbolIndex].aggregates
+				if state != nil {
+					e.compactAggregateLocked(state, e.state.binding, state.tail[row.windowStart.Unix()], node.admissionTime)
+				}
+			}
+		}
 	}
 	entry.nextChunk++
 	entry.consumedRows = wouldConsume
 	entry.lastWindowStart = last
+	if e.state.hydration.generation.purpose == HydrationFreshBootstrap && !last.IsZero() {
+		state := e.state.binding.symbols[e.state.binding.index[input.token.symbol]].aggregates
+		advanceFreshHydrationQualification(state, e.state.binding, last.Add(time.Second), input.token.end)
+		pruneFreshHydrationActivityTargets(state.activity, last.Add(time.Second), input.token.end)
+	}
 	addHydrationRows(&entry.rowAccounting, delta)
 	addHydrationRows(&e.state.hydration.generation.rowAccounting, delta)
 	if !entry.rowAccounting.reconciles() || !e.state.hydration.generation.rowAccounting.reconciles() {
@@ -911,6 +927,29 @@ func (e *Engine) applyHydrationTerminalLocked(node *queueNode) (DispositionCode,
 		if _, ok := e.allocateHydrationFenceCommandLocked(generation); !ok {
 			return DispositionHydrationIntegrity, ReasonAccounting
 		}
+	}
+	if input.state == HydrationCompletedValue || input.state == HydrationCompletedEmpty {
+		index, exists := e.state.binding.index[input.token.symbol]
+		if !exists {
+			return DispositionHydrationIntegrity, ReasonHydrationToken
+		}
+		state := ensureAggregateState(&e.state.binding.symbols[index])
+		if !installExactCoverage(state, e.state.binding, input.token.start, input.token.end) {
+			return DispositionHydrationIntegrity, ReasonHydrationInterval
+		}
+		// Once this symbol's exact terminal is accepted, its historical prefix no
+		// longer needs to remain pinned for another symbol's work. Fold and
+		// evaluate that prefix now so the final ingress fence performs only the
+		// short live-tail continuation. Publication and readiness remain fenced.
+		e.compactSymbolLocked(state, e.state.binding, input.token.symbol, node.admissionTime)
+		maintainActivityState(state, e.state.binding, node.admissionTime, input.token.end)
+		if generation.purpose == HydrationFreshBootstrap {
+			completeFreshHydrationQualification(state, e.state.binding, input.token.end, node.admissionTime, entry.coverage == hydrationCoverageCandidateComplete)
+		} else {
+			evaluateQualificationThrough(state, e.state.binding, input.token.end, node.admissionTime)
+		}
+		ensurePriceRangeState(state).result = evaluatePriceRangeFeatures(e.state.binding, &e.state.binding.symbols[index], input.token.end)
+		applyActivityResult(ensureActivityState(state), evaluateActivityFeatures(e.state.binding, state, input.token.end))
 	}
 	e.state.hydration.revision++
 	return DispositionHydrationTerminalApplied, ReasonNone
@@ -1072,10 +1111,8 @@ func (e *Engine) applyHydrationPolicyActionLocked(node *queueNode) (DispositionC
 }
 
 func (g *hydrationGenerationState) requestIndexBySymbol(symbol string) (int, bool) {
-	for index := range g.requests {
-		if g.requests[index].token.symbol == symbol {
-			return index, true
-		}
+	if index, ok := g.symbolIndex[symbol]; ok {
+		return index, true
 	}
 	// Empty intervals have no provider request and are complete by construction.
 	if g.start.Equal(g.end) {
@@ -1139,19 +1176,6 @@ func addHydrationRows(target *HydrationRowAccounting, delta HydrationRowAccounti
 	target.Rejected += delta.Rejected
 	target.Fenced += delta.Fenced
 	target.Integrity += delta.Integrity
-}
-
-func (e *Engine) hydrationPinsIdentityLocked(symbol string, start time.Time) bool {
-	generation := &e.state.hydration.generation
-	if !generation.active || start.Before(generation.start) || !start.Before(generation.end) {
-		return false
-	}
-	for index := range generation.requests {
-		if generation.requests[index].token.symbol == symbol {
-			return true
-		}
-	}
-	return false
 }
 
 type hydrationObservation struct {

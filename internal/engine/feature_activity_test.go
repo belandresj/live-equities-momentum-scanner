@@ -579,3 +579,130 @@ func sameFloat(a, b float64) bool {
 }
 
 func closeFloat(a, b float64) bool { return math.Abs(a-b) <= 1e-9 }
+
+func TestFreshHydrationActivityOptimizationsMatchValueOracle(t *testing.T) {
+	binding := installedBindingForQualification(t, testBinding(t))
+	start := binding.sessionStart
+	end := start.Add(20 * time.Minute)
+	now := end.Add(correctionHorizon + time.Second)
+
+	newState := func(progressive bool) *symbolAggregateState {
+		state := &symbolAggregateState{tail: make(map[int64]*canonicalAggregate)}
+		for ordinal, at := 0, start; at.Before(end); ordinal, at = ordinal+1, at.Add(time.Second) {
+			record := qualificationRecord("AAA", at, 10+float64(ordinal%7)/100, 100+float64(ordinal%13), 10, 10+int64(ordinal%5), ATSRESTFloorVolumeOverTrades)
+			record.values.High, record.values.Low = record.values.Close+.1, record.values.Close-.1
+			ensurePresence(state).set(sessionSlot(binding, at))
+			foldActivityAggregate(state, binding, *record, now)
+			if progressive && (ordinal+1)%256 == 0 {
+				pruneFreshHydrationActivityTargets(state.activity, at.Add(time.Second), end)
+			}
+		}
+		if progressive {
+			pruneFreshHydrationActivityTargets(state.activity, end, end)
+		}
+		return state
+	}
+
+	full, progressive := newState(false), newState(true)
+	got, want := evaluateActivityFeatures(binding, progressive, end), evaluateActivityFeatures(binding, full, end)
+	if got != want {
+		t.Fatalf("progressive activity differs: got=%+v want=%+v", got, want)
+	}
+	if len(progressive.activity.foldedTargets) > 1 || progressive.activity.foldedTargetContributions > 30 {
+		t.Fatalf("progressive target retention blocks=%d contributions=%d", len(progressive.activity.foldedTargets), progressive.activity.foldedTargetContributions)
+	}
+	if len(progressive.activity.references) != len(full.activity.references) {
+		t.Fatalf("reference population=%d want=%d", len(progressive.activity.references), len(full.activity.references))
+	}
+	for key, wantSummary := range full.activity.references {
+		gotSummary := progressive.activity.references[key]
+		if gotSummary == nil || finishActivitySummary(*gotSummary) != finishActivitySummary(*wantSummary) {
+			t.Fatalf("reference %d differs: got=%+v want=%+v", key, gotSummary, wantSummary)
+		}
+	}
+}
+
+func TestActivityStableSummaryAndDeferredFinalizationEquivalence(t *testing.T) {
+	binding := installedBindingForQualification(t, testBinding(t))
+	start := binding.sessionStart
+	now := start.Add(correctionHorizon + time.Hour)
+	state := &symbolAggregateState{tail: make(map[int64]*canonicalAggregate)}
+	var eager, deferred activityBlockSummary
+	eager.low, deferred.low = math.Inf(1), math.Inf(1)
+	var stable *activityBlockSummary
+	for ordinal := 0; ordinal < 30; ordinal++ {
+		at := start.Add(time.Duration(ordinal) * time.Second)
+		values := AggregateValues{Open: 10, High: 10.2 + float64(ordinal%3)/100, Low: 9.8, Close: 10, Volume: 100 + float64(ordinal), VWAP: 10, AverageTradeSize: 10 + int64(ordinal%5), ATSProvenance: ATSRESTFloorVolumeOverTrades}
+		record := canonicalAggregate{identity: aggregateIdentity{symbol: "AAA", start: at.Unix()}, windowStart: at, windowEnd: at.Add(time.Second), values: values}
+		foldActivityAggregate(state, binding, record, now)
+		pointer := state.activity.references[activityBlockEnd(binding, at).Unix()]
+		if ordinal == 0 {
+			stable = pointer
+		} else if pointer != stable {
+			t.Fatal("activity reference storage identity changed within one block")
+		}
+		eager = finishActivitySummary(addActivityAggregate(eager, values))
+		deferred = addActivityAggregate(deferred, values)
+	}
+	deferred = finishActivitySummary(deferred)
+	if stable == nil {
+		t.Fatal("stable activity reference missing")
+	}
+	stableFinished := finishActivitySummary(*stable)
+	stableFinished.end = 0
+	if eager != deferred || stableFinished != deferred {
+		t.Fatalf("stable/deferred summary differs: stable=%+v deferred=%+v eager=%+v", stable, deferred, eager)
+	}
+}
+
+func TestMutableActivityRecomputeDefersOnlyProjection(t *testing.T) {
+	binding := installedBindingForQualification(t, testBinding(t))
+	state := &symbolAggregateState{tail: make(map[int64]*canonicalAggregate)}
+	blockEnd := binding.sessionStart.Add(activityBlockDuration)
+	want := activityBlockSummary{end: blockEnd.Unix(), low: math.Inf(1)}
+	for ordinal := 0; ordinal < 30; ordinal++ {
+		at := binding.sessionStart.Add(time.Duration(ordinal) * time.Second)
+		values := AggregateValues{Open: 10, High: 10.2 + float64(ordinal%3)/100, Low: 9.8, Close: 10,
+			Volume: 100 + float64(ordinal), VWAP: 10, AverageTradeSize: 10 + int64(ordinal%5), ATSProvenance: ATSRESTFloorVolumeOverTrades}
+		state.tail[at.Unix()] = &canonicalAggregate{identity: aggregateIdentity{symbol: "AAA", start: at.Unix()},
+			windowStart: at, windowEnd: at.Add(time.Second), values: values}
+		want = addActivityAggregate(want, values)
+	}
+	recomputeMutableActivityBlock(state, binding, blockEnd)
+	got := state.activity.mutable[blockEnd.Unix()].current
+	if got.transactions != 0 || got.expansionBPS != 0 {
+		t.Fatalf("mutable recompute projected early: %+v", got)
+	}
+	if finishActivitySummary(got) != finishActivitySummary(want) {
+		t.Fatalf("deferred mutable summary differs: got=%+v want=%+v", got, want)
+	}
+}
+
+func BenchmarkActivityReferenceStorage(b *testing.B) {
+	values := AggregateValues{High: 10.2, Low: 9.8, Volume: 123, AverageTradeSize: 11}
+	b.Run("stable_pointer", func(b *testing.B) {
+		for iteration := 0; iteration < b.N; iteration++ {
+			references := make(map[int64]*activityBlockSummary)
+			for row := 0; row < 30; row++ {
+				summary := references[1]
+				if summary == nil {
+					summary = &activityBlockSummary{low: math.Inf(1)}
+					references[1] = summary
+				}
+				*summary = addActivityAggregate(*summary, values)
+			}
+		}
+	})
+	b.Run("value_replacement", func(b *testing.B) {
+		for iteration := 0; iteration < b.N; iteration++ {
+			references := make(map[int64]activityBlockSummary)
+			for row := 0; row < 30; row++ {
+				summary := references[1]
+				if summary.aggregateCount == 0 {
+					summary.low = math.Inf(1)
+				}
+				references[1] = addActivityAggregate(summary, values)
+			}
+		}
+	})
+}

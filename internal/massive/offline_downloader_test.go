@@ -3,6 +3,7 @@ package massive
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -218,6 +219,14 @@ func TestOfflineDownloaderContract(t *testing.T) {
 		result := downloader.Download(context.Background(), DownloadPlan{binding, start, start.Add(time.Second), 2, 2, budget})
 		if result.Complete() || result.Accounting().FailedSymbols != 2 || consumed.Load() > budget+1 {
 			t.Fatalf("global response budget result=%+v consumed=%d", result, consumed.Load())
+		}
+	})
+
+	t.Run("budget proof byte never enters terminal accounting", func(t *testing.T) {
+		budget := &responseBudget{maximum: 4}
+		body, err := budget.read(strings.NewReader("12345"))
+		if !errors.Is(err, errResponseBudget) || string(body) != "1234" || budget.used != budget.maximum {
+			t.Fatalf("budget crossing body=%q used=%d/%d err=%v", body, budget.used, budget.maximum, err)
 		}
 	})
 }

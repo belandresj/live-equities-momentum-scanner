@@ -46,6 +46,9 @@ func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error 
 	}
 	var lastErr error
 	for attemptOrdinal := uint64(1); ; attemptOrdinal++ {
+		if err := terminalLiveStateError(r.engine.ObserveOperational()); err != nil {
+			return errors.Join(err, lastErr)
+		}
 		establishmentCtx, cancelEstablishment := context.WithTimeout(ctx, r.config.ConnectionAttemptDeadline)
 		attempt, err := r.openAttempt(ctx, establishmentCtx, components, attemptOrdinal*100)
 		cancelEstablishment()
@@ -115,6 +118,13 @@ func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error 
 		// the supervisor, owns the transition to recovery.
 		r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
 	}
+}
+
+func terminalLiveStateError(view engine.OperationalView) error {
+	if view.Lifecycle != "suppressed" && view.Lifecycle != "ended" && view.Suppression == "" {
+		return nil
+	}
+	return fmt.Errorf("live engine is terminal: lifecycle=%s reason=%s suppression=%s", view.Lifecycle, view.LifecycleReason, view.Suppression)
 }
 
 func hydrationPurpose(view engine.OperationalView) (engine.HydrationPurpose, error) {
@@ -258,6 +268,7 @@ func (r *Runtime) hydrate(ctx context.Context, components LiveComponents, attemp
 	sink := &engineHydrationSink{owner: r.engine, tokens: tokens}
 	workCtx, cancelWork := context.WithCancel(ctx)
 	pumpCtx, cancelPump := context.WithCancel(ctx)
+	defer cancelPump()
 	pumpDone := make(chan error, 1)
 	go func() {
 		for {
@@ -284,20 +295,49 @@ func (r *Runtime) hydrate(ctx context.Context, components LiveComponents, attemp
 	}()
 	result := components.Hydrator.Run(workCtx, ctx, plan, sink)
 	cancelWork()
-	cancelPump()
-	pumpErr := <-pumpDone
 	accounting := result.Accounting()
 	fence, sinkErr := sink.result()
 	if sinkErr != nil || accounting.ItemsStarted != accounting.ProviderCompletedValue+accounting.ProviderCompletedEmpty+accounting.ProviderFailed+accounting.ProviderCanceled || fence.CommandToken() == 0 {
+		cancelPump()
+		<-pumpDone
 		return engine.HydrationFenceCommand{}, errors.New("hydration worker did not terminally reconcile")
 	}
+	if ctx.Err() != nil {
+		cancelPump()
+		<-pumpDone
+		return engine.HydrationFenceCommand{}, ctx.Err()
+	}
+	// REST may finish before its supported boundary is eligible at T. Keep the
+	// sole live consumer running during that wait; otherwise the socket reader
+	// can fill C5's bounded queue while no goroutine dispositions the live tail.
+	eligibleAt := planResult.Plan.End().Add(r.config.EvaluationDelay)
+	if wait := eligibleAt.Sub(r.clock().UTC()); wait > 0 {
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			cancelPump()
+			<-pumpDone
+			return engine.HydrationFenceCommand{}, ctx.Err()
+		case pumpErr := <-pumpDone:
+			if !timer.Stop() {
+				<-timer.C
+			}
+			if pumpErr == nil {
+				pumpErr = errors.New("aggregate connection ended during hydration fence wait")
+			}
+			return engine.HydrationFenceCommand{}, errors.Join(errors.New("live delivery failed during hydration"), pumpErr)
+		case <-timer.C:
+		}
+	}
+	cancelPump()
+	pumpErr := <-pumpDone
 	if pumpErr != nil && !errors.Is(pumpErr, context.Canceled) {
 		return engine.HydrationFenceCommand{}, errors.Join(errors.New("live delivery failed during hydration"), pumpErr)
 	}
-	if ctx.Err() != nil {
-		return engine.HydrationFenceCommand{}, ctx.Err()
-	}
-	return fence, r.finishFence(ctx, attempt, fence, planResult.Plan.End())
+	return fence, r.finishEligibleFence(ctx, attempt, fence)
 }
 
 func (r *Runtime) applyHydrationPolicy(ctx context.Context, command engine.HydrationFenceCommand, action engine.HydrationPolicyAction, token uint64) error {
@@ -337,6 +377,10 @@ func (r *Runtime) finishFence(ctx context.Context, attempt *massive.LiveAttempt,
 		case <-timer.C:
 		}
 	}
+	return r.finishEligibleFence(ctx, attempt, command)
+}
+
+func (r *Runtime) finishEligibleFence(ctx context.Context, attempt *massive.LiveAttempt, command engine.HydrationFenceCommand) error {
 	capture, err := massive.CaptureAggregateIngressFenceCommandFromEngine(command)
 	if err != nil {
 		return err

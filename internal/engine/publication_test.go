@@ -45,9 +45,7 @@ func TestENGINPUT01ClosedCommonCrossFamilyValidation(t *testing.T) {
 	insert := liveAggregate(binding, "AAA", start, 1, 1)
 	applyAggregate(t, e, insert, DispositionAggregateInserted, ReasonNone)
 	inserted := e.observePublication()
-	if inserted.publicationID != 2 || inserted.lastDisposition != DispositionAggregateInserted || inserted.watermark != nil {
-		t.Fatalf("insert publication = %+v", inserted)
-	}
+	assertSamePublication(t, before, inserted)
 	applyAggregate(t, e, insert, DispositionAggregateExactDuplicate, ReasonNone)
 	assertSamePublication(t, inserted, e.observePublication())
 
@@ -115,7 +113,9 @@ func TestENGPUBLISH01AtomicImmutablePublicationClock(t *testing.T) {
 	if first.publicationID != 1 || first.generatedAt != start.Add(time.Minute) || clock.count() != reads+2 {
 		t.Fatalf("first publication/clock = %+v reads=%d/%d", first, clock.count(), reads+2)
 	}
-	if first.lastEngineSequence != 1 || first.watermark != nil || first.currentMarketClaim {
+	if first.lastEngineSequence != 1 || first.watermark != nil || first.currentMarketClaim ||
+		first.aggregateEvaluation.mode != rankingUnavailable || first.aggregateEvaluation.reason != rankingReasonNoCommittedWatermark ||
+		!first.aggregateEvaluation.at.IsZero() {
 		t.Fatalf("first publication claims = %+v", first)
 	}
 
@@ -158,9 +158,7 @@ func TestENGPUBLISH01AtomicImmutablePublicationClock(t *testing.T) {
 	aggregate := liveAggregate(binding, "AAA", start, 1, 1)
 	applyAggregate(t, e, aggregate, DispositionAggregateInserted, ReasonNone)
 	second := e.observePublication()
-	if second.publicationID != 2 || !second.generatedAt.Equal(first.generatedAt) {
-		t.Fatalf("equal generated_at publication = %+v", second)
-	}
+	assertSamePublication(t, first, second)
 	reads = clock.count()
 	applyAggregate(t, e, aggregate, DispositionAggregateExactDuplicate, ReasonNone)
 	assertSamePublication(t, second, e.observePublication())
@@ -172,9 +170,7 @@ func TestENGPUBLISH01AtomicImmutablePublicationClock(t *testing.T) {
 	correction.Live.FrameSequence = 2
 	applyAggregate(t, e, correction, DispositionAggregateRevised, ReasonNone)
 	third := e.observePublication()
-	if third.publicationID != 3 || third.watermark != nil || third.lastDisposition != DispositionAggregateRevised {
-		t.Fatalf("same-T correction publication = %+v", third)
-	}
+	assertSamePublication(t, first, third)
 
 	// Readers race only with complete atomic replacements. Value-only views
 	// cannot alias canonical maps; mutating a returned copy changes no cell.
@@ -191,7 +187,7 @@ func TestENGPUBLISH01AtomicImmutablePublicationClock(t *testing.T) {
 			defer wg.Done()
 			for range 500 {
 				view := e.observePublication()
-				if view.kind != publicationNormal || view.publicationID < 3 || view.publicationID > 4 || view.schemaVersion != privatePublicationSchemaV1 {
+				if view.kind != publicationNormal || view.publicationID != 1 || view.schemaVersion != privatePublicationSchemaV1 {
 					select {
 					case seenBad <- view:
 					default:
@@ -244,9 +240,9 @@ func TestENGPUBLISH01AtomicImmutablePublicationClock(t *testing.T) {
 		exhausted.mu.Lock()
 		exhausted.lastPubID = math.MaxUint64
 		exhausted.mu.Unlock()
-		input := liveAggregate(binding, "AAA", start, 1, 1)
-		_, completion := exhausted.admitAggregateForProof(input)
-		got := awaitAggregateDisposition(t, completion)
+		fact := controlFact(binding.Identity(), ConnectionAttempt, 1, LivePosition{}, start.Add(time.Minute), 1, ControlSucceeded)
+		_, completion := exhausted.AdmitConnectionControl(context.Background(), fact)
+		got := <-completion
 		if got.Code != DispositionPublicationIntegrity || got.SuppressionDisposition != SuppressionRestartRequired || exhausted.observePublication().kind != publicationUnavailableSentinel ||
 			exhausted.observePublication().lifecycleReason != lifecycleReasonPublicationIntegrity {
 			t.Fatalf("publication exhaustion = %+v view=%+v", got, exhausted.observePublication())
@@ -267,15 +263,17 @@ func TestENGPUBLISH01AtomicImmutablePublicationClock(t *testing.T) {
 		var once sync.Once
 		backlog.beforeConsume = func(*queueNode) { once.Do(func() { close(entered); <-release }) }
 		clock.set(start.Add(2 * time.Minute))
-		_, firstCompletion := backlog.admitAggregateForProof(liveAggregate(binding, "AAA", start, 1, 1))
+		firstFact := controlFact(binding.Identity(), ConnectionAttempt, 1, LivePosition{}, start.Add(2*time.Minute), 1, ControlSucceeded)
+		_, firstCompletion := backlog.AdmitConnectionControl(context.Background(), firstFact)
 		<-entered
 		clock.set(start.Add(3 * time.Minute))
-		_, secondCompletion := backlog.admitAggregateForProof(liveAggregate(binding, "AAA", start.Add(time.Second), 1, 2))
+		secondFact := controlFact(binding.Identity(), AggregateCommandWriteResult, 1, LivePosition{}, start.Add(3*time.Minute), 2, ControlSucceeded)
+		_, secondCompletion := backlog.AdmitConnectionControl(context.Background(), secondFact)
 		clock.set(start.Add(4 * time.Minute))
 		close(release)
-		firstResult := awaitAggregateDisposition(t, firstCompletion)
-		secondResult := awaitAggregateDisposition(t, secondCompletion)
-		if firstResult.Code != DispositionAggregateInserted || secondResult.Code != DispositionAggregateInserted {
+		firstResult := <-firstCompletion
+		secondResult := <-secondCompletion
+		if firstResult.Code != DispositionConnectionControlApplied || secondResult.Code != DispositionConnectionControlApplied {
 			t.Fatalf("linked backlog invalidated by later publication read: %+v %+v", firstResult, secondResult)
 		}
 		if view := backlog.observePublication(); view.generatedAt != start.Add(4*time.Minute) || view.publicationID != 3 {
@@ -292,11 +290,12 @@ func TestENGPUBLISH01AtomicImmutablePublicationClock(t *testing.T) {
 		var once sync.Once
 		regressed.beforeConsume = func(*queueNode) { once.Do(func() { close(entered); <-release }) }
 		clock.set(start.Add(3 * time.Minute))
-		_, completion := regressed.admitAggregateForProof(liveAggregate(binding, "AAA", start, 1, 1))
+		fact := controlFact(binding.Identity(), ConnectionAttempt, 1, LivePosition{}, start.Add(3*time.Minute), 1, ControlSucceeded)
+		_, completion := regressed.AdmitConnectionControl(context.Background(), fact)
 		<-entered
 		clock.set(start.Add(2 * time.Minute))
 		close(release)
-		got := awaitAggregateDisposition(t, completion)
+		got := <-completion
 		if got.Code != DispositionClockRegression || got.SuppressionDisposition != SuppressionRestartRequired || regressed.observePublication().kind != publicationUnavailableSentinel ||
 			regressed.observePublication().lifecycleReason != lifecycleReasonClockRegression || regressed.observePublication().suppressionDisposition != SuppressionRestartRequired {
 			t.Fatalf("publication clock regression = %+v view=%+v", got, regressed.observePublication())
@@ -418,12 +417,12 @@ func TestENGFAIL01CrossPathContainmentTerminalDrain(t *testing.T) {
 		var once sync.Once
 		e.beforeConsume = func(*queueNode) { once.Do(func() { close(entered); <-release }) }
 		e.publicationFault = publicationFaultBuild
-		input := liveAggregate(binding, "AAA", start, 1, 1)
-		_, trigger := e.admitAggregateForProof(input)
+		fact := controlFact(binding.Identity(), ConnectionAttempt, 1, LivePosition{}, start.Add(time.Minute), 1, ControlSucceeded)
+		_, trigger := e.AdmitConnectionControl(context.Background(), fact)
 		<-entered
 		_, behind := e.AdmitTimer(context.Background())
 		close(release)
-		if got := awaitAggregateDisposition(t, trigger); got.Code != DispositionPublicationIntegrity {
+		if got := <-trigger; got.Code != DispositionPublicationIntegrity {
 			t.Fatalf("trigger = %+v", got)
 		}
 		if got := awaitTimerDisposition(t, behind); got.Code != DispositionTerminal {
@@ -612,7 +611,7 @@ func TestENGOBS01CompletedAccountingCardinality(t *testing.T) {
 	assertCompletedAccounting(t, e)
 
 	e.mu.Lock()
-	if len(e.queue) > e.capacity || e.state.aggregates.consumed != 253 || e.lastPubID != 2 {
+	if len(e.queue) > e.capacity || e.state.aggregates.consumed != 253 || e.lastPubID != 1 {
 		t.Fatalf("bounded trace queue=%d aggregates=%+v publicationID=%d", len(e.queue), e.state.aggregates, e.lastPubID)
 	}
 	if len(e.state.binding.symbols) != binding.UniverseAccounting().EligibleRecords {

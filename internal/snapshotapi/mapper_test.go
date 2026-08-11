@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -335,15 +336,15 @@ func TestPC10SchemaPublicMapperRequiresSealedCapture(t *testing.T) {
 	if !ok {
 		t.Fatal("sealed capture was not inspectable")
 	}
-	_, beforeMutation := Map(capture)
-	if beforeMutation == nil {
-		t.Fatal("prepublication runtime capture unexpectedly mapped")
+	beforeSnapshot, beforeMutation := Map(capture)
+	if beforeMutation != nil || beforeSnapshot.Ranking.Mode != "unavailable" || beforeSnapshot.Ranking.Reason != "no_committed_watermark" {
+		t.Fatalf("bound noncurrent runtime capture did not map: snapshot=%+v err=%v", beforeSnapshot, beforeMutation)
 	}
 	inspection.Engine.TQ.PublicationID++
 	inspection.Status.SampledAt = inspection.Status.SampledAt.Add(time.Second)
-	_, afterMutation := Map(capture)
-	if afterMutation == nil || afterMutation.Error() != beforeMutation.Error() {
-		t.Fatalf("detached inspection changed sealed mapper behavior: before=%v after=%v", beforeMutation, afterMutation)
+	afterSnapshot, afterMutation := Map(capture)
+	if afterMutation != nil || !reflect.DeepEqual(afterSnapshot, beforeSnapshot) {
+		t.Fatalf("detached inspection changed sealed mapper behavior: before=%+v/%v after=%+v/%v", beforeSnapshot, beforeMutation, afterSnapshot, afterMutation)
 	}
 	if _, err := Map(operations.SnapshotCapture{}); err == nil {
 		t.Fatal("nil/unconstructed capture serialized")

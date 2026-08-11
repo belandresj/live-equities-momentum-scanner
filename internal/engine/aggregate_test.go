@@ -642,6 +642,39 @@ func assertRecomputationDelta(t *testing.T, before, after uint64, code Dispositi
 	}
 }
 
+func TestExactAggregateCoverageWordRanges(t *testing.T) {
+	binding := testBinding(t)
+	installed := installedBindingForQualification(t, binding)
+	start := installed.sessionStart.Add(3 * time.Second)
+	end := start.Add(130 * time.Second)
+	state := &symbolAggregateState{tail: make(map[int64]*canonicalAggregate)}
+	presentAt := start.Add(61 * time.Second)
+	tailAt := start.Add(64 * time.Second)
+	conflictAt := start.Add(65 * time.Second)
+	ensurePresence(state).set(sessionSlot(installed, presentAt))
+	state.tail[tailAt.Unix()] = qualificationRecord("AAA", tailAt, 10, 100, 10, 10, ATSLiveProviderAverage)
+	ensureHistoricalConflict(state).set(sessionSlot(installed, conflictAt))
+
+	if !installExactCoverage(state, installed, start, end) {
+		t.Fatal("non-word-aligned coverage installation failed")
+	}
+	if state.provenAbsent.has(sessionSlot(installed, presentAt)) || state.provenAbsent.has(sessionSlot(installed, tailAt)) ||
+		state.provenAbsent.has(sessionSlot(installed, conflictAt)) || state.provenAbsent.has(sessionSlot(installed, start.Add(-time.Second))) ||
+		state.provenAbsent.has(sessionSlot(installed, end)) {
+		t.Fatal("coverage range fabricated absence over present, conflicting, or out-of-range slots")
+	}
+	if exactAggregateCoverage(state, installed, start, end) {
+		t.Fatal("historical conflict reached exact coverage")
+	}
+	state.historicalConflict.clear(sessionSlot(installed, conflictAt))
+	if exactAggregateCoverage(state, installed, start, end) {
+		t.Fatal("cleared conflict became covered without new evidence")
+	}
+	if !installExactCoverage(state, installed, start, end) || !exactAggregateCoverage(state, installed, start, end) {
+		t.Fatal("word-range absence plus canonical presence did not establish exact coverage")
+	}
+}
+
 func aggregateIntegritySnapshot(e *Engine) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()

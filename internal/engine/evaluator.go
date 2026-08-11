@@ -88,8 +88,17 @@ type aggregateEvaluationResult struct {
 	dayInvalidRankable  uint64
 	qualifiedDayInvalid uint64
 	rows                []aggregateRankingRow
+	updates             []aggregateSymbolEvaluationUpdate
 	invalidSupport      bool
 	tqIntentAvailable   bool
+}
+
+type aggregateSymbolEvaluationUpdate struct {
+	qualification   *qualificationState
+	committedLatest *committedAggregateMark
+	priceRange      priceRangeFeatureResult
+	activity        activityFeatureResult
+	present         bool
 }
 
 type aggregateEvaluatorState struct {
@@ -164,7 +173,7 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 	}
 	changed := (node.kind == inputTimer || node.kind == inputReplayGroup) && code == DispositionTimerApplied
 	changed = changed || (node.kind == inputAggregateIngressFence && code == DispositionAggregateIngressFenceApplied)
-	changed = changed || (node.kind == inputAggregate && (code == DispositionAggregateInserted || code == DispositionAggregateRevised ||
+	changed = changed || (e.mode == RunModeReplay && node.kind == inputAggregate && (code == DispositionAggregateInserted || code == DispositionAggregateRevised ||
 		code == DispositionAggregateWithdrawn || (code == DispositionAggregateRejected && (reason == ReasonHistoricalLiveConflict || reason == ReasonStructural))))
 	if !changed {
 		return true
@@ -173,13 +182,18 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 	if candidate != nil {
 		staged = *candidate
 	} else {
+		if e.mode == RunModeLive {
+			return true
+		}
 		if e.state.committedT == nil {
 			return true
 		}
 		staged = e.stageAggregateEvaluationLocked(*e.state.committedT)
 	}
 	expected := time.Time{}
-	if (node.kind == inputTimer || node.kind == inputReplayGroup || node.kind == inputAggregateIngressFence) && e.state.latestTarget != nil {
+	if e.mode == RunModeLive && candidate != nil && (node.kind == inputTimer || node.kind == inputAggregateIngressFence) {
+		expected = staged.at
+	} else if (node.kind == inputTimer || node.kind == inputReplayGroup || node.kind == inputAggregateIngressFence) && e.state.latestTarget != nil {
 		expected = *e.state.latestTarget
 	} else if e.state.committedT != nil {
 		expected = *e.state.committedT
@@ -199,11 +213,22 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 		// gate. It cannot apply candidate-T state and is not itself corruption.
 		return true
 	}
-	e.applyAggregateCandidateLocked(staged.at, node.admissionTime)
-	if !aggregateEvaluationEqual(e.state.aggregateEvaluator.current, staged) {
+	e.applyStagedAggregateCandidateLocked(staged, node.admissionTime)
+	consumePending := e.mode == RunModeLive && e.state.aggregateProjectionPending
+	evaluationChanged := !aggregateEvaluationEqual(e.state.aggregateEvaluator.current, staged)
+	if evaluationChanged {
 		e.state.aggregateEvaluator.current = cloneAggregateEvaluation(staged)
 		e.state.evaluationRevision++
 		e.state.exposedRevision++
+	}
+	if consumePending {
+		e.state.aggregateProjectionPending = false
+		// The accepted aggregate prefix and its accounting become visible at
+		// this boundary even when its recomputed market rows equal the prior
+		// evaluation.
+		if !evaluationChanged {
+			e.state.exposedRevision++
+		}
 	}
 	return true
 }
@@ -227,6 +252,29 @@ func (e *Engine) applyAggregateCandidateLocked(at, engineTime time.Time) {
 		ensurePriceRangeState(symbol.aggregates).result = evaluatePriceRangeFeatures(e.state.binding, symbol, at)
 		applyActivityResult(ensureActivityState(symbol.aggregates), evaluateActivityFeatures(e.state.binding, symbol.aggregates, at))
 	}
+	e.commitAggregateTargetLocked(at)
+}
+
+func (e *Engine) applyStagedAggregateCandidateLocked(staged aggregateEvaluationResult, engineTime time.Time) {
+	if len(staged.updates) != len(e.state.binding.symbols) {
+		e.applyAggregateCandidateLocked(staged.at, engineTime)
+		return
+	}
+	for index := range e.state.binding.symbols {
+		update := staged.updates[index]
+		state := e.state.binding.symbols[index].aggregates
+		if state == nil || !update.present {
+			continue
+		}
+		state.committedLatest = update.committedLatest
+		state.qualification = update.qualification
+		ensurePriceRangeState(state).result = update.priceRange
+		applyActivityResult(ensureActivityState(state), update.activity)
+	}
+	e.commitAggregateTargetLocked(staged.at)
+}
+
+func (e *Engine) commitAggregateTargetLocked(at time.Time) {
 	if e.state.committedT == nil || at.After(*e.state.committedT) {
 		e.state.committedT = immutableTime(at)
 	}
@@ -249,6 +297,7 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 		result.invalidSupport = true
 	}
 	qualified, degraded := &rankingHeap{}, &rankingHeap{}
+	result.updates = make([]aggregateSymbolEvaluationUpdate, len(e.state.binding.symbols))
 	heap.Init(qualified)
 	heap.Init(degraded)
 	qualificationComplete := true
@@ -270,6 +319,7 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 
 		features := unavailablePriceRangeResult(at)
 		activity := unavailableActivityResult(at)
+		var projectedQualification *qualificationState
 		if state != nil {
 			projectionState := *state
 			projectionState.qualification = cloneQualificationState(state.qualification)
@@ -278,6 +328,12 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 			evaluateQualificationThrough(&projectionState, e.state.binding, at, engineTime)
 			features = evaluatePriceRangeFeatures(e.state.binding, &projectionSymbol, at)
 			activity = evaluateActivityFeatures(e.state.binding, &projectionState, at)
+			projectedQualification = projectionState.qualification
+			update := aggregateSymbolEvaluationUpdate{qualification: projectedQualification, priceRange: features, activity: activity, present: true}
+			if hasMark {
+				update.committedLatest = committedMark(mark)
+			}
+			result.updates[index] = update
 		}
 		validPrior := symbol.prior.status == reference.PriorCloseValid && symbol.prior.close > 0 && finiteEvaluator(symbol.prior.close)
 		if !validPrior {
@@ -329,14 +385,9 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 		result.population.trustedRankableMark++
 		status := qualificationUnresolved
 		origin := uncertaintyLocalInvalid
-		if state != nil {
-			projectionState := *state
-			projectionState.qualification = cloneQualificationState(state.qualification)
-			evaluateQualificationThrough(&projectionState, e.state.binding, at, engineTime)
-			if projectionState.qualification != nil && projectionState.qualification.result.at.Equal(at) {
-				status = projectionState.qualification.result.status
-				origin = projectionState.qualification.result.unresolvedOrigin
-			}
+		if projectedQualification != nil && projectedQualification.result.at.Equal(at) {
+			status = projectedQualification.result.status
+			origin = projectedQualification.result.unresolvedOrigin
 		}
 		qualifiedPasser := false
 		switch status {
@@ -413,6 +464,14 @@ func cloneQualificationState(source *qualificationState) *qualificationState {
 	result.dirty = make(map[int64]struct{}, len(source.dirty))
 	for key := range source.dirty {
 		result.dirty[key] = struct{}{}
+	}
+	if source.hydrationScan != nil {
+		scan := *source.hydrationScan
+		scan.recentPassing = make(map[int64]struct{}, len(source.hydrationScan.recentPassing))
+		for key := range source.hydrationScan.recentPassing {
+			scan.recentPassing[key] = struct{}{}
+		}
+		result.hydrationScan = &scan
 	}
 	return &result
 }
@@ -540,6 +599,7 @@ func minUint64(value uint64, limit int) uint64 {
 
 func cloneAggregateEvaluation(r aggregateEvaluationResult) aggregateEvaluationResult {
 	r.rows = append([]aggregateRankingRow(nil), r.rows...)
+	r.updates = nil
 	return r
 }
 func aggregateEvaluationEqual(a, b aggregateEvaluationResult) bool {

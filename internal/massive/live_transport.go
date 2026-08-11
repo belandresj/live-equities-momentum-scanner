@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"runtime/trace"
 	"slices"
 	"strconv"
 	"strings"
@@ -952,14 +953,22 @@ func (a *LiveAttempt) next(ctx context.Context) (AdapterDelivery, bool) {
 func (a *LiveAttempt) DeliverNextToEngine(ctx context.Context, state *engine.Engine) (EngineDeliveryResult, bool, error) {
 	a.deliveryMu.Lock()
 	defer a.deliveryMu.Unlock()
-	delivery, ok := a.next(ctx)
+	var delivery AdapterDelivery
+	var ok bool
+	trace.WithRegion(ctx, "websocket_dequeue_normalization", func() {
+		delivery, ok = a.next(ctx)
+	})
 	if !ok {
 		return EngineDeliveryResult{}, false, nil
 	}
 	// Once dequeue succeeds, ownership has transferred. A separate internal
 	// lifetime guarantees admission and completion; caller cancellation may
 	// stop waiting for the next item but cannot drop this causal predecessor.
-	result, err := DeliverToEngine(context.Background(), state, delivery)
+	var result EngineDeliveryResult
+	var err error
+	trace.WithRegion(context.Background(), "engine_owner_wait", func() {
+		result, err = DeliverToEngine(context.Background(), state, delivery)
+	})
 	return result, true, err
 }
 

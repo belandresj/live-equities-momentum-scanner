@@ -468,7 +468,12 @@ func (b *responseBudget) read(source io.Reader) ([]byte, error) {
 	body, err := io.ReadAll(io.LimitReader(source, limit+1))
 	if int64(len(body)) > limit {
 		b.used = b.maximum
-		return body, errResponseBudget
+		// The extra byte proves the cumulative boundary was exceeded, but it
+		// is not part of the accepted response budget. Returning it would make
+		// the provider terminal claim more bytes than the engine-authorized
+		// plan and turn an ordinary bounded provider failure into an accounting
+		// integrity failure.
+		return body[:limit], errResponseBudget
 	}
 	b.used += int64(len(body))
 	return body, err

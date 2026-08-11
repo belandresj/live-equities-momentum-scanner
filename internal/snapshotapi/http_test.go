@@ -51,16 +51,20 @@ func TestPC10HTTPRoutesCORSAndLifecycle(t *testing.T) {
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	var readiness readinessResponse
-	if response.Code != http.StatusServiceUnavailable || source.calls.Load() != beforeReady+1 || json.Unmarshal(response.Body.Bytes(), &readiness) != nil || readiness.PublicationID != nil || readiness.BindingIdentity != nil || readiness.Reason != "publication_unavailable" {
+	if response.Code != http.StatusServiceUnavailable || source.calls.Load() != beforeReady+1 || json.Unmarshal(response.Body.Bytes(), &readiness) != nil ||
+		readiness.PublicationID == nil || readiness.BindingIdentity == nil || readiness.BackendReady || readiness.Reason != "lifecycle_not_ready" {
 		t.Fatalf("initial readiness = code %d calls %d body=%s", response.Code, source.calls.Load(), response.Body.String())
 	}
-	assertStatusAndOneCapture(t, handler, source, http.MethodGet, "/api/v1/snapshot", http.StatusServiceUnavailable)
-	for _, path := range []string{"/readyz", "/api/v1/snapshot"} {
+	assertStatusAndOneCapture(t, handler, source, http.MethodGet, "/api/v1/snapshot", http.StatusOK)
+	for _, test := range []struct {
+		path   string
+		status int
+	}{{"/readyz", http.StatusServiceUnavailable}, {"/api/v1/snapshot", http.StatusOK}} {
 		before := source.calls.Load()
 		response = httptest.NewRecorder()
-		handler.ServeHTTP(response, httptest.NewRequest(http.MethodHead, path, nil))
-		if response.Code != http.StatusServiceUnavailable || response.Body.Len() != 0 || response.Header().Get("Content-Length") == "0" || source.calls.Load() != before+1 {
-			t.Fatalf("unavailable HEAD %s = code %d calls %d headers=%v body=%q", path, response.Code, source.calls.Load(), response.Header(), response.Body.String())
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodHead, test.path, nil))
+		if response.Code != test.status || response.Body.Len() != 0 || response.Header().Get("Content-Length") == "0" || source.calls.Load() != before+1 {
+			t.Fatalf("initial HEAD %s = code %d calls %d headers=%v body=%q", test.path, response.Code, source.calls.Load(), response.Header(), response.Body.String())
 		}
 	}
 

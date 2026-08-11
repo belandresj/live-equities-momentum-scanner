@@ -307,7 +307,7 @@ func projectActivity(state *symbolAggregateState, binding *installedBinding, t0 
 	keys := sortedInt64Keys(source.references)
 	for _, end := range keys {
 		if end <= t0.Unix() {
-			r.References = append(r.References, projectActivitySummary(source.references[end]))
+			r.References = append(r.References, projectActivitySummary(*source.references[end]))
 		}
 	}
 	keys = sortedInt64Keys(source.mutable)
@@ -797,14 +797,14 @@ func restoreActivity(v *checkpoint.Activity, b *installedBinding, t0 time.Time) 
 	if v == nil {
 		return nil, nil
 	}
-	r := &activityFeatureState{references: make(map[int64]activityBlockSummary), mutable: make(map[int64]activityMutableBlock), foldedTargets: make(map[int64]activityFoldedTargetBlock), boundExceeded: v.BoundExceeded, result: unavailableActivityResult(time.Time{})}
+	r := &activityFeatureState{references: make(map[int64]*activityBlockSummary), mutable: make(map[int64]activityMutableBlock), foldedTargets: make(map[int64]activityFoldedTargetBlock), boundExceeded: v.BoundExceeded, result: unavailableActivityResult(time.Time{})}
 	for _, s := range v.References {
 		x := restoreActivitySummary(s)
-		if s.End > b.sessionEnd.Unix() || s.End > t0.Unix() || r.references[s.End].end != 0 || !validCheckpointActivitySummary(x, s.End) {
+		if s.End > b.sessionEnd.Unix() || s.End > t0.Unix() || r.references[s.End] != nil || !validCheckpointActivitySummary(x, s.End) {
 			return nil, errors.New("activity reference")
 		}
 		normalizeCheckpointActivitySummary(&x)
-		r.references[s.End] = x
+		r.references[s.End] = &x
 	}
 	for _, m := range v.Mutable {
 		folded, current := restoreActivitySummary(m.Folded), restoreActivitySummary(m.Current)

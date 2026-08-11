@@ -24,6 +24,8 @@ import (
 	"github.com/belandresj/live-equities-momentum-scanner/internal/snapshotapi"
 )
 
+const liveHydrationResponseByteBudget = int64(2 << 30)
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -50,6 +52,7 @@ func run(ctx context.Context, arguments []string) error {
 	replayArtifact := flags.String("replay-artifact", "", "validated complete aggregate replay artifact")
 	observationStart := flags.String("observation-start", "", "New York observation start HH:MM:SS")
 	observationEnd := flags.String("observation-end", "", "New York observation end HH:MM:SS")
+	hydrationWorkers := flags.Int("hydration-workers", 1, "live aggregate REST hydration workers: 1, 2, 4, or 8")
 	apiAddress := flags.String("api-address", snapshotapi.DefaultAddress, "private loopback snapshot API address")
 	var allowedOrigins originFlags
 	flags.Var(&allowedOrigins, "allow-origin", "exact browser origin allowed to read the snapshot API; repeatable")
@@ -57,7 +60,7 @@ func run(ctx context.Context, arguments []string) error {
 		return errors.New("scanner flags are invalid")
 	}
 	if *runMode == "replay" {
-		for _, liveOnly := range []string{"trading-date", "checkpoint-dir", "rest-origin", "websocket-endpoint"} {
+		for _, liveOnly := range []string{"trading-date", "checkpoint-dir", "rest-origin", "websocket-endpoint", "hydration-workers"} {
 			if provided[liveOnly] {
 				return errors.New("replay mode rejects live-only flags")
 			}
@@ -70,6 +73,10 @@ func run(ctx context.Context, arguments []string) error {
 	}
 	if *runMode != "live" || *tradingDate == "" || *replayArtifact != "" || *observationStart != "" || *observationEnd != "" {
 		return errors.New("live mode requires one trading date and rejects replay flags")
+	}
+	maximumNormalizedRecords, maximumResidentRecords, err := liveHydrationBounds(*hydrationWorkers, 1)
+	if err != nil {
+		return err
 	}
 	credential := os.Getenv("MASSIVE_API_KEY")
 	if credential == "" {
@@ -125,8 +132,13 @@ func run(ctx context.Context, arguments []string) error {
 		_ = runtime.Shutdown(context.Background())
 		return err
 	}
-	components := operations.LiveComponents{Adapter: adapter, Hydrator: hydrator, Store: store, Workers: 8, RowsPerChunk: 256, MaximumResponseBytes: 512 << 20,
-		MaximumNormalizedRecords: int64(len(binding.UniverseSymbols())) * 57_600, MaximumResidentRecords: 8 * 57_600,
+	maximumNormalizedRecords, maximumResidentRecords, err = liveHydrationBounds(*hydrationWorkers, len(binding.UniverseSymbols()))
+	if err != nil {
+		_ = runtime.Shutdown(context.Background())
+		return err
+	}
+	components := operations.LiveComponents{Adapter: adapter, Hydrator: hydrator, Store: store, Workers: *hydrationWorkers, RowsPerChunk: 256, MaximumResponseBytes: liveHydrationResponseByteBudget,
+		MaximumNormalizedRecords: maximumNormalizedRecords, MaximumResidentRecords: maximumResidentRecords,
 		Durations: massive.OperationalDurations{Dial: 10 * time.Second, HandshakeStep: 5 * time.Second, HandshakeTotal: 30 * time.Second, HeartbeatInterval: 15 * time.Second, HeartbeatDeadline: 5 * time.Second, Write: 5 * time.Second, Close: 5 * time.Second}}
 	api, err := snapshotapi.Listen(runtime, snapshotapi.ServerConfig{Address: *apiAddress, AllowedOrigins: []string(allowedOrigins)})
 	if err != nil {
@@ -173,6 +185,18 @@ func run(ctx context.Context, arguments []string) error {
 			}
 		}
 	}
+}
+
+func liveHydrationBounds(workers, population int) (maximumNormalizedRecords, maximumResidentRecords int64, err error) {
+	if population <= 0 {
+		return 0, 0, errors.New("live hydration population is invalid")
+	}
+	switch workers {
+	case 1, 2, 4, 8:
+	default:
+		return 0, 0, errors.New("hydration-workers must be one of 1, 2, 4, or 8")
+	}
+	return int64(population) * 57_600, int64(workers) * 57_600, nil
 }
 
 func runReplay(ctx context.Context, cancelRun context.CancelFunc, config replaymode.StartupConfig, apiAddress string, allowedOrigins []string) error {

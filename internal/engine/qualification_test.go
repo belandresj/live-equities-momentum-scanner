@@ -245,6 +245,153 @@ func qualificationInput(binding interface {
 	}
 }
 
+func TestSparseQualificationFastForward(t *testing.T) {
+	binding := testBinding(t)
+	installed := installedBindingForQualification(t, binding)
+	start := installed.sessionStart
+	at := start.Add(8 * time.Hour)
+	state := &symbolAggregateState{tail: make(map[int64]*canonicalAggregate)}
+	state.tail[start.Unix()] = qualificationRecord("AAA", start, 10, 100, 10, 10, ATSRESTFloorVolumeOverTrades)
+	if !installExactCoverage(state, installed, start, at) {
+		t.Fatal("sparse coverage installation")
+	}
+	evaluateQualificationThrough(state, installed, at, at)
+	qualification := state.qualification
+	if qualification == nil || qualificationBarUpperBound(state) >= minimumQualificationSeconds || !qualification.accountedThrough.Equal(at) ||
+		qualification.result.status != qualificationNotYetPassed || !qualification.result.at.Equal(at) {
+		t.Fatalf("sparse qualification fast-forward = %+v upper_bound=%d", qualification, qualificationBarUpperBound(state))
+	}
+}
+
+func TestQualificationProofWindowMatchesCanonicalOracle(t *testing.T) {
+	binding := testBinding(t)
+	installed := installedBindingForQualification(t, binding)
+	start := installed.sessionStart
+	state := &symbolAggregateState{tail: make(map[int64]*canonicalAggregate)}
+	for second := 0; second < 180; second++ {
+		if second%7 == 0 || second%11 == 0 {
+			continue
+		}
+		at := start.Add(time.Duration(second) * time.Second)
+		ats := int64(20 + second%9)
+		if second%31 == 0 {
+			ats = 0
+		}
+		provenance := ATSRESTFloorVolumeOverTrades
+		if second%2 == 0 {
+			provenance = ATSLiveProviderAverage
+		}
+		state.tail[at.Unix()] = qualificationRecord("AAA", at, 9+float64(second)/100, 100+float64(second%13), 9.5, ats, provenance)
+	}
+	if !installExactCoverage(state, installed, start, start.Add(180*time.Second)) {
+		t.Fatal("install rolling-window coverage")
+	}
+	ensureHistoricalConflict(state).set(sessionSlot(installed, start.Add(80*time.Second)))
+	proofEnd := start
+	window := newQualificationProofWindow(state, installed, proofEnd)
+	for step := 0; step <= 180; step++ {
+		wantFacts := calculateQualificationGateFacts(state, installed, proofEnd)
+		if got := window.facts(); got != wantFacts {
+			t.Fatalf("step %d facts differ: got=%+v want=%+v", step, got, wantFacts)
+		}
+		if !window.canPossiblyPass() && passesQualificationGate(wantFacts) {
+			t.Fatalf("step %d impossibility gate rejected passing canonical facts: %+v", step, wantFacts)
+		}
+		wantCoverage := qualificationCoverageTrustworthy(state, installed, proofEnd.Add(-qualificationWindow), proofEnd)
+		if got := window.coverageTrustworthy(); got != wantCoverage {
+			t.Fatalf("step %d coverage=%t want=%t", step, got, wantCoverage)
+		}
+		window.advance(state, installed, proofEnd)
+		proofEnd = proofEnd.Add(time.Second)
+	}
+}
+
+func TestFreshHydrationQualificationMatchesCanonicalOracle(t *testing.T) {
+	binding := installedBindingForQualification(t, testBinding(t))
+	start := binding.sessionStart
+
+	for _, test := range []struct {
+		name     string
+		duration time.Duration
+		trusted  bool
+	}{
+		{name: "provisional", duration: 10 * time.Minute, trusted: true},
+		{name: "strictly finalized", duration: 8 * time.Hour, trusted: true},
+		{name: "untrusted remains unresolved", duration: 10 * time.Minute, trusted: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			end := start.Add(test.duration)
+			newState := func() *symbolAggregateState {
+				state := &symbolAggregateState{tail: make(map[int64]*canonicalAggregate)}
+				for at, ordinal := start, 0; at.Before(end); at, ordinal = at.Add(time.Second), ordinal+1 {
+					// The regular holes exercise the exact gap and present-second rules;
+					// every remaining second passes the activity and dollar-volume gates.
+					if ordinal%47 >= 3 {
+						state.tail[at.Unix()] = qualificationRecord("AAA", at, 10, 1000, 10, 10, ATSRESTFloorVolumeOverTrades)
+					}
+				}
+				return state
+			}
+
+			incremental := newState()
+			for identity, record := range incremental.tail {
+				if end.Sub(record.windowEnd) > correctionHorizon {
+					foldQualificationAggregate(incremental, binding, *record, end)
+					delete(incremental.tail, identity)
+				}
+			}
+			for through := start.Add(257 * time.Second); through.Before(end); through = through.Add(257 * time.Second) {
+				advanceFreshHydrationQualification(incremental, binding, through, end)
+			}
+			advanceFreshHydrationQualification(incremental, binding, end, end)
+			if got := len(incremental.qualification.finalizedGateBars); got > int((correctionHorizon+qualificationWindow)/time.Second) {
+				t.Fatalf("progressive retained gate bars=%d", got)
+			}
+			if test.trusted && !installExactCoverage(incremental, binding, start, end) {
+				t.Fatal("install incremental coverage")
+			}
+			completeFreshHydrationQualification(incremental, binding, end, end, test.trusted)
+
+			if !test.trusted {
+				got := incremental.qualification
+				if got == nil || got.result.status != qualificationUnresolved || got.unresolvedOrigin != uncertaintyBootstrapOrigin {
+					t.Fatalf("untrusted result = %+v", got)
+				}
+				return
+			}
+
+			oracle := newState()
+			if !installExactCoverage(oracle, binding, start, end) {
+				t.Fatal("install oracle coverage")
+			}
+			evaluateQualificationThrough(oracle, binding, end, end)
+			got, want := incremental.qualification, oracle.qualification
+			if got.result != want.result || got.finalized != want.finalized || !got.finalProofEnd.Equal(want.finalProofEnd) ||
+				len(got.proofs) != len(want.proofs) || (!got.finalized && !got.accountedThrough.Equal(want.accountedThrough)) {
+				t.Fatalf("incremental result differs: got=%+v proofs=%d want=%+v proofs=%d", got, len(got.proofs), want, len(want.proofs))
+			}
+			for proof := range want.proofs {
+				if _, ok := got.proofs[proof]; !ok {
+					t.Fatalf("incremental proof %d missing; got=%v want=%v", proof, got.proofs, want.proofs)
+				}
+			}
+		})
+	}
+
+	t.Run("successful empty is fully accounted", func(t *testing.T) {
+		end := start.Add(8 * time.Hour)
+		state := &symbolAggregateState{tail: make(map[int64]*canonicalAggregate)}
+		if !installExactCoverage(state, binding, start, end) {
+			t.Fatal("install empty coverage")
+		}
+		completeFreshHydrationQualification(state, binding, end, end, true)
+		got := state.qualification
+		if got == nil || !got.accountedThrough.Equal(end) || got.result.status != qualificationNotYetPassed || got.result.unresolvedOrigin != uncertaintyNone {
+			t.Fatalf("successful empty result = %+v", got)
+		}
+	})
+}
+
 func qualificationRecord(symbol string, window time.Time, close, volume, vwap float64, ats int64, provenance ATSProvenance) *canonicalAggregate {
 	return &canonicalAggregate{
 		identity: aggregateIdentity{symbol: symbol, start: window.Unix()}, windowStart: window, windowEnd: window.Add(time.Second),

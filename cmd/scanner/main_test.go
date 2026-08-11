@@ -75,7 +75,10 @@ func TestC12RunModeConfigurationIsMutuallyExclusive(t *testing.T) {
 		{"replay missing bounds", []string{"--run-mode=replay", "--replay-artifact=/private/missing"}, "requires artifact"},
 		{"replay trading date", []string{"--run-mode=replay", "--replay-artifact=/private/missing", "--observation-start=09:30:00", "--observation-end=09:35:00", "--trading-date=2026-08-07"}, "live-only"},
 		{"replay checkpoint", []string{"--run-mode=replay", "--replay-artifact=/private/missing", "--observation-start=09:30:00", "--observation-end=09:35:00", "--checkpoint-dir=/tmp/checkpoints"}, "live-only"},
+		{"replay hydration workers", []string{"--run-mode=replay", "--replay-artifact=/private/missing", "--observation-start=09:30:00", "--observation-end=09:35:00", "--hydration-workers=1"}, "live-only"},
 		{"live replay flag", []string{"--trading-date=2026-08-07", "--observation-start=09:30:00"}, "rejects replay"},
+		{"live zero hydration workers", []string{"--trading-date=2026-08-07", "--hydration-workers=0"}, "hydration-workers"},
+		{"live unsupported hydration workers", []string{"--trading-date=2026-08-07", "--hydration-workers=3"}, "hydration-workers"},
 		{"duplicate scalar", []string{"--trading-date=2026-08-07", "--trading-date=2026-08-08"}, "duplicate --trading-date"},
 		{"position", []string{"--trading-date=2026-08-07", "extra"}, "flags are invalid"},
 	} {
@@ -89,6 +92,31 @@ func TestC12RunModeConfigurationIsMutuallyExclusive(t *testing.T) {
 	provided, err := scalarFlags([]string{"--allow-origin=http://127.0.0.1:3000", "--allow-origin", "http://127.0.0.1:4173", "--api-address=127.0.0.1:0"})
 	if err != nil || !provided["api-address"] || provided["allow-origin"] {
 		t.Fatalf("repeatable origin parse = %v err=%v", provided, err)
+	}
+}
+
+func TestLiveHydrationWorkerBounds(t *testing.T) {
+	if liveHydrationResponseByteBudget != 2<<30 {
+		t.Fatalf("live cumulative response budget = %d", liveHydrationResponseByteBudget)
+	}
+	for _, test := range []struct {
+		workers      int
+		wantResident int64
+	}{
+		{1, 57_600},
+		{2, 115_200},
+		{4, 230_400},
+		{8, 460_800},
+	} {
+		normalized, resident, err := liveHydrationBounds(test.workers, 6_000)
+		if err != nil || normalized != 345_600_000 || resident != test.wantResident {
+			t.Fatalf("workers=%d bounds=%d/%d err=%v", test.workers, normalized, resident, err)
+		}
+	}
+	for _, workers := range []int{0, 3, 9} {
+		if _, _, err := liveHydrationBounds(workers, 6_000); err == nil {
+			t.Fatalf("workers=%d accepted", workers)
+		}
 	}
 }
 

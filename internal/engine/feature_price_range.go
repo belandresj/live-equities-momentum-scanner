@@ -173,7 +173,10 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 	}
 	if ((node.kind == inputTimer || node.kind == inputReplayGroup) && code == DispositionTimerApplied) ||
 		(node.kind == inputAggregateIngressFence && code == DispositionAggregateIngressFenceApplied) {
-		target := *e.state.latestTarget
+		target, evaluate := e.aggregateEvaluationTargetLocked(node)
+		if !evaluate {
+			return nil
+		}
 		maintenanceAt := target
 		if e.state.committedT != nil {
 			// Until the sole central gate accepts a later target, future support
@@ -181,8 +184,9 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 			maintenanceAt = *e.state.committedT
 		}
 		for index := range e.state.binding.symbols {
-			if state := e.state.binding.symbols[index].aggregates; state != nil {
-				e.compactSymbolLocked(state, e.state.binding, node.admissionTime)
+			symbol := &e.state.binding.symbols[index]
+			if state := symbol.aggregates; state != nil {
+				e.compactSymbolLocked(state, e.state.binding, symbol.symbol, node.admissionTime)
 				maintainActivityState(state, e.state.binding, node.admissionTime, maintenanceAt)
 			}
 		}
@@ -230,10 +234,39 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 			last = *e.state.committedT
 		}
 		markQualificationProofsDirty(qualification, first, last)
+		if e.mode == RunModeLive {
+			evaluateQualificationThrough(state, e.state.binding, *e.state.committedT, node.admissionTime)
+			ensurePriceRangeState(state).result = evaluatePriceRangeFeatures(e.state.binding, &e.state.binding.symbols[index], *e.state.committedT)
+			applyActivityResult(activity, evaluateActivityFeatures(e.state.binding, state, *e.state.committedT))
+			return nil
+		}
 		staged := e.stageAggregateEvaluationAtLocked(*e.state.committedT, node.admissionTime)
 		return &staged
 	}
 	return nil
+}
+
+// aggregateEvaluationTargetLocked chooses the sole full-population projection
+// boundary. Replay retains its existing group target. Live prefers a supported
+// later target, then falls back to the committed watermark when pending
+// aggregate work must be exposed without claiming unsupported time.
+func (e *Engine) aggregateEvaluationTargetLocked(node *queueNode) (time.Time, bool) {
+	if e.mode == RunModeReplay {
+		if e.state.latestTarget == nil {
+			return time.Time{}, false
+		}
+		return *e.state.latestTarget, true
+	}
+	if e.mode != RunModeLive || (node.kind != inputTimer && node.kind != inputAggregateIngressFence) {
+		return time.Time{}, false
+	}
+	if e.state.latestTarget != nil && e.candidateTargetSupportedLocked(*e.state.latestTarget) {
+		return *e.state.latestTarget, true
+	}
+	if e.state.aggregateProjectionPending && e.state.committedT != nil && e.candidateTargetSupportedLocked(*e.state.committedT) {
+		return *e.state.committedT, true
+	}
+	return time.Time{}, false
 }
 
 func evaluatePriceRangeFeatures(binding *installedBinding, symbol *coreSymbol, at time.Time) priceRangeFeatureResult {
@@ -260,7 +293,12 @@ func evaluatePriceRangeFeatures(binding *installedBinding, symbol *coreSymbol, a
 		return result
 	}
 	firstStart, firstOpen, hasFirst := features.firstStart, features.firstOpen, features.hasFirst
-	sessionLow, sessionHigh, hasSession := extremaEvidenceWithin(features.sessionLows, features.sessionHighs, binding.sessionStart.Unix(), at.Unix())
+	sessionLow, sessionHigh, hasSession := 0.0, 0.0, false
+	if features.hasSessionExtrema && features.finalizedThrough <= at.Unix() {
+		sessionLow, sessionHigh, hasSession = features.sessionLow, features.sessionHigh, true
+	} else {
+		sessionLow, sessionHigh, hasSession = extremaEvidenceWithin(features.sessionLows, features.sessionHighs, binding.sessionStart.Unix(), at.Unix())
+	}
 	for _, record := range state.tail {
 		if !record.windowStart.Before(at) {
 			continue
@@ -318,12 +356,12 @@ func latestMarkBefore(state *symbolAggregateState, at time.Time) (canonicalAggre
 		found = true
 	}
 	if state.olderLatest != nil && state.olderLatest.windowStart.Before(at) {
-		if !found || state.olderLatest.windowStart.After(result.windowStart) {
+		if !found || !state.olderLatest.windowStart.Before(result.windowStart) {
 			result, found = *state.olderLatest, true
 		}
 	}
 	for _, record := range state.tail {
-		if record.windowStart.Before(at) && (!found || record.windowStart.After(result.windowStart)) {
+		if record.windowStart.Before(at) && (!found || !record.windowStart.Before(result.windowStart)) {
 			result, found = *record, true
 		}
 	}
@@ -368,10 +406,9 @@ func extremaWithin(lows, highs []extremaPoint, floor int64) (float64, float64, b
 
 func extremaEvidenceWithin(lows, highs []extremaPoint, floor, upper int64) (float64, float64, bool) {
 	low, high, found := 0.0, 0.0, false
-	for _, point := range lows {
-		if point.windowStart < floor || point.windowStart >= upper {
-			continue
-		}
+	lowStart := sort.Search(len(lows), func(i int) bool { return lows[i].windowStart >= floor })
+	lowEnd := sort.Search(len(lows), func(i int) bool { return lows[i].windowStart >= upper })
+	for _, point := range lows[lowStart:lowEnd] {
 		if !found || point.value < low {
 			low = point.value
 		}
@@ -381,10 +418,9 @@ func extremaEvidenceWithin(lows, highs []extremaPoint, floor, upper int64) (floa
 		return 0, 0, false
 	}
 	foundHigh := false
-	for _, point := range highs {
-		if point.windowStart < floor || point.windowStart >= upper {
-			continue
-		}
+	highStart := sort.Search(len(highs), func(i int) bool { return highs[i].windowStart >= floor })
+	highEnd := sort.Search(len(highs), func(i int) bool { return highs[i].windowStart >= upper })
+	for _, point := range highs[highStart:highEnd] {
 		if !foundHigh || point.value > high {
 			high = point.value
 		}

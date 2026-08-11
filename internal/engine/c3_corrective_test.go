@@ -225,7 +225,7 @@ func TestC3R1CommittedBoundaryRetention(t *testing.T) {
 
 	e.mu.Lock()
 	state := e.state.binding.symbols[e.state.binding.index["AAA"]].aggregates
-	e.compactSymbolLocked(state, e.state.binding, post.WindowEnd.Add(correctionHorizon+time.Nanosecond))
+	e.compactSymbolLocked(state, e.state.binding, "AAA", post.WindowEnd.Add(correctionHorizon+time.Nanosecond))
 	after := evaluatePriceRangeFeatures(e.state.binding, &e.state.binding.symbols[e.state.binding.index["AAA"]], oldT)
 	laterMark, laterAvailable := latestMarkBefore(state, post.WindowEnd)
 	activityKey := activityBlockEnd(e.state.binding, postWindow).Unix()
@@ -248,6 +248,7 @@ func TestC3R1CommittedBoundaryRetention(t *testing.T) {
 func TestC3R1AtomicCandidateAndPublicationIdentity(t *testing.T) {
 	at := time.Date(2026, 7, 29, 15, 0, 0, 0, time.UTC)
 	e := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationFinalized}})
+	e.mode = RunModeReplay
 	current := e.stageAggregateEvaluationLocked(at)
 	e.state.aggregateEvaluator.current = cloneAggregateEvaluation(current)
 	state := e.state.binding.symbols[0].aggregates

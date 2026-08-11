@@ -208,6 +208,7 @@ func TestC3EVAL01AtomicStagingAndPathEquivalence(t *testing.T) {
 	// A failed attempt beyond an already committed T must discard its staged
 	// candidate rather than reproject current rows from candidate-mutated support.
 	failedAdvance := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationFinalized}})
+	failedAdvance.mode = RunModeLive
 	current := failedAdvance.stageAggregateEvaluationLocked(at)
 	failedAdvance.state.aggregateEvaluator.current = cloneAggregateEvaluation(current)
 	target := at.Add(time.Second)

@@ -121,6 +121,9 @@ func TestLiveBackendContentionReproducer(t *testing.T) {
 			if !result.accountingReconciled {
 				t.Fatal("contention reproducer accounting did not reconcile")
 			}
+			if variant.name == "control" && liveContentionOutcome(result) != "kept_up" {
+				t.Fatalf("unprobed control outcome = %s, want kept_up", liveContentionOutcome(result))
+			}
 		})
 	}
 }

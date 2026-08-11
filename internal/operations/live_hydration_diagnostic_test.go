@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/metrics"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -39,43 +38,50 @@ const (
 )
 
 const (
-	diagnosticClassLivePath = iota + 1
-	diagnosticClassCrossSource
-	diagnosticClassWorkerBoundary
-	diagnosticClassOtherStartup
+	diagnosticTrialLiveOnly = iota + 1
+	diagnosticTrialOneWorker
 )
 
 type liveDiagnosticConfig struct {
-	duration, cadence, safetyCadence, joinDeadline time.Duration
-	queueStop                                      uint64
-	oldestStop                                     time.Duration
+	liveOnlyDuration, oneWorkerTimeout   time.Duration
+	cadence, safetyCadence, joinDeadline time.Duration
+	queueStop                            uint64
+	oldestStop                           time.Duration
+	postReadySamples                     int
 }
 
 func productionLiveDiagnosticConfig() liveDiagnosticConfig {
-	return liveDiagnosticConfig{duration: 30 * time.Second, cadence: time.Second, safetyCadence: 10 * time.Millisecond,
-		joinDeadline: 10 * time.Second, queueStop: 384, oldestStop: 2 * time.Second}
+	return liveDiagnosticConfig{liveOnlyDuration: 30 * time.Second, oneWorkerTimeout: 8 * time.Minute, cadence: time.Second, safetyCadence: 50 * time.Millisecond,
+		joinDeadline: 10 * time.Second, queueStop: 384, oldestStop: 2 * time.Second, postReadySamples: 10}
 }
 
 // liveDiagnosticSample deliberately contains only bounded numeric values. It
 // cannot retain a credential, URL, provider body, raw frame, symbol, or row.
 type liveDiagnosticSample struct {
-	ElapsedMilliseconds, Workers                                                           int64
-	LiveFramesRead, LiveFramesAdmitted, LiveFramesDispositioned, LiveFramesQueued          uint64
-	LiveFramesFenced, RejectedCapacity, RejectedReceipt, RejectedOversize, RejectedGate    uint64
-	CurrentQueuedFrames, MaximumQueuedFrames                                               uint64
-	CurrentQueuedBytes, MaximumQueuedBytes                                                 int64
-	OldestLiveFrameNanoseconds                                                             int64
-	LiveDeliveryCount, MeanDeliveryDelayNanoseconds, OneSecondMaxDelayNanoseconds          uint64
-	OverallMaxDeliveryDelayNanoseconds                                                     uint64
-	EngineQueueOccupancy                                                                   int64
-	AggregateConsumed, AggregateInserted, AggregateRevised, AggregateRejected              uint64
-	AggregateFenced, IngressIntegrity                                                      uint64
-	HydrationOpen, HydrationCompleted, HydrationFailed, HydrationCanceled, HydrationFenced uint64
-	HydrationRowsConsumed                                                                  uint64
-	HydrationRowsPerSecond, AverageCPUCores                                                float64
-	HeapAllocBytes, HeapInUseBytes                                                         uint64
-	Goroutines                                                                             int64
-	AccountingValid                                                                        int64
+	ElapsedMilliseconds, Workers                                                         int64
+	LiveFramesRead, LiveFramesAdmitted, LiveFramesDispositioned, LiveFramesQueued        uint64
+	LiveFramesFenced, RejectedCapacity, RejectedReceipt, RejectedOversize, RejectedGate  uint64
+	ConnectionEpoch, IngressFencesStarted, IngressFencesDispositioned                    uint64
+	CurrentQueuedFrames, MaximumQueuedFrames                                             uint64
+	CurrentQueuedBytes, MaximumQueuedBytes                                               int64
+	OldestLiveFrameNanoseconds                                                           int64
+	LiveDeliveryCount, MeanDeliveryDelayNanoseconds, OneSecondMaxDelayNanoseconds        uint64
+	OverallMaxDeliveryDelayNanoseconds                                                   uint64
+	EngineQueueOccupancy                                                                 int64
+	AggregateConsumed, AggregateInserted, AggregateRevised, AggregateDuplicate           uint64
+	AggregateRejected, AggregateConflictOrWithdrawn                                      uint64
+	AggregateFenced, IngressIntegrity                                                    uint64
+	HydrationGeneration, HydrationPlanned, HydrationOpen, HydrationValue, HydrationEmpty uint64
+	HydrationFenceMarkerOrdinal                                                          uint64
+	HydrationFailed, HydrationCanceled, HydrationFenced                                  uint64
+	HydrationRowsConsumed, HydrationRowsInserted, HydrationRowsDuplicate                 uint64
+	HydrationRowsConflictOrWithdrawn, HydrationRowsRejected, HydrationRowsFenced         uint64
+	HydrationRowsPerSecond, AverageCPUCores                                              float64
+	HeapAllocBytes, HeapInUseBytes                                                       uint64
+	Goroutines, AccountingValid, Suppressed, FenceReconciled                             int64
+	ConnectionAcknowledged                                                               int64
+	LifecycleLive, BackendReady, RankingCurrent                                          int64
+	WatermarkLagNanoseconds                                                              int64
 }
 
 type liveDiagnosticSummary struct {
@@ -90,18 +96,33 @@ type liveDiagnosticSummary struct {
 }
 
 type liveDiagnosticArtifact struct {
-	Schema, Classification int64
-	Trials                 []liveDiagnosticSummary
+	Schema, Trial int64
+	Trials        []liveDiagnosticSummary
 }
 
 type liveDiagnosticTrial struct {
-	binding    reference.Binding
-	adapter    *massive.LiveAdapter
-	hydrator   *massive.HydrationWorker
-	workers    int
-	clock      func() time.Time
-	config     liveDiagnosticConfig
-	components LiveComponents
+	binding         reference.Binding
+	adapter         *massive.LiveAdapter
+	hydrator        *massive.HydrationWorker
+	mode            int
+	workers         int
+	clock           func() time.Time
+	config          liveDiagnosticConfig
+	runtimeConfig   Config
+	components      LiveComponents
+	sampleTransform func(*liveDiagnosticSample)
+	queueTransform  func(*liveDiagnosticQueueProbe)
+}
+
+type liveDiagnosticQueueProbe struct {
+	currentQueued, maximumQueued uint64
+	oldest                       time.Duration
+	rejections                   uint64
+}
+
+type liveDiagnosticHydrationReply struct {
+	err                error
+	progressedWithLive bool
 }
 
 type liveDiagnosticBaseline struct {
@@ -120,51 +141,61 @@ func TestLiveHydrationThroughputDiagnostic(t *testing.T) {
 	if os.Getenv("LIVE_HYDRATION_DIAGNOSTIC") != "1" {
 		t.Skip("set LIVE_HYDRATION_DIAGNOSTIC=1 after authorizing an exact trading date")
 	}
+	mode, err := parseLiveHydrationTrial(os.Getenv("LIVE_HYDRATION_TRIAL"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	tradingDate := os.Getenv("LIVE_TRADING_DATE")
 	credential := os.Getenv("MASSIVE_API_KEY")
 	output := os.Getenv("LIVE_DIAGNOSTIC_OUTPUT")
 	if tradingDate == "" || credential == "" || output == "" {
 		t.Fatal("LIVE_TRADING_DATE, LIVE_DIAGNOSTIC_OUTPUT, and MASSIVE_API_KEY are required")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Minute+30*time.Second)
 	defer cancel()
 	output = validatedLiveDiagnosticOutput(t, output)
-	binding := cachedLiveDiagnosticBinding(t, ctx, tradingDate, filepath.Join(filepath.Dir(output), "reference"))
-
-	workers := []int{0, 1, 2, 4}
-	results := make([]liveDiagnosticSummary, 0, 5)
-	for index := 0; index < len(workers); index++ {
-		trial := newProviderLiveDiagnosticTrial(t, binding, credential, workers[index])
-		result, err := runLiveDiagnosticTrial(ctx, trial)
-		if err != nil {
-			t.Fatalf("diagnostic trial %d cleanup: %v", workers[index], err)
-		}
-		results = append(results, result)
-		if result.Outcome != diagnosticStable {
-			break
-		}
-		if workers[index] == 4 {
-			workers = append(workers, 8)
-		}
+	moduleRoot, err := liveDiagnosticModuleRoot()
+	if err != nil {
+		t.Fatal(err)
 	}
-	classification := classifyLiveDiagnostic(results)
-	artifact := liveDiagnosticArtifact{Schema: 1, Classification: int64(classification), Trials: results}
+	binding := cachedLiveDiagnosticBinding(t, ctx, tradingDate, filepath.Join(moduleRoot, "var", "reference"))
+
+	trial := newProviderLiveDiagnosticTrial(t, binding, credential, mode)
+	result, err := runLiveDiagnosticTrial(ctx, trial)
+	if err != nil {
+		t.Fatalf("diagnostic trial cleanup: %v", err)
+	}
+	artifact := liveDiagnosticArtifact{Schema: 1, Trial: int64(mode), Trials: []liveDiagnosticSummary{result}}
 	if err := writeLiveDiagnosticArtifact(output, artifact); err != nil {
 		t.Fatal(err)
 	}
-	for _, result := range results {
-		t.Logf("workers=%d duration_ms=%d live_in_per_s=%.2f live_out_per_s=%.2f max_queued=%d max_oldest_ns=%d rejections=%d max_delivery_ns=%d hydration_rows_per_s=%.2f avg_cpu_cores=%.3f outcome=%s stop=%s",
-			result.Workers, result.DurationMilliseconds, result.LiveFramesPerSecondIn, result.LiveFramesPerSecondOut, result.MaximumQueuedFrames,
-			result.MaximumOldestFrameNanoseconds, result.Rejections, result.MaximumDeliveryDelayNanoseconds, result.HydrationRowsPerSecond, result.AverageCPUCores,
-			diagnosticOutcomeName(int(result.Outcome)), diagnosticStopName(int(result.StopReason)))
+	t.Logf("workers=%d duration_ms=%d live_in_per_s=%.2f live_out_per_s=%.2f max_queued=%d max_oldest_ns=%d rejections=%d max_delivery_ns=%d hydration_rows_per_s=%.2f avg_cpu_cores=%.3f outcome=%s stop=%s",
+		result.Workers, result.DurationMilliseconds, result.LiveFramesPerSecondIn, result.LiveFramesPerSecondOut, result.MaximumQueuedFrames,
+		result.MaximumOldestFrameNanoseconds, result.Rejections, result.MaximumDeliveryDelayNanoseconds, result.HydrationRowsPerSecond, result.AverageCPUCores,
+		diagnosticOutcomeName(int(result.Outcome)), diagnosticStopName(int(result.StopReason)))
+	last := result.Samples[len(result.Samples)-1]
+	t.Logf("hydration_terminal=%d/%d planned=%d fence=%d ready=%d ranking_current=%d watermark_lag_ns=%d accounting=%d",
+		last.HydrationValue, last.HydrationEmpty, last.HydrationPlanned, last.FenceReconciled, last.BackendReady, last.RankingCurrent, last.WatermarkLagNanoseconds, last.AccountingValid)
+	if result.Outcome != diagnosticStable {
+		t.Fatal("live hydration trial failed its acceptance boundary")
 	}
-	t.Logf("classification=%s next_boundary=%s", diagnosticClassificationName(classification), diagnosticNextBoundary(classification, results))
 }
 
-// TestLiveHydrationThroughputHarness is the fake-source race proof. It proves
-// bounded sampling and a deadline safety stop while a REST worker is blocked,
-// then proves cancellation joins the HTTP, WebSocket, delivery, and engine
-// work. The safety predicate is separately exercised at every stop boundary.
+func parseLiveHydrationTrial(value string) (int, error) {
+	switch value {
+	case "live_only":
+		return diagnosticTrialLiveOnly, nil
+	case "one_worker":
+		return diagnosticTrialOneWorker, nil
+	default:
+		return 0, errors.New("LIVE_HYDRATION_TRIAL must be exactly live_only or one_worker")
+	}
+}
+
+// TestLiveHydrationThroughputHarness is the fake-source race proof for mode
+// selection, the non-hydrating live-only path, bounded sampling, cancellation,
+// cleanup, and numeric artifact containment. The production one-worker path is
+// proved by TestLiveRESTHydrationProgressionHarness.
 func TestLiveHydrationThroughputHarness(t *testing.T) {
 	if testing.Short() {
 		t.Skip("opt-in diagnostic harness proof")
@@ -175,6 +206,17 @@ func TestLiveHydrationThroughputHarness(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(moduleRoot, "go.mod")); err != nil {
 		t.Fatalf("module-root discovery: %v", err)
+	}
+	for _, value := range []string{"", "0", "live", "one_worker "} {
+		if _, err := parseLiveHydrationTrial(value); err == nil {
+			t.Fatalf("trial %q was accepted", value)
+		}
+	}
+	if mode, err := parseLiveHydrationTrial("live_only"); err != nil || mode != diagnosticTrialLiveOnly {
+		t.Fatalf("live_only parse=%d err=%v", mode, err)
+	}
+	if mode, err := parseLiveHydrationTrial("one_worker"); err != nil || mode != diagnosticTrialOneWorker {
+		t.Fatalf("one_worker parse=%d err=%v", mode, err)
 	}
 	for _, test := range []struct {
 		name string
@@ -190,18 +232,46 @@ func TestLiveHydrationThroughputHarness(t *testing.T) {
 		t.Run("safety_"+test.name, func(t *testing.T) {
 			sample := liveDiagnosticSample{AccountingValid: 1}
 			test.edit(&sample)
-			if got := liveDiagnosticSafetyStop(sample, productionLiveDiagnosticConfig()); got != test.want {
+			if got := liveDiagnosticHeavyStop(sample, diagnosticTrialOneWorker, productionLiveDiagnosticConfig()); got != test.want {
 				t.Fatalf("stop=%d want=%d", got, test.want)
 			}
 		})
 	}
+	for _, test := range []struct {
+		name  string
+		probe liveDiagnosticQueueProbe
+		want  int
+	}{
+		{"rejection", liveDiagnosticQueueProbe{rejections: 1}, diagnosticStopRejection},
+		{"queue", liveDiagnosticQueueProbe{currentQueued: 384}, diagnosticStopQueue},
+		{"oldest", liveDiagnosticQueueProbe{oldest: 2 * time.Second}, diagnosticStopOldest},
+	} {
+		t.Run("queue_safety_"+test.name, func(t *testing.T) {
+			if got := liveDiagnosticQueueStop(test.probe, productionLiveDiagnosticConfig()); got != test.want {
+				t.Fatalf("stop=%d want=%d", got, test.want)
+			}
+		})
+	}
+	body, err := os.ReadFile(filepath.Join(moduleRoot, "internal", "operations", "live_hydration_diagnostic_test.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(body)
+	start := strings.LastIndex(source, "func captureLiveDiagnosticQueueProbe")
+	end := strings.Index(source[start:], "\n}\n\nfunc liveDiagnosticQueueStop")
+	if start < 0 || end < 0 {
+		t.Fatal("locate lightweight queue probe source")
+	}
+	probeSource := source[start : start+end]
+	if strings.Contains(probeSource, ".Metrics(") || strings.Contains(probeSource, "ReadMemStats") {
+		t.Fatal("50-millisecond queue probe performs a heavyweight runtime sample")
+	}
 
 	binding := capacityBinding(t, []string{"AAA", "BBB", "CCC", "DDD"})
-	var activeREST atomic.Int64
+	var restRequests atomic.Int64
 	rest := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		activeREST.Add(1)
-		defer activeREST.Add(-1)
-		<-request.Context().Done()
+		restRequests.Add(1)
+		http.Error(writer, "live_only must not request REST", http.StatusInternalServerError)
 	}))
 	defer rest.Close()
 	ws := liveDiagnosticWebSocketServer(t)
@@ -217,38 +287,147 @@ func TestLiveHydrationThroughputHarness(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := productionLiveDiagnosticConfig()
-	config.duration, config.cadence, config.safetyCadence = 120*time.Millisecond, 20*time.Millisecond, time.Millisecond
-	trial := liveDiagnosticTrial{binding: binding, adapter: adapter, hydrator: hydrator, workers: 1, clock: func() time.Time { return now }, config: config}
+	config.liveOnlyDuration, config.cadence, config.safetyCadence = 120*time.Millisecond, 20*time.Millisecond, time.Millisecond
+	trial := liveDiagnosticTrial{binding: binding, adapter: adapter, hydrator: hydrator, mode: diagnosticTrialLiveOnly, workers: 0, clock: func() time.Time { return now }, config: config}
 	trial.components = productionDiagnosticComponents(adapter, hydrator, 1, len(binding.UniverseSymbols()))
 	result, err := runLiveDiagnosticTrial(context.Background(), trial)
 	if err != nil {
 		t.Fatal(err)
 	}
-	maximumSamples := int(config.duration/config.cadence) + 1
-	if result.Outcome != diagnosticStable || result.StopReason != diagnosticStopDeadline || len(result.Samples) < 2 || len(result.Samples) > maximumSamples || activeREST.Load() != 0 {
-		t.Fatalf("bounded/joined result=%+v active_rest=%d maximum_samples=%d", result, activeREST.Load(), maximumSamples)
+	maximumSamples := int(config.liveOnlyDuration/config.cadence) + 2
+	last := result.Samples[len(result.Samples)-1]
+	if result.Outcome != diagnosticStable || result.StopReason != diagnosticStopDeadline || len(result.Samples) < 2 || len(result.Samples) > maximumSamples || restRequests.Load() != 0 ||
+		last.BackendReady != 0 || last.HydrationPlanned+last.HydrationOpen+last.HydrationValue+last.HydrationEmpty+last.HydrationFailed+last.HydrationCanceled+last.HydrationFenced != 0 {
+		t.Fatalf("bounded live_only result=%+v rest_requests=%d maximum_samples=%d", result, restRequests.Load(), maximumSamples)
 	}
-	body, err := json.Marshal(liveDiagnosticArtifact{Schema: 1, Classification: diagnosticClassOtherStartup, Trials: []liveDiagnosticSummary{result}})
-	if err != nil || strings.Contains(string(body), "fixture") || strings.Contains(string(body), "AAA") || strings.Contains(string(body), rest.URL) || strings.Contains(string(body), ws.URL) {
+	encoded, err := json.Marshal(liveDiagnosticArtifact{Schema: 1, Trial: diagnosticTrialLiveOnly, Trials: []liveDiagnosticSummary{result}})
+	if err != nil || strings.Contains(string(encoded), "fixture") || strings.Contains(string(encoded), "AAA") || strings.Contains(string(encoded), rest.URL) || strings.Contains(string(encoded), ws.URL) {
 		t.Fatalf("numeric artifact boundary violated: err=%v", err)
+	}
+	root := t.TempDir()
+	first, second := filepath.Join(root, "live-only"), filepath.Join(root, "one-worker")
+	if err := writeLiveDiagnosticArtifact(first, liveDiagnosticArtifact{Schema: 1, Trial: diagnosticTrialLiveOnly, Trials: []liveDiagnosticSummary{result}}); err != nil {
+		t.Fatal(err)
+	}
+	oneWorkerResult := result
+	oneWorkerResult.Workers = 1
+	if err := writeLiveDiagnosticArtifact(second, liveDiagnosticArtifact{Schema: 1, Trial: diagnosticTrialOneWorker, Trials: []liveDiagnosticSummary{oneWorkerResult}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(first, "summary.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(second, "summary.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeLiveDiagnosticArtifact(first, liveDiagnosticArtifact{Schema: 1, Trial: diagnosticTrialLiveOnly, Trials: []liveDiagnosticSummary{result}}); err == nil {
+		t.Fatal("diagnostic artifact overwrote prior evidence")
+	}
+	for _, stop := range []struct {
+		name            string
+		want            int
+		sampleTransform func(*liveDiagnosticSample)
+		queueTransform  func(*liveDiagnosticQueueProbe)
+	}{
+		{"rejection", diagnosticStopRejection, func(sample *liveDiagnosticSample) { sample.RejectedCapacity = 1 }, nil},
+		{"integrity", diagnosticStopTerminal, func(sample *liveDiagnosticSample) { sample.IngressIntegrity = 1 }, nil},
+		{"accounting", diagnosticStopAccounting, func(sample *liveDiagnosticSample) { sample.AccountingValid = 0 }, nil},
+		{"queue", diagnosticStopQueue, nil, func(probe *liveDiagnosticQueueProbe) { probe.currentQueued = 384 }},
+		{"oldest", diagnosticStopOldest, nil, func(probe *liveDiagnosticQueueProbe) { probe.oldest = 2 * time.Second }},
+	} {
+		t.Run("cancel_join_"+stop.name, func(t *testing.T) {
+			stopAdapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{Endpoint: "ws" + strings.TrimPrefix(ws.URL, "http"), Credential: "fixture",
+				Queue: massive.LiveQueueConfig{FrameSlots: 512, MaxFrameBytes: 8 << 20, TotalFrameBytes: 64 << 20}, Clock: func() time.Time { return now }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			stopConfig := productionLiveDiagnosticConfig()
+			stopConfig.liveOnlyDuration, stopConfig.cadence, stopConfig.safetyCadence = 100*time.Millisecond, 5*time.Millisecond, time.Millisecond
+			stopTrial := liveDiagnosticTrial{binding: binding, adapter: stopAdapter, hydrator: hydrator, mode: diagnosticTrialLiveOnly, workers: 0,
+				clock: func() time.Time { return now }, config: stopConfig, sampleTransform: stop.sampleTransform, queueTransform: stop.queueTransform}
+			stopTrial.components = productionDiagnosticComponents(stopAdapter, hydrator, 1, len(binding.UniverseSymbols()))
+			stopped, err := runLiveDiagnosticTrial(context.Background(), stopTrial)
+			if err != nil || stopped.StopReason != int64(stop.want) || stopped.Outcome == diagnosticStable {
+				t.Fatalf("stop=%s result=%+v err=%v", stop.name, stopped, err)
+			}
+		})
+	}
+
+	oneWorkerREST := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		restRequests.Add(1)
+		timer := time.NewTimer(3 * time.Millisecond)
+		select {
+		case <-request.Context().Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		symbol := ""
+		parts := strings.Split(request.URL.Path, "/")
+		if len(parts) > 4 {
+			symbol = parts[4]
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"status":"OK","ticker":"` + symbol + `","adjusted":false,"results":[]}`))
+	}))
+	defer oneWorkerREST.Close()
+	oneWorkerWS := liveDiagnosticWebSocketServer(t)
+	defer oneWorkerWS.Close()
+	oneWorkerHydrator, err := massive.NewHydrationWorker(oneWorkerREST.URL, func() (string, error) { return "fixture", nil }, oneWorkerREST.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	oneWorkerAdapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{Endpoint: "ws" + strings.TrimPrefix(oneWorkerWS.URL, "http"), Credential: "fixture",
+		Queue: massive.LiveQueueConfig{FrameSlots: 512, MaxFrameBytes: 8 << 20, TotalFrameBytes: 64 << 20}, Clock: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oneWorkerConfig := productionLiveDiagnosticConfig()
+	oneWorkerConfig.oneWorkerTimeout, oneWorkerConfig.cadence, oneWorkerConfig.safetyCadence, oneWorkerConfig.postReadySamples = time.Second, 10*time.Millisecond, time.Millisecond, 3
+	fastRuntime := DefaultConfig()
+	fastRuntime.EvaluationDelay, fastRuntime.SampleCadence = 0, 5*time.Millisecond
+	oneWorkerTrial := liveDiagnosticTrial{binding: binding, adapter: oneWorkerAdapter, hydrator: oneWorkerHydrator, mode: diagnosticTrialOneWorker, workers: 1,
+		clock: func() time.Time { return now }, config: oneWorkerConfig, runtimeConfig: fastRuntime}
+	oneWorkerTrial.components = productionDiagnosticComponents(oneWorkerAdapter, oneWorkerHydrator, 1, len(binding.UniverseSymbols()))
+	oneWorkerDiagnostic, err := runLiveDiagnosticTrial(context.Background(), oneWorkerTrial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oneWorkerLast := oneWorkerDiagnostic.Samples[len(oneWorkerDiagnostic.Samples)-1]
+	if oneWorkerDiagnostic.Outcome != diagnosticStable || oneWorkerDiagnostic.Workers != 1 || oneWorkerLast.HydrationPlanned != uint64(len(binding.UniverseSymbols())) ||
+		oneWorkerLast.HydrationOpen != 0 || oneWorkerLast.HydrationFailed+oneWorkerLast.HydrationCanceled+oneWorkerLast.HydrationFenced != 0 ||
+		oneWorkerLast.FenceReconciled != 1 || oneWorkerLast.BackendReady != 1 || oneWorkerLast.RankingCurrent != 1 || oneWorkerLast.LifecycleLive != 1 {
+		t.Fatalf("one-worker diagnostic did not reach stable readiness: %+v", oneWorkerDiagnostic)
 	}
 }
 
 func runLiveDiagnosticTrial(parent context.Context, trial liveDiagnosticTrial) (liveDiagnosticSummary, error) {
-	if parent == nil || trial.binding.Identity() == "" || trial.adapter == nil || trial.hydrator == nil || trial.clock == nil || trial.config.duration <= 0 ||
-		trial.config.cadence <= 0 || trial.config.safetyCadence <= 0 || trial.config.joinDeadline <= 0 || trial.config.queueStop == 0 || trial.config.oldestStop <= 0 {
+	if parent == nil || trial.binding.Identity() == "" || trial.adapter == nil || trial.hydrator == nil || trial.clock == nil ||
+		(trial.mode != diagnosticTrialLiveOnly && trial.mode != diagnosticTrialOneWorker) ||
+		trial.config.liveOnlyDuration <= 0 || trial.config.oneWorkerTimeout <= 0 || trial.config.cadence <= 0 || trial.config.safetyCadence <= 0 ||
+		trial.config.joinDeadline <= 0 || trial.config.queueStop == 0 || trial.config.oldestStop <= 0 || trial.config.postReadySamples <= 0 {
 		return liveDiagnosticSummary{}, errors.New("invalid live diagnostic trial")
+	}
+	workers := 0
+	if trial.mode == diagnosticTrialOneWorker {
+		workers = 1
+	}
+	if trial.workers != workers {
+		return liveDiagnosticSummary{}, errors.New("live diagnostic trial worker count contradicts mode")
 	}
 	trialCtx, cancelTrial := context.WithCancel(parent)
 	defer cancelTrial()
-	runtimeConfig := DefaultConfig()
+	runtimeConfig := trial.runtimeConfig
+	if !runtimeConfig.valid() {
+		runtimeConfig = DefaultConfig()
+	}
 	run, err := New(trialCtx, trial.binding, runtimeConfig, trial.clock)
 	if err != nil {
 		return liveDiagnosticSummary{}, err
 	}
 	components := trial.components
 	if !components.valid() {
-		components = productionDiagnosticComponents(trial.adapter, trial.hydrator, max(1, trial.workers), len(trial.binding.UniverseSymbols()))
+		components = productionDiagnosticComponents(trial.adapter, trial.hydrator, 1, len(trial.binding.UniverseSymbols()))
 	}
 	establish, cancelEstablish := context.WithTimeout(trialCtx, runtimeConfig.ConnectionAttemptDeadline)
 	attempt, err := run.openAttempt(trialCtx, establish, components, 100)
@@ -269,13 +448,19 @@ func runLiveDiagnosticTrial(parent context.Context, trial liveDiagnosticTrial) (
 	baseline := liveDiagnosticBaseline{metrics: baselineMetrics, deliveries: run.deliveryCount.Load(), deliveryNanos: run.deliveryTotalNanos.Load(),
 		deliveryMax: run.deliveryMaxNanos.Load(), cpuSeconds: goRuntimeCPUSeconds(), started: time.Now()}
 
+	queueBaseline := attempt.QueueAccounting()
+	hydrationDone := make(chan liveDiagnosticHydrationReply, 1)
 	workDone := make(chan error, 1)
 	go func() {
-		if trial.workers > 0 {
+		if trial.mode == diagnosticTrialOneWorker {
 			if _, hydrateErr := run.hydrate(trialCtx, components, attempt, engine.HydrationFreshBootstrap); hydrateErr != nil {
+				hydrationDone <- liveDiagnosticHydrationReply{err: hydrateErr}
 				workDone <- hydrateErr
 				return
 			}
+			queue := attempt.QueueAccounting()
+			hydration := run.engine.ObserveOperational().Hydration.Accounting
+			hydrationDone <- liveDiagnosticHydrationReply{progressedWithLive: queue.FramesDispositioned > queueBaseline.FramesDispositioned && hydration.CompletedValue+hydration.CompletedEmpty > 0}
 		}
 		for {
 			started := time.Now()
@@ -290,7 +475,7 @@ func runLiveDiagnosticTrial(parent context.Context, trial liveDiagnosticTrial) (
 		}
 	}()
 
-	summary := liveDiagnosticSummary{Workers: int64(trial.workers)}
+	summary := liveDiagnosticSummary{Workers: int64(workers)}
 	trackSample := func(sample liveDiagnosticSample) {
 		if sample.MaximumQueuedFrames > summary.MaximumQueuedFrames {
 			summary.MaximumQueuedFrames = sample.MaximumQueuedFrames
@@ -303,20 +488,31 @@ func runLiveDiagnosticTrial(parent context.Context, trial liveDiagnosticTrial) (
 		}
 	}
 	appendSample := func() liveDiagnosticSample {
-		sample := captureLiveDiagnosticSample(run, baseline, trial.workers)
+		sample := captureLiveDiagnosticSample(run, baseline, workers)
+		if trial.sampleTransform != nil {
+			trial.sampleTransform(&sample)
+		}
 		summary.Samples = append(summary.Samples, sample)
 		trackSample(sample)
 		return sample
 	}
 	initial := appendSample()
-	stopReason := liveDiagnosticSafetyStop(initial, trial.config)
+	stopReason := liveDiagnosticHeavyStop(initial, trial.mode, trial.config)
 	sampleTicker := time.NewTicker(trial.config.cadence)
 	safetyTicker := time.NewTicker(trial.config.safetyCadence)
-	deadline := time.NewTimer(trial.config.duration)
+	duration := trial.config.liveOnlyDuration
+	if trial.mode == diagnosticTrialOneWorker {
+		duration = trial.config.oneWorkerTimeout
+	}
+	deadline := time.NewTimer(duration)
 	defer sampleTicker.Stop()
 	defer safetyTicker.Stop()
 	defer deadline.Stop()
 	workJoined := false
+	hydrationTerminal := trial.mode == diagnosticTrialLiveOnly
+	hydrationProgressedWithLive := false
+	readyObserved := false
+	readySamples := 0
 	for stopReason == 0 {
 		select {
 		case <-parent.Done():
@@ -324,23 +520,48 @@ func runLiveDiagnosticTrial(parent context.Context, trial liveDiagnosticTrial) (
 		case <-workDone:
 			workJoined = true
 			stopReason = diagnosticStopTerminal
+		case hydrationReply := <-hydrationDone:
+			hydrationTerminal = hydrationReply.err == nil
+			hydrationProgressedWithLive = hydrationReply.progressedWithLive
+			if hydrationReply.err != nil {
+				stopReason = diagnosticStopTerminal
+			}
 		case <-deadline.C:
 			stopReason = diagnosticStopDeadline
 		case <-sampleTicker.C:
-			stopReason = liveDiagnosticSafetyStop(appendSample(), trial.config)
+			sample := appendSample()
+			stopReason = liveDiagnosticHeavyStop(sample, trial.mode, trial.config)
+			if stopReason == 0 && trial.mode == diagnosticTrialOneWorker && hydrationTerminal {
+				if sample.BackendReady == 1 && sample.RankingCurrent == 1 && sample.FenceReconciled == 1 && sample.LifecycleLive == 1 {
+					if readyObserved {
+						readySamples++
+					} else {
+						readyObserved = true
+					}
+				} else {
+					readyObserved = false
+					readySamples = 0
+				}
+				if readySamples == trial.config.postReadySamples {
+					stopReason = diagnosticStopDeadline
+				}
+			}
 		case <-safetyTicker.C:
-			probe := captureLiveDiagnosticSample(run, baseline, trial.workers)
-			trackSample(probe)
-			stopReason = liveDiagnosticSafetyStop(probe, trial.config)
+			probe := captureLiveDiagnosticQueueProbe(attempt, queueBaseline)
+			if trial.queueTransform != nil {
+				trial.queueTransform(&probe)
+			}
+			if probe.maximumQueued > summary.MaximumQueuedFrames {
+				summary.MaximumQueuedFrames = probe.maximumQueued
+			}
+			if int64(probe.oldest) > summary.MaximumOldestFrameNanoseconds {
+				summary.MaximumOldestFrameNanoseconds = int64(probe.oldest)
+			}
+			stopReason = liveDiagnosticQueueStop(probe, trial.config)
 		}
 	}
-	boundary := captureLiveDiagnosticSample(run, baseline, trial.workers)
-	maximumSamples := int(trial.config.duration/trial.config.cadence) + 1
-	if len(summary.Samples) >= maximumSamples {
-		summary.Samples[len(summary.Samples)-1] = boundary
-	} else {
-		summary.Samples = append(summary.Samples, boundary)
-	}
+	boundary := captureLiveDiagnosticSample(run, baseline, workers)
+	summary.Samples = append(summary.Samples, boundary)
 	trackSample(boundary)
 	cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), trial.config.joinDeadline)
 	defer cancelCleanup()
@@ -352,8 +573,10 @@ func runLiveDiagnosticTrial(parent context.Context, trial liveDiagnosticTrial) (
 			return summary, errors.New("diagnostic live/hydration work did not join")
 		}
 	}
-	err = closeLiveDiagnosticTrial(cleanupCtx, run, attempt)
-	if err != nil {
+	if err = drainLiveDiagnosticAttempt(cleanupCtx, run, attempt); err != nil {
+		return summary, err
+	}
+	if err = run.Shutdown(cleanupCtx); err != nil {
 		return summary, err
 	}
 
@@ -367,7 +590,22 @@ func runLiveDiagnosticTrial(parent context.Context, trial liveDiagnosticTrial) (
 	summary.HydrationRowsPerSecond = float64(last.HydrationRowsConsumed) / seconds
 	summary.AverageCPUCores = last.AverageCPUCores
 	summary.Outcome = diagnosticStable
-	if stopReason != diagnosticStopDeadline {
+	acceptedCompletion := stopReason == diagnosticStopDeadline
+	if trial.mode == diagnosticTrialOneWorker {
+		acceptedCompletion = acceptedCompletion && hydrationTerminal && hydrationProgressedWithLive && readySamples == trial.config.postReadySamples &&
+			last.HydrationGeneration == 1 && last.HydrationPlanned == uint64(len(trial.binding.UniverseSymbols())) && last.HydrationOpen == 0 &&
+			last.HydrationValue+last.HydrationEmpty == last.HydrationPlanned && last.HydrationFailed+last.HydrationCanceled+last.HydrationFenced == 0 &&
+			last.IngressFencesStarted >= 1 && last.IngressFencesStarted == last.IngressFencesDispositioned &&
+			last.HydrationFenceMarkerOrdinal != 0 && last.FenceReconciled == 1 &&
+			last.ConnectionEpoch != 0 && last.ConnectionAcknowledged == 1 && last.BackendReady == 1 && last.RankingCurrent == 1 &&
+			last.LifecycleLive == 1 && last.WatermarkLagNanoseconds <= int64(runtimeConfig.ReadinessTolerance)
+	} else {
+		acceptedCompletion = acceptedCompletion && last.BackendReady == 0 && last.HydrationGeneration == 0 && last.HydrationPlanned == 0 && last.HydrationOpen == 0 &&
+			last.HydrationValue == 0 && last.HydrationEmpty == 0 && last.HydrationFailed == 0 && last.HydrationCanceled == 0 && last.HydrationFenced == 0 &&
+			last.IngressFencesStarted == 0 && last.IngressFencesDispositioned == 0 && last.ConnectionEpoch != 0 && last.ConnectionAcknowledged == 1
+	}
+	acceptedCompletion = acceptedCompletion && last.CurrentQueuedFrames == 0 && liveDiagnosticStableTail(summary.Samples, trial.config.postReadySamples)
+	if !acceptedCompletion {
 		summary.Outcome = diagnosticSaturated
 	}
 	if stopReason == diagnosticStopTerminal {
@@ -388,7 +626,7 @@ func captureLiveDiagnosticSample(run *Runtime, baseline liveDiagnosticBaseline, 
 		overallMax = 0
 	}
 	hydration := observed.Engine.Hydration
-	completed := hydration.Accounting.CompletedValue + hydration.Accounting.CompletedEmpty
+	status := run.Status()
 	elapsed := now.Sub(baseline.started)
 	cpu := goRuntimeCPUSeconds() - baseline.cpuSeconds
 	averageCPU := 0.0
@@ -398,6 +636,26 @@ func captureLiveDiagnosticSample(run *Runtime, baseline liveDiagnosticBaseline, 
 	valid := int64(0)
 	if observed.AccountingValid {
 		valid = 1
+	}
+	suppressed, fenceReconciled, connectionAcknowledged := int64(0), int64(0), int64(0)
+	lifecycleLive, backendReady, rankingCurrent := int64(0), int64(0), int64(0)
+	if observed.Engine.Suppression != "" || observed.Engine.Lifecycle == "suppressed" {
+		suppressed = 1
+	}
+	if hydration.FenceReconciled {
+		fenceReconciled = 1
+	}
+	if observed.Engine.Lifecycle == "live" {
+		lifecycleLive = 1
+	}
+	if status.BackendReady {
+		backendReady = 1
+	}
+	if status.RankingCurrent {
+		rankingCurrent = 1
+	}
+	if observed.Engine.Connection.Acknowledged {
+		connectionAcknowledged = 1
 	}
 	mean := uint64(0)
 	if deliveries > 0 {
@@ -409,24 +667,61 @@ func captureLiveDiagnosticSample(run *Runtime, baseline liveDiagnosticBaseline, 
 		LiveFramesDispositioned: subtractCounter(queue.FramesDispositioned, baseQueue.FramesDispositioned), LiveFramesQueued: queue.FramesQueued,
 		LiveFramesFenced: subtractCounter(queue.FramesFenced, baseQueue.FramesFenced), RejectedCapacity: subtractCounter(queue.FramesRejectedCapacity, baseQueue.FramesRejectedCapacity),
 		RejectedReceipt: subtractCounter(queue.FramesRejectedReceipt, baseQueue.FramesRejectedReceipt), RejectedOversize: subtractCounter(queue.FramesRejectedOversize, baseQueue.FramesRejectedOversize),
-		RejectedGate:        subtractCounter(queue.FramesRejectedGateOrClose, baseQueue.FramesRejectedGateOrClose),
-		CurrentQueuedFrames: observed.QueueCurrentFrames, MaximumQueuedFrames: observed.QueueHighFrames, CurrentQueuedBytes: int64(observed.QueueCurrentBytes), MaximumQueuedBytes: int64(observed.QueueHighBytes),
+		RejectedGate:               subtractCounter(queue.FramesRejectedGateOrClose, baseQueue.FramesRejectedGateOrClose),
+		ConnectionEpoch:            observed.Engine.Connection.Epoch,
+		IngressFencesStarted:       subtractCounter(queue.IngressFencesStarted, baseQueue.IngressFencesStarted),
+		IngressFencesDispositioned: subtractCounter(queue.IngressFencesDispositioned, baseQueue.IngressFencesDispositioned),
+		CurrentQueuedFrames:        observed.QueueCurrentFrames, MaximumQueuedFrames: observed.QueueHighFrames, CurrentQueuedBytes: int64(observed.QueueCurrentBytes), MaximumQueuedBytes: int64(observed.QueueHighBytes),
 		OldestLiveFrameNanoseconds: int64(queue.OldestFrameAge), LiveDeliveryCount: deliveries, MeanDeliveryDelayNanoseconds: mean,
 		OneSecondMaxDelayNanoseconds: uint64(observed.MaxProcessingDelayOneSecond), OverallMaxDeliveryDelayNanoseconds: overallMax,
 		EngineQueueOccupancy: int64(observed.Engine.QueueOccupancy), AggregateConsumed: observed.Engine.Aggregates.Consumed, AggregateInserted: observed.Engine.Aggregates.Inserted,
-		AggregateRevised: observed.Engine.Aggregates.Revised, AggregateRejected: observed.Engine.Aggregates.Rejected, AggregateFenced: observed.Engine.Aggregates.Fenced,
-		IngressIntegrity: observed.Engine.Connection.Integrity + observed.Engine.Aggregates.Integrity + observed.Engine.Transitions.IntegrityFailure,
-		HydrationOpen:    hydration.Accounting.Open, HydrationCompleted: completed, HydrationFailed: hydration.Accounting.Failed, HydrationCanceled: hydration.Accounting.Canceled,
-		HydrationFenced: hydration.Accounting.Fenced, HydrationRowsConsumed: hydration.Rows.Consumed, HydrationRowsPerSecond: float64(hydration.Rows.Consumed) / max(elapsed.Seconds(), 0.001),
-		AverageCPUCores: averageCPU, HeapAllocBytes: observed.HeapAllocBytes, HeapInUseBytes: observed.HeapInUseBytes, Goroutines: int64(observed.Goroutines), AccountingValid: valid,
+		AggregateRevised: observed.Engine.Aggregates.Revised, AggregateDuplicate: observed.Engine.Aggregates.ExactDuplicate,
+		AggregateRejected: observed.Engine.Aggregates.Rejected, AggregateConflictOrWithdrawn: observed.Engine.Aggregates.WithdrawnConflict, AggregateFenced: observed.Engine.Aggregates.Fenced,
+		IngressIntegrity:    observed.Engine.Connection.Integrity + observed.Engine.Aggregates.Integrity + observed.Engine.Transitions.IntegrityFailure + hydration.Rows.Integrity,
+		HydrationGeneration: hydration.Generation, HydrationPlanned: hydration.Accounting.Planned, HydrationOpen: hydration.Accounting.Open, HydrationValue: hydration.Accounting.CompletedValue, HydrationEmpty: hydration.Accounting.CompletedEmpty,
+		HydrationFenceMarkerOrdinal: hydration.FenceMarkerOrdinal,
+		HydrationFailed:             hydration.Accounting.Failed, HydrationCanceled: hydration.Accounting.Canceled, HydrationFenced: hydration.Accounting.Fenced,
+		HydrationRowsConsumed: hydration.Rows.Consumed, HydrationRowsInserted: hydration.Rows.Inserted, HydrationRowsDuplicate: hydration.Rows.Duplicate,
+		HydrationRowsConflictOrWithdrawn: hydration.Rows.ConflictOrWithdrawal, HydrationRowsRejected: hydration.Rows.Rejected, HydrationRowsFenced: hydration.Rows.Fenced,
+		HydrationRowsPerSecond: float64(hydration.Rows.Consumed) / max(elapsed.Seconds(), 0.001), AverageCPUCores: averageCPU,
+		HeapAllocBytes: observed.HeapAllocBytes, HeapInUseBytes: observed.HeapInUseBytes, Goroutines: int64(observed.Goroutines), AccountingValid: valid,
+		Suppressed: suppressed, FenceReconciled: fenceReconciled, ConnectionAcknowledged: connectionAcknowledged,
+		LifecycleLive: lifecycleLive, BackendReady: backendReady, RankingCurrent: rankingCurrent,
+		WatermarkLagNanoseconds: int64(status.WatermarkLag),
 	}
 }
 
-func liveDiagnosticSafetyStop(sample liveDiagnosticSample, config liveDiagnosticConfig) int {
+func captureLiveDiagnosticQueueProbe(attempt *massive.LiveAttempt, baseline massive.LiveQueueAccounting) liveDiagnosticQueueProbe {
+	queue := attempt.QueueAccounting()
+	return liveDiagnosticQueueProbe{
+		currentQueued: queue.FramesQueued + queue.FramesClassifying,
+		maximumQueued: queue.FramesQueued + queue.FramesClassifying,
+		oldest:        queue.OldestFrameAge,
+		rejections: subtractCounter(queue.FramesRejectedCapacity, baseline.FramesRejectedCapacity) +
+			subtractCounter(queue.FramesRejectedReceipt, baseline.FramesRejectedReceipt) +
+			subtractCounter(queue.FramesRejectedOversize, baseline.FramesRejectedOversize) +
+			subtractCounter(queue.FramesRejectedGateOrClose, baseline.FramesRejectedGateOrClose),
+	}
+}
+
+func liveDiagnosticQueueStop(probe liveDiagnosticQueueProbe, config liveDiagnosticConfig) int {
+	if probe.rejections > 0 {
+		return diagnosticStopRejection
+	}
+	if probe.currentQueued >= config.queueStop {
+		return diagnosticStopQueue
+	}
+	if probe.oldest >= config.oldestStop {
+		return diagnosticStopOldest
+	}
+	return 0
+}
+
+func liveDiagnosticHeavyStop(sample liveDiagnosticSample, mode int, config liveDiagnosticConfig) int {
 	if sample.RejectedCapacity+sample.RejectedReceipt+sample.RejectedOversize+sample.RejectedGate > 0 {
 		return diagnosticStopRejection
 	}
-	if sample.IngressIntegrity > 0 {
+	if sample.IngressIntegrity > 0 || sample.Suppressed != 0 {
 		return diagnosticStopTerminal
 	}
 	if sample.CurrentQueuedFrames >= config.queueStop {
@@ -438,10 +733,33 @@ func liveDiagnosticSafetyStop(sample liveDiagnosticSample, config liveDiagnostic
 	if sample.AccountingValid == 0 {
 		return diagnosticStopAccounting
 	}
+	if mode == diagnosticTrialLiveOnly && (sample.HydrationGeneration+sample.HydrationPlanned+sample.HydrationOpen+sample.HydrationValue+sample.HydrationEmpty+sample.HydrationFailed+sample.HydrationCanceled+sample.HydrationFenced+sample.HydrationRowsConsumed > 0) {
+		return diagnosticStopAccounting
+	}
+	if mode == diagnosticTrialOneWorker && sample.HydrationFailed+sample.HydrationCanceled+sample.HydrationFenced > 0 {
+		return diagnosticStopTerminal
+	}
 	return 0
 }
 
+func liveDiagnosticStableTail(samples []liveDiagnosticSample, count int) bool {
+	if len(samples) < 2 {
+		return false
+	}
+	start := max(0, len(samples)-count)
+	last := samples[len(samples)-1]
+	return last.CurrentQueuedFrames <= samples[start].CurrentQueuedFrames &&
+		last.OldestLiveFrameNanoseconds <= samples[start].OldestLiveFrameNanoseconds
+}
+
 func closeLiveDiagnosticTrial(ctx context.Context, run *Runtime, attempt *massive.LiveAttempt) error {
+	if err := drainLiveDiagnosticAttempt(ctx, run, attempt); err != nil {
+		return err
+	}
+	return run.Shutdown(ctx)
+}
+
+func drainLiveDiagnosticAttempt(ctx context.Context, run *Runtime, attempt *massive.LiveAttempt) error {
 	_ = attempt.Close(massive.CloseEpochCommand{BindingIdentity: run.binding.Identity(), ConnectionEpoch: attempt.Epoch(), CommandToken: 190, Cause: massive.CloseControlledStop})
 	for {
 		started := time.Now()
@@ -456,9 +774,6 @@ func closeLiveDiagnosticTrial(ctx context.Context, run *Runtime, attempt *massiv
 	if err := attempt.Wait(ctx); err != nil {
 		return errors.New("diagnostic WebSocket cleanup did not join")
 	}
-	if err := run.Shutdown(ctx); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -467,8 +782,12 @@ func productionDiagnosticComponents(adapter *massive.LiveAdapter, hydrator *mass
 		MaximumNormalizedRecords: int64(population) * 57_600, MaximumResidentRecords: int64(workers) * 57_600, Durations: defaultDurations()}
 }
 
-func newProviderLiveDiagnosticTrial(t *testing.T, binding reference.Binding, credential string, workers int) liveDiagnosticTrial {
+func newProviderLiveDiagnosticTrial(t *testing.T, binding reference.Binding, credential string, mode int) liveDiagnosticTrial {
 	t.Helper()
+	workers := 0
+	if mode == diagnosticTrialOneWorker {
+		workers = 1
+	}
 	adapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{Endpoint: "wss://socket.massive.com/stocks", Credential: credential,
 		Queue: massive.LiveQueueConfig{FrameSlots: 512, MaxFrameBytes: 8 << 20, TotalFrameBytes: 64 << 20}})
 	if err != nil {
@@ -478,9 +797,8 @@ func newProviderLiveDiagnosticTrial(t *testing.T, binding reference.Binding, cre
 	if err != nil {
 		t.Fatal(err)
 	}
-	componentWorkers := max(1, workers)
-	return liveDiagnosticTrial{binding: binding, adapter: adapter, hydrator: hydrator, workers: workers, clock: func() time.Time { return time.Now().UTC() },
-		config: productionLiveDiagnosticConfig(), components: productionDiagnosticComponents(adapter, hydrator, componentWorkers, len(binding.UniverseSymbols()))}
+	return liveDiagnosticTrial{binding: binding, adapter: adapter, hydrator: hydrator, mode: mode, workers: workers, clock: func() time.Time { return time.Now().UTC() },
+		config: productionLiveDiagnosticConfig(), components: productionDiagnosticComponents(adapter, hydrator, 1, len(binding.UniverseSymbols()))}
 }
 
 func cachedLiveDiagnosticBinding(t *testing.T, ctx context.Context, tradingDate, dataDirectory string) reference.Binding {
@@ -548,11 +866,11 @@ func liveDiagnosticModuleRoot() (string, error) {
 }
 
 func writeLiveDiagnosticArtifact(directory string, artifact liveDiagnosticArtifact) error {
-	if artifact.Schema != 1 || len(artifact.Trials) == 0 || len(artifact.Trials) > 5 {
+	if artifact.Schema != 1 || (artifact.Trial != diagnosticTrialLiveOnly && artifact.Trial != diagnosticTrialOneWorker) || len(artifact.Trials) != 1 {
 		return errors.New("invalid bounded diagnostic artifact")
 	}
 	for _, trial := range artifact.Trials {
-		if len(trial.Samples) == 0 || len(trial.Samples) > 31 {
+		if len(trial.Samples) == 0 || len(trial.Samples) > 491 {
 			return errors.New("invalid bounded diagnostic sample count")
 		}
 	}
@@ -563,7 +881,7 @@ func writeLiveDiagnosticArtifact(directory string, artifact liveDiagnosticArtifa
 		return errors.New("protect diagnostic output directory")
 	}
 	body, err := json.MarshalIndent(artifact, "", "  ")
-	if err != nil || len(body) > 1<<20 {
+	if err != nil || len(body) > 2<<20 {
 		return errors.New("encode bounded diagnostic artifact")
 	}
 	file, err := os.OpenFile(filepath.Join(directory, "summary.json"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -579,21 +897,6 @@ func writeLiveDiagnosticArtifact(directory string, artifact liveDiagnosticArtifa
 		return errors.New("sync diagnostic artifact")
 	}
 	return file.Close()
-}
-
-func classifyLiveDiagnostic(results []liveDiagnosticSummary) int {
-	if len(results) == 0 || results[0].Outcome != diagnosticStable {
-		return diagnosticClassLivePath
-	}
-	if len(results) < 2 || results[1].Outcome != diagnosticStable {
-		return diagnosticClassCrossSource
-	}
-	for _, result := range results[2:] {
-		if result.Outcome != diagnosticStable {
-			return diagnosticClassWorkerBoundary
-		}
-	}
-	return diagnosticClassOtherStartup
 }
 
 func diagnosticOutcomeName(outcome int) string {
@@ -623,42 +926,6 @@ func diagnosticStopName(reason int) string {
 		return "oldest_frame_two_seconds"
 	case diagnosticStopAccounting:
 		return "accounting_invalid"
-	default:
-		return "invalid"
-	}
-}
-
-func diagnosticClassificationName(classification int) string {
-	switch classification {
-	case diagnosticClassLivePath:
-		return "live_path_bottleneck"
-	case diagnosticClassCrossSource:
-		return "cross_source_contention"
-	case diagnosticClassWorkerBoundary:
-		return "hydration_worker_boundary"
-	case diagnosticClassOtherStartup:
-		return "other_production_start_interaction"
-	default:
-		return "invalid"
-	}
-}
-
-func diagnosticNextBoundary(classification int, results []liveDiagnosticSummary) string {
-	switch classification {
-	case diagnosticClassLivePath:
-		return "live_normalization_admission_evaluation_batching_or_optimization"
-	case diagnosticClassCrossSource:
-		return "live_priority_engine_admission_and_reduced_hydration_side_work"
-	case diagnosticClassWorkerBoundary:
-		maximumStable := int64(0)
-		for _, result := range results {
-			if result.Outcome == diagnosticStable {
-				maximumStable = result.Workers
-			}
-		}
-		return "cap_or_throttle_hydration_at_" + strconv.FormatInt(maximumStable, 10) + "_workers"
-	case diagnosticClassOtherStartup:
-		return "isolate_non_hydration_production_start_interaction"
 	default:
 		return "invalid"
 	}

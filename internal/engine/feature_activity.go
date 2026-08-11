@@ -69,7 +69,7 @@ type activityFoldedTargetBlock struct {
 // reference position. mutable contains only block IDs with
 // a folded prefix that can still be corrected at the inclusive H boundary.
 type activityFeatureState struct {
-	references                map[int64]activityBlockSummary
+	references                map[int64]*activityBlockSummary
 	mutable                   map[int64]activityMutableBlock
 	foldedTargets             map[int64]activityFoldedTargetBlock
 	foldedTargetContributions int
@@ -80,7 +80,7 @@ type activityFeatureState struct {
 func ensureActivityState(state *symbolAggregateState) *activityFeatureState {
 	if state.activity == nil {
 		state.activity = &activityFeatureState{
-			references: make(map[int64]activityBlockSummary),
+			references: make(map[int64]*activityBlockSummary),
 			mutable:    make(map[int64]activityMutableBlock),
 			result:     unavailableActivityResult(time.Time{}),
 		}
@@ -108,8 +108,11 @@ func foldActivityAggregate(state *symbolAggregateState, binding *installedBindin
 	}
 	end := activityBlockEnd(binding, record.windowStart).Unix()
 	if summary, exists := activity.references[end]; exists {
-		summary = finishActivitySummary(addActivityAggregate(summary, record.values))
-		activity.references[end] = summary
+		// The superaccumulator is already the exact, order-independent state.
+		// Converting it through big.Int after every historical second creates no
+		// new fact; feature evaluation and checkpoint projection both finalize
+		// the completed summary at their read boundary.
+		*summary = addActivityAggregate(*summary, record.values)
 		return
 	}
 	block, ok := activity.mutable[end]
@@ -117,7 +120,8 @@ func foldActivityAggregate(state *symbolAggregateState, binding *installedBindin
 		blockEnd := time.Unix(end, 0).UTC()
 		if now.After(blockEnd.Add(correctionHorizon)) {
 			summary := activityBlockSummary{end: end, low: math.Inf(1)}
-			activity.references[end] = finishActivitySummary(addActivityAggregate(summary, record.values))
+			summary = addActivityAggregate(summary, record.values)
+			activity.references[end] = &summary
 			return
 		}
 		block.folded = activityBlockSummary{end: end, low: math.Inf(1)}
@@ -125,7 +129,7 @@ func foldActivityAggregate(state *symbolAggregateState, binding *installedBindin
 	}
 	block.folded = addActivityAggregate(block.folded, record.values)
 	if block.current.aggregateCount == 0 {
-		block.current = finishActivitySummary(block.folded)
+		block.current = block.folded
 	}
 	activity.mutable[end] = block
 	if len(activity.mutable) > maximumMutableActivityBlockIDs {
@@ -334,12 +338,18 @@ func recomputeMutableActivityBlock(state *symbolAggregateState, binding *install
 	if current.aggregateCount == 0 {
 		current.low = math.Inf(1)
 	}
-	for _, record := range state.tail {
-		if activityBlockEnd(binding, record.windowStart).Equal(blockEnd) {
+	// A mutable activity block has exactly 30 canonical whole-second
+	// identities. Looking those identities up directly avoids rescanning the
+	// full correction-horizon tail on every live revision.
+	for second := blockEnd.Add(-activityBlockDuration); second.Before(blockEnd); second = second.Add(time.Second) {
+		if record := state.tail[second.Unix()]; record != nil {
 			current = addActivityAggregate(current, record.values)
 		}
 	}
-	block.current = finishActivitySummary(current)
+	// The exact accumulator, extrema, and count are the complete mutable state.
+	// Decimal conversion is observational work and is deferred to feature or
+	// checkpoint projection; doing it on every revision adds no market fact.
+	block.current = current
 	activity.mutable[key] = block
 	if len(activity.mutable) > maximumMutableActivityBlockIDs {
 		failActivityBound(activity)
@@ -372,7 +382,7 @@ func finalizeActivityMutable(activity *activityFeatureState, now time.Time) {
 			continue
 		}
 		summary := activity.mutable[end].current
-		activity.references[end] = summary
+		activity.references[end] = &summary
 		delete(activity.mutable, end)
 	}
 }
@@ -564,6 +574,22 @@ func pruneFoldedActivityTargets(activity *activityFeatureState, floor time.Time)
 	}
 }
 
+func pruneFreshHydrationActivityTargets(activity *activityFeatureState, through, generationEnd time.Time) {
+	if activity == nil {
+		return
+	}
+	// A post-hydration target is never before generationEnd. Folded target
+	// operands earlier than both the next possible 30-second target and that
+	// final overlap have already contributed to their immutable session
+	// reference summaries. Correctable identities remain canonical in tail.
+	floor := through.Add(-activityBlockDuration)
+	finalFloor := generationEnd.Add(-activityBlockDuration)
+	if finalFloor.Before(floor) {
+		floor = finalFloor
+	}
+	pruneFoldedActivityTargets(activity, floor)
+}
+
 func unavailableActivityResult(at time.Time) activityFeatureResult {
 	return activityFeatureResult{
 		at:       at,
@@ -574,7 +600,11 @@ func unavailableActivityResult(at time.Time) activityFeatureResult {
 func activityComponentsForBlock(state *symbolAggregateState, binding *installedBinding, start, end time.Time) activityBlockSummary {
 	activity := ensureActivityState(state)
 	key := end.Unix()
-	summary, ok := activity.references[key]
+	summaryPointer, ok := activity.references[key]
+	var summary activityBlockSummary
+	if ok {
+		summary = *summaryPointer
+	}
 	if !ok {
 		if block, exists := activity.mutable[key]; exists {
 			summary, ok = block.current, true
@@ -585,11 +615,10 @@ func activityComponentsForBlock(state *symbolAggregateState, binding *installedB
 		// This fallback supports direct formula evaluation before the ordinary
 		// contributor has observed a test/setup state. Production transitions
 		// populate exactly the touched mutable block above.
-		for _, record := range state.tail {
-			if record.windowStart.Before(start) || !record.windowStart.Before(end) {
-				continue
+		for second := start; second.Before(end); second = second.Add(time.Second) {
+			if record := state.tail[second.Unix()]; record != nil {
+				summary = addActivityAggregate(summary, record.values)
 			}
-			summary = addActivityAggregate(summary, record.values)
 		}
 	}
 	return summary

@@ -145,7 +145,7 @@ func TestC7STATE01CommittedProjectionRoundTrip(t *testing.T) {
 		compact.applyAggregateCandidateLocked(ct, ct)
 		state := compact.state.binding.symbols[0].aggregates
 		compactNow = ct.Add(correctionHorizon + time.Second)
-		compact.compactSymbolLocked(state, compact.state.binding, compactNow)
+		compact.compactSymbolLocked(state, compact.state.binding, "AAA", compactNow)
 		maintainActivityState(state, compact.state.binding, compactNow, ct)
 		ensureHistoricalConflict(state).set(3)
 		compact.state.aggregateEvaluator.invalidMarks = map[int]invalidMarkEvidence{1: {windowStart: start.Add(time.Second)}}
@@ -177,7 +177,7 @@ func TestC7STATE01CommittedProjectionRoundTrip(t *testing.T) {
 		}
 		other := ensureAggregateState(&compact.state.binding.symbols[1])
 		other.qualification = &qualificationState{finalizedGateBars: map[int64]qualificationGateBar{}, proofs: map[int64]struct{}{}, dirty: map[int64]struct{}{}, accountedThrough: ct, finalized: true, finalProofEnd: start.Add(60 * time.Second), unresolvedOrigin: uncertaintyNone}
-		other.activity = &activityFeatureState{references: map[int64]activityBlockSummary{start.Add(30 * time.Second).Unix(): {end: start.Add(30 * time.Second).Unix(), low: math.Inf(1), invalid: true}}, mutable: map[int64]activityMutableBlock{}, foldedTargets: map[int64]activityFoldedTargetBlock{}, result: unavailableActivityResult(time.Time{})}
+		other.activity = &activityFeatureState{references: map[int64]*activityBlockSummary{start.Add(30 * time.Second).Unix(): {end: start.Add(30 * time.Second).Unix(), low: math.Inf(1), invalid: true}}, mutable: map[int64]activityMutableBlock{}, foldedTargets: map[int64]activityFoldedTargetBlock{}, result: unavailableActivityResult(time.Time{})}
 		compact.state.aggregateEvaluator.current = compact.stageAggregateEvaluationAtLocked(ct, ct)
 		compact.mu.Unlock()
 		qualificationImage := projectForTest(t, compact).Image
@@ -221,7 +221,7 @@ func TestC7STATE01CommittedProjectionRoundTrip(t *testing.T) {
 		atsSource.applyAggregateCandidateLocked(ct, ct)
 		atsNow = ct.Add(correctionHorizon + time.Second)
 		atsState := atsSource.state.binding.symbols[0].aggregates
-		atsSource.compactSymbolLocked(atsState, atsSource.state.binding, atsNow)
+		atsSource.compactSymbolLocked(atsState, atsSource.state.binding, "AAA", atsNow)
 		maintainActivityState(atsState, atsSource.state.binding, atsNow, ct)
 		atsSource.state.aggregateEvaluator.current = atsSource.stageAggregateEvaluationAtLocked(ct, ct)
 		wantEval := cloneAggregateEvaluation(atsSource.state.aggregateEvaluator.current)

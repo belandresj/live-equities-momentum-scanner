@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"math"
+	"sort"
 	"time"
 )
 
@@ -602,7 +603,7 @@ func advanceLiveAuthority(record *canonicalAggregate, input frozenAggregateInput
 
 func (e *Engine) installAggregateLocked(symbol *coreSymbol, input frozenAggregateInput, now time.Time, revision bool) (DispositionCode, DispositionReason) {
 	state := ensureAggregateState(symbol)
-	e.compactSymbolLocked(state, e.state.binding, now)
+	e.compactSymbolLocked(state, e.state.binding, symbol.symbol, now)
 	record := canonicalAggregate{identity: aggregateIdentity{symbol: input.Symbol, start: input.WindowStart.Unix()}, windowStart: input.WindowStart, windowEnd: input.WindowEnd, values: input.Values, first: evidence(input), authority: evidence(input)}
 	if old := state.tail[record.identity.start]; old != nil {
 		record.first = old.first
@@ -634,8 +635,10 @@ func (e *Engine) installAggregateLocked(symbol *coreSymbol, input frozenAggregat
 		foldPriceRangeAggregate(state, e.state.binding, record)
 		foldActivityAggregate(state, e.state.binding, record, now)
 		if state.olderLatest == nil || record.windowStart.After(state.olderLatest.windowStart) {
-			copyRecord := record
-			state.olderLatest = &copyRecord
+			if state.olderLatest == nil {
+				state.olderLatest = &canonicalAggregate{}
+			}
+			*state.olderLatest = record
 		}
 		if e.state.committedT != nil && record.windowStart.Before(*e.state.committedT) &&
 			(state.committedLatest == nil || record.windowStart.After(state.committedLatest.windowStart)) {
@@ -646,7 +649,10 @@ func (e *Engine) installAggregateLocked(symbol *coreSymbol, input frozenAggregat
 		state.tail[record.identity.start] = &copyRecord
 	}
 	if state.latest == nil || record.windowStart.After(state.latest.record.windowStart) || record.identity == state.latest.record.identity {
-		state.latest = &latestAggregateMark{record: record}
+		if state.latest == nil {
+			state.latest = &latestAggregateMark{}
+		}
+		state.latest.record = record
 	}
 	state.recomputations++
 	if revision {
@@ -727,27 +733,65 @@ func ensureHistoricalConflict(state *symbolAggregateState) *slotBitmap {
 	return state.historicalConflict
 }
 
-func (e *Engine) compactSymbolLocked(state *symbolAggregateState, binding *installedBinding, now time.Time) {
-	for start, record := range state.tail {
-		if e.hydrationPinsIdentityLocked(record.identity.symbol, record.windowStart) {
-			continue
-		}
-		if now.Sub(record.windowEnd) > correctionHorizon {
-			ensurePresence(state).set(sessionSlot(binding, record.windowStart))
-			foldQualificationAggregate(state, binding, *record, now)
-			foldPriceRangeAggregate(state, binding, *record)
-			foldActivityAggregate(state, binding, *record, now)
-			if state.olderLatest == nil || record.windowStart.After(state.olderLatest.windowStart) {
-				copyRecord := *record
-				state.olderLatest = &copyRecord
+func (e *Engine) compactSymbolLocked(state *symbolAggregateState, binding *installedBinding, symbol string, now time.Time) {
+	// Every compaction-eligible record for a symbol with active hydration must
+	// remain available until that generation's ingress fence. Avoid walking the
+	// retained tail only to rediscover that fact for every record and every live
+	// update. The fence transition marks the generation inactive before its
+	// contributor pass, so the same tail is compacted exactly once there.
+	if generation := &e.state.hydration.generation; generation.active {
+		if requestIndex, pinned := generation.symbolIndex[symbol]; pinned {
+			entry := &generation.requests[requestIndex]
+			if entry.terminal == "" && !entry.engineClosed && !entry.fenced {
+				return
 			}
-			if e.state.committedT != nil && record.windowStart.Before(*e.state.committedT) &&
-				(state.committedLatest == nil || record.windowStart.After(state.committedLatest.windowStart)) {
-				state.committedLatest = committedMark(*record)
-			}
-			delete(state.tail, start)
 		}
 	}
+	type compactableAggregate struct {
+		start  int64
+		record *canonicalAggregate
+	}
+	compactable := make([]compactableAggregate, 0, len(state.tail))
+	for start, record := range state.tail {
+		if now.Sub(record.windowEnd) > correctionHorizon {
+			compactable = append(compactable, compactableAggregate{start: start, record: record})
+		}
+	}
+	// Hydration retains a full-session tail until its exact ingress fence. Map
+	// iteration order is random, while price/range sufficient evidence is time
+	// ordered. Folding a late-session population in map order repeatedly shifted
+	// those slices and made the one-time fence pass quadratic within each symbol.
+	// Sorting once makes every evidence insertion an append without changing the
+	// canonical records, cutoff, or fold semantics.
+	sort.Slice(compactable, func(i, j int) bool {
+		if compactable[i].record.windowStart.Equal(compactable[j].record.windowStart) {
+			return compactable[i].start < compactable[j].start
+		}
+		return compactable[i].record.windowStart.Before(compactable[j].record.windowStart)
+	})
+	for _, candidate := range compactable {
+		record := candidate.record
+		e.compactAggregateLocked(state, binding, record, now)
+	}
+}
+
+func (e *Engine) compactAggregateLocked(state *symbolAggregateState, binding *installedBinding, record *canonicalAggregate, now time.Time) {
+	if state == nil || binding == nil || record == nil || now.Sub(record.windowEnd) <= correctionHorizon || state.tail[record.identity.start] != record {
+		return
+	}
+	ensurePresence(state).set(sessionSlot(binding, record.windowStart))
+	foldQualificationAggregate(state, binding, *record, now)
+	foldPriceRangeAggregate(state, binding, *record)
+	foldActivityAggregate(state, binding, *record, now)
+	if state.olderLatest == nil || record.windowStart.After(state.olderLatest.windowStart) {
+		copyRecord := *record
+		state.olderLatest = &copyRecord
+	}
+	if e.state.committedT != nil && record.windowStart.Before(*e.state.committedT) &&
+		(state.committedLatest == nil || record.windowStart.After(state.committedLatest.windowStart)) {
+		state.committedLatest = committedMark(*record)
+	}
+	delete(state.tail, record.identity.start)
 }
 
 func committedMark(record canonicalAggregate) *committedAggregateMark {
@@ -780,15 +824,28 @@ func exactAggregateCoverage(state *symbolAggregateState, binding *installedBindi
 		end.After(binding.sessionEnd) || start.After(end) {
 		return false
 	}
-	for at := start; at.Before(end); at = at.Add(time.Second) {
-		slot := sessionSlot(binding, at)
-		if state.historicalConflict.has(slot) {
+	startSlot, endSlot := sessionSlot(binding, start), sessionSlot(binding, end)
+	var tail slotBitmap
+	for _, record := range state.tail {
+		if record != nil && !record.windowStart.Before(start) && record.windowStart.Before(end) {
+			tail.set(sessionSlot(binding, record.windowStart))
+		}
+	}
+	for word := startSlot / 64; word <= (endSlot-1)/64 && startSlot < endSlot; word++ {
+		required := slotRangeWordMask(word, startSlot, endSlot)
+		if state.historicalConflict != nil && state.historicalConflict[word]&required != 0 {
 			return false
 		}
-		if aggregatePresentAt(state, at.Unix()) || state.presence.has(slot) || state.provenAbsent.has(slot) {
-			continue
+		covered := tail[word]
+		if state.presence != nil {
+			covered |= state.presence[word]
 		}
-		return false
+		if state.provenAbsent != nil {
+			covered |= state.provenAbsent[word]
+		}
+		if required&^covered != 0 {
+			return false
+		}
 	}
 	return true
 }
@@ -813,14 +870,44 @@ func installExactCoverage(state *symbolAggregateState, binding *installedBinding
 		end.After(binding.sessionEnd) || start.After(end) {
 		return false
 	}
-	for at := start; at.Before(end); at = at.Add(time.Second) {
-		slot := sessionSlot(binding, at)
-		if state.historicalConflict.has(slot) || aggregatePresentAt(state, at.Unix()) || state.presence.has(slot) {
-			continue
+	startSlot, endSlot := sessionSlot(binding, start), sessionSlot(binding, end)
+	if startSlot == endSlot {
+		return true
+	}
+	absent := ensureProvenAbsent(state)
+	for word := startSlot / 64; word <= (endSlot-1)/64 && startSlot < endSlot; word++ {
+		mask := slotRangeWordMask(word, startSlot, endSlot)
+		if state.presence != nil {
+			mask &^= state.presence[word]
 		}
-		ensureProvenAbsent(state).set(slot)
+		if state.historicalConflict != nil {
+			mask &^= state.historicalConflict[word]
+		}
+		absent[word] |= mask
+	}
+	for _, record := range state.tail {
+		if record != nil && !record.windowStart.Before(start) && record.windowStart.Before(end) {
+			absent.clear(sessionSlot(binding, record.windowStart))
+		}
 	}
 	return true
+}
+
+func slotRangeWordMask(word, startSlot, endSlot int) uint64 {
+	wordStart := word * 64
+	from, through := max(startSlot-wordStart, 0), min(endSlot-wordStart, 64)
+	if from >= through {
+		return 0
+	}
+	upper := ^uint64(0)
+	if through < 64 {
+		upper = uint64(1)<<uint(through) - 1
+	}
+	lower := uint64(0)
+	if from > 0 {
+		lower = uint64(1)<<uint(from) - 1
+	}
+	return upper &^ lower
 }
 
 func (e *Engine) historicalRegistrationAllowedForProof(symbol string, start, end time.Time) bool {

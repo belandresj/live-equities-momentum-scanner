@@ -527,6 +527,25 @@ func TestC8RUNTIME03InitialRetryAndExhaustion(t *testing.T) {
 	}
 }
 
+func TestLiveTerminalStateCannotEnterReconnectLoop(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		view engine.OperationalView
+		want bool
+	}{
+		{"hydrating", engine.OperationalView{Lifecycle: "hydrating"}, false},
+		{"recovering", engine.OperationalView{Lifecycle: "recovering"}, false},
+		{"suppressed", engine.OperationalView{Lifecycle: "suppressed", LifecycleReason: "accounting_integrity", Suppression: engine.SuppressionRestartRequired}, true},
+		{"ended", engine.OperationalView{Lifecycle: "ended", LifecycleReason: "controlled_stop"}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := terminalLiveStateError(test.view); (got != nil) != test.want {
+				t.Fatalf("terminal state error = %v, want=%t", got, test.want)
+			}
+		})
+	}
+}
+
 func TestC8RUNTIME04SuccessfulRecoveryResetsBudget(t *testing.T) {
 	binding := operationsBinding(t)
 	base := binding.SessionStart().Add(20 * time.Minute)
