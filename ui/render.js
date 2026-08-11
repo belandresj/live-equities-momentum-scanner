@@ -53,12 +53,14 @@ export function renderDashboard(document, event, options = {}) {
   const main = element(document, "main"), model = event.model;
   const header = element(document, "header"), title = element(document, "div"); title.append(textElement(document, "p", "LIVE EQUITIES", "eyebrow"), textElement(document, "h1", "Momentum Scanner"));
   const replayState = event.transport === "refresh_delayed" ? " · REFRESH DELAYED" : event.transport === "disconnected" ? " · FROZEN · DISCONNECTED" : "";
-  const live = textElement(document, "div", model ? `${model.replay ? `HISTORICAL · NONLIVE${replayState}` : model.current ? "CURRENT" : event.transport === "refresh_delayed" ? "REFRESH DELAYED" : event.transport === "disconnected" ? "FROZEN · DISCONNECTED" : model.backendReady && model.rankingMode === "degraded_bootstrap" ? "DEGRADED" : "NONCURRENT"} · publication ${model.publicationID} · ${model.rows.length} ranked` : event.error ? `Scanner API disconnected: ${event.error}` : "Connecting to scanner API", "status-live");
+  const primaryState = !model ? "" : model.replay ? `HISTORICAL · NONLIVE${replayState}` : model.current ? "CURRENT" : event.transport === "refresh_delayed" ? "REFRESH DELAYED" : event.transport === "disconnected" ? "FROZEN · DISCONNECTED" : model.backendReady && model.rankingMode === "degraded_bootstrap" ? "DEGRADED" : model.finalizing ? "FINALIZING" : model.warming ? "WARMING" : "NONCURRENT";
+  const warmupProgress = model?.warming && event.transport === "connected" ? ` · ${model.hydrationProgress}${model.hydrationIssueText}` : "";
+  const live = textElement(document, "div", model ? `${primaryState}${warmupProgress} · publication ${model.publicationID} · ${model.rows.length} ranked` : event.error ? `Scanner API disconnected: ${event.error}` : "Connecting to scanner API", "status-live");
   live.id = "status-live"; live.dataset.state = model?.current && !model.replay ? "current" : "warning"; header.append(title, live); main.append(header);
   const grid = element(document, "section", "status-grid"); grid.setAttribute("aria-label", "Scanner status");
   grid.append(statusItem(document, "Transport", event.transport, event.transport === "connected" ? "current" : "warning"),
     statusItem(document, "Process", model ? model.processLive ? model.replay ? "running" : "live" : "not live" : "unknown", model?.processLive ? "current" : "warning"),
-    statusItem(document, "Backend", model ? model.backendReady ? "ready" : model.readinessReason || "not ready" : "unknown", model?.backendReady ? "current" : "warning"),
+    statusItem(document, "Backend", model ? model.backendReady ? "ready" : model.warming ? `${model.finalizing ? "finalizing" : "warming"} · ${model.hydrationProgress}${model.hydrationIssueText}` : model.readinessReason || "not ready" : "unknown", model?.backendReady ? "current" : "warning"),
     statusItem(document, "Ops sample", model ? model.sampleAccountingValid ? "accounting valid" : "accounting invalid" : "unknown", model?.sampleAccountingValid ? "current" : "warning"),
     statusItem(document, "Ranking", model ? `${model.rankingMode}${model.rankingReason ? ` · ${model.rankingReason}` : ""}` : "unknown"),
     statusItem(document, model?.replay ? "Replay time" : "Watermark", model?.replayLogicalTime || (model?.committedT ? `${new Date(model.committedT).toLocaleTimeString()} · ${model.watermarkLagMS} ms` : "unavailable")),
@@ -68,7 +70,7 @@ export function renderDashboard(document, event, options = {}) {
   if (model) main.append(buildDiagnostics(document, model, detailsOpen));
   const message = element(document, "div", "message"); message.id = "message";
   if (!model) message.textContent = "No valid scanner snapshot is available.";
-  else if (model.rows.length === 0) message.textContent = model.rowsCurrent && model.rankingMode === "qualified_current" ? "No symbols currently qualify." : `No rows in retained noncurrent publication · ${model.rankingMode}${model.rankingReason ? ` · ${model.rankingReason}` : ""}.`;
+  else if (model.rows.length === 0) message.textContent = model.rowsCurrent && model.rankingMode === "qualified_current" ? "No symbols currently qualify." : model.warming ? `Scanner warm-up in progress · ${model.hydrationProgress}${model.hydrationIssueText}.` : `No rows in retained noncurrent publication · ${model.rankingMode}${model.rankingReason ? ` · ${model.rankingReason}` : ""}.`;
   else message.hidden = true;
   main.append(message);
   if (model) main.append(buildTable(document, model));

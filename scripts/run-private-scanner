@@ -1,0 +1,127 @@
+#!/bin/sh
+set -eu
+
+umask 077
+script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repository_root=$(CDPATH= cd -- "$script_directory/.." && pwd)
+runtime_directory="$repository_root/var/run-private-scanner/bin"
+
+usage() {
+    printf '%s\n' \
+        'Usage:' \
+        '  ./scripts/run-private-scanner' \
+        '  ./scripts/run-private-scanner --trading-date YYYY-MM-DD' \
+        '  ./scripts/run-private-scanner --open' \
+        '  ./scripts/run-private-scanner --trading-date YYYY-MM-DD --open'
+}
+
+seen_date=0
+seen_open=0
+seen_help=0
+trading_date=
+remaining=$#
+while [ "$remaining" -gt 0 ]; do
+    argument=$1
+    shift
+    remaining=$((remaining - 1))
+    case "$argument" in
+        --trading-date)
+            if [ "$seen_date" -ne 0 ]; then
+                printf '%s\n' '--trading-date may be supplied only once' >&2
+                exit 2
+            fi
+            if [ "$remaining" -eq 0 ]; then
+                printf '%s\n' '--trading-date requires YYYY-MM-DD' >&2
+                exit 2
+            fi
+            seen_date=1
+            trading_date=$1
+            shift
+            remaining=$((remaining - 1))
+            ;;
+        --open)
+            if [ "$seen_open" -ne 0 ]; then
+                printf '%s\n' '--open may be supplied only once' >&2
+                exit 2
+            fi
+            seen_open=1
+            ;;
+        --help)
+            if [ "$seen_help" -ne 0 ]; then
+                printf '%s\n' '--help may be supplied only once' >&2
+                exit 2
+            fi
+            seen_help=1
+            ;;
+        -*)
+            printf 'unknown argument %s\n' "$argument" >&2
+            exit 2
+            ;;
+        *)
+            printf 'positional argument %s is not supported\n' "$argument" >&2
+            exit 2
+            ;;
+    esac
+done
+
+if [ "$seen_help" -ne 0 ]; then
+    if [ "$seen_date" -ne 0 ] || [ "$seen_open" -ne 0 ]; then
+        printf '%s\n' '--help cannot be combined with startup arguments' >&2
+        exit 2
+    fi
+    usage
+    exit 0
+fi
+
+if [ "$seen_date" -ne 0 ]; then
+    validated_date=$(/bin/date -j -f '%Y-%m-%d' "$trading_date" '+%Y-%m-%d' 2>/dev/null) || {
+        printf '%s\n' '--trading-date must be a valid date in YYYY-MM-DD form' >&2
+        exit 2
+    }
+    if [ "$validated_date" != "$trading_date" ]; then
+        printf '%s\n' '--trading-date must be a valid date in YYYY-MM-DD form' >&2
+        exit 2
+    fi
+fi
+
+# Reconstruct the already-validated public arguments because the POSIX parser
+# above consumes its positional parameters. The Go launcher validates them a
+# second time before preflight or credential acquisition.
+set --
+if [ "$seen_date" -ne 0 ]; then
+    set -- "$@" --trading-date "$trading_date"
+fi
+if [ "$seen_open" -ne 0 ]; then
+    set -- "$@" --open
+fi
+
+mkdir -p "$runtime_directory"
+
+build_pid=
+forward_build_signal() {
+    forwarded_signal=$1
+    exit_status=$2
+    if [ -n "$build_pid" ]; then
+        kill -"$forwarded_signal" "$build_pid" 2>/dev/null || true
+        wait "$build_pid" 2>/dev/null || true
+    fi
+    trap - INT TERM
+    exit "$exit_status"
+}
+trap 'forward_build_signal INT 130' INT
+trap 'forward_build_signal TERM 143' TERM
+
+(cd "$repository_root" && exec /usr/bin/env -u MASSIVE_API_KEY go build -trimpath -o "$runtime_directory/private-scanner-launcher" ./cmd/private-scanner-launcher) &
+build_pid=$!
+set +e
+wait "$build_pid"
+build_status=$?
+set -e
+build_pid=
+trap - INT TERM
+if [ "$build_status" -ne 0 ]; then
+    exit "$build_status"
+fi
+
+export PRIVATE_SCANNER_REPO_ROOT="$repository_root"
+exec "$runtime_directory/private-scanner-launcher" "$@"

@@ -38,8 +38,12 @@ Sections 8-19 are completed here after its just-in-time V2 reconnaissance.
 | Boundary/reconnaissance plan | `accepted` | Direct owner V1 program revision; C7 finally accepted; recorded V2 scope inspected | Complete |
 | Completed contract | `accepted_current_plan` | Two slices and two primary proofs preserve the existing engine-owned lifecycle/readiness boundary; no new competing owner or consequential interface requires pre-implementation review | Implement `C8-S1` |
 | `C8-S1` runtime/lifecycle | `accepted_after_correction` | 2026-08-10 live-start evidence invalidated the use of one 60-second wall-clock deadline for both connection establishment and full-population hydration. Corrected `P-C8-RUNTIME` proves the connection deadline is handshake-only, finite C6 hydration can outlive it, the subscribed live tail is consumed concurrently, and every causal predecessor is drained through the ingress fence before readiness; affected race clean. | Complete |
+| `C8-S1` live response-bound/failure containment | `accepted_after_correction` | A 2026-08-10 two-worker launch reached 4,558/5,517 terminal symbols without live-queue loss, then exposed an undersized 512 MiB cumulative REST transfer bound and a proof-byte accounting defect that converted bounded exhaustion into global suppression. Production now allows 2 GiB; the proof byte is excluded from accepted terminal accounting; and terminal engine suppression exits the live supervisor instead of reconnect-spinning. Focused provider/engine/supervisor proofs, ordinary verification, and race verification pass. | Complete |
+| `C8-S1` hydration-pin/fence finalization | `accepted_after_deterministic_correction` | The request-symbol index, progressive canonical folding, bounded feature maintenance, and coalesced aggregate projection preserve the exact fence/readiness semantics while removing the measured dominant costs. Final-source full 1x passed all 7,581,690 rows and 28,377 frames with zero rejection, queue high-water 293, 490.875 ms fence, 650.808 ms drain, and ready/accounting true. | Complete locally; separately authorized provider confirmation remains pending |
+| Cached hydration fence correction | `accepted_deterministically` | [`live-fence-finalization-cached-hydration-correction.md`](../live-fence-finalization-cached-hydration-correction.md) records the sealed-artifact full 1x pass, a second current-source full 1x pass, the strengthened 3,072,000-row bounded 2x burst pass, and the preserved honest sustained-2x failure. No provider or credential was accessed. | Complete; do not rerun sustained full 2x |
 | `C8-S2` measurements/load | `accepted_after_correction` | `P-C8-LOAD`: 6,000-symbol bound population, 100 active aggregate symbols, 20 corrections, 20 duplicates, 20 rejects, and 60 normalized T/Q facts correctly fenced without acknowledged membership; 53.67 s end-to-end and exact accounting | Complete |
 | Final component review | `accepted_after_2026-08-10_correction` | Focused re-review confirmed the hydration-deadline/live-tail correction plus synchronized concurrent-terminal diagnostics and an explicit active-attempt shutdown join. No P1/P2 finding remains; uncached ordinary, focused race, vet, UI-model, and diff checks pass. Unchanged non-short load evidence is reused. | Complete |
+| Private daily operational finalization | `accepted_after_final_review` | `./scripts/run-private-scanner` supplies the exact two-worker/persistent-path workflow, isolates credentials, gates dashboard startup on `/livez`, reports engine `/readyz`, and contains both processes. Public-wrapper/fake-process tests, current-source capacity evidence, ordinary/race/vet/UI checks, and correction/re-review are clean. | Complete locally; exact-date provider observation remains separately authorized |
 
 ## 1-4. Outcome, scope, ownership, and settled boundary
 
@@ -256,6 +260,42 @@ A single injected C5 clock source, defaulting to UTC wall time, keeps receipts,
 deadlines, terminals, and fence capture causally coherent without changing
 production time semantics.
 
+The controlled 2026-08-10 launch also invalidated the original 512 MiB
+cumulative REST response budget. It was a whole-plan transfer bound rather
+than a resident-memory limit and stopped a healthy two-worker hydration at
+4,558 of 5,517 terminal symbols. Production now uses a 2 GiB cumulative bound,
+more than three times the approximately 625 MiB complete transfer projected
+from that observation. C6's 16 MiB page, two-page, three-attempt,
+15-second-per-attempt, interval-row, and worker-resident bounds remain intact.
+The downloader no longer includes the single over-bound proof byte in terminal
+accounting, and the engine accepts an ordinary failed terminal that exactly
+consumes the remaining authorized bytes without global suppression. The live
+supervisor also exits when the engine is already `suppressed` or `ended`, so a
+terminal integrity event cannot become an unbounded reconnect loop.
+
+The following paragraph records the historical state before the accepted
+cached correction; it is superseded by the final-source result below. The next
+controlled launch completed the full hydration plan (5,468 value and
+49 successful empty terminals) but invalidated the cost of the active-generation
+pin lookup. Live aggregate installation compacted each symbol tail and checked
+each retained identity against the full 5,517-request plan. Near the end of the
+extended session, this records-times-population loop saturated one core and
+filled the 512-frame queue before the ingress fence. The generation now owns a
+symbol-to-request index. While it is active, compaction returns immediately for
+a pinned symbol; the fence deactivates the generation and performs the required
+one-time compaction before readiness evaluation. This changes implementation
+cost only: retained identity, fence ordering, ranking, and readiness semantics
+are unchanged. Deterministic and race proofs pass. Two repeated provider
+launches proved ordinary hydration now remains caught up through all 5,517
+terminals, but reopened the fence-finalization claim: delivery stopped at 8,152
+in the first and 9,421 in the chronological-fold run. In the latter, queue
+occupancy rose from 157 to 483/512 in about 28 seconds before the scanner was
+stopped. At that point, the remaining full-population compaction, coverage,
+maintenance, and projection work still required profiling or bounded ordered
+finalization; readiness could not be claimed from REST completion alone. The
+accepted cached correction recorded later in this section closes that
+historical condition without weakening the readiness fence.
+
 `P-C8-RUNTIME` rejects process-live-as-ready, T/Q-as-readiness, a stale
 watermark, disconnect-as-current, a connection deadline canceling finite
 hydration or a healthy live connection, queued live input being skipped by the
@@ -354,3 +394,15 @@ issue. Its uncached ordinary suite and affected race suite both passed, as did
 `git diff --check`. The unchanged non-short `P-C8-LOAD` evidence was reused;
 credentialed provider availability, market-hours validation, and an SLA remain
 explicitly unproven and deferred.
+
+The cached fence correction subsequently closed the reopened deterministic
+boundary without changing queue capacity, ranking, qualification, hydration,
+or readiness meaning. The final-source full 1x trial validated 7,581,690 rows,
+5,439 value and 63 successful-empty terminals, 28,377 fully reconciled frames,
+zero rejection, queue high-water 293, a 490.875 ms ingress fence, 650.808 ms
+tail drain, `live`/`qualified_current`, 20 rows, and ready/accounting true. The
+focused full-retention 2x burst completed all 3,072,000 measured rows and
+23,448 frames with zero rejection, queue high-water 38, 2.194 ms drain, and
+reconciled accounting. The separate sustained full 2x artifact remains a
+failure after 7,078,180 hydration rows and is explicitly unsupported. These
+results are distinct trials and no metrics were combined.

@@ -224,6 +224,18 @@ function fieldView(field, stops = null, digits = 2) { return knownCurrentMeasure
 function rangeFieldView(field) { const view = fieldView(field, null, 0); view.position = view.state === "current" ? field.value_ratio * 100 : null; return view; }
 function activityFieldView(field) { const view = fieldView(field, null, 0); view.position = view.state === "current" ? field.value_ratio * 100 : null; return view; }
 function rateView(rate, outerCurrent) { return outerCurrent && knownCurrentTQ(rate.status, rate.reason) ? `${rate.trades_per_second.toFixed(1)}/s` : "—"; }
+function groupedDecimal(value) { return value.replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
+function hydrationView(recovery) {
+  const work = recovery.work;
+  const planned = BigInt(work.planned), open = BigInt(work.open);
+  const failed = BigInt(work.failed), canceled = BigInt(work.canceled), fenced = BigInt(work.fenced);
+  const terminal = BigInt(work.completed_value) + BigInt(work.completed_empty) + failed + canceled + fenced;
+  const issues = failed + canceled + fenced;
+  const percent = planned === 0n ? null : terminal * 1000n / planned;
+  const progress = planned === 0n ? "planning" : `${groupedDecimal(String(terminal))} / ${groupedDecimal(work.planned)} · ${percent / 10n}.${percent % 10n}%`;
+  const issueText = issues === 0n ? "" : ` · failed ${groupedDecimal(work.failed)} · canceled ${groupedDecimal(work.canceled)} · fenced ${groupedDecimal(work.fenced)}`;
+  return { planned, open, issues, progress, issueText };
+}
 
 export function buildViewModel(input, transport = "connected") {
   const snapshot = validateSnapshot(input);
@@ -241,6 +253,9 @@ export function buildViewModel(input, transport = "connected") {
     tape: { state: tqState(row.tape_rate.status, row.tape_rate.reason), position: fiveSecondCurrent ? row.tape_rate.five_second.trades_per_second / 30 * 100 : null, primary: tapeCurrent ? fiveSecondRate : "—", secondary: "", detail: `five-second ${fiveSecondRate}; status ${row.tape_rate.status}; reason ${row.tape_rate.reason || "none"}; coverage ${row.tape_rate.trade_coverage ? "yes" : "no"}; timestamp ${row.tape_rate.timestamp_basis || "none"}; lifecycle records ${row.tape_rate.lifecycle_records_observed ? "observed" : "not observed"}; membership desired ${row.tq_membership.desired ? "yes" : "no"}, provider ${row.tq_membership.provider_present ? "present" : "absent"}, unknown ${row.tq_membership.provider_membership_unknown ? "yes" : "no"}` },
     spread: { state: tqState(row.spread.status, row.spread.reason), band: spreadCurrent ? band(row.spread.basis_points, [0, 5, 10, 25, 50]) : 0, primary: spreadCurrent ? `${row.spread.basis_points.toFixed(1)} bps / ${row.spread.cents.toFixed(2)}¢` : "—", secondary: "", detail: `status ${row.spread.status}; reason ${row.spread.reason || "none"}; coverage ${row.spread.quote_coverage ? "yes" : "no"}; duration ${row.spread.valid_duration_ms} ms; quality ${row.spread.quality || "none"}; membership desired ${row.tq_membership.desired ? "yes" : "no"}, provider ${row.tq_membership.provider_present ? "present" : "absent"}, unknown ${row.tq_membership.provider_membership_unknown ? "yes" : "no"}` },
   }; });
+  const hydration = hydrationView(snapshot.recovery);
+  const warming = !replay && snapshot.status.process_live && !snapshot.status.backend_ready && snapshot.publication.lifecycle === "hydrating" && !snapshot.recovery.fence_reconciled;
+  const finalizing = warming && hydration.planned > 0n && hydration.open === 0n;
   return {
     schemaVersion: snapshot.schema_version, sampleID: snapshot.sample.id, sampledAt: snapshot.sample.sampled_at, publicationID: snapshot.publication.id,
     transport, current, rowsCurrent, replay, replayLogicalTime: replay ? snapshot.replay.logical_time : null,
@@ -249,6 +264,8 @@ export function buildViewModel(input, transport = "connected") {
     watermarkLagMS: snapshot.status.watermark_lag_ms, accountingValid: snapshot.status.accounting_valid, sampleAccountingValid: snapshot.operations.sample_accounting_valid, tqPressure: snapshot.tq.pressure_mode, tqAggregateOnly: snapshot.tq.aggregate_only,
     tqUnknown: snapshot.tq.unknown, tqRetainedBoundHit: snapshot.tq.retained_bound_hit, tqKnownPresent: snapshot.tq.known_present, tqKnownAbsent: snapshot.tq.known_absent,
     recoveryPurpose: snapshot.recovery.purpose, recoveryGeneration: snapshot.recovery.generation, rows,
+    hydrationProgress: hydration.progress, hydrationIssueText: hydration.issueText, hydrationIssues: hydration.issues !== 0n,
+    warming, finalizing,
     diagnostics: diagnosticEntries(snapshot),
   };
 }

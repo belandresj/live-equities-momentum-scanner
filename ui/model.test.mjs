@@ -73,6 +73,31 @@ test("P-C11-STATE distinguishes exact empty, fewer, noncurrent, and independent 
   assert.equal(pressureModel.tqAggregateOnly, true); assert.equal(pressureModel.rows[0].tape.state, "pressure_shed"); assert.equal(pressureModel.rows[0].spread.state, "pressure_shed");
 });
 
+test("P-C11-STATE presents connected hydration as bounded warm-up progress", () => {
+  const snapshot = snapshotFixture(0);
+  snapshot.publication.lifecycle = "hydrating"; snapshot.publication.lifecycle_reason = "fresh_bootstrap";
+  snapshot.publication.hydration_fence = { reconciled: false, connection_epoch: "0", through_frame_sequence: "0", marker_ordinal: "0", supported_through: null };
+  snapshot.status.backend_ready = false; snapshot.status.ranking_current = false; snapshot.status.readiness_reason = "fence_pending";
+  snapshot.recovery.fence_reconciled = false;
+  snapshot.recovery.work = { planned: "5517", open: "3378", completed_value: "2121", completed_empty: "18", failed: "0", canceled: "0", fenced: "0" };
+  const model = buildViewModel(snapshot);
+  assert.equal(model.warming, true); assert.equal(model.finalizing, false); assert.equal(model.hydrationProgress, "2,139 / 5,517 · 38.7%"); assert.equal(model.current, false);
+  const document = new FakeDocument(); renderDashboard(document, { transport: "connected", model });
+  assert.match(document.body.textContent, /WARMING · 2,139 \/ 5,517 · 38\.7%/);
+  assert.match(document.body.textContent, /Backendwarming · 2,139 \/ 5,517 · 38\.7%/);
+  assert.match(document.body.textContent, /Scanner warm-up in progress · 2,139 \/ 5,517 · 38\.7%/);
+  assert.doesNotMatch(document.body.textContent, /DISCONNECTED/);
+
+  snapshot.recovery.work = { planned: "5517", open: "0", completed_value: "5490", completed_empty: "25", failed: "1", canceled: "0", fenced: "1" };
+  const finalizing = buildViewModel(snapshot); assert.equal(finalizing.finalizing, true); assert.equal(finalizing.hydrationIssues, true);
+  const finalDocument = new FakeDocument(); renderDashboard(finalDocument, { transport: "connected", model: finalizing });
+  assert.match(finalDocument.body.textContent, /FINALIZING · 5,517 \/ 5,517 · 100\.0% · failed 1 · canceled 0 · fenced 1/);
+
+  const disconnected = new FakeDocument(); renderDashboard(disconnected, { transport: "disconnected", model: buildViewModel(snapshot, "disconnected") });
+  assert.match(disconnected.body.textContent, /FROZEN · DISCONNECTED/);
+  assert.doesNotMatch(disconnected.body.textContent, /FINALIZING · 5,517/);
+});
+
 test("P-C11-STATE rejects every known contradiction and accounting break", () => {
   const contradictions = [
     snapshot => { snapshot.status.process_live = false; },
