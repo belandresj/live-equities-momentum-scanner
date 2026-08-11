@@ -108,8 +108,8 @@ type aggregateEvaluatorState struct {
 }
 
 // aggregateCoverageConsequence is engine-private consequence state only.
-// Component 6's validated fence fact is the only production path that may
-// populate it.
+// Validated hydration and ordinary-live fence facts are the only production
+// paths that may populate it.
 type uncertaintyOrigin uint8
 
 const (
@@ -312,8 +312,9 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 			mark, hasMark = latestMarkBefore(state, at)
 		}
 		coverage, hasCoverageConsequence := e.state.aggregateEvaluator.coverage[index]
-		_, hasInvalidEvidence := e.state.aggregateEvaluator.invalidMarks[index]
-		if coverage == coverageNoPrintThroughT && (hasMark || hasInvalidEvidence) {
+		invalid, hasInvalidEvidence := e.state.aggregateEvaluator.invalidMarks[index]
+		invalidApplicableAtT := hasInvalidEvidence && invalid.windowStart.Before(at)
+		if coverage == coverageNoPrintThroughT && (hasMark || invalidApplicableAtT) {
 			result.invalidSupport = true
 		}
 

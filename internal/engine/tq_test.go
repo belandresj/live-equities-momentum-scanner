@@ -50,7 +50,7 @@ func TestPC9TAQ(t *testing.T) {
 	e.state.committedT = immutableTime(now)
 	index := e.state.binding.index["AAA"]
 	installEvaluatorMarkOnSymbol(&e.state.binding.symbols[index], now, 12, qualificationProvisional)
-	installExactCoverage(e.state.binding.symbols[index].aggregates, e.state.binding, e.state.binding.sessionStart, now)
+	installExactCoverage(e.state.binding.symbols[index].aggregates, e.state.binding, e.state.binding.sessionStart, now, nil)
 	e.mu.Unlock()
 
 	applyTQTimer(t, e)

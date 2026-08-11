@@ -147,6 +147,9 @@ func (e *Engine) applyLiveCoverageFenceLocked(node *queueNode) (DispositionCode,
 	if e.state.hydration.supportedThrough != nil && target.Before(*e.state.hydration.supportedThrough) {
 		return DispositionLiveCoverageFenceRejected, ReasonLiveCoverageFence
 	}
+	if e.state.hydration.supportedThrough != nil && target.After(*e.state.hydration.supportedThrough) {
+		e.extendOrdinaryLiveCoverageLocked(*e.state.hydration.supportedThrough, target)
+	}
 	e.state.hydration.supportedThrough = immutableTime(target)
 	e.state.hydration.fenceReconciled = true
 	e.state.hydration.fenceEpoch = e.state.liveEpoch
@@ -154,6 +157,43 @@ func (e *Engine) applyLiveCoverageFenceLocked(node *queueNode) (DispositionCode,
 	e.state.hydration.fenceMarkerOrdinal = input.markerOrdinal
 	e.state.hydration.revision++
 	return DispositionLiveCoverageFenceApplied, ReasonNone
+}
+
+// extendOrdinaryLiveCoverageLocked installs the per-symbol consequence of one
+// accepted wildcard-stream fence into the existing canonical coverage
+// bitmaps. A pre-existing unresolved interval keeps its closed origin; only a
+// newly discovered inability to establish exact coverage for the fenced
+// interval is labeled a post-bootstrap gap.
+func (e *Engine) extendOrdinaryLiveCoverageLocked(start, end time.Time) {
+	if e.state.aggregateEvaluator.coverage == nil {
+		e.state.aggregateEvaluator.coverage = make(map[int]aggregateCoverageConsequence, len(e.state.binding.symbols))
+	}
+	for index := range e.state.binding.symbols {
+		state := ensureAggregateState(&e.state.binding.symbols[index])
+		invalid, hasInvalid := e.state.aggregateEvaluator.invalidMarks[index]
+		var invalidEvidence *invalidMarkEvidence
+		if hasInvalid {
+			invalidEvidence = &invalid
+		}
+		installed := installExactCoverage(state, e.state.binding, start, end, invalidEvidence)
+		invalidInInterval := hasInvalid && !invalid.windowStart.Before(start) && invalid.windowStart.Before(end)
+		coverageExactThroughT := installed && !invalidInInterval && exactAggregateCoverage(state, e.state.binding, e.state.binding.sessionStart, end)
+		prior, exists := e.state.aggregateEvaluator.coverage[index]
+		if exists && prior.outcome == coverageOutcomeUnknown && prior.origin != uncertaintyNone {
+			continue
+		}
+		if !coverageExactThroughT {
+			if !exists || prior.outcome != coverageOutcomeUnknown || prior.origin == uncertaintyNone {
+				e.state.aggregateEvaluator.coverage[index] = coverageUnknownPostBootstrap
+			}
+			continue
+		}
+		if _, hasMark := latestMarkBefore(state, end); hasMark {
+			delete(e.state.aggregateEvaluator.coverage, index)
+		} else {
+			e.state.aggregateEvaluator.coverage[index] = coverageNoPrintThroughT
+		}
+	}
 }
 
 func (e *Engine) finishLiveCoverageCommand(node *queueNode, result LiveCoverageFenceDisposition) {

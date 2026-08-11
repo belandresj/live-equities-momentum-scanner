@@ -50,6 +50,7 @@ records are never tie-breakers.
 | [`architecture/data-time-and-event-contract.md`](architecture/data-time-and-event-contract.md) | Approved architecture; session, identity, clocks, causal order, merge/reconciliation, watermark, replay, and checkpoint cutoff. |
 | [`architecture/scanner-state-engine-lifecycle.md`](architecture/scanner-state-engine-lifecycle.md) | Approved architecture; legal live/replay lifecycle, progress/exit, publication, recovery, suppression, session end, and shutdown. |
 | [`glossary.md`](glossary.md) | Approved vocabulary; controlling product/architecture text wins when more specific. |
+| [`live-coverage-and-partial-ranking-correction.md`](live-coverage-and-partial-ranking-correction.md) | Owner-directed 2026-08-11 product correction and executable two-slice plan: exact ordinary live coverage followed by symbol-local uncertainty containment and current partial ranking. |
 
 Phase 1 settles the eligible universe, prior-close basis, qualification, exact
 Day-% ranking/top 20, displayed V1 fields, one engine/state/watermark/evaluator,

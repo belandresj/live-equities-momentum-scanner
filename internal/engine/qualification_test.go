@@ -62,7 +62,7 @@ func TestC3QUAL01ExactGateBoundaryMatrix(t *testing.T) {
 			}
 			state.tail[window.Unix()] = qualificationRecord("AAA", window, 10, 500, 10, 25, provenance)
 		}
-		installExactCoverage(state, bindingState, start, proofEnd)
+		installExactCoverage(state, bindingState, start, proofEnd, nil)
 		return state
 	}
 	for _, test := range []struct {
@@ -252,7 +252,7 @@ func TestSparseQualificationFastForward(t *testing.T) {
 	at := start.Add(8 * time.Hour)
 	state := &symbolAggregateState{tail: make(map[int64]*canonicalAggregate)}
 	state.tail[start.Unix()] = qualificationRecord("AAA", start, 10, 100, 10, 10, ATSRESTFloorVolumeOverTrades)
-	if !installExactCoverage(state, installed, start, at) {
+	if !installExactCoverage(state, installed, start, at, nil) {
 		t.Fatal("sparse coverage installation")
 	}
 	evaluateQualificationThrough(state, installed, at, at)
@@ -283,7 +283,7 @@ func TestQualificationProofWindowMatchesCanonicalOracle(t *testing.T) {
 		}
 		state.tail[at.Unix()] = qualificationRecord("AAA", at, 9+float64(second)/100, 100+float64(second%13), 9.5, ats, provenance)
 	}
-	if !installExactCoverage(state, installed, start, start.Add(180*time.Second)) {
+	if !installExactCoverage(state, installed, start, start.Add(180*time.Second), nil) {
 		t.Fatal("install rolling-window coverage")
 	}
 	ensureHistoricalConflict(state).set(sessionSlot(installed, start.Add(80*time.Second)))
@@ -347,7 +347,7 @@ func TestFreshHydrationQualificationMatchesCanonicalOracle(t *testing.T) {
 			if got := len(incremental.qualification.finalizedGateBars); got > int((correctionHorizon+qualificationWindow)/time.Second) {
 				t.Fatalf("progressive retained gate bars=%d", got)
 			}
-			if test.trusted && !installExactCoverage(incremental, binding, start, end) {
+			if test.trusted && !installExactCoverage(incremental, binding, start, end, nil) {
 				t.Fatal("install incremental coverage")
 			}
 			completeFreshHydrationQualification(incremental, binding, end, end, test.trusted)
@@ -361,7 +361,7 @@ func TestFreshHydrationQualificationMatchesCanonicalOracle(t *testing.T) {
 			}
 
 			oracle := newState()
-			if !installExactCoverage(oracle, binding, start, end) {
+			if !installExactCoverage(oracle, binding, start, end, nil) {
 				t.Fatal("install oracle coverage")
 			}
 			evaluateQualificationThrough(oracle, binding, end, end)
@@ -381,7 +381,7 @@ func TestFreshHydrationQualificationMatchesCanonicalOracle(t *testing.T) {
 	t.Run("successful empty is fully accounted", func(t *testing.T) {
 		end := start.Add(8 * time.Hour)
 		state := &symbolAggregateState{tail: make(map[int64]*canonicalAggregate)}
-		if !installExactCoverage(state, binding, start, end) {
+		if !installExactCoverage(state, binding, start, end, nil) {
 			t.Fatal("install empty coverage")
 		}
 		completeFreshHydrationQualification(state, binding, end, end, true)

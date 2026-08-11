@@ -655,7 +655,7 @@ func TestExactAggregateCoverageWordRanges(t *testing.T) {
 	state.tail[tailAt.Unix()] = qualificationRecord("AAA", tailAt, 10, 100, 10, 10, ATSLiveProviderAverage)
 	ensureHistoricalConflict(state).set(sessionSlot(installed, conflictAt))
 
-	if !installExactCoverage(state, installed, start, end) {
+	if !installExactCoverage(state, installed, start, end, nil) {
 		t.Fatal("non-word-aligned coverage installation failed")
 	}
 	if state.provenAbsent.has(sessionSlot(installed, presentAt)) || state.provenAbsent.has(sessionSlot(installed, tailAt)) ||
@@ -670,7 +670,7 @@ func TestExactAggregateCoverageWordRanges(t *testing.T) {
 	if exactAggregateCoverage(state, installed, start, end) {
 		t.Fatal("cleared conflict became covered without new evidence")
 	}
-	if !installExactCoverage(state, installed, start, end) || !exactAggregateCoverage(state, installed, start, end) {
+	if !installExactCoverage(state, installed, start, end, nil) || !exactAggregateCoverage(state, installed, start, end) {
 		t.Fatal("word-range absence plus canonical presence did not establish exact coverage")
 	}
 }

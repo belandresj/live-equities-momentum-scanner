@@ -934,7 +934,12 @@ func (e *Engine) applyHydrationTerminalLocked(node *queueNode) (DispositionCode,
 			return DispositionHydrationIntegrity, ReasonHydrationToken
 		}
 		state := ensureAggregateState(&e.state.binding.symbols[index])
-		if !installExactCoverage(state, e.state.binding, input.token.start, input.token.end) {
+		invalid, hasInvalid := e.state.aggregateEvaluator.invalidMarks[index]
+		var invalidEvidence *invalidMarkEvidence
+		if hasInvalid {
+			invalidEvidence = &invalid
+		}
+		if !installExactCoverage(state, e.state.binding, input.token.start, input.token.end, invalidEvidence) {
 			return DispositionHydrationIntegrity, ReasonHydrationInterval
 		}
 		// Once this symbol's exact terminal is accepted, its historical prefix no
@@ -1009,7 +1014,12 @@ func (e *Engine) applyAggregateIngressFenceLocked(node *queueNode) (DispositionC
 			coverage = hydrationCoverageUnknown
 		}
 		state := ensureAggregateState(symbol)
-		if coverage != hydrationCoverageCandidateComplete || !installExactCoverage(state, e.state.binding, generation.start, target) ||
+		invalid, hasInvalid := e.state.aggregateEvaluator.invalidMarks[index]
+		var invalidEvidence *invalidMarkEvidence
+		if hasInvalid {
+			invalidEvidence = &invalid
+		}
+		if coverage != hydrationCoverageCandidateComplete || !installExactCoverage(state, e.state.binding, generation.start, target, invalidEvidence) ||
 			!exactAggregateCoverage(state, e.state.binding, e.state.binding.sessionStart, target) {
 			if generation.purpose == HydrationGapRecovery {
 				e.state.aggregateEvaluator.coverage[index] = coverageUnknownPostBootstrap

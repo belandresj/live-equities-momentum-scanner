@@ -322,8 +322,22 @@ func (e *Engine) updateInvalidMarkEvidenceLocked(input frozenAggregateInput, now
 		if e.state.aggregateEvaluator.invalidMarks == nil {
 			e.state.aggregateEvaluator.invalidMarks = make(map[int]invalidMarkEvidence)
 		}
+		invalid := invalidMarkEvidence{windowStart: input.WindowStart}
+		state := e.state.binding.symbols[index].aggregates
+		if state != nil && state.provenAbsent != nil {
+			state.provenAbsent.clear(sessionSlot(e.state.binding, invalid.windowStart))
+		}
+		if e.state.hydration.supportedThrough != nil && invalid.windowStart.Before(*e.state.hydration.supportedThrough) {
+			if e.state.aggregateEvaluator.coverage == nil {
+				e.state.aggregateEvaluator.coverage = make(map[int]aggregateCoverageConsequence)
+			}
+			priorCoverage, exists := e.state.aggregateEvaluator.coverage[index]
+			if !exists || priorCoverage.outcome != coverageOutcomeUnknown || priorCoverage.origin == uncertaintyNone {
+				e.state.aggregateEvaluator.coverage[index] = coverageUnknownPostBootstrap
+			}
+		}
 		if prior, exists := e.state.aggregateEvaluator.invalidMarks[index]; !exists || input.WindowStart.After(prior.windowStart) {
-			e.state.aggregateEvaluator.invalidMarks[index] = invalidMarkEvidence{windowStart: input.WindowStart}
+			e.state.aggregateEvaluator.invalidMarks[index] = invalid
 		}
 		return
 	}
@@ -861,10 +875,10 @@ func aggregatePresentAt(state *symbolAggregateState, start int64) bool {
 	return false
 }
 
-// installExactCoverage applies only the bounded consequence of a Component 6
-// binding/generation/fence-validated coverage fact. It creates absence bits,
+// installExactCoverage applies only the bounded consequence of an engine-
+// validated hydration or ordinary-live fence fact. It creates absence bits,
 // never synthetic aggregate records or marks.
-func installExactCoverage(state *symbolAggregateState, binding *installedBinding, start, end time.Time) bool {
+func installExactCoverage(state *symbolAggregateState, binding *installedBinding, start, end time.Time, invalid *invalidMarkEvidence) bool {
 	if state == nil || binding == nil || start != start.UTC() || end != end.UTC() ||
 		start.Nanosecond() != 0 || end.Nanosecond() != 0 || start.Before(binding.sessionStart) ||
 		end.After(binding.sessionEnd) || start.After(end) {
@@ -882,6 +896,12 @@ func installExactCoverage(state *symbolAggregateState, binding *installedBinding
 		}
 		if state.historicalConflict != nil {
 			mask &^= state.historicalConflict[word]
+		}
+		if invalid != nil && !invalid.windowStart.Before(start) && invalid.windowStart.Before(end) {
+			invalidSlot := sessionSlot(binding, invalid.windowStart)
+			if invalidSlot/64 == word {
+				mask &^= uint64(1) << uint(invalidSlot%64)
+			}
 		}
 		absent[word] |= mask
 	}
