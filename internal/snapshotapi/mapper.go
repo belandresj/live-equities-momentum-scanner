@@ -2,7 +2,6 @@ package snapshotapi
 
 import (
 	"encoding/hex"
-	"errors"
 	"math"
 	"strconv"
 	"strings"
@@ -17,7 +16,7 @@ const maximumExactJSONInteger = uint64(1<<53 - 1)
 func Map(capture operations.SnapshotCapture) (Snapshot, error) {
 	view, ok := operations.InspectSnapshotCapture(capture)
 	if !ok {
-		return Snapshot{}, errors.New("snapshot capture unavailable")
+		return Snapshot{}, rejectMapping("capture_seal")
 	}
 	return mapCaptureView(view)
 }
@@ -35,7 +34,7 @@ func mapCaptureView(capture operations.SnapshotCaptureView) (Snapshot, error) {
 		publication.LastEngineSequence != operational.LastEngineSequence || !sameOptionalTime(publication.Watermark, operational.Watermark) ||
 		len(publication.AggregateEvaluation.Rows) > 20 ||
 		capture.Metrics.LiveQueue.CapacityFrames < 0 || capture.Metrics.QueueCurrentBytes < 0 || capture.Metrics.QueueHighBytes < 0 || capture.Metrics.Goroutines < 0 {
-		return Snapshot{}, errors.New("invalid snapshot capture")
+		return Snapshot{}, rejectMapping("capture_coherence")
 	}
 
 	result := Snapshot{
@@ -59,7 +58,7 @@ func mapCaptureView(capture operations.SnapshotCaptureView) (Snapshot, error) {
 	if publication.Watermark != nil {
 		lag := capture.Status.WatermarkLag.Milliseconds()
 		if lag < 0 {
-			return Snapshot{}, errors.New("negative watermark lag")
+			return Snapshot{}, rejectMapping("watermark_negative_lag")
 		}
 		result.Status.WatermarkLagMS = &lag
 	}
@@ -67,7 +66,7 @@ func mapCaptureView(capture operations.SnapshotCaptureView) (Snapshot, error) {
 	tqRows := make(map[string]engine.TQSymbolView, len(capture.Engine.TQ.Rows))
 	for _, row := range capture.Engine.TQ.Rows {
 		if row.Symbol == "" {
-			return Snapshot{}, errors.New("invalid T/Q row")
+			return Snapshot{}, rejectMapping("tq_source_row")
 		}
 		tqRows[row.Symbol] = row
 	}
@@ -214,7 +213,7 @@ func mapOperations(metrics operations.Metrics, operational engine.OperationalVie
 
 func mapRow(row engine.ReplayRankingRowView, tq engine.TQSymbolView) (Row, error) {
 	if row.Rank == 0 || row.Rank > 20 || row.Symbol == "" || !finite(row.Last) || !finite(row.DayPercent) || row.MarkAge < 0 {
-		return Row{}, errors.New("invalid ranking row")
+		return Row{}, rejectMapping("ranking_source_row")
 	}
 	result := Row{Rank: uint64(row.Rank), Symbol: row.Symbol, LastUSD: row.Last, DayChangeRatio: percentagePointsToRatio(row.DayPercent),
 		MarkAgeMS: durationMilliseconds(row.MarkAge), From4AMChange: mapRatio(row.From4AMPercent), HODDrawdown: mapRatio(row.HODDrawdown),
@@ -262,39 +261,85 @@ func mapRate(status engine.TQFieldStatus, reason string, value float64) RateMeas
 
 func validateSnapshot(value Snapshot) error {
 	p, w, hr, tq, commands, checkpoint := value.Accounting.Population, value.Recovery.Work, value.Recovery.Rows, value.TQ.Facts, value.TQ.Commands, value.Checkpoint
-	if value.SchemaVersion != SchemaVersion || !validTimestamp(value.Sample.SampledAt) || !validTimestamp(value.Publication.GeneratedAt) ||
-		!validTimestamp(value.Status.CausalTarget) || !validTradingDate(value.Publication.TradingDate) ||
-		!validPositiveDecimal(value.Sample.ID) || !validPositiveDecimal(value.Publication.ID) || !validDecimal(value.Publication.LastEngineSequence) ||
+	if value.SchemaVersion != SchemaVersion {
+		return rejectMapping("schema_version")
+	}
+	if !validTimestamp(value.Sample.SampledAt) || !validTimestamp(value.Publication.GeneratedAt) || !validTimestamp(value.Status.CausalTarget) || !validTradingDate(value.Publication.TradingDate) {
+		return rejectMapping("required_time")
+	}
+	if !validPositiveDecimal(value.Sample.ID) || !validPositiveDecimal(value.Publication.ID) || !validDecimal(value.Publication.LastEngineSequence) ||
 		!validDecimal(value.Publication.ConnectionEpoch) || !validDecimal(value.Recovery.Generation) || !validDecimal(value.TQ.PressureTransitions) ||
 		!validDecimal(value.TQ.PressureFenced) || !validDecimal(value.TQ.Commands.ResultFenced) || !validDecimal(value.Operations.Deliveries) ||
 		!validDecimal(value.Operations.ConsumerDeferred) || !validDecimal(value.Operations.HeapAllocBytes) || !validDecimal(value.Operations.HeapInUseBytes) ||
-		!validDecimal(value.Operations.ConnectionRecoveryAttempts) ||
-		!oneOf(value.Publication.RunMode, "live", "replay") ||
-		!oneOf(value.Publication.Lifecycle, "initializing", "awaiting_session", "awaiting_aggregate_ack", "hydrating", "live", "recovering", "replaying", "suppressed", "ended") ||
-		!oneOf(value.Publication.LifecycleReason, "", "binding_before_session", "binding_in_session", "binding_after_session", "session_start_without_aggregate_ack", "session_end", "controlled_stop", "sequence_exhaustion", "clock_regression", "canonical_integrity", "publication_integrity", "accounting_integrity", "closed", "replay_start", "replay_end", "replay_requested_end", "replay_failure", "aggregate_acknowledged", "aggregate_acknowledged_at_session_start", "aggregate_epoch_lost", "ingress_integrity", "hydration_complete", "recovery_exhausted") ||
-		!oneOf(value.Publication.Suppression, "", "same_binding_recovery_allowed", "clean_reinitialization_required", "restart_required", "terminal_replay_failure") ||
-		!oneOf(value.Status.ReadinessReason, "", "runtime_unavailable", "binding_mismatch", "not_live_mode", "lifecycle_not_ready", "suppressed", "aggregate_unacknowledged", "fence_pending", "ranking_noncurrent", "watermark_missing", "watermark_stale", "accounting_invalid") ||
-		!oneOf(value.Ranking.Mode, "unavailable", "qualified_current", "degraded_bootstrap", "stale", "suppressed") ||
-		!oneOf(value.Ranking.Reason, "", "no_committed_watermark", "no_trusted_marks", "incomplete_population", "qualification_incomplete", "global_suppression", "replay_warming") ||
-		!oneOf(value.Recovery.Purpose, "", "fresh_bootstrap", "checkpoint_catchup", "gap_recovery") ||
-		!oneOf(value.TQ.PressureMode, "normal", "taq_degraded", "aggregate_only") || value.Status.TQPressureMode != value.TQ.PressureMode || value.Status.TQShed != value.TQ.Shed ||
-		value.TQ.AggregateOnly != (value.TQ.PressureMode == "aggregate_only") || value.TQ.Shed != (value.TQ.PressureMode != "normal") ||
-		!validOptionalTimestamp(value.Publication.CommittedT) || !validOptionalTimestamp(value.Recovery.Start) || !validOptionalTimestamp(value.Recovery.End) ||
-		!validOptionalTimestamp(value.Recovery.SupportedThrough) || !validOptionalTimestamp(value.Publication.HydrationFence.SupportedThrough) ||
-		(value.Publication.CommittedT == nil) != (value.Status.WatermarkLagMS == nil) ||
-		value.Status.WatermarkLagMS != nil && (*value.Status.WatermarkLagMS < 0 || uint64(*value.Status.WatermarkLagMS) > maximumExactJSONInteger) ||
-		!validPosition(value.Publication.AggregateAcknowledged, value.Publication.AggregateAckPosition) ||
-		value.Publication.AggregateAcknowledged && value.Publication.AggregateAckPosition.ConnectionEpoch != value.Publication.ConnectionEpoch ||
-		!validHydrationFence(value.Publication.HydrationFence) ||
-		!sumUint64Equals(p.UniverseTotal, p.ValidPriorClose, p.InvalidOrMissingPriorClose) ||
-		!sumUint64Equals(p.ValidPriorClose, p.TrustedRankableMark, p.TrustedBelowPriceMark, p.NoPrintThroughT, p.InvalidMark, p.UnknownDueFailureOrFence) ||
-		!sumDecimalEquals(w.Planned, w.Open, w.CompletedValue, w.CompletedEmpty, w.Failed, w.Canceled, w.Fenced) ||
-		!sumDecimalEquals(hr.Consumed, hr.Inserted, hr.Duplicate, hr.ConflictOrWithdrawal, hr.Rejected, hr.Fenced, hr.Integrity) ||
-		!sumDecimalEquals(tq.Consumed, tq.Applied, tq.Duplicate, tq.Rejected, tq.Fenced, tq.PressureShed, tq.Integrity) ||
-		!sumDecimalEquals(commands.Issued, commands.Pending, commands.Acknowledged, commands.Failed, commands.Fenced) ||
-		!sumDecimalEquals(checkpoint.Submitted, checkpoint.InProgress, checkpoint.Pending, checkpoint.Completed, checkpoint.Failed, checkpoint.Canceled, checkpoint.Superseded) ||
-		!validReplaySnapshot(value) {
-		return errors.New("snapshot accounting identity failed")
+		!validDecimal(value.Operations.ConnectionRecoveryAttempts) {
+		return rejectMapping("decimal_encoding")
+	}
+	if !oneOf(value.Publication.RunMode, "live", "replay") {
+		return rejectMapping("run_mode")
+	}
+	if !oneOf(value.Publication.Lifecycle, "initializing", "awaiting_session", "awaiting_aggregate_ack", "hydrating", "live", "recovering", "replaying", "suppressed", "ended") {
+		return rejectMapping("lifecycle")
+	}
+	if !oneOf(value.Publication.LifecycleReason, "", "binding_before_session", "binding_in_session", "binding_after_session", "session_start_without_aggregate_ack", "session_end", "controlled_stop", "sequence_exhaustion", "clock_regression", "canonical_integrity", "publication_integrity", "accounting_integrity", "closed", "replay_start", "replay_end", "replay_requested_end", "replay_failure", "aggregate_acknowledged", "aggregate_acknowledged_at_session_start", "aggregate_epoch_lost", "ingress_integrity", "hydration_complete", "recovery_exhausted") {
+		return rejectMapping("lifecycle_reason")
+	}
+	if !oneOf(value.Publication.Suppression, "", "same_binding_recovery_allowed", "clean_reinitialization_required", "restart_required", "terminal_replay_failure") {
+		return rejectMapping("suppression")
+	}
+	if !oneOf(value.Status.ReadinessReason, "", "runtime_unavailable", "binding_mismatch", "not_live_mode", "lifecycle_not_ready", "suppressed", "aggregate_unacknowledged", "fence_pending", "ranking_noncurrent", "watermark_missing", "watermark_stale", "accounting_invalid") {
+		return rejectMapping("readiness_reason")
+	}
+	if !oneOf(value.Ranking.Mode, "unavailable", "qualified_current", "degraded_bootstrap", "stale", "suppressed") {
+		return rejectMapping("ranking_mode")
+	}
+	if !oneOf(value.Ranking.Reason, "", "no_committed_watermark", "no_trusted_marks", "incomplete_population", "qualification_incomplete", "global_suppression", "replay_warming") {
+		return rejectMapping("ranking_reason")
+	}
+	if !oneOf(value.Recovery.Purpose, "", "fresh_bootstrap", "checkpoint_catchup", "gap_recovery") {
+		return rejectMapping("recovery_purpose")
+	}
+	if !oneOf(value.TQ.PressureMode, "normal", "taq_degraded", "aggregate_only") || value.Status.TQPressureMode != value.TQ.PressureMode || value.Status.TQShed != value.TQ.Shed ||
+		value.TQ.AggregateOnly != (value.TQ.PressureMode == "aggregate_only") || value.TQ.Shed != (value.TQ.PressureMode != "normal") {
+		return rejectMapping("tq_pressure_consistency")
+	}
+	if !validOptionalTimestamp(value.Publication.CommittedT) || !validOptionalTimestamp(value.Recovery.Start) || !validOptionalTimestamp(value.Recovery.End) ||
+		!validOptionalTimestamp(value.Recovery.SupportedThrough) || !validOptionalTimestamp(value.Publication.HydrationFence.SupportedThrough) {
+		return rejectMapping("optional_time")
+	}
+	if (value.Publication.CommittedT == nil) != (value.Status.WatermarkLagMS == nil) ||
+		value.Status.WatermarkLagMS != nil && (*value.Status.WatermarkLagMS < 0 || uint64(*value.Status.WatermarkLagMS) > maximumExactJSONInteger) {
+		return rejectMapping("watermark_lag_consistency")
+	}
+	if !validPosition(value.Publication.AggregateAcknowledged, value.Publication.AggregateAckPosition) ||
+		value.Publication.AggregateAcknowledged && value.Publication.AggregateAckPosition.ConnectionEpoch != value.Publication.ConnectionEpoch {
+		return rejectMapping("aggregate_ack_position")
+	}
+	if !validHydrationFence(value.Publication.HydrationFence) {
+		return rejectMapping("hydration_fence")
+	}
+	if !sumUint64Equals(p.UniverseTotal, p.ValidPriorClose, p.InvalidOrMissingPriorClose) {
+		return rejectMapping("population_prior_close_identity")
+	}
+	if !sumUint64Equals(p.ValidPriorClose, p.TrustedRankableMark, p.TrustedBelowPriceMark, p.NoPrintThroughT, p.InvalidMark, p.UnknownDueFailureOrFence) {
+		return rejectMapping("population_mark_identity")
+	}
+	if !sumDecimalEquals(w.Planned, w.Open, w.CompletedValue, w.CompletedEmpty, w.Failed, w.Canceled, w.Fenced) {
+		return rejectMapping("recovery_work_identity")
+	}
+	if !sumDecimalEquals(hr.Consumed, hr.Inserted, hr.Duplicate, hr.ConflictOrWithdrawal, hr.Rejected, hr.Fenced, hr.Integrity) {
+		return rejectMapping("recovery_row_identity")
+	}
+	if !sumDecimalEquals(tq.Consumed, tq.Applied, tq.Duplicate, tq.Rejected, tq.Fenced, tq.PressureShed, tq.Integrity) {
+		return rejectMapping("tq_fact_identity")
+	}
+	if !sumDecimalEquals(commands.Issued, commands.Pending, commands.Acknowledged, commands.Failed, commands.Fenced) {
+		return rejectMapping("tq_command_identity")
+	}
+	if !sumDecimalEquals(checkpoint.Submitted, checkpoint.InProgress, checkpoint.Pending, checkpoint.Completed, checkpoint.Failed, checkpoint.Canceled, checkpoint.Superseded) {
+		return rejectMapping("checkpoint_identity")
+	}
+	if !validReplaySnapshot(value) {
+		return rejectMapping("replay_consistency")
 	}
 	for _, count := range []uint64{p.UniverseTotal, p.ValidPriorClose, p.InvalidOrMissingPriorClose, p.TrustedRankableMark, p.TrustedBelowPriceMark,
 		p.NoPrintThroughT, p.InvalidMark, p.UnknownDueFailureOrFence, p.CoveredPopulation, p.UnresolvedPopulation, value.Ranking.TotalPassers,
@@ -306,29 +351,29 @@ func validateSnapshot(value Snapshot) error {
 		value.Operations.QueueCurrentFrames, value.Operations.QueueHighFrames, value.Operations.QueueCurrentBytes, value.Operations.QueueHighBytes,
 		value.Operations.MeanProcessingDelayMS, value.Operations.MaxProcessingDelayMS, value.Operations.MaxProcessingDelayOneSecondMS, value.Operations.Goroutines} {
 		if count > maximumExactJSONInteger {
-			return errors.New("snapshot integer exceeds exact JSON bound")
+			return rejectMapping("exact_json_integer_bound")
 		}
 	}
 	if len(value.Rows) > 20 || len(value.TQ.DesiredSymbols) > 20 {
-		return errors.New("snapshot row bound exceeded")
+		return rejectMapping("product_row_bound")
 	}
 	seenRows := make(map[string]struct{}, len(value.Rows))
 	for index, row := range value.Rows {
 		if row.Rank != uint64(index+1) || row.Symbol == "" || !finite(row.LastUSD) || !finite(row.DayChangeRatio) || !measurementsValid(row) {
-			return errors.New("invalid snapshot row")
+			return rejectMapping("product_row")
 		}
 		if _, exists := seenRows[row.Symbol]; exists {
-			return errors.New("duplicate snapshot row")
+			return rejectMapping("duplicate_product_row")
 		}
 		seenRows[row.Symbol] = struct{}{}
 	}
 	seenDesired := make(map[string]struct{}, len(value.TQ.DesiredSymbols))
 	for _, symbol := range value.TQ.DesiredSymbols {
 		if symbol == "" {
-			return errors.New("empty desired symbol")
+			return rejectMapping("empty_tq_desired_symbol")
 		}
 		if _, exists := seenDesired[symbol]; exists {
-			return errors.New("duplicate desired symbol")
+			return rejectMapping("duplicate_tq_desired_symbol")
 		}
 		seenDesired[symbol] = struct{}{}
 	}

@@ -153,6 +153,8 @@ func run(ctx context.Context, arguments []string) error {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	encoder := json.NewEncoder(os.Stdout)
+	diagnosticEncoder := json.NewEncoder(os.Stderr)
+	mappingFailures := api.MappingFailures()
 	for {
 		select {
 		case <-runCtx.Done():
@@ -173,6 +175,13 @@ func run(ctx context.Context, arguments []string) error {
 				return errors.New("snapshot API stopped unexpectedly")
 			}
 			return fmt.Errorf("snapshot API: %w", err)
+		case failure := <-mappingFailures:
+			if err := encodeSnapshotMappingFailure(diagnosticEncoder, failure); err != nil {
+				if stopErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, false); stopErr != nil {
+					return stopErr
+				}
+				return errors.New("encode snapshot mapper diagnostic")
+			}
 		case <-ticker.C:
 			if err := encoder.Encode(struct {
 				Status  operations.Status
@@ -185,6 +194,12 @@ func run(ctx context.Context, arguments []string) error {
 			}
 		}
 	}
+}
+
+func encodeSnapshotMappingFailure(encoder *json.Encoder, failure snapshotapi.MappingFailure) error {
+	return encoder.Encode(struct {
+		SnapshotMappingFailure snapshotapi.MappingFailure `json:"snapshot_mapping_failure"`
+	}{SnapshotMappingFailure: failure})
 }
 
 func liveHydrationBounds(workers, population int) (maximumNormalizedRecords, maximumResidentRecords int64, err error) {

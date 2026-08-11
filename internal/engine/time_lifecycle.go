@@ -262,9 +262,14 @@ func (e *Engine) transitionLifecycleLocked(event lifecycleEvent, node *queueNode
 		return false
 	}
 
-	if next == previous && !(next == lifecycleSuppressed &&
+	// A reasonless legal self-transition (most importantly a quiet timer while
+	// suppressed) is progress accounting, not new lifecycle evidence. Preserve
+	// the fixed cause that established the current state. A later explicit
+	// suppression event may still replace the record when its reason or
+	// disposition genuinely changes.
+	if next == previous && (reason == "" || !(next == lifecycleSuppressed &&
 		(e.state.latestTransition == nil || e.state.latestTransition.Reason != reason ||
-			e.state.latestTransition.SuppressionDisposition != e.state.suppressionDisposition)) {
+			e.state.latestTransition.SuppressionDisposition != e.state.suppressionDisposition))) {
 		return true
 	}
 	record := &transitionRecord{

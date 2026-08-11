@@ -17,9 +17,10 @@ type ServerConfig struct {
 }
 
 type Server struct {
-	http     *http.Server
-	listener net.Listener
-	done     chan error
+	http        *http.Server
+	listener    net.Listener
+	done        chan error
+	diagnostics *MappingDiagnostics
 }
 
 func Listen(source CaptureSource, config ServerConfig) (*Server, error) {
@@ -30,7 +31,8 @@ func Listen(source CaptureSource, config ServerConfig) (*Server, error) {
 	if !loopbackAddress(address) {
 		return nil, errors.New("snapshot server requires an explicit loopback address")
 	}
-	handler, err := NewHandler(source, HandlerConfig{AllowedOrigins: config.AllowedOrigins})
+	diagnostics := NewMappingDiagnostics()
+	handler, err := NewHandler(source, HandlerConfig{AllowedOrigins: config.AllowedOrigins, Diagnostics: diagnostics})
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +40,7 @@ func Listen(source CaptureSource, config ServerConfig) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	server := &Server{listener: listener, done: make(chan error, 1)}
+	server := &Server{listener: listener, done: make(chan error, 1), diagnostics: diagnostics}
 	server.http = &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
 	go func() {
 		err := server.http.Serve(listener)
@@ -49,6 +51,20 @@ func Listen(source CaptureSource, config ServerConfig) (*Server, error) {
 		close(server.done)
 	}()
 	return server, nil
+}
+
+func (server *Server) MappingFailures() <-chan MappingFailure {
+	if server == nil || server.diagnostics == nil {
+		return nil
+	}
+	return server.diagnostics.Updates()
+}
+
+func (server *Server) LatestMappingFailure() (MappingFailure, bool) {
+	if server == nil {
+		return MappingFailure{}, false
+	}
+	return server.diagnostics.Latest()
 }
 
 func (server *Server) Address() string {

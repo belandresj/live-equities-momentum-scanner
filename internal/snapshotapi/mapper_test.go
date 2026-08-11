@@ -351,6 +351,28 @@ func TestPC10SchemaPublicMapperRequiresSealedCapture(t *testing.T) {
 	}
 }
 
+func TestMappingDiagnosticsIdentifyInvariantAndRemainBounded(t *testing.T) {
+	invalid := schemaCapture()
+	invalid.Engine.Publication.AggregateEvaluation.Population.ValidPriorClose++
+	_, err := mapCaptureView(invalid)
+	if err == nil || mappingInvariant(err) != "population_prior_close_identity" {
+		t.Fatalf("mapper diagnostic=%v invariant=%q", err, mappingInvariant(err))
+	}
+
+	diagnostics := NewMappingDiagnostics()
+	for sequence := uint64(1); sequence <= 100; sequence++ {
+		diagnostics.record(MappingFailure{Invariant: mappingInvariant(err), Route: "/api/v1/snapshot", PublicationID: "8",
+			LastEngineSequence: decimal(sequence), Lifecycle: "live", RankingMode: "degraded_bootstrap"})
+	}
+	latest, ok := diagnostics.Latest()
+	if !ok || latest.LastEngineSequence != "100" || len(diagnostics.updates) != 1 {
+		t.Fatalf("bounded diagnostic latest=%+v ok=%t pending=%d", latest, ok, len(diagnostics.updates))
+	}
+	if pending := <-diagnostics.Updates(); pending.LastEngineSequence != "100" || pending.Invariant != "population_prior_close_identity" {
+		t.Fatalf("bounded diagnostic notification=%+v", pending)
+	}
+}
+
 func schemaCapture() operations.SnapshotCaptureView {
 	at := time.Date(2026, 8, 8, 16, 0, 0, 0, time.UTC)
 	target := at.Add(-4 * time.Second)
@@ -386,8 +408,11 @@ func schemaCapture() operations.SnapshotCaptureView {
 		Engine: engine.SnapshotView{Publication: publication, Operational: operational, TQ: tq}, Status: status, Metrics: metrics}
 }
 
-func snapshotBinding(t *testing.T) reference.Binding {
+func snapshotBinding(t *testing.T, requestedSymbols ...string) reference.Binding {
 	t.Helper()
+	if len(requestedSymbols) == 0 {
+		requestedSymbols = []string{"AAA"}
+	}
 	schedule, err := session.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -399,9 +424,17 @@ func snapshotBinding(t *testing.T) reference.Binding {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch {
 		case request.URL.Path == "/v3/reference/tickers":
-			_ = json.NewEncoder(w).Encode(map[string]any{"status": "OK", "count": 1, "results": []map[string]any{{"ticker": "AAA", "active": true, "market": "stocks", "locale": "us", "type": "CS"}}})
+			results := make([]map[string]any, len(requestedSymbols))
+			for index, symbol := range requestedSymbols {
+				results[index] = map[string]any{"ticker": symbol, "active": true, "market": "stocks", "locale": "us", "type": "CS"}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "OK", "count": len(results), "results": results})
 		case strings.HasPrefix(request.URL.Path, "/v2/aggs/grouped/locale/us/market/stocks/"):
-			_ = json.NewEncoder(w).Encode(map[string]any{"status": "OK", "adjusted": true, "resultsCount": 1, "results": []map[string]any{{"T": "AAA", "c": 10.0, "t": facts.PriorRegularClose.UnixMilli()}}})
+			results := make([]map[string]any, len(requestedSymbols))
+			for index, symbol := range requestedSymbols {
+				results[index] = map[string]any{"T": symbol, "c": 10.0, "t": facts.PriorRegularClose.UnixMilli()}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "OK", "adjusted": true, "resultsCount": len(results), "results": results})
 		default:
 			http.NotFound(w, request)
 		}

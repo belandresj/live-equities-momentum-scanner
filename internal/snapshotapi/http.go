@@ -20,11 +20,13 @@ type CaptureSource interface {
 
 type HandlerConfig struct {
 	AllowedOrigins []string
+	Diagnostics    *MappingDiagnostics
 }
 
 type handler struct {
-	source  CaptureSource
-	origins map[string]struct{}
+	source      CaptureSource
+	origins     map[string]struct{}
+	diagnostics *MappingDiagnostics
 }
 
 func NewHandler(source CaptureSource, config HandlerConfig) (http.Handler, error) {
@@ -41,7 +43,7 @@ func NewHandler(source CaptureSource, config HandlerConfig) (http.Handler, error
 		}
 		origins[origin] = struct{}{}
 	}
-	return &handler{source: source, origins: origins}, nil
+	return &handler{source: source, origins: origins, diagnostics: config.Diagnostics}, nil
 }
 
 func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -97,6 +99,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		response := readinessResponse{SchemaVersion: "scanner.readiness.v1", SampleID: decimal(view.SampleID), SampledAt: timestamp(view.SampledAt), ProcessLive: view.ProcessLive}
 		status := http.StatusServiceUnavailable
 		if mapErr != nil {
+			h.recordMappingFailure(request.URL.Path, view, mapErr)
 			response.Reason = "publication_unavailable"
 		} else {
 			response.PublicationID, response.BindingIdentity = &snapshot.Publication.ID, &snapshot.Publication.BindingIdentity
@@ -109,11 +112,18 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	default:
 		snapshot, mapErr := Map(capture)
 		if mapErr != nil {
+			h.recordMappingFailure(request.URL.Path, view, mapErr)
 			h.write(writer, request.Method, http.StatusServiceUnavailable, errorResponse{Error: "snapshot_unavailable"}, origin)
 			return
 		}
 		h.write(writer, request.Method, http.StatusOK, snapshot, origin)
 	}
+}
+
+func (h *handler) recordMappingFailure(route string, capture operations.SnapshotCaptureView, err error) {
+	publication := capture.Engine.Publication
+	h.diagnostics.record(MappingFailure{Invariant: mappingInvariant(err), Route: route, PublicationID: decimal(publication.PublicationID),
+		LastEngineSequence: decimal(publication.LastEngineSequence), Lifecycle: publication.Lifecycle, RankingMode: publication.AggregateEvaluation.Mode})
 }
 
 func productRoute(path string) bool {

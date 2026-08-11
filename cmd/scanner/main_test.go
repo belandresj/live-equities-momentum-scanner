@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -61,6 +62,21 @@ func TestC10OriginFlagsPreserveExactRepeatedValues(t *testing.T) {
 	var values originFlags
 	if values.String() != "" || values.Set("http://127.0.0.1:3000") != nil || values.Set("https://scanner.example") != nil || values.String() != "http://127.0.0.1:3000,https://scanner.example" {
 		t.Fatalf("origin flags = %q", values.String())
+	}
+}
+
+func TestSnapshotMappingFailureEncoding(t *testing.T) {
+	failure := snapshotapi.MappingFailure{Invariant: "population_mark_identity", Route: "/readyz", PublicationID: "81",
+		LastEngineSequence: "144", Lifecycle: "live", RankingMode: "degraded_bootstrap"}
+	var output bytes.Buffer
+	if err := encodeSnapshotMappingFailure(json.NewEncoder(&output), failure); err != nil {
+		t.Fatal(err)
+	}
+	var record struct {
+		SnapshotMappingFailure snapshotapi.MappingFailure `json:"snapshot_mapping_failure"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &record); err != nil || record.SnapshotMappingFailure != failure {
+		t.Fatalf("encoded mapper failure=%s decoded=%+v err=%v", output.String(), record, err)
 	}
 }
 
