@@ -33,6 +33,31 @@ type Handle struct {
 	metadata Metadata
 }
 
+// validationProgressObserver is a package-private measurement seam for bounded
+// fixed-cardinality validation tests. Ordinary callers cannot install one, and
+// validation never consults observer output when deciding whether bytes are
+// trusted.
+type validationProgressObserver struct {
+	everyRecords int64
+	observe      func(validationProgress)
+}
+
+type validationProgress struct {
+	phase       string
+	records     int64
+	bytes       int64
+	lastOrdinal int64
+}
+
+type validationProgressKey struct{}
+
+func withValidationProgressObserver(ctx context.Context, everyRecords int64, observe func(validationProgress)) context.Context {
+	if ctx == nil || everyRecords <= 0 || observe == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, validationProgressKey{}, validationProgressObserver{everyRecords: everyRecords, observe: observe})
+}
+
 func OpenValidated(path string, plan ValidationPlan) (*Handle, error) {
 	return OpenValidatedContext(context.Background(), path, plan)
 }
@@ -272,6 +297,15 @@ func validateOpenFile(ctx context.Context, file *os.File, plan ValidationPlan) (
 	_, _ = digest.Write(headerBytes)
 	sealedBytes := int64(len(headerBytes))
 	bodyBytes := sealedBytes
+	scannedBytes := sealedBytes
+	observer, observing := ctx.Value(validationProgressKey{}).(validationProgressObserver)
+	observing = observing && observer.everyRecords > 0 && observer.observe != nil
+	notify := func(phase string, records, lastOrdinal int64, force bool) {
+		if observing && (force || records%observer.everyRecords == 0) {
+			observer.observe(validationProgress{phase: phase, records: records, bytes: scannedBytes, lastOrdinal: lastOrdinal})
+		}
+	}
+	notify("aggregate", 0, 0, true)
 
 	expectedSymbols := plan.Binding.UniverseSymbols()
 	member := make(map[string]struct{}, len(expectedSymbols))
@@ -292,6 +326,7 @@ func validateOpenFile(ctx context.Context, file *os.File, plan ValidationPlan) (
 		if readErr != nil {
 			return Metadata{}, readErr
 		}
+		scannedBytes += int64(len(line))
 		kind, kindErr := lineKind(line)
 		if kindErr != nil {
 			return Metadata{}, kindErr
@@ -325,6 +360,7 @@ func validateOpenFile(ctx context.Context, file *os.File, plan ValidationPlan) (
 			_, _ = digest.Write(line)
 			sealedBytes += int64(len(line))
 			bodyBytes += int64(len(line))
+			notify("aggregate", aggregateCount, value.Ordinal, false)
 		case "coverage":
 			if phase == "summary" || phase == "seal" {
 				return Metadata{}, errors.New("coverage line is out of order")
@@ -350,6 +386,7 @@ func validateOpenFile(ctx context.Context, file *os.File, plan ValidationPlan) (
 			_, _ = digest.Write(line)
 			sealedBytes += int64(len(line))
 			bodyBytes += int64(len(line))
+			notify("coverage", aggregateCount, aggregateCount, true)
 		case "summary":
 			if phase != "coverage" {
 				return Metadata{}, errors.New("summary is out of order")
@@ -367,6 +404,7 @@ func validateOpenFile(ctx context.Context, file *os.File, plan ValidationPlan) (
 			}
 			_, _ = digest.Write(line)
 			sealedBytes += int64(len(line))
+			notify("summary", aggregateCount, aggregateCount, true)
 		case "seal":
 			if phase != "summary" {
 				return Metadata{}, errors.New("seal is out of order")
@@ -382,6 +420,7 @@ func validateOpenFile(ctx context.Context, file *os.File, plan ValidationPlan) (
 			if err := ctx.Err(); err != nil {
 				return Metadata{}, err
 			}
+			notify("validated", aggregateCount, aggregateCount, true)
 			return Metadata{plan.ExpectedMode, seal.ArtifactID, header.BindingID, header.UniverseID, header.TradingDate,
 				context.sessionStart, context.sessionEnd, context.replayStart, context.replayEnd,
 				aggregateCount, coverageCount, emptyCount, sealedBytes}, nil
@@ -392,6 +431,17 @@ func validateOpenFile(ctx context.Context, file *os.File, plan ValidationPlan) (
 }
 
 func strictCanonicalLine(line []byte, destination any) error {
+	if err := decodeClosedLine(line, destination); err != nil {
+		return err
+	}
+	reencoded, err := appendCanonicalLine(nil, destination, int64(len(line)))
+	if err != nil || !bytes.Equal(reencoded, line) {
+		return errors.New("line is not canonical")
+	}
+	return nil
+}
+
+func decodeClosedLine(line []byte, destination any) error {
 	if len(line) == 0 || line[len(line)-1] != '\n' {
 		return errors.New("canonical line lacks LF")
 	}
@@ -404,15 +454,11 @@ func strictCanonicalLine(line []byte, destination any) error {
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return errors.New("canonical line has trailing JSON")
 	}
-	reencoded, err := appendCanonicalLine(nil, destination, int64(len(line)))
-	if err != nil || !bytes.Equal(reencoded, line) {
-		return errors.New("line is not canonical")
-	}
 	return nil
 }
 
 func strictCanonicalAggregateLine(line []byte, destination *aggregateLine) error {
-	if err := strictCanonicalLine(line, destination); err != nil {
+	if err := decodeClosedLine(line, destination); err != nil {
 		return err
 	}
 	normalized := *destination
@@ -430,13 +476,12 @@ func strictCanonicalAggregateLine(line []byte, destination *aggregateLine) error
 }
 
 func lineKind(line []byte) (string, error) {
-	var probe struct {
-		Kind string `json:"kind"`
+	for _, kind := range [...]string{"aggregate", "coverage", "summary", "seal"} {
+		if bytes.HasPrefix(line, []byte(`{"kind":"`+kind+`",`)) {
+			return kind, nil
+		}
 	}
-	if err := json.Unmarshal(line, &probe); err != nil || probe.Kind == "" {
-		return "", errors.New("artifact line has no kind")
-	}
-	return probe.Kind, nil
+	return "", errors.New("artifact line has no canonical kind prefix")
 }
 
 func validateHeader(header headerLine, plan ValidationPlan) (artifactContext, error) {

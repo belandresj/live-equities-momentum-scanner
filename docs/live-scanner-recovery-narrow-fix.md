@@ -36,6 +36,7 @@ This is the sole ledger; prior corrections are evidence.
 | Correction contract | `reopened` | Planning milestone `6381f6c`; Gate E failed before preload, so A-E acceptance and focused final review are not available | Preserve the one-run failure; do not run Gate F or claim acceptance |
 | S1 — stable live path | `accepted` | `P-NARROW-LIVE` and Gate B passed 2026-08-11; exact evidence below | Measure the S2 17:15 boundary before any Activity change |
 | S2 — measured mature cost | `proof_incomplete` | Activity correction and synthetic A-D evidence pass; the single Gate E run was terminated in production-reader validation before any cached row or cycle | Preserve implementation/evidence as a correction milestone; no final acceptance |
+| S2-R — production-reader resource diagnosis | `correction_active` | Compact trust corpus and 100,000/500,000-record production-reader rungs prove linear transient allocation of about 7,667 bytes per record with no retained-state growth; exact evidence below | Remove only the measured redundant canonical decode/re-encode allocation, then repeat the narrow proof/trust corpus before increasing scale |
 
 ### S1 acceptance evidence — 2026-08-11
 
@@ -178,6 +179,136 @@ The diff contains no replay, replayartifact, replaymode, checkpoint codec/
 store/writer, partial-ranking, or C12 change. Since Gate E failed, these checks
 prove only local race/static/diff conformance of the deterministic correction;
 they do not convert the missing cached-data result into acceptance.
+
+### S2-R production-reader resource diagnosis — active 2026-08-11
+
+The owner reopened only the prerequisite that the accepted production artifact
+reader can fully validate the exact Gate E input within a bounded local resource
+envelope. This is a diagnostic/correction allocation under `C4-ART-02` and
+`C4-BOUNDED-CANCEL-01`; it does not change `aggregate-replay-jsonl-v1`, any
+persisted trust meaning, replay lifecycle, the scanner evaluator, Activity, or
+Gate E authorization. Accepted compact trust and cancellation evidence remains
+valid unless the diagnosis directly invalidates it.
+
+`P-NARROW-READER-RESOURCE` is the sole new primary proof. It uses
+`replayartifact.OpenValidatedContext`, valid artifacts produced by the accepted
+compiler/codec, fixed-cardinality progress, and host/process measurements to
+report records and bytes reached, validation phase, wall/CPU time, current and
+peak heap/RSS, total allocation, and GC count. The smallest scale ladder that
+distinguishes behavior is used; representative targets are 100,000, 500,000,
+1,000,000, 2,000,000, and the exact 7,671,171-record artifact. Every rung has
+an explicit timeout/resource bound and validated fixture identity. Scaling
+stops when the mechanism is distinguished, and an unchanged failed full reader
+command is never repeated.
+
+The implementation assignment is limited initially to test-only bounded
+instrumentation and fixture generation in `internal/replayartifact` plus this
+ledger. A production edit inside `internal/replayartifact` is permitted only
+after measurements demonstrate redundant parsing, re-encoding, allocation,
+retention, unbounded-line behavior, or another bounded reader defect. No
+predecessor source or fixture is authorized. `internal/engine`, Activity,
+ranking, hydration, C12, provider, checkpoint, API/UI, and artifact schema or
+format changes are excluded. The writer does not stage or commit.
+
+Any correction must preserve exact rejection of noncanonical bytes/numerics,
+unknown or duplicate fields, signed zero, wrong ordinal/order, duplicate
+complete identity, binding/date/session/interval/symbol mismatch, incomplete or
+duplicate coverage, count/body-byte/digest/seal mismatch, truncation, bytes
+after seal, same-open-file mutation, cancellation, and byte/record budget
+violations. The dangerous false success is any such input reaching a validated
+handle because a performance change skipped or approximated existing trust
+work. Construction or proof must keep strict closed-schema decoding and exact
+canonical byte comparison; approximate validation is prohibited.
+
+Before any exact full-artifact reader attempt, the compact production trust
+corpus and the narrow scale/resource proof must pass. If production code
+changes, ordinary verification, affected focused race, vet, diff checking, and
+the required read-only persisted-trust review/re-review apply. A successful
+full-reader result authorizes only the report and proposed replacement Gate E
+command. Gate E composition and Gate F remain unexecuted pending their separate
+owner authorizations.
+
+The initial diagnosis passed the compact persisted-trust corpus in 0.460
+seconds of package time. Valid partial-synthetic artifacts were emitted by the
+production canonical encoder and validated by `OpenValidatedContext` in fresh
+child processes so fixture construction did not contaminate the reader
+measurements:
+
+| Records | Artifact bytes | Wall | CPU | Total allocation | GC | Peak heap | Peak RSS |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 100,000 | 29,689,864 | 0.938s | 1.000s | 766,812,064 B | 224 | 3.85 MB | 22.50 MB |
+| 500,000 | 148,889,866 | 4.813s | 5.147s | 3,833,637,544 B | 1,129 | 3.87 MB | 23.00 MB |
+
+Both rungs reached the exact final ordinal, byte count, summary, seal, and
+`validated` phase. Heap after validation remained about 1.7--2.0 MB and
+post-GC retained heap about 0.34 MB. The curve is linear at approximately
+7,667 allocated bytes and 9.69 microseconds per record, with no retained-state
+or RSS growth. Extrapolation to 7,671,171 records is approximately 54.8 GiB of
+transient allocation, 17,354 garbage collections, and 74.3 seconds for the
+synthetic line shape; this is diagnostic scaling, not a full-artifact result.
+
+The 100,000-record allocation profile attributes 637.1 MB cumulative (86.25%)
+to strict canonical aggregate validation and 523.1 MB (70.8%) to canonical
+re-encoding. Inspection identifies the exact mechanism: every aggregate line
+is decoded once to discover its kind, then strict-decoded and canonically
+re-encoded, after which aggregate signed-zero normalization performs a second
+canonical re-encoding. Canonical string emission also creates a fresh
+`bytes.Buffer` and `json.Encoder` for each string. This is a demonstrated
+production-reader implementation defect; it is not required trust work and it
+does not indicate unbounded retained state.
+
+The authorized correction may dispatch from the exact canonical kind prefix,
+decode each aggregate once, normalize signed zero, and perform exactly one
+canonical byte comparison. Canonical string emission may be made
+allocation-light only with differential proof that it remains byte-identical
+to Go 1.26 `encoding/json` with HTML escaping disabled, including controls,
+invalid UTF-8 replacement, and U+2028/U+2029. Closed-schema decoding, unknown/
+duplicate-field rejection, and the exact final byte comparison remain the
+trust authority. No parser approximation, schema change, or skipped check is
+authorized.
+
+The implemented correction retains that exact authority. Prefix matching only
+selects the closed line type; it cannot admit a line. Each aggregate receives
+one `DisallowUnknownFields` decode, EOF/trailing check, signed-zero
+normalization in a copy, and one exact canonical whole-line comparison.
+Canonical string emission is allocation-light and differential tests match Go
+1.26 `encoding/json` with HTML escaping disabled for ordinary UTF-8, quotes,
+backslashes, all control bytes, invalid UTF-8 replacement, and U+2028/U+2029.
+Adversarial tests reject unknown/duplicate fields, signed zero, alternate
+numeric spelling, member reordering, leading whitespace, and duplicate kind.
+
+The same valid fixed-cardinality fixtures measured:
+
+| Records | Wall | CPU | Total allocation | GC | Peak heap | Peak RSS |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 100,000 | 0.437s | 0.469s | 328,107,704 B | 96 | 3.82 MB | 21.64 MB |
+| 500,000 | 2.241s | 2.406s | 1,640,127,560 B | 484 | 3.82 MB | 22.27 MB |
+| 1,000,000 | 4.462s | 4.771s | 3,280,134,816 B | 966 | 3.83 MB | 22.58 MB |
+| 2,000,000 | 9.202s | 9.792s | 6,560,159,248 B | 1,939 | 3.83 MB | 22.33 MB |
+
+At 500,000 records, wall time fell 53.44%, CPU 53.25%, allocation 57.22%,
+and garbage collections 57.13%; final bytes/ordinal/summary/seal remained
+exact and retained heap/RSS stayed flat. Corrected scaling is approximately
+3,280 allocated bytes and 4.615 microseconds per record. The same synthetic
+shape extrapolates to about 23.43 GiB cumulative allocation and 35.3 seconds at
+7,671,171 records; the exact artifact remains the required distinguishing
+proof rather than an inferred pass.
+
+The required `gpt-5.6-sol` medium read-only persisted-trust review found no
+P1/P2 false-success regression. It confirmed that closed-schema decode, exact
+canonical byte equality, binding/session/symbol/order/coverage/accounting,
+digest/seal/EOF, budgets, and cancellation remain the admission path. The
+review repeated the focused trust/cancellation corpus and a 100,000-record
+rung. The limitation remains that the scale ladder is one-symbol
+`partial_synthetic`; it exercises the changed aggregate hot path but is not
+complete-mode, exact-artifact, playback, or Gate E evidence.
+
+Pre-full verification passed: focused canonical/adversarial plus compact trust
+tests, package short, `go test -short -timeout 2m ./...` in 9.24 seconds,
+`go test -race -short -timeout 5m ./internal/replayartifact -count=1` in 4.08
+seconds, `go vet ./...` in 0.48 seconds, and `git diff --check`. The next action
+is one reader-only validation of the exact artifact with the exact binding and
+resource/progress reporting. It is not Gate E composition.
 
 ## Sections 1-4 — Outcome, scope, ownership, and settled boundary
 

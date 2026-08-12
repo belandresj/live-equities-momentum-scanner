@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/belandresj/live-equities-momentum-scanner/internal/engine"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/massive"
@@ -342,12 +343,56 @@ func encodeAggregateLine(line aggregateLine) ([]byte, error) {
 }
 
 func appendJSONString(destination []byte, value string) []byte {
-	var encoded bytes.Buffer
-	encoder := json.NewEncoder(&encoded)
-	encoder.SetEscapeHTML(false)
-	_ = encoder.Encode(value)
-	bytes := encoded.Bytes()
-	return append(destination, bytes[:len(bytes)-1]...)
+	const hex = "0123456789abcdef"
+	destination = append(destination, '"')
+	start := 0
+	for index := 0; index < len(value); {
+		if current := value[index]; current < utf8.RuneSelf {
+			if current >= 0x20 && current != '\\' && current != '"' {
+				index++
+				continue
+			}
+			destination = append(destination, value[start:index]...)
+			switch current {
+			case '\\', '"':
+				destination = append(destination, '\\', current)
+			case '\b':
+				destination = append(destination, `\b`...)
+			case '\f':
+				destination = append(destination, `\f`...)
+			case '\n':
+				destination = append(destination, `\n`...)
+			case '\r':
+				destination = append(destination, `\r`...)
+			case '\t':
+				destination = append(destination, `\t`...)
+			default:
+				destination = append(destination, '\\', 'u', '0', '0', hex[current>>4], hex[current&0x0f])
+			}
+			index++
+			start = index
+			continue
+		}
+		current, size := utf8.DecodeRuneInString(value[index:])
+		if current == utf8.RuneError && size == 1 {
+			destination = append(destination, value[start:index]...)
+			destination = append(destination, `\ufffd`...)
+			index++
+			start = index
+			continue
+		}
+		if current == '\u2028' || current == '\u2029' {
+			destination = append(destination, value[start:index]...)
+			destination = append(destination, '\\', 'u', '2', '0', '2', hex[current&0x0f])
+			index += size
+			start = index
+			continue
+		}
+		index += size
+	}
+	destination = append(destination, value[start:]...)
+	destination = append(destination, '"')
+	return destination
 }
 
 func appendCanonicalFloat(destination []byte, value float64) []byte {

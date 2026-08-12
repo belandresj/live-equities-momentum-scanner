@@ -1,9 +1,10 @@
 # Aggregate replay
 
-**Status:** Finally accepted through `C4-S6` on 2026-08-09. The bounded
-candidate/scan/manual-cancel correction, all eleven primary proofs, cumulative
-verification, required focused review/corrections/re-reviews, and conformance
-are clean. C12-S1 is now the next sequential slice.
+**Status:** Reopened narrowly on 2026-08-11 for measured production-reader
+allocation mechanics under `C4-ART-02`. Accepted schema, persisted trust,
+replay lifecycle, `C4-S1`--`C4-S6`, and their eleven primary proofs remain
+preserved; the resource correction must pass its narrow proof and persisted-
+trust review before Component 4 returns to finally accepted.
 
 **Owner boundary approval:** approved 2026-08-06 in the owning Codex task;
 includes the Phase 1 boundary, modular document map, and exact future version 2
@@ -98,6 +99,7 @@ cumulative verification, and both focused correction re-reviews are complete.
 | Final component review | `accepted` | Mandatory read-only `gpt-5.6-sol` medium review found five actionable issues; all received direct regressions and corrections, the same reviewer found the complete correction set clean, and its focused review confirmed the shortened `R == E` proof preserves `C4-RUN-01` / `P-C4-RUN` without making a deferred capacity claim | 2026-08-06 | Complete |
 | `C4-S5` requested-end correction | `accepted` | `C4-PREFIX-END-01` / `P-C4-PREFIX-END`; exact prefix/artifact-end parity/suffix-integrity/cancellation/clock/rejection/accounting matrix, affected and repository short tests, proportionate race, vet, conformance inspection, and required `gpt-5.6-sol` medium persisted-source/lifecycle focused re-review all clean | 2026-08-09 | Complete |
 | `C4-S6` bounded manual-driver correction | `accepted` | `C4-BOUNDED-CANCEL-01` / `P-C4-BOUNDED-CANCEL`: bounded untrusted header probe; context-aware validation and both playback passes; one source-owned serialized `Cancel(ctx)`; retained nonterminal and terminal dispositions; exact terminal accounting; and an honest `(Result,error)` one-shot seam whose existing C4 command consumer supplies a separate bounded cleanup context. Thirty focused lifecycle repetitions, ten focused race repetitions, full affected/repository short/race/vet/diff/conformance checks, and required `gpt-5.6-sol` medium review/correction/re-reviews are clean. | 2026-08-09 | Complete; advance to C12-S1 |
+| Production-reader resource correction | `full_artifact_proof_pending` | Owner-directed `P-NARROW-READER-RESOURCE`: diagnosis found linear approximately 7,667 B/record allocation and 86.25% of allocation in duplicate strict aggregate canonical work. The correction reduces the 500,000-record rung by 53.44% wall and 57.22% allocation; corrected 100,000--2,000,000 scaling is linear at approximately 3,280 B/record with flat approximately 22 MB RSS. Compact trust/adversarial proofs, repository short, focused race, vet/diff, and required `gpt-5.6-sol` persisted-trust review are clean with no P1/P2. The prior unexplained Gate E termination remains preserved. | 2026-08-11 | Validate the exact 2,584,011,150-byte artifact once through the reader-only production path with resource/progress reporting; do not run Gate E composition |
 
 **C4-S6 active correction record:** The accepted C11/private V1 RC prerequisite
 completed at commit `3644ed1`, so Component 4 reopened only
