@@ -75,6 +75,15 @@ type activityFeatureState struct {
 	foldedTargetContributions int
 	boundExceeded             bool
 	result                    activityFeatureResult
+	referenceLookup           activityReferenceLookup
+}
+
+// activityReferenceLookup is a bounded, derived acceleration of references.
+// The sufficient summaries above remain the semantic and checkpoint authority.
+type activityReferenceLookup struct {
+	at                       time.Time
+	transactions, expansions []float64
+	valid                    bool
 }
 
 func ensureActivityState(state *symbolAggregateState) *activityFeatureState {
@@ -112,7 +121,10 @@ func foldActivityAggregate(state *symbolAggregateState, binding *installedBindin
 		// Converting it through big.Int after every historical second creates no
 		// new fact; feature evaluation and checkpoint projection both finalize
 		// the completed summary at their read boundary.
+		blockEnd := time.Unix(end, 0).UTC()
+		removeActivityReferenceLookupBlock(activity, state, binding, blockEnd)
 		*summary = addActivityAggregate(*summary, record.values)
+		insertActivityReferenceLookupBlock(activity, state, binding, blockEnd)
 		return
 	}
 	block, ok := activity.mutable[end]
@@ -330,6 +342,7 @@ func recomputeMutableActivityBlock(state *symbolAggregateState, binding *install
 		// Component 2 still supplied its exact record to foldActivityAggregate.
 		return
 	}
+	removeActivityReferenceLookupBlock(activity, state, binding, blockEnd)
 	block, ok := activity.mutable[key]
 	if !ok {
 		block.folded = activityBlockSummary{end: key, low: math.Inf(1)}
@@ -351,6 +364,7 @@ func recomputeMutableActivityBlock(state *symbolAggregateState, binding *install
 	// checkpoint projection; doing it on every revision adds no market fact.
 	block.current = current
 	activity.mutable[key] = block
+	insertActivityReferenceLookupBlock(activity, state, binding, blockEnd)
 	if len(activity.mutable) > maximumMutableActivityBlockIDs {
 		failActivityBound(activity)
 	}
@@ -406,6 +420,7 @@ func failActivityBound(activity *activityFeatureState) {
 	clear(activity.foldedTargets)
 	activity.foldedTargetContributions = 0
 	activity.boundExceeded = true
+	activity.referenceLookup = activityReferenceLookup{}
 }
 
 func evaluateActivityFeatures(binding *installedBinding, state *symbolAggregateState, at time.Time) activityFeatureResult {
@@ -462,6 +477,40 @@ func evaluateActivityFeatures(binding *installedBinding, state *symbolAggregateS
 	upper := at.Add(-activityBlockDuration)
 	transactionReferences := make([]float64, 0, maximumActivityReferences)
 	expansionReferences := make([]float64, 0, maximumActivityReferences)
+	if activity.referenceLookup.valid && !at.Before(activity.referenceLookup.at) {
+		upper := at.Add(-activityBlockDuration)
+		if binding.sessionStart.Before(upper) && !activityCoverageTrustworthy(state, binding, binding.sessionStart, upper) {
+			result.activity = aggregateFeatureField{status: featureUnavailable, reason: featureReasonHistoryIncomplete}
+			return result
+		}
+		lookupUpper := activity.referenceLookup.at.Add(-activityBlockDuration)
+		result.referenceCount = len(activity.referenceLookup.transactions)
+		transactionRank := upperBoundActivityValue(activity.referenceLookup.transactions, target.transactions)
+		expansionRank := upperBoundActivityValue(activity.referenceLookup.expansions, target.expansionBPS)
+		for blockEnd := activityBlockEnd(binding, lookupUpper); !blockEnd.After(upper); blockEnd = blockEnd.Add(activityBlockDuration) {
+			value, status, reason, eligible := activityReferenceValue(state, binding, blockEnd)
+			if status != featureCurrent {
+				result.activity = aggregateFeatureField{status: status, reason: reason}
+				return result
+			}
+			if eligible {
+				result.referenceCount++
+				if value.transactions <= target.transactions {
+					transactionRank++
+				}
+				if value.expansionBPS <= target.expansionBPS {
+					expansionRank++
+				}
+			}
+		}
+		if result.referenceCount < minimumActivityReferences {
+			result.activity = aggregateFeatureField{status: featureWarming, reason: featureReasonReferenceWarmup}
+			return result
+		}
+		result.transactionPercentile = 100 * float64(transactionRank) / float64(result.referenceCount)
+		result.expansionPercentile = 100 * float64(expansionRank) / float64(result.referenceCount)
+		return finishActivityResult(result)
+	}
 	for blockStart := firstAlignedActivityStart(binding, floor); blockStart.Add(activityBlockDuration).Compare(upper) <= 0; blockStart = blockStart.Add(activityBlockDuration) {
 		blockEnd := blockStart.Add(activityBlockDuration)
 		if blockEnd.After(binding.sessionEnd) {
@@ -496,6 +545,10 @@ func evaluateActivityFeatures(binding *installedBinding, state *symbolAggregateS
 	}
 	result.transactionPercentile = empiricalPercentile(transactionReferences, target.transactions)
 	result.expansionPercentile = empiricalPercentile(expansionReferences, target.expansionBPS)
+	return finishActivityResult(result)
+}
+
+func finishActivityResult(result activityFeatureResult) activityFeatureResult {
 	value := math.Sqrt(result.transactionPercentile * result.expansionPercentile)
 	if !finiteFeature(value) || value < 0 || value > 100 {
 		result.activity = aggregateFeatureField{status: featureInvalid, reason: featureReasonInvalidInput}
@@ -505,9 +558,127 @@ func evaluateActivityFeatures(binding *installedBinding, state *symbolAggregateS
 	return result
 }
 
-func applyActivityResult(activity *activityFeatureState, result activityFeatureResult) {
+func applyActivityResult(state *symbolAggregateState, binding *installedBinding, result activityFeatureResult) {
+	activity := ensureActivityState(state)
+	advanceActivityReferenceLookup(activity, state, binding, result.at)
 	activity.result = result
 	pruneFoldedActivityTargets(activity, result.at.Add(-activityBlockDuration))
+}
+
+func upperBoundActivityValue(values []float64, target float64) int {
+	return sort.Search(len(values), func(i int) bool { return values[i] > target })
+}
+
+func insertOrderedActivityValue(values []float64, value float64) []float64 {
+	i := sort.SearchFloat64s(values, value)
+	values = append(values, 0)
+	copy(values[i+1:], values[i:])
+	values[i] = value
+	return values
+}
+
+func removeOrderedActivityValue(values []float64, value float64) ([]float64, bool) {
+	i := sort.SearchFloat64s(values, value)
+	if i == len(values) || values[i] != value {
+		return values, false
+	}
+	copy(values[i:], values[i+1:])
+	return values[:len(values)-1], true
+}
+
+func activityReferenceValue(state *symbolAggregateState, binding *installedBinding, blockEnd time.Time) (activityBlockSummary, aggregateFeatureStatus, aggregateFeatureReason, bool) {
+	start := blockEnd.Add(-activityBlockDuration)
+	if !activityCoverageTrustworthy(state, binding, start, blockEnd) {
+		return activityBlockSummary{}, featureUnavailable, featureReasonHistoryIncomplete, false
+	}
+	summary := activityComponentsForBlock(state, binding, start, blockEnd)
+	if summary.invalid {
+		return summary, featureInvalid, featureReasonInvalidInput, false
+	}
+	if summary.aggregateCount == 0 {
+		return summary, featureCurrent, featureReasonNone, false
+	}
+	summary = finishActivitySummary(summary)
+	if summary.invalid {
+		return summary, featureInvalid, featureReasonInvalidInput, false
+	}
+	return summary, featureCurrent, featureReasonNone, summary.transactions >= minimumActivityReferenceTx
+}
+
+func rebuildActivityReferenceLookup(activity *activityFeatureState, state *symbolAggregateState, binding *installedBinding, at time.Time) bool {
+	lookup := activityReferenceLookup{at: at, transactions: make([]float64, 0, maximumActivityReferences), expansions: make([]float64, 0, maximumActivityReferences)}
+	upper := at.Add(-activityBlockDuration)
+	for start := firstAlignedActivityStart(binding, binding.sessionStart); !start.Add(activityBlockDuration).After(upper); start = start.Add(activityBlockDuration) {
+		end := start.Add(activityBlockDuration)
+		if end.After(binding.sessionEnd) {
+			break
+		}
+		value, status, _, eligible := activityReferenceValue(state, binding, end)
+		if status != featureCurrent {
+			activity.referenceLookup = activityReferenceLookup{}
+			return false
+		}
+		if eligible {
+			lookup.transactions = append(lookup.transactions, value.transactions)
+			lookup.expansions = append(lookup.expansions, value.expansionBPS)
+		}
+	}
+	sort.Float64s(lookup.transactions)
+	sort.Float64s(lookup.expansions)
+	lookup.valid = len(lookup.transactions) <= maximumActivityReferences && len(lookup.transactions) == len(lookup.expansions)
+	activity.referenceLookup = lookup
+	return lookup.valid
+}
+
+func advanceActivityReferenceLookup(activity *activityFeatureState, state *symbolAggregateState, binding *installedBinding, at time.Time) {
+	if !activity.referenceLookup.valid || at.Before(activity.referenceLookup.at) {
+		rebuildActivityReferenceLookup(activity, state, binding, at)
+		return
+	}
+	oldUpper, upper := activity.referenceLookup.at.Add(-activityBlockDuration), at.Add(-activityBlockDuration)
+	for end := activityBlockEnd(binding, oldUpper); !end.After(upper); end = end.Add(activityBlockDuration) {
+		value, status, _, eligible := activityReferenceValue(state, binding, end)
+		if status != featureCurrent {
+			activity.referenceLookup = activityReferenceLookup{}
+			return
+		}
+		if eligible {
+			activity.referenceLookup.transactions = insertOrderedActivityValue(activity.referenceLookup.transactions, value.transactions)
+			activity.referenceLookup.expansions = insertOrderedActivityValue(activity.referenceLookup.expansions, value.expansionBPS)
+		}
+	}
+	activity.referenceLookup.at = at
+}
+
+func removeActivityReferenceLookupBlock(activity *activityFeatureState, state *symbolAggregateState, binding *installedBinding, end time.Time) {
+	if !activity.referenceLookup.valid || end.After(activity.referenceLookup.at.Add(-activityBlockDuration)) {
+		return
+	}
+	value, status, _, eligible := activityReferenceValue(state, binding, end)
+	if status != featureCurrent || !eligible {
+		return
+	}
+	var ok1, ok2 bool
+	activity.referenceLookup.transactions, ok1 = removeOrderedActivityValue(activity.referenceLookup.transactions, value.transactions)
+	activity.referenceLookup.expansions, ok2 = removeOrderedActivityValue(activity.referenceLookup.expansions, value.expansionBPS)
+	if !ok1 || !ok2 {
+		activity.referenceLookup = activityReferenceLookup{}
+	}
+}
+
+func insertActivityReferenceLookupBlock(activity *activityFeatureState, state *symbolAggregateState, binding *installedBinding, end time.Time) {
+	if !activity.referenceLookup.valid || end.After(activity.referenceLookup.at.Add(-activityBlockDuration)) {
+		return
+	}
+	value, status, _, eligible := activityReferenceValue(state, binding, end)
+	if status != featureCurrent {
+		activity.referenceLookup = activityReferenceLookup{}
+		return
+	}
+	if eligible {
+		activity.referenceLookup.transactions = insertOrderedActivityValue(activity.referenceLookup.transactions, value.transactions)
+		activity.referenceLookup.expansions = insertOrderedActivityValue(activity.referenceLookup.expansions, value.expansionBPS)
+	}
 }
 
 func addFoldedActivityTarget(summary activityBlockSummary, activity *activityFeatureState, binding *installedBinding, second time.Time) (activityBlockSummary, bool) {

@@ -107,6 +107,13 @@ type TimerDisposition struct {
 	SuppressionDisposition SuppressionDisposition
 }
 
+// EvaluationTimingView is fixed-cardinality diagnostic attribution for the
+// most recent full-population live boundary. It owns no market state.
+type EvaluationTimingView struct {
+	EngineSequence            uint64
+	Stage, Apply, Publication time.Duration
+}
+
 const BindingInstallSchemaV1 = "engine-binding-install-v1"
 
 // BindingInstall is the closed S1 binding-install payload. Kind, source, and
@@ -339,6 +346,16 @@ type engineState struct {
 	checkpointOutstanding      map[uint64]checkpoint.Request
 	checkpointOperations       CheckpointOperations
 	tq                         tqState
+	evaluationTiming           EvaluationTimingView
+}
+
+func (e *Engine) ObserveEvaluationTiming() EvaluationTimingView {
+	if e == nil {
+		return EvaluationTimingView{}
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.state.evaluationTiming
 }
 
 type admissionCounters struct {
@@ -414,14 +431,38 @@ type Engine struct {
 
 	// Test-only fault/pause points are package-private and have no production
 	// constructor or exported mutation path.
-	buildCandidate      func(frozenBinding) (*installedBinding, error)
-	beforeConsume       func(*queueNode)
-	terminal            *Disposition
-	publicationFault    publicationFault
-	evaluationFault     bool
-	checkpointSubmitter *checkpoint.Writer
-	tqLimits            tqRetentionLimits
-	tqPressurePolicy    tqPressurePolicy
+	buildCandidate        func(frozenBinding) (*installedBinding, error)
+	beforeConsume         func(*queueNode)
+	terminal              *Disposition
+	publicationFault      publicationFault
+	evaluationFault       bool
+	evaluationTimingClock func() time.Time
+	checkpointSubmitter   *checkpoint.Writer
+	tqLimits              tqRetentionLimits
+	tqPressurePolicy      tqPressurePolicy
+}
+
+func (e *Engine) ArmEvaluationTimingForTest(clock func() time.Time) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	e.evaluationTimingClock = clock
+	e.mu.Unlock()
+}
+
+func (e *Engine) evaluationTimingStart() time.Time {
+	if e.evaluationTimingClock == nil {
+		return time.Time{}
+	}
+	return e.evaluationTimingClock()
+}
+
+func (e *Engine) evaluationTimingElapsed(start time.Time) time.Duration {
+	if start.IsZero() || e.evaluationTimingClock == nil {
+		return 0
+	}
+	return e.evaluationTimingClock().Sub(start)
 }
 
 // New constructs an unbound engine shell and starts its sole consumer.

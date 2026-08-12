@@ -83,6 +83,11 @@ func TestC7STATE01CommittedProjectionRoundTrip(t *testing.T) {
 	if install.Disposition != CheckpointInstalled || install.Fact.T0 != t0 {
 		t.Fatalf("install = %+v", install)
 	}
+	restoredLookup := restored.state.binding.symbols[0].aggregates.activity
+	if restoredLookup == nil || !restoredLookup.referenceLookup.valid ||
+		len(restoredLookup.referenceLookup.transactions) != len(restoredLookup.referenceLookup.expansions) {
+		t.Fatalf("restored Activity lookup not rebuilt/validated: %+v", restoredLookup)
+	}
 	if gotSymbols := checkpointSymbolsForTest(t, restored, t0); !reflect.DeepEqual(gotSymbols, projection.Image.Symbols) {
 		g, w := gotSymbols[0], projection.Image.Symbols[0]
 		t.Fatalf("restored complete semantic graph differs tail=%v marks=%v/%v bitmaps=%v/%v/%v price=%v activity=%v qualification=%v support=%v/%v", reflect.DeepEqual(g.Tail, w.Tail), reflect.DeepEqual(g.OlderMark, w.OlderMark), reflect.DeepEqual(g.CommittedMark, w.CommittedMark), reflect.DeepEqual(g.Presence, w.Presence), reflect.DeepEqual(g.ProvenAbsent, w.ProvenAbsent), reflect.DeepEqual(g.HistoricalConflict, w.HistoricalConflict), reflect.DeepEqual(g.PriceRange, w.PriceRange), reflect.DeepEqual(g.Activity, w.Activity), reflect.DeepEqual(g.Qualification, w.Qualification), reflect.DeepEqual(g.InvalidMarkStart, w.InvalidMarkStart), reflect.DeepEqual(g.Coverage, w.Coverage))

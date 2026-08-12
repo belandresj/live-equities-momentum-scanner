@@ -190,7 +190,9 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 				maintainActivityState(state, e.state.binding, node.admissionTime, maintenanceAt)
 			}
 		}
+		started := e.evaluationTimingStart()
 		staged := e.stageAggregateEvaluationAtLocked(target, node.admissionTime)
+		e.state.evaluationTiming = EvaluationTimingView{EngineSequence: node.engineSequence, Stage: e.evaluationTimingElapsed(started)}
 		return &staged
 	}
 	if node.kind != inputAggregate {
@@ -237,10 +239,12 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 		if e.mode == RunModeLive {
 			evaluateQualificationThrough(state, e.state.binding, *e.state.committedT, node.admissionTime)
 			ensurePriceRangeState(state).result = evaluatePriceRangeFeatures(e.state.binding, &e.state.binding.symbols[index], *e.state.committedT)
-			applyActivityResult(activity, evaluateActivityFeatures(e.state.binding, state, *e.state.committedT))
+			applyActivityResult(state, e.state.binding, evaluateActivityFeatures(e.state.binding, state, *e.state.committedT))
 			return nil
 		}
+		started := e.evaluationTimingStart()
 		staged := e.stageAggregateEvaluationAtLocked(*e.state.committedT, node.admissionTime)
+		e.state.evaluationTiming = EvaluationTimingView{EngineSequence: node.engineSequence, Stage: e.evaluationTimingElapsed(started)}
 		return &staged
 	}
 	return nil

@@ -278,7 +278,9 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 		// gate. It cannot apply candidate-T state and is not itself corruption.
 		return true
 	}
+	applyStarted := e.evaluationTimingStart()
 	e.applyStagedAggregateCandidateLocked(staged, node.admissionTime)
+	e.state.evaluationTiming.Apply = e.evaluationTimingElapsed(applyStarted)
 	consumePending := e.mode == RunModeLive && e.state.aggregateProjectionPending
 	evaluationChanged := !aggregateEvaluationEqual(e.state.aggregateEvaluator.current, staged)
 	if evaluationChanged {
@@ -350,7 +352,7 @@ func (e *Engine) applyAggregateCandidateLocked(at, engineTime time.Time) {
 		}
 		evaluateQualificationThrough(symbol.aggregates, e.state.binding, at, engineTime)
 		ensurePriceRangeState(symbol.aggregates).result = evaluatePriceRangeFeatures(e.state.binding, symbol, at)
-		applyActivityResult(ensureActivityState(symbol.aggregates), evaluateActivityFeatures(e.state.binding, symbol.aggregates, at))
+		applyActivityResult(symbol.aggregates, e.state.binding, evaluateActivityFeatures(e.state.binding, symbol.aggregates, at))
 	}
 	e.commitAggregateTargetLocked(at)
 }
@@ -369,7 +371,7 @@ func (e *Engine) applyStagedAggregateCandidateLocked(staged aggregateEvaluationR
 		state.committedLatest = update.committedLatest
 		state.qualification = update.qualification
 		ensurePriceRangeState(state).result = update.priceRange
-		applyActivityResult(ensureActivityState(state), update.activity)
+		applyActivityResult(state, e.state.binding, update.activity)
 	}
 	e.commitAggregateTargetLocked(staged.at)
 }

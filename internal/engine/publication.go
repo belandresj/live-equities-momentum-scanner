@@ -288,8 +288,10 @@ func (e *Engine) completePublicationDecisionLocked(node *queueNode, disposition 
 				nextID := e.lastPubID + 1
 				prospectivePublications = advancePublicationCounters(prospectivePublications, decisionReplaced)
 				var err error
+				publicationStarted := e.evaluationTimingStart()
 				candidate, err = e.buildPublicationLocked(nextID, node.engineSequence, disposition, generatedAt,
 					prospectiveAdmission, prospectiveTransitions, prospectivePublications)
+				e.state.evaluationTiming.Publication = e.evaluationTimingElapsed(publicationStarted)
 				if err != nil || e.publicationFault == publicationFaultBuild ||
 					e.publicationFault == publicationFaultValidation || validatePublication(candidate) != nil {
 					disposition.Code, disposition.Reason = DispositionPublicationIntegrity, ReasonPublication

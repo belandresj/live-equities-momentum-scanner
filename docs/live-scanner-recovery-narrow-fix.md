@@ -1,6 +1,7 @@
 # Live scanner recovery narrow fix
 
-**Status:** Active executable correction; S1 accepted, S2 pending.
+**Status:** Reopened after the single Gate E run was externally terminated
+before preload; S1 accepted and S2 deterministic correction passes A-D.
 
 **Boundary and completed-contract authority:** Direct owner request on
 2026-08-11 to use the read-only recovery review and specify the narrow fix.
@@ -32,9 +33,9 @@ This is the sole ledger; prior corrections are evidence.
 
 | Item | State | Evidence/review | Next action |
 | --- | --- | --- | --- |
-| Correction contract | `active` | Planning milestone `6381f6c`; focused evaluator/lifecycle review remains required after A-E | Implement S2 |
+| Correction contract | `reopened` | Planning milestone `6381f6c`; Gate E failed before preload, so A-E acceptance and focused final review are not available | Preserve the one-run failure; do not run Gate F or claim acceptance |
 | S1 — stable live path | `accepted` | `P-NARROW-LIVE` and Gate B passed 2026-08-11; exact evidence below | Measure the S2 17:15 boundary before any Activity change |
-| S2 — measured mature cost | `pending` | `P-NARROW-MATURE` | Begin from the accepted S1 boundary |
+| S2 — measured mature cost | `proof_incomplete` | Activity correction and synthetic A-D evidence pass; the single Gate E run was terminated in production-reader validation before any cached row or cycle | Preserve implementation/evidence as a correction milestone; no final acceptance |
 
 ### S1 acceptance evidence — 2026-08-11
 
@@ -81,6 +82,102 @@ prevents a suppressed/ended runtime from opening a socket, and makes
 checkpoint-off status explicit with zero checkpoint work. This proves S1
 semantics and ordinary conformance, not late-session capacity, provider
 behavior, or Gate F.
+
+### S2 correction and Gate E failure evidence — 2026-08-11
+
+The mandatory pre-change 6,000-symbol 17:15 measurement had exactly 1,589
+reference blocks plus one target block per symbol. Three trials reported:
+
+| Trial | Stage | Apply | Publication | Total lock | Allocated bytes |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 10.268257667s | 9.082167ms | 519.125µs | 10.2778605s | 6,497,812,568 |
+| 2 | 11.541589417s | 4.965542ms | 775.333µs | 11.547334875s | 6,492,435,720 |
+| 3 | 10.663651875s | 5.47725ms | 83.458µs | 10.669216125s | 6,492,435,736 |
+
+Mean lock time was about 10.83147 seconds and every trial exceeded two
+seconds. Stage time and about 6.49 GB of allocations per publication isolated
+the session-length Activity traversal; apply and publication did not justify a
+ranking index or broader evaluator change.
+
+The triggered correction keeps the existing at-most-1,920 block summaries as
+semantic and checkpoint authority and adds only two derived sorted finite-value
+collections, each bounded by 1,920. A corrected eligible block removes its old
+values, recomputes from canonical evidence, and inserts its new values.
+Percentiles retain inclusive `<= target` ties. Whole-interval trust is checked
+before lookup use, and checkpoint installation rebuilds the derived lookup
+through ordinary deterministic apply; nothing is persisted in checkpoint
+schema.
+
+Post-correction Gate C passed with the same exact manifest:
+
+| Trial | Stage | Apply | Publication | Total lock | Allocated bytes |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 287.817333ms | 1.369833ms | 94.792µs | 289.295333ms | 14,692,504 |
+| 2 | 62.610167ms | 429.458µs | 38.459µs | 63.078417ms | 9,315,656 |
+| 3 | 60.465416ms | 431.5µs | 68.167µs | 60.965375ms | 9,315,640 |
+
+Mean lock time was 137.779708 ms and maximum was 289.295333 ms. Gate D's
+generated 60 one-second evaluation cycles reported stage total 4.767944542s,
+apply total 304.075541ms, publication total 1.700374ms, mean lock 84.562449ms,
+maximum 359.461709ms, zero aggregate rejection, zero queue growth, and lookup
+cardinality at most 1,920. Checkpoint-off production composition separately
+made ten successful HTTP snapshot polls while checkpoint submitted/outstanding
+work remained zero. The Gate D fixture directly measures staged/apply/
+publication cycles; it does not instantiate HTTP or admit a fresh aggregate
+correction in each measured cycle, so those are separate proofs rather than one
+fully joined D trace.
+
+Activity differential proofs cover insert, correction, withdrawal containment,
+the exact 100-transaction eligibility boundary, restoration, inclusive target
+ties, stalled `T`, horizon folding, and checkpoint continuation/rebuild. The
+focused Activity/checkpoint suite passed in 3.00 seconds; checkpoint-off HTTP
+composition passed in 2.27 seconds; `go test -short -timeout 2m ./...` passed
+in 7.99 seconds before Gate E and 8.93 seconds after it.
+
+The corrected Gate E preflight passed without a full parse: the compact
+production-reader fixture passed in 0.01 seconds; the exact private regular
+artifact was 2,584,011,150 bytes with file SHA-256
+`e7e33c7981ed55cb12408ee1145f78e69c11caca52fc34b3c08484a1857db189`;
+the exact reference files were `prior-close/2026-08-06.json` and
+`universe/2026-08-07.json`; reference/binding validation completed in about
+3.30 seconds; and the recorded manifest named binding
+`session-binding-v1:b68b50821b19ec69073cf039bc61a9d193825578b65708e49aec892aa97b7f7d`,
+7,671,171 records, 5,691 symbols, and the complete session interval
+`[2026-08-07T08:00:00Z,2026-08-08T00:00:00Z)`.
+
+The one permitted Gate E command was:
+
+```text
+/usr/bin/time -p env CACHED_HYDRATION_ACCEPTANCE=1 CACHED_HYDRATION_RATE_MULTIPLIER=1 go test -timeout 8m ./internal/operations -run '^TestCachedHydrationFenceAcceptance$' -count=1 -v
+```
+
+Its internal context was 7m30s. It emitted only
+`=== RUN TestCachedHydrationFenceAcceptance`, then the process was terminated
+after approximately 28 seconds inside the initial
+`replayartifact.OpenValidatedContext` full-artifact validation, without a Go
+failure, PASS, exit status, or `/usr/bin/time` trailer. Preload did not begin:
+zero rows were applied and zero of ten planned cycles ran. The command was not
+rerun. This distinguishes local process/resource termination in the existing
+production reader from Activity semantics, cached-data results, provider
+behavior, or a Gate E capacity result.
+
+Because Gate E is not green, the correction remains reopened. The conditional
+final read-only review was not spawned, no acceptance commit is authorized,
+and Gate F remains both separately authorized and unexecuted. No provider
+credential or request was accessed.
+
+Final local checks after preserving the failure passed:
+
+```text
+go test -race -short -timeout 5m ./internal/engine ./internal/operations ./internal/snapshotapi ./cmd/scanner  # 31s
+go vet ./...  # 1s
+git diff --check
+```
+
+The diff contains no replay, replayartifact, replaymode, checkpoint codec/
+store/writer, partial-ranking, or C12 change. Since Gate E failed, these checks
+prove only local race/static/diff conformance of the deterministic correction;
+they do not convert the missing cached-data result into acceptance.
 
 ## Sections 1-4 — Outcome, scope, ownership, and settled boundary
 

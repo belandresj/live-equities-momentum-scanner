@@ -954,7 +954,7 @@ func (e *Engine) applyHydrationTerminalLocked(node *queueNode) (DispositionCode,
 			evaluateQualificationThrough(state, e.state.binding, input.token.end, node.admissionTime)
 		}
 		ensurePriceRangeState(state).result = evaluatePriceRangeFeatures(e.state.binding, &e.state.binding.symbols[index], input.token.end)
-		applyActivityResult(ensureActivityState(state), evaluateActivityFeatures(e.state.binding, state, input.token.end))
+		applyActivityResult(state, e.state.binding, evaluateActivityFeatures(e.state.binding, state, input.token.end))
 	}
 	e.state.hydration.revision++
 	return DispositionHydrationTerminalApplied, ReasonNone

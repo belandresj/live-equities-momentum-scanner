@@ -1,9 +1,8 @@
 package operations
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +23,7 @@ import (
 	"github.com/belandresj/live-equities-momentum-scanner/internal/massive"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/reference"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/replayartifact"
+	"github.com/belandresj/live-equities-momentum-scanner/internal/replayartifact/playback"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/session"
 )
 
@@ -56,6 +56,60 @@ type cachedFenceRunResult struct {
 	accounting, ready, fenceReconciled                          bool
 	heapBefore, heapAtFence, heapAfter                          uint64
 	tq                                                          engine.TQView
+	cycleStage, cycleApply, cyclePublication, cycleLock         [10]time.Duration
+	cycleAlloc                                                  [10]uint64
+	cyclePublicationID                                          [10]uint64
+}
+
+type cachedArtifactLine struct {
+	Kind        string `json:"kind"`
+	Symbol      string `json:"symbol"`
+	WindowStart string `json:"window_start"`
+	WindowEnd   string `json:"window_end"`
+}
+
+func TestCachedHydrationFencePreflight(t *testing.T) {
+	if testing.Short() || os.Getenv("CACHED_HYDRATION_PREFLIGHT") != "1" {
+		t.Skip("set CACHED_HYDRATION_PREFLIGHT=1")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 110*time.Second)
+	defer cancel()
+	started := time.Now()
+	info, err := os.Stat(cachedFenceArtifact)
+	if err != nil || info.Size() != 2_584_011_150 {
+		t.Fatalf("artifact stat size=%v err=%v", func() int64 {
+			if info == nil {
+				return -1
+			}
+			return info.Size()
+		}(), err)
+	}
+	hashFile, err := os.Open(cachedFenceArtifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.New()
+	_, err = io.Copy(digest, hashFile)
+	closeErr := hashFile.Close()
+	if err != nil || closeErr != nil || fmt.Sprintf("%x", digest.Sum(nil)) != "e7e33c7981ed55cb12408ee1145f78e69c11caca52fc34b3c08484a1857db189" {
+		t.Fatalf("artifact digest err=%v close=%v sha=%x", err, closeErr, digest.Sum(nil))
+	}
+	t.Logf("preflight file bytes/digest validated in %s", time.Since(started))
+	for _, path := range []string{cachedFenceReference + "/prior-close/2026-08-06.json", cachedFenceReference + "/universe/2026-08-07.json"} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("reference %s: %v", path, err)
+		}
+	}
+	binding, err := cachedFenceBinding(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("preflight binding/references validated in %s", time.Since(started))
+	if binding.Identity() != "session-binding-v1:b68b50821b19ec69073cf039bc61a9d193825578b65708e49aec892aa97b7f7d" || len(binding.UniverseSymbols()) != 5_691 ||
+		binding.SessionStart() != time.Date(2026, 8, 7, 8, 0, 0, 0, time.UTC) || binding.SessionEnd() != time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC) {
+		t.Fatalf("recorded manifest binding=%s population=%d interval=[%s,%s)", binding.Identity(), len(binding.UniverseSymbols()), binding.SessionStart(), binding.SessionEnd())
+	}
+	t.Logf("GATE_E_PREFLIGHT path=%s bytes=%d file_sha256=%x artifact=%s binding=%s records=%d symbols=%d reference_dates=2026-08-06,2026-08-07 interval=[%s,%s) duration=%s", cachedFenceArtifact, info.Size(), digest.Sum(nil), cachedFenceArtifactID, binding.Identity(), 7_671_171, 5_691, binding.SessionStart().Format(time.RFC3339), binding.SessionEnd().Format(time.RFC3339), time.Since(started))
 }
 
 // TestCachedHydrationFenceAcceptance is the explicitly selected, no-network
@@ -73,7 +127,7 @@ func TestCachedHydrationFenceAcceptance(t *testing.T) {
 		}
 		rate = value
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 14*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 7*time.Minute+30*time.Second)
 	defer cancel()
 	manifest := preflightCachedFence(t, ctx)
 	defer manifest.handle.Close()
@@ -117,7 +171,7 @@ func preflightCachedFence(t *testing.T, ctx context.Context) cachedFenceManifest
 	if len(rowsBySymbol) != 5_502 {
 		t.Fatalf("valid-prior population=%d want=5502", len(rowsBySymbol))
 	}
-	rows, err := scanCachedFenceRows(ctx, handle, start, end, rowsBySymbol, nil)
+	rows, err := scanCachedFencePlayback(ctx, handle, start, end, rowsBySymbol, nil)
 	if err != nil {
 		t.Fatalf("derive cached hydration oracle: %v", err)
 	}
@@ -126,9 +180,6 @@ func preflightCachedFence(t *testing.T, ctx context.Context) cachedFenceManifest
 		if count > 0 {
 			values++
 		}
-	}
-	if err := handle.ValidateAgainContext(ctx); err != nil {
-		t.Fatalf("artifact changed after oracle scan: %v", err)
 	}
 	return cachedFenceManifest{binding: binding, start: start, end: end, metadata: metadata, handle: handle, rowsBySymbol: rowsBySymbol,
 		rows: rows, values: values, empties: int64(len(rowsBySymbol)) - values, preflight: time.Since(started)}
@@ -154,81 +205,42 @@ func cachedFenceBinding(ctx context.Context) (reference.Binding, error) {
 	return reference.AssembleBinding(facts, universe, priors)
 }
 
-type cachedArtifactLine struct {
-	Kind, Symbol, WindowStart, WindowEnd, ATSProvenance string
-	Open, High, Low, Close, Volume, VWAP                float64
-	AverageTradeSize                                    int64 `json:"average_trade_size"`
-}
-
-func (v *cachedArtifactLine) UnmarshalJSON(raw []byte) error {
-	type wire struct {
-		Kind             string  `json:"kind"`
-		Symbol           string  `json:"symbol"`
-		WindowStart      string  `json:"window_start"`
-		WindowEnd        string  `json:"window_end"`
-		Open             float64 `json:"open"`
-		High             float64 `json:"high"`
-		Low              float64 `json:"low"`
-		Close            float64 `json:"close"`
-		Volume           float64 `json:"volume"`
-		VWAP             float64 `json:"vwap"`
-		AverageTradeSize int64   `json:"average_trade_size"`
-		ATSProvenance    string  `json:"ats_provenance"`
+func scanCachedFencePlayback(ctx context.Context, handle *replayartifact.Handle, start, end time.Time, counts map[string]int64, consume func(playback.RecordEvidence) error) (int64, error) {
+	cursor, err := handle.BeginPlaybackThroughContext(ctx, end)
+	if err != nil {
+		return 0, err
 	}
-	var w wire
-	if err := json.Unmarshal(raw, &w); err != nil {
-		return err
+	if evidence, err := cursor.StartContext(ctx); err != nil || !evidence.Valid() || !evidence.Complete() {
+		return 0, fmt.Errorf("playback start: %v", err)
 	}
-	*v = cachedArtifactLine{Kind: w.Kind, Symbol: w.Symbol, WindowStart: w.WindowStart, WindowEnd: w.WindowEnd, Open: w.Open, High: w.High, Low: w.Low,
-		Close: w.Close, Volume: w.Volume, VWAP: w.VWAP, AverageTradeSize: w.AverageTradeSize, ATSProvenance: w.ATSProvenance}
-	return nil
-}
-
-func scanCachedFenceRows(ctx context.Context, reader io.Reader, start, end time.Time, counts map[string]int64, consume func(cachedArtifactLine) error) (int64, error) {
-	buffer := bufio.NewReaderSize(reader, 1<<20)
 	var total int64
-	for {
-		if err := ctx.Err(); err != nil {
-			return total, err
-		}
-		line, err := buffer.ReadBytes('\n')
-		if err != nil {
-			return total, err
-		}
-		var kind struct {
-			Kind string `json:"kind"`
-		}
-		if json.Unmarshal(line, &kind) != nil {
-			return total, errors.New("decode artifact line kind")
-		}
-		if kind.Kind == "coverage" {
-			return total, nil
-		}
-		if kind.Kind != "aggregate" {
-			continue
-		}
-		var value cachedArtifactLine
-		if err := json.Unmarshal(line, &value); err != nil {
-			return total, err
-		}
-		if _, selected := counts[value.Symbol]; !selected {
-			continue
-		}
-		window, err := time.Parse(time.RFC3339Nano, value.WindowStart)
-		if err != nil {
-			return total, err
-		}
-		if window.Before(start) || !window.Before(end) {
-			continue
-		}
-		counts[value.Symbol]++
-		total++
-		if consume != nil {
-			if err := consume(value); err != nil {
+	for group := start; !group.After(end); group = group.Add(time.Second) {
+		for {
+			record, ok, err := cursor.NextRecordContext(ctx, group)
+			if err != nil {
 				return total, err
 			}
+			if !ok {
+				break
+			}
+			if _, selected := counts[record.Symbol()]; selected && record.WindowStart().Before(end) {
+				counts[record.Symbol()]++
+				total++
+				if consume != nil {
+					if err := consume(record); err != nil {
+						return total, err
+					}
+				}
+			}
+		}
+		if _, err := cursor.FinishGroupContext(ctx, group); err != nil {
+			return total, err
 		}
 	}
+	if evidence, err := cursor.RequestedEndContext(ctx); err != nil || !evidence.Valid() || evidence.RequestedEnd() != end {
+		return total, fmt.Errorf("playback requested end: %v", err)
+	}
+	return total, nil
 }
 
 type cachedFenceClock struct {
@@ -399,6 +411,7 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 	if err != nil {
 		t.Fatal(err)
 	}
+	run.Engine().ArmEvaluationTimingForTest(time.Now)
 	defer func() {
 		shutdown, stop := context.WithTimeout(context.Background(), 10*time.Second)
 		defer stop()
@@ -501,24 +514,17 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 		state.rows = state.rows[:0]
 		return nil
 	}
-	rows, err := scanCachedFenceRows(ctx, manifest.handle, manifest.start, manifest.end, counts, func(value cachedArtifactLine) error {
-		start, err := time.Parse(time.RFC3339Nano, value.WindowStart)
+	rows, err := scanCachedFencePlayback(ctx, manifest.handle, manifest.start, manifest.end, counts, func(value playback.RecordEvidence) error {
+		v := value.Values()
+		row, err := engine.NewHydrationRow(value.Symbol(), value.WindowStart(), value.WindowEnd(), engine.AggregateValues{Open: v.Open, High: v.High, Low: v.Low, Close: v.Close,
+			Volume: v.Volume, VWAP: v.VWAP, AverageTradeSize: v.AverageTradeSize, ATSProvenance: engine.ATSProvenance(v.ATSProvenance)})
 		if err != nil {
 			return err
 		}
-		end, err := time.Parse(time.RFC3339Nano, value.WindowEnd)
-		if err != nil {
-			return err
-		}
-		row, err := engine.NewHydrationRow(value.Symbol, start, end, engine.AggregateValues{Open: value.Open, High: value.High, Low: value.Low, Close: value.Close,
-			Volume: value.Volume, VWAP: value.VWAP, AverageTradeSize: value.AverageTradeSize, ATSProvenance: engine.ATSProvenance(value.ATSProvenance)})
-		if err != nil {
-			return err
-		}
-		state := states[value.Symbol]
+		state := states[value.Symbol()]
 		state.rows = append(state.rows, row)
 		if len(state.rows) == cachedFenceRowsPerChunk {
-			return flush(value.Symbol)
+			return flush(value.Symbol())
 		}
 		return nil
 	})
@@ -617,6 +623,39 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 		time.Sleep(time.Millisecond)
 	}
 	result.tailDrain = time.Since(tailStarted)
+	for cycle := 0; cycle < 10; cycle++ {
+		runtime.GC()
+		var beforeCycle, afterCycle runtime.MemStats
+		runtime.ReadMemStats(&beforeCycle)
+		clock.set(manifest.end.Add(time.Duration(cycle+1) * time.Second))
+		started := time.Now()
+		admission, completion := run.Engine().AdmitTimer(ctx)
+		if admission != engine.AdmissionAdmitted || completion == nil {
+			t.Fatalf("Gate E cycle %d timer admission=%s", cycle+1, admission)
+		}
+		disposition := <-completion
+		result.cycleLock[cycle] = time.Since(started)
+		if disposition.Code != engine.DispositionTimerApplied {
+			t.Fatalf("Gate E cycle %d timer=%s/%s", cycle+1, disposition.Code, disposition.Reason)
+		}
+		timing := run.Engine().ObserveEvaluationTiming()
+		if timing.EngineSequence != disposition.EngineSequence {
+			t.Fatalf("Gate E cycle %d timing sequence=%d disposition=%d", cycle+1, timing.EngineSequence, disposition.EngineSequence)
+		}
+		result.cycleStage[cycle], result.cycleApply[cycle], result.cyclePublication[cycle] = timing.Stage, timing.Apply, timing.Publication
+		capture, err := run.CaptureSnapshot()
+		if err != nil {
+			t.Fatalf("Gate E cycle %d API capture: %v", cycle+1, err)
+		}
+		view, ok := InspectSnapshotCapture(capture)
+		if !ok {
+			t.Fatalf("Gate E cycle %d sealed API capture invalid", cycle+1)
+		}
+		result.cyclePublicationID[cycle] = view.Engine.Publication.PublicationID
+		runtime.ReadMemStats(&afterCycle)
+		result.cycleAlloc[cycle] = afterCycle.TotalAlloc - beforeCycle.TotalAlloc
+		t.Logf("GATE_E cycle=%d stage=%s apply=%s publication=%s total_lock=%s allocated_bytes=%d publication_id=%d", cycle+1, timing.Stage, timing.Apply, timing.Publication, result.cycleLock[cycle], result.cycleAlloc[cycle], result.cyclePublicationID[cycle])
+	}
 	runtime.GC()
 	var after runtime.MemStats
 	runtime.ReadMemStats(&after)
@@ -667,6 +706,11 @@ func assertCachedFence(t *testing.T, manifest cachedFenceManifest, result cached
 	}
 	if !result.accounting || result.maximumQueued >= 512 {
 		problems = append(problems, fmt.Sprintf("accounting=%t queue_high=%d", result.accounting, result.maximumQueued))
+	}
+	for cycle := range result.cycleLock {
+		if result.cycleLock[cycle] >= 2*time.Second || result.cyclePublicationID[cycle] == 0 || cycle > 0 && result.cyclePublicationID[cycle] <= result.cyclePublicationID[cycle-1] {
+			problems = append(problems, fmt.Sprintf("cycle %d lock=%s publication=%d", cycle+1, result.cycleLock[cycle], result.cyclePublicationID[cycle]))
+		}
 	}
 	if len(problems) != 0 {
 		t.Fatalf("cached hydration fence acceptance failed: %s", strings.Join(problems, "; "))

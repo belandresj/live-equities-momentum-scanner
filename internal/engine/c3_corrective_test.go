@@ -253,7 +253,7 @@ func TestC3R1AtomicCandidateAndPublicationIdentity(t *testing.T) {
 	e.state.aggregateEvaluator.current = cloneAggregateEvaluation(current)
 	state := e.state.binding.symbols[0].aggregates
 	ensurePriceRangeState(state).result = evaluatePriceRangeFeatures(e.state.binding, &e.state.binding.symbols[0], at)
-	applyActivityResult(ensureActivityState(state), evaluateActivityFeatures(e.state.binding, state, at))
+	applyActivityResult(state, e.state.binding, evaluateActivityFeatures(e.state.binding, state, at))
 	beforeT, beforeEvaluation := *e.state.committedT, cloneAggregateEvaluation(e.state.aggregateEvaluator.current)
 	beforePrice, beforeActivity, beforeQualification := state.priceRange.result, state.activity.result, state.qualification.result
 	bad := current

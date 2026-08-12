@@ -194,8 +194,7 @@ func TestC3ACT02CorrectionLongPathDifferentialTrace(t *testing.T) {
 		// sufficient state rather than a raw Activity bar copy.
 		e.mu.Lock()
 		e.state.committedT = immutableTime(at)
-		activity := ensureActivityState(e.state.binding.symbols[e.state.binding.index["AAA"]].aggregates)
-		applyActivityResult(activity, evaluateActivityFeatures(e.state.binding, e.state.binding.symbols[e.state.binding.index["AAA"]].aggregates, at))
+		applyActivityResult(e.state.binding.symbols[e.state.binding.index["AAA"]].aggregates, e.state.binding, evaluateActivityFeatures(e.state.binding, e.state.binding.symbols[e.state.binding.index["AAA"]].aggregates, at))
 		e.mu.Unlock()
 
 		// The oldest identity remains mutable at exact H equality.
@@ -372,8 +371,7 @@ func runActivityPermutationTrace(t *testing.T, binding interface {
 	e.delay = delay
 	e.state.committedT = immutableTime(at)
 	state := e.state.binding.symbols[e.state.binding.index["AAA"]].aggregates
-	activity := ensureActivityState(state)
-	applyActivityResult(activity, evaluateActivityFeatures(e.state.binding, state, at))
+	applyActivityResult(state, e.state.binding, evaluateActivityFeatures(e.state.binding, state, at))
 	e.mu.Unlock()
 	now = at.Add(delay)
 	admission, completion := e.AdmitTimer(context.Background())
