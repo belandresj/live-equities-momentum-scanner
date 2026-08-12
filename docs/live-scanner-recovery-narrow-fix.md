@@ -36,7 +36,7 @@ This is the sole ledger; prior corrections are evidence.
 | Correction contract | `reopened` | Planning milestone `6381f6c`; Gate E failed before preload, so A-E acceptance and focused final review are not available | Preserve the one-run failure; do not run Gate F or claim acceptance |
 | S1 — stable live path | `accepted` | `P-NARROW-LIVE` and Gate B passed 2026-08-11; exact evidence below | Measure the S2 17:15 boundary before any Activity change |
 | S2 — measured mature cost | `proof_incomplete` | Activity correction and synthetic A-D evidence pass; the single Gate E run was terminated in production-reader validation before any cached row or cycle | Preserve implementation/evidence as a correction milestone; no final acceptance |
-| S2-R — production-reader resource diagnosis | `correction_active` | Compact trust corpus and 100,000/500,000-record production-reader rungs prove linear transient allocation of about 7,667 bytes per record with no retained-state growth; exact evidence below | Remove only the measured redundant canonical decode/re-encode allocation, then repeat the narrow proof/trust corpus before increasing scale |
+| S2-R — production-reader resource diagnosis | `accepted_prerequisite` | Corrected exact reader validates all 2,584,011,150 bytes and 7,671,171 records in 40.53s with 20.30 MB peak RSS; compact trust/scale/repository/race/vet/review evidence is clean | Request explicit owner authorization for one replacement Gate E composition; do not run Gate F |
 
 ### S1 acceptance evidence — 2026-08-11
 
@@ -309,6 +309,59 @@ tests, package short, `go test -short -timeout 2m ./...` in 9.24 seconds,
 seconds, `go vet ./...` in 0.48 seconds, and `git diff --check`. The next action
 is one reader-only validation of the exact artifact with the exact binding and
 resource/progress reporting. It is not Gate E composition.
+
+The exact reader-only command then passed once:
+
+```text
+/usr/bin/time -lp env REPLAYARTIFACT_EXACT_READER=1 go test -timeout 3m ./internal/replayartifact -run '^TestOpenValidatedContextExactArtifactResource$' -count=1 -v
+```
+
+The parent preflight recomputed file SHA-256
+`e7e33c7981ed55cb12408ee1145f78e69c11caca52fc34b3c08484a1857db189`
+and re-established the exact 5,691-symbol binding and session interval. A fresh
+child then used only `OpenValidatedContext` in `complete_final_bars` mode and
+reported:
+
+| Measurement | Exact result |
+| --- | ---: |
+| Reader wall / child total / command total | 40.530s / 42.31s / 44.35s |
+| User CPU / system CPU | 45.802s / 2.995s |
+| Artifact bytes / records | 2,584,011,150 / 7,671,171 |
+| Coverage / empty symbols | 5,691 / 172 |
+| Peak Go heap / retained heap | 3,966,976 B / 370,936 B |
+| Reader current RSS before / after / peak | 19,496,960 B / 17,743,872 B / 20,299,776 B |
+| Cumulative allocation / GC | 25,848,661,336 B / 12,178 |
+
+The final phase was `validated`, final ordinal was 7,671,171, final progress
+bytes equaled the file size, and artifact ID was exactly
+`sha256:fce95a904bb37c3d63bfe0a2988ac78aa0e0a2ee4c8d171bdca27fcd00f8808a`.
+No playback cursor, preload, engine, operations runtime, Activity evaluation,
+Gate E cycle, provider, credential, or live request participated.
+
+The historical 27.8-second disappearance did not have a recoverable signal or
+macOS diagnostic. It removed the whole command session: neither Go, the shell,
+nor the parent `/usr/bin/time` could report status. A 35-second idle child and a
+35-second CPU-bound child both completed through the same execution supervisor,
+and the corrected exact reader completed in 44.35 seconds, excluding a general
+approximately-28-second supervisor CPU/wall limit. The scale ladder and exact
+run also keep live heap/RSS near 20--23 MB, excluding an unbounded retained-
+reader-state or ordinary process-OOM explanation. The strongest supported
+classification is therefore a one-off external process-group/session
+termination; whether its initiating trigger was host resource enforcement or
+execution-supervisor state is no longer recoverable from available evidence.
+The demonstrated reader defect was transient allocation/GC amplification, not
+proved as the direct kill mechanism.
+
+`P-NARROW-READER-RESOURCE` is accepted for the production-reader prerequisite.
+Recommended reader bounds remain `MaximumBytes=3<<30`,
+`MaximumRecords=8_000_000`, a 150-second direct-reader context, and a
+three-minute reader-proof command. The proposed replacement Gate E remains the
+original bounded composition command below; it is not authorized by this
+diagnostic result and was not executed:
+
+```text
+/usr/bin/time -p env CACHED_HYDRATION_ACCEPTANCE=1 CACHED_HYDRATION_RATE_MULTIPLIER=1 go test -timeout 8m ./internal/operations -run '^TestCachedHydrationFenceAcceptance$' -count=1 -v
+```
 
 ## Sections 1-4 — Outcome, scope, ownership, and settled boundary
 

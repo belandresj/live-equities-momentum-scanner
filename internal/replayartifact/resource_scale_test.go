@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,9 +23,21 @@ import (
 
 	"github.com/belandresj/live-equities-momentum-scanner/internal/engine"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/reference"
+	"github.com/belandresj/live-equities-momentum-scanner/internal/session"
 )
 
-const maximumDiagnosticScaleRecords = int64(2_000_000)
+const (
+	maximumDiagnosticScaleRecords = int64(2_000_000)
+	exactReaderArtifactPath       = "/Users/joshuabelandres/Dev/live-equities-momentum-scanner/var/aggregate-replay/aggregate-replay-fce95a904bb37c3d63bfe0a2988ac78aa0e0a2ee4c8d171bdca27fcd00f8808a.jsonl"
+	exactReaderReferenceDirectory = "/Users/joshuabelandres/Dev/live-equities-momentum-scanner/var/reference"
+	exactReaderFileBytes          = int64(2_584_011_150)
+	exactReaderFileSHA256         = "e7e33c7981ed55cb12408ee1145f78e69c11caca52fc34b3c08484a1857db189"
+	exactReaderArtifactID         = "sha256:fce95a904bb37c3d63bfe0a2988ac78aa0e0a2ee4c8d171bdca27fcd00f8808a"
+	exactReaderBindingID          = "session-binding-v1:b68b50821b19ec69073cf039bc61a9d193825578b65708e49aec892aa97b7f7d"
+	exactReaderRecords            = int64(7_671_171)
+	exactReaderCoverageEntries    = int64(5_691)
+	exactReaderEmptySymbols       = int64(172)
+)
 
 type resourceFixture struct {
 	path       string
@@ -36,6 +49,8 @@ type resourceFixture struct {
 
 type readerResourceResult struct {
 	Records              int64   `json:"records"`
+	CoverageEntries      int64   `json:"coverage_entries"`
+	EmptySymbols         int64   `json:"empty_symbols"`
 	Bytes                int64   `json:"bytes"`
 	Phase                string  `json:"phase"`
 	LastOrdinal          int64   `json:"last_ordinal"`
@@ -121,6 +136,78 @@ func TestOpenValidatedContextResourceScale(t *testing.T) {
 	}
 }
 
+// TestOpenValidatedContextExactArtifactResource is the separately selected
+// exact-input rung of P-NARROW-READER-RESOURCE. It performs only cache-based
+// binding resolution and first-pass production validation; it never constructs
+// playback, preload, engine, or operations state.
+func TestOpenValidatedContextExactArtifactResource(t *testing.T) {
+	if testing.Short() || os.Getenv("REPLAYARTIFACT_EXACT_READER") != "1" {
+		t.Skip("set REPLAYARTIFACT_EXACT_READER=1 for the explicit exact-artifact reader proof")
+	}
+	preflightContext, cancelPreflight := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelPreflight()
+	info, err := os.Stat(exactReaderArtifactPath)
+	if err != nil || info.Size() != exactReaderFileBytes {
+		t.Fatalf("exact artifact stat: err=%v bytes=%d expected=%d", err, sizeOrZero(info), exactReaderFileBytes)
+	}
+	fileDigest, err := hashFileContext(preflightContext, exactReaderArtifactPath)
+	if err != nil || fileDigest != exactReaderFileSHA256 {
+		t.Fatalf("exact artifact file SHA-256: err=%v got=%s expected=%s", err, fileDigest, exactReaderFileSHA256)
+	}
+	binding := exactReaderBinding(t, preflightContext)
+	requireExactReaderBinding(t, binding)
+	t.Logf("exact preflight path=%s bytes=%d file_sha256=%s binding=%s symbols=%d interval=[%s,%s)",
+		exactReaderArtifactPath, info.Size(), fileDigest, binding.Identity(), len(binding.UniverseSymbols()),
+		binding.SessionStart().Format(time.RFC3339Nano), binding.SessionEnd().Format(time.RFC3339Nano))
+
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	childContext, cancelChild := context.WithTimeout(context.Background(), 165*time.Second)
+	defer cancelChild()
+	command := exec.CommandContext(childContext, executable, "-test.run=^TestOpenValidatedContextExactArtifactResourceHelper$", "-test.v")
+	command.Env = append(os.Environ(), "REPLAYARTIFACT_EXACT_READER_HELPER=1")
+	output, commandErr := command.CombinedOutput()
+	if childContext.Err() != nil {
+		t.Fatalf("exact reader child exceeded 165s bound: %v\n%s", childContext.Err(), output)
+	}
+	if commandErr != nil {
+		t.Fatalf("exact reader child failed: %v\n%s", commandErr, output)
+	}
+	t.Logf("exact reader child:\n%s", output)
+}
+
+func TestOpenValidatedContextExactArtifactResourceHelper(t *testing.T) {
+	if testing.Short() || os.Getenv("REPLAYARTIFACT_EXACT_READER") != "1" || os.Getenv("REPLAYARTIFACT_EXACT_READER_HELPER") != "1" {
+		t.Skip("exact resource child only")
+	}
+	info, err := os.Stat(exactReaderArtifactPath)
+	if err != nil || info.Size() != exactReaderFileBytes {
+		t.Fatalf("exact artifact identity changed: err=%v bytes=%d expected=%d", err, sizeOrZero(info), exactReaderFileBytes)
+	}
+	bindingContext, cancelBinding := context.WithTimeout(context.Background(), 10*time.Second)
+	binding := exactReaderBinding(t, bindingContext)
+	cancelBinding()
+	requireExactReaderBinding(t, binding)
+	plan := ValidationPlan{
+		Binding: binding, Start: binding.SessionStart(), End: binding.SessionEnd(), ExpectedMode: CompleteFinalBars,
+		MaximumBytes: 3 << 30, MaximumRecords: 8_000_000,
+	}
+	canceledContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	if handle, openErr := OpenValidatedContext(canceledContext, exactReaderArtifactPath, plan); handle != nil || !errors.Is(openErr, context.Canceled) {
+		if handle != nil {
+			_ = handle.Close()
+		}
+		t.Fatalf("pre-canceled validation returned handle=%t err=%v", handle != nil, openErr)
+	}
+	measureOpenValidated(t, exactReaderArtifactPath, exactReaderFileBytes, plan, validationExpectation{
+		artifactID: exactReaderArtifactID, records: exactReaderRecords, coverageEntries: exactReaderCoverageEntries,
+		emptySymbols: exactReaderEmptySymbols,
+	}, 150*time.Second)
+}
+
 func TestOpenValidatedContextResourceHelper(t *testing.T) {
 	if os.Getenv("REPLAYARTIFACT_RESOURCE_HELPER") != "1" {
 		t.Skip("resource child only")
@@ -138,6 +225,19 @@ func TestOpenValidatedContextResourceHelper(t *testing.T) {
 	binding := replayArtifactTestBinding(t, []string{"AAA"})
 	start := binding.SessionStart()
 	end := start.Add(2 * time.Second)
+	measureOpenValidated(t, path, expectedBytes, ValidationPlan{
+		Binding: binding, Start: start, End: end, ExpectedMode: PartialSynthetic,
+		MaximumBytes: expectedBytes, MaximumRecords: expectedRecords,
+	}, validationExpectation{records: expectedRecords, coverageEntries: 1}, 75*time.Second)
+}
+
+type validationExpectation struct {
+	artifactID                             string
+	records, coverageEntries, emptySymbols int64
+}
+
+func measureOpenValidated(t *testing.T, path string, expectedBytes int64, plan ValidationPlan, expected validationExpectation, readerTimeout time.Duration) {
+	t.Helper()
 
 	runtime.GC()
 	var before runtime.MemStats
@@ -179,7 +279,7 @@ func TestOpenValidatedContextResourceHelper(t *testing.T) {
 	var progressMu sync.Mutex
 	progress := validationProgress{}
 	var observations int64
-	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), readerTimeout)
 	defer cancel()
 	ctx = withValidationProgressObserver(ctx, 10_000, func(value validationProgress) {
 		progressMu.Lock()
@@ -188,10 +288,7 @@ func TestOpenValidatedContextResourceHelper(t *testing.T) {
 		progressMu.Unlock()
 	})
 	wallStart := time.Now()
-	handle, openErr := OpenValidatedContext(ctx, path, ValidationPlan{
-		Binding: binding, Start: start, End: end, ExpectedMode: PartialSynthetic,
-		MaximumBytes: expectedBytes, MaximumRecords: expectedRecords,
-	})
+	handle, openErr := OpenValidatedContext(ctx, path, plan)
 	wall := time.Since(wallStart)
 	close(stopSampling)
 	<-samplingDone
@@ -202,8 +299,10 @@ func TestOpenValidatedContextResourceHelper(t *testing.T) {
 	if closeErr := handle.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	if metadata.AggregateRecords != expectedRecords {
-		t.Fatalf("validated records=%d expected=%d", metadata.AggregateRecords, expectedRecords)
+	if metadata.AggregateRecords != expected.records || metadata.CoverageEntries != expected.coverageEntries || metadata.EmptySymbols != expected.emptySymbols ||
+		(expected.artifactID != "" && metadata.ArtifactID != expected.artifactID) {
+		t.Fatalf("validated metadata=%+v expected artifact=%s records=%d coverage=%d empty=%d", metadata, expected.artifactID,
+			expected.records, expected.coverageEntries, expected.emptySymbols)
 	}
 
 	var current runtime.MemStats
@@ -219,12 +318,13 @@ func TestOpenValidatedContextResourceHelper(t *testing.T) {
 	progressMu.Lock()
 	finalProgress, progressCount := progress, observations
 	progressMu.Unlock()
-	if finalProgress.phase != "validated" || finalProgress.records != expectedRecords || finalProgress.lastOrdinal != expectedRecords || finalProgress.bytes != expectedBytes {
-		t.Fatalf("final progress=%+v expected records=%d bytes=%d", finalProgress, expectedRecords, expectedBytes)
+	if finalProgress.phase != "validated" || finalProgress.records != expected.records || finalProgress.lastOrdinal != expected.records || finalProgress.bytes != expectedBytes {
+		t.Fatalf("final progress=%+v expected records=%d bytes=%d", finalProgress, expected.records, expectedBytes)
 	}
 
 	result := readerResourceResult{
-		Records: expectedRecords, Bytes: expectedBytes, Phase: finalProgress.phase, LastOrdinal: finalProgress.lastOrdinal,
+		Records: metadata.AggregateRecords, CoverageEntries: metadata.CoverageEntries, EmptySymbols: metadata.EmptySymbols,
+		Bytes: expectedBytes, Phase: finalProgress.phase, LastOrdinal: finalProgress.lastOrdinal,
 		ArtifactID: metadata.ArtifactID, WallSeconds: wall.Seconds(),
 		UserCPUSeconds: usageAfter.userSeconds - usageBefore.userSeconds, SystemCPUSeconds: usageAfter.systemSeconds - usageBefore.systemSeconds,
 		HeapAllocBefore: before.HeapAlloc, HeapAllocCurrent: current.HeapAlloc, HeapAllocRetained: retained.HeapAlloc,
@@ -252,6 +352,74 @@ func TestOpenValidatedContextResourceHelper(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+}
+
+func exactReaderBinding(t *testing.T, ctx context.Context) reference.Binding {
+	t.Helper()
+	schedule, err := session.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := schedule.ForTradingDate("2026-08-07")
+	if err != nil {
+		t.Fatal(err)
+	}
+	universe, err := (&reference.Resolver{DataDir: exactReaderReferenceDirectory, Schedule: schedule}).Resolve(ctx, facts)
+	if err != nil {
+		t.Fatalf("resolve exact-date cached universe: %v", err)
+	}
+	priors, err := (&reference.PriorCloseResolver{DataDir: exactReaderReferenceDirectory, Schedule: schedule}).Resolve(ctx, facts, universe)
+	if err != nil {
+		t.Fatalf("resolve exact-date cached prior closes: %v", err)
+	}
+	binding, err := reference.AssembleBinding(facts, universe, priors)
+	if err != nil {
+		t.Fatalf("assemble exact cached binding: %v", err)
+	}
+	return binding
+}
+
+func requireExactReaderBinding(t *testing.T, binding reference.Binding) {
+	t.Helper()
+	wantStart := time.Date(2026, 8, 7, 8, 0, 0, 0, time.UTC)
+	wantEnd := time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)
+	if binding.Identity() != exactReaderBindingID || len(binding.UniverseSymbols()) != int(exactReaderCoverageEntries) ||
+		binding.SessionStart() != wantStart || binding.SessionEnd() != wantEnd {
+		t.Fatalf("exact binding mismatch: id=%s symbols=%d interval=[%s,%s)", binding.Identity(), len(binding.UniverseSymbols()),
+			binding.SessionStart().Format(time.RFC3339Nano), binding.SessionEnd().Format(time.RFC3339Nano))
+	}
+}
+
+func hashFileContext(ctx context.Context, path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	digest := sha256.New()
+	buffer := make([]byte, 1<<20)
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		count, readErr := file.Read(buffer)
+		if count > 0 {
+			_, _ = digest.Write(buffer[:count])
+		}
+		if errors.Is(readErr, io.EOF) {
+			return hex.EncodeToString(digest.Sum(nil)), nil
+		}
+		if readErr != nil {
+			return "", readErr
+		}
+	}
+}
+
+func sizeOrZero(info os.FileInfo) int64 {
+	if info == nil {
+		return 0
+	}
+	return info.Size()
 }
 
 type processUsage struct {
