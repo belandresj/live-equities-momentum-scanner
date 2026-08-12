@@ -1,7 +1,8 @@
 # Live scanner recovery narrow fix
 
-**Status:** Reopened after the single Gate E run was externally terminated
-before preload; S1 accepted and S2 deterministic correction passes A-D.
+**Status:** Reopened after the authorized replacement Gate E exhausted its
+7m30s internal deadline during hydration preload; S1 and Gates A-D remain
+accepted, and the reader/playback prerequisites are corrected and proved.
 
 **Boundary and completed-contract authority:** Direct owner request on
 2026-08-11 to use the read-only recovery review and specify the narrow fix.
@@ -33,10 +34,11 @@ This is the sole ledger; prior corrections are evidence.
 
 | Item | State | Evidence/review | Next action |
 | --- | --- | --- | --- |
-| Correction contract | `reopened` | Planning milestone `6381f6c`; Gate E failed before preload, so A-E acceptance and focused final review are not available | Preserve the one-run failure; do not run Gate F or claim acceptance |
-| S1 — stable live path | `accepted` | `P-NARROW-LIVE` and Gate B passed 2026-08-11; exact evidence below | Measure the S2 17:15 boundary before any Activity change |
-| S2 — measured mature cost | `proof_incomplete` | Activity correction and synthetic A-D evidence pass; the single Gate E run was terminated in production-reader validation before any cached row or cycle | Preserve implementation/evidence as a correction milestone; no final acceptance |
-| S2-R — production-reader resource diagnosis | `accepted_prerequisite` | Corrected exact reader validates all 2,584,011,150 bytes and 7,671,171 records in 40.53s with 20.30 MB peak RSS; compact trust/scale/repository/race/vet/review evidence is clean | Request explicit owner authorization for one replacement Gate E composition; do not run Gate F |
+| Correction contract | `reopened` | Planning milestone `6381f6c`; the initial Gate E process was externally terminated before preload and the authorized replacement later canceled during preload at its exact 7m30s context deadline | Preserve both failures; do not run Gate F or claim A-E acceptance |
+| S1 — stable live path | `accepted` | `P-NARROW-LIVE` and Gate B passed 2026-08-11; exact evidence below | Preserve; no S1 rerun is required by S2-P |
+| S2 — measured mature cost | `proof_incomplete` | Activity correction and synthetic A-D evidence pass; replacement Gate E reached production hydration but canceled before terminal/fence/cycles, so cached composition remains unproved | Preserve implementation/evidence; another Gate E requires a new explicit authorization |
+| S2-R — production-reader resource diagnosis | `accepted_prerequisite` | Corrected exact reader validates all 2,584,011,150 bytes and 7,671,171 records in 40.53s with 20.30 MB peak RSS; compact trust/scale/repository/race/vet/review evidence is clean | Complete; reused by S2-P and any later authorized composition |
+| S2-P — production-playback preparation correction | `accepted_prerequisite` | One trusted requested-prefix manifest and reused same-open cursor reduce five strict parses to three. Exact reader-only proof validates 7,581,690 selected rows and 5,439/63 value/empty symbols in 2m6.65s; focused trust/resource, short/race/vet, and required review are clean | Stop; do not rerun Gate E without new explicit authorization and do not run Gate F |
 
 ### S1 acceptance evidence — 2026-08-11
 
@@ -355,13 +357,89 @@ proved as the direct kill mechanism.
 `P-NARROW-READER-RESOURCE` is accepted for the production-reader prerequisite.
 Recommended reader bounds remain `MaximumBytes=3<<30`,
 `MaximumRecords=8_000_000`, a 150-second direct-reader context, and a
-three-minute reader-proof command. The proposed replacement Gate E remains the
-original bounded composition command below; it is not authorized by this
-diagnostic result and was not executed:
+three-minute reader-proof command. At this prerequisite gate, the proposed
+replacement Gate E remained the original bounded composition command below; it
+was not yet authorized by this diagnostic result or executed:
 
 ```text
 /usr/bin/time -p env CACHED_HYDRATION_ACCEPTANCE=1 CACHED_HYDRATION_RATE_MULTIPLIER=1 go test -timeout 8m ./internal/operations -run '^TestCachedHydrationFenceAcceptance$' -count=1 -v
 ```
+
+### S2-P replacement Gate E diagnosis and playback correction — 2026-08-11
+
+The owner authorized exactly one replacement Gate E execution. The unchanged
+command reached production hydration and then failed exactly at the internal
+7m30s deadline:
+
+```text
+cached_hydration_fence_acceptance_test.go:134: hydration chunk not admitted
+--- FAIL: TestCachedHydrationFenceAcceptance (450.01s)
+FAIL github.com/belandresj/live-equities-momentum-scanner/internal/operations 450.396s
+real 451.89
+user 471.19
+sys 65.81
+```
+
+The engine admission implementation classifies an already-expired context as
+`not_admitted_canceled`; the harness had collapsed that exact result into the
+generic message. This was not a malformed chunk disposition, queue-capacity
+rejection, Activity-cycle failure, terminal/fence failure, or market-semantic
+contradiction. No hydration terminal, ingress fence, readiness transition, or
+one of the ten measured cycles was reached.
+
+Inspection identified a proof-mechanics defect. `OpenValidatedContext` parsed
+the complete 2,584,011,150-byte artifact once. Each of the harness's two
+`BeginPlaybackThroughContext` calls then performed a complete validation pass
+and a complete same-open streaming/suffix pass. Gate E therefore performed
+five strict full-artifact parses around a 7,581,690-row synchronous hydration
+preload, even though the prior harness used a direct parser and a 14-minute
+internal context. The accepted 40.53-second reader proof measured only the
+first of those five passes and did not establish the combined eight-minute
+composition.
+
+The correction keeps every C4 trust decision and removes only redundant work.
+The playback first pass now captures one immutable requested-prefix count per
+binding symbol, tied to artifact ID, binding ID, and requested end. Gate E uses
+that bounded planning evidence to construct exact chunk totals, then reuses the
+same cursor for hydration and final suffix/digest/seal/file-identity
+validation. The planning evidence cannot represent terminal success, and no
+hydration terminal, fence, or readiness result is possible until the second
+pass returns valid requested-end evidence. Returned count maps are detached.
+Partial artifacts receive no requested-prefix evidence.
+
+The playback canonical hot path now uses exact canonical kind-prefix dispatch
+and the allocation-light JSON string encoder already differentially proved for
+the production validator. Closed-schema decode, duplicate/unknown rejection,
+signed-zero normalization, exact whole-line canonical comparison, ordinal and
+group order, coverage, digest/seal/EOF, cancellation, and same-open mutation
+containment remain mandatory. Gate E diagnostics now report fixed-cardinality
+progress and exact symbol/chunk/emitted rows/admission/context/queue/operational
+state instead of the generic failure.
+
+Bounded playback measurements reported:
+
+| Records | Prepare | Stream | Allocation per pass |
+| ---: | ---: | ---: | ---: |
+| 100,000 | 458.890 ms | 439.355 ms | about 281.6 MB |
+| 500,000 | 2.200 s | 2.225 s | about 1.408 GB |
+
+The exact reader-only proof—no engine, hydration runtime, live adapter, fence,
+publication, or Gate E cycle—then passed once. It produced a trusted 17:15
+prefix of 7,587,384 artifact records, including the exact valid-prior subset of
+7,581,690 rows, 5,439 value symbols, and 63 successful-empty symbols.
+Preparation took 1m23.484s, the reused same-open streaming/suffix pass took
+43.161s, and total test work took 2m6.65s (`real 128.73`, `user 141.11`,
+`sys 8.89`). The corrected design uses three strict parses rather than five.
+
+Focused canonical/adversarial, immutable-prefix, requested-end/replay, and
+package tests pass. `go test -short -timeout 2m ./...`, focused short race for
+playback/replayartifact/replay/operations, `go vet ./...`, and
+`git diff --check` are clean. The required `gpt-5.6-sol` medium read-only
+persisted-trust review found no P1/P2. Its residual limitation is explicit:
+this proves the corrected exact reader/preparation boundary, not hydration
+throughput, the ten cycles, or Gate E's eight-minute composition. The consumed
+replacement Gate E was not rerun, and Gate F, credentials, provider requests,
+deployment, push, rebase, and amend remain unexecuted.
 
 ## Sections 1-4 — Outcome, scope, ownership, and settled boundary
 

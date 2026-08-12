@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -115,6 +116,17 @@ type RequestedEndEvidence struct {
 	prefixRecords uint64
 }
 
+// RequestedPrefixEvidence is immutable first-pass planning evidence for one
+// requested application boundary. It is not terminal playback success: the
+// same-open second pass must still reach RequestedEndEvidence before a caller
+// may claim the requested prefix complete.
+type RequestedPrefixEvidence struct {
+	evidence      evidence
+	requestedEnd  time.Time
+	prefixRecords uint64
+	recordCounts  map[string]int64
+}
+
 type evidence struct {
 	valid, complete bool
 	artifactID      string
@@ -172,6 +184,31 @@ func (e RequestedEndEvidence) ArtifactEnd() time.Time  { return e.evidence.end }
 func (e RequestedEndEvidence) RequestedEnd() time.Time { return e.requestedEnd }
 func (e RequestedEndEvidence) TotalRecords() uint64    { return e.evidence.totalRecords }
 func (e RequestedEndEvidence) PrefixRecords() uint64   { return e.prefixRecords }
+func (e RequestedPrefixEvidence) Valid() bool {
+	if !e.evidence.valid || !e.evidence.complete || e.requestedEnd != e.evidence.requestedEnd ||
+		!e.evidence.start.Before(e.requestedEnd) || e.requestedEnd.After(e.evidence.end) || len(e.recordCounts) == 0 {
+		return false
+	}
+	var total uint64
+	for symbol, count := range e.recordCounts {
+		if symbol == "" || count < 0 {
+			return false
+		}
+		total += uint64(count)
+	}
+	return total == e.prefixRecords
+}
+func (e RequestedPrefixEvidence) ArtifactID() string      { return e.evidence.artifactID }
+func (e RequestedPrefixEvidence) BindingID() string       { return e.evidence.bindingID }
+func (e RequestedPrefixEvidence) RequestedEnd() time.Time { return e.requestedEnd }
+func (e RequestedPrefixEvidence) PrefixRecords() uint64   { return e.prefixRecords }
+func (e RequestedPrefixEvidence) RecordCounts() map[string]int64 {
+	result := make(map[string]int64, len(e.recordCounts))
+	for symbol, count := range e.recordCounts {
+		result[symbol] = count
+	}
+	return result
+}
 
 type Cursor struct {
 	file                *os.File
@@ -186,6 +223,7 @@ type Cursor struct {
 	sealed              bool
 	validatedArtifactID string
 	expectedRecords     uint64
+	requestedPrefix     RequestedPrefixEvidence
 	recordCounts        map[string]int64
 	priorRecord         *record
 	validatedSize       int64
@@ -225,6 +263,8 @@ func NewContext(ctx context.Context, file *os.File, plan Plan) (*Cursor, error) 
 	if _, err := first.StartContext(ctx); err != nil {
 		return nil, err
 	}
+	var prefixCounts map[string]int64
+	var prefixRecords uint64
 	for group := plan.Start; !group.After(plan.End); group = group.Add(time.Second) {
 		for {
 			record, ok, err := first.NextRecordContext(ctx, group)
@@ -238,6 +278,13 @@ func NewContext(ctx context.Context, file *os.File, plan Plan) (*Cursor, error) 
 		}
 		if _, err := first.FinishGroupContext(ctx, group); err != nil {
 			return nil, err
+		}
+		if group.Equal(plan.RequestedEnd) {
+			prefixCounts = make(map[string]int64, len(plan.Symbols))
+			for _, symbol := range plan.Symbols {
+				prefixCounts[symbol] = first.recordCounts[symbol]
+			}
+			prefixRecords = first.ordinal
 		}
 	}
 	endEvidence, err := first.EndContext(ctx)
@@ -253,6 +300,16 @@ func NewContext(ctx context.Context, file *os.File, plan Plan) (*Cursor, error) 
 	second := newCursor(file, plan)
 	second.validatedArtifactID = plan.ArtifactID
 	second.expectedRecords = endEvidence.TotalRecords()
+	if plan.Mode == CompleteFinalBars {
+		second.requestedPrefix = RequestedPrefixEvidence{
+			evidence: evidence{valid: true, complete: true, artifactID: plan.ArtifactID, bindingID: plan.BindingID,
+				start: plan.Start, end: plan.End, requestedEnd: plan.RequestedEnd, totalRecords: endEvidence.TotalRecords()},
+			requestedEnd: plan.RequestedEnd, prefixRecords: prefixRecords, recordCounts: prefixCounts,
+		}
+		if !second.requestedPrefix.Valid() {
+			return nil, classified(ErrorArtifactValidation, "requested prefix accounting is invalid")
+		}
+	}
 	info, err := file.Stat()
 	if err != nil {
 		return nil, errors.New("stat validated playback artifact")
@@ -262,6 +319,18 @@ func NewContext(ctx context.Context, file *os.File, plan Plan) (*Cursor, error) 
 		return nil, err
 	}
 	return second, nil
+}
+
+// RequestedPrefix returns bounded first-pass counts tied to the validated
+// artifact, binding, and requested end. The returned map is detached from the
+// cursor. It cannot substitute for RequestedEndEvidence from the second pass.
+func (c *Cursor) RequestedPrefix() (RequestedPrefixEvidence, error) {
+	if c == nil || !c.requestedPrefix.Valid() {
+		return RequestedPrefixEvidence{}, classified(ErrorArtifactValidation, "requested prefix evidence is unavailable")
+	}
+	evidence := c.requestedPrefix
+	evidence.recordCounts = evidence.RecordCounts()
+	return evidence, nil
 }
 
 func newCursor(file *os.File, plan Plan) *Cursor {
@@ -743,13 +812,12 @@ func parseTime(s string) (time.Time, error) {
 	return t, nil
 }
 func kindOf(line []byte) (string, error) {
-	var v struct {
-		Kind string `json:"kind"`
+	for _, kind := range [...]string{"aggregate", "coverage", "summary", "seal"} {
+		if bytes.HasPrefix(line, []byte(`{"kind":"`+kind+`",`)) {
+			return kind, nil
+		}
 	}
-	if json.Unmarshal(line, &v) != nil || v.Kind == "" {
-		return "", errors.New("line kind")
-	}
-	return v.Kind, nil
+	return "", errors.New("line kind")
 }
 func strictLine(line []byte, dst any) error {
 	if len(line) == 0 || line[len(line)-1] != '\n' {
@@ -820,10 +888,54 @@ func strictAggregate(line []byte, dst *aggregateLine) error {
 	return nil
 }
 func appendJSONString(dst []byte, value string) []byte {
-	var b bytes.Buffer
-	enc := json.NewEncoder(&b)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(value)
-	encoded := b.Bytes()
-	return append(dst, encoded[:len(encoded)-1]...)
+	const hex = "0123456789abcdef"
+	dst = append(dst, '"')
+	start := 0
+	for index := 0; index < len(value); {
+		if current := value[index]; current < utf8.RuneSelf {
+			if current >= 0x20 && current != '\\' && current != '"' {
+				index++
+				continue
+			}
+			dst = append(dst, value[start:index]...)
+			switch current {
+			case '\\', '"':
+				dst = append(dst, '\\', current)
+			case '\b':
+				dst = append(dst, `\b`...)
+			case '\f':
+				dst = append(dst, `\f`...)
+			case '\n':
+				dst = append(dst, `\n`...)
+			case '\r':
+				dst = append(dst, `\r`...)
+			case '\t':
+				dst = append(dst, `\t`...)
+			default:
+				dst = append(dst, '\\', 'u', '0', '0', hex[current>>4], hex[current&0x0f])
+			}
+			index++
+			start = index
+			continue
+		}
+		current, size := utf8.DecodeRuneInString(value[index:])
+		if current == utf8.RuneError && size == 1 {
+			dst = append(dst, value[start:index]...)
+			dst = append(dst, `\ufffd`...)
+			index++
+			start = index
+			continue
+		}
+		if current == '\u2028' || current == '\u2029' {
+			dst = append(dst, value[start:index]...)
+			dst = append(dst, '\\', 'u', '2', '0', '2', hex[current&0x0f])
+			index += size
+			start = index
+			continue
+		}
+		index += size
+	}
+	dst = append(dst, value[start:]...)
+	dst = append(dst, '"')
+	return dst
 }

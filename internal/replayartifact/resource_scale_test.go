@@ -136,6 +136,77 @@ func TestOpenValidatedContextResourceScale(t *testing.T) {
 	}
 }
 
+// TestPlaybackResourceScale is the explicit bounded resource proof for the
+// production playback parser's validation and streaming passes. It does not
+// exercise hydration, the operations runtime, or Gate E.
+func TestPlaybackResourceScale(t *testing.T) {
+	if testing.Short() {
+		t.Skip("playback resource scale proof is an explicit acceptance test")
+	}
+	recordText := os.Getenv("REPLAYARTIFACT_PLAYBACK_RESOURCE_RECORDS")
+	if recordText == "" {
+		t.Skip("set REPLAYARTIFACT_PLAYBACK_RESOURCE_RECORDS to one bounded scale rung")
+	}
+	records, err := strconv.ParseInt(recordText, 10, 64)
+	if err != nil || records <= 0 || records > 500_000 {
+		t.Fatalf("invalid playback resource cardinality %q (maximum 500000)", recordText)
+	}
+	binding := replayArtifactTestBinding(t, []string{"AAA"})
+	start := binding.SessionStart()
+	end := start.Add(2 * time.Second)
+	fixture := writeResourceFixture(t, binding, start, end, records)
+	plan := ValidationPlan{Binding: binding, Start: start, End: end, ExpectedMode: PartialSynthetic, MaximumBytes: fixture.bytes, MaximumRecords: records}
+	handle, err := OpenValidatedContext(context.Background(), fixture.path, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handle.Close()
+
+	runtime.GC()
+	var prepareBefore, prepareAfter runtime.MemStats
+	runtime.ReadMemStats(&prepareBefore)
+	prepareStarted := time.Now()
+	cursor, err := handle.BeginPlaybackContext(context.Background())
+	prepareDuration := time.Since(prepareStarted)
+	runtime.ReadMemStats(&prepareAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runtime.GC()
+	var streamBefore, streamAfter runtime.MemStats
+	runtime.ReadMemStats(&streamBefore)
+	streamStarted := time.Now()
+	started, err := cursor.StartContext(context.Background())
+	if err != nil || !started.Valid() {
+		t.Fatalf("playback start=%+v err=%v", started, err)
+	}
+	var streamed uint64
+	for group := start; !group.After(end); group = group.Add(time.Second) {
+		for {
+			_, ok, nextErr := cursor.NextRecordContext(context.Background(), group)
+			if nextErr != nil {
+				t.Fatal(nextErr)
+			}
+			if !ok {
+				break
+			}
+			streamed++
+		}
+		if _, err := cursor.FinishGroupContext(context.Background(), group); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ended, err := cursor.EndContext(context.Background())
+	streamDuration := time.Since(streamStarted)
+	runtime.ReadMemStats(&streamAfter)
+	if err != nil || !ended.Valid() || streamed != uint64(records) || ended.TotalRecords() != uint64(records) {
+		t.Fatalf("playback end=%+v streamed=%d expected=%d err=%v", ended, streamed, records, err)
+	}
+	t.Logf("PLAYBACK_RESOURCE records=%d bytes=%d prepare=%s prepare_allocated_bytes=%d stream=%s stream_allocated_bytes=%d",
+		records, fixture.bytes, prepareDuration, prepareAfter.TotalAlloc-prepareBefore.TotalAlloc, streamDuration, streamAfter.TotalAlloc-streamBefore.TotalAlloc)
+}
+
 // TestOpenValidatedContextExactArtifactResource is the separately selected
 // exact-input rung of P-NARROW-READER-RESOURCE. It performs only cache-based
 // binding resolution and first-pass production validation; it never constructs

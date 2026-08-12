@@ -40,6 +40,7 @@ type cachedFenceManifest struct {
 	start, end            time.Time
 	metadata              replayartifact.Metadata
 	handle                *replayartifact.Handle
+	cursor                *playback.Cursor
 	rowsBySymbol          map[string]int64
 	rows, values, empties int64
 	preflight             time.Duration
@@ -112,6 +113,43 @@ func TestCachedHydrationFencePreflight(t *testing.T) {
 	t.Logf("GATE_E_PREFLIGHT path=%s bytes=%d file_sha256=%x artifact=%s binding=%s records=%d symbols=%d reference_dates=2026-08-06,2026-08-07 interval=[%s,%s) duration=%s", cachedFenceArtifact, info.Size(), digest.Sum(nil), cachedFenceArtifactID, binding.Identity(), 7_671_171, 5_691, binding.SessionStart().Format(time.RFC3339), binding.SessionEnd().Format(time.RFC3339), time.Since(started))
 }
 
+// TestCachedHydrationFencePreparedPlayback proves only that the corrected
+// production reader prepares one trusted 17:15 prefix and completes its
+// same-open streaming/suffix pass for the exact artifact. It constructs no
+// engine, hydration runtime, live adapter, fence, publication, or Gate E cycle.
+func TestCachedHydrationFencePreparedPlayback(t *testing.T) {
+	if testing.Short() || os.Getenv("CACHED_HYDRATION_PREPARED_PLAYBACK") != "1" {
+		t.Skip("set CACHED_HYDRATION_PREPARED_PLAYBACK=1")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute+45*time.Second)
+	defer cancel()
+	manifest := preflightCachedFence(t, ctx)
+	defer manifest.handle.Close()
+	if manifest.rows != 7_581_690 || manifest.values != 5_439 || manifest.empties != 63 {
+		t.Fatalf("prepared prefix rows=%d values=%d empty=%d", manifest.rows, manifest.values, manifest.empties)
+	}
+	counts := make(map[string]int64, len(manifest.rowsBySymbol))
+	for symbol := range manifest.rowsBySymbol {
+		counts[symbol] = 0
+	}
+	started := time.Now()
+	rows, err := scanCachedFencePlayback(ctx, manifest.cursor, manifest.start, manifest.end, counts, nil)
+	if err != nil || rows != manifest.rows {
+		t.Fatalf("prepared playback rows=%d expected=%d err=%v", rows, manifest.rows, err)
+	}
+	values := int64(0)
+	for _, count := range counts {
+		if count > 0 {
+			values++
+		}
+	}
+	if values != manifest.values {
+		t.Fatalf("prepared playback values=%d expected=%d", values, manifest.values)
+	}
+	t.Logf("GATE_E_READER_ONLY_PREPARED rows=%d values=%d empty=%d prepare=%s stream_and_suffix=%s total=%s", manifest.rows,
+		manifest.values, manifest.empties, manifest.preflight, time.Since(started), manifest.preflight+time.Since(started))
+}
+
 // TestCachedHydrationFenceAcceptance is the explicitly selected, no-network
 // production-path acceptance in docs/live-fence-finalization-cached-hydration-correction.md.
 // It is intentionally excluded from ordinary and generic non-short test runs.
@@ -162,18 +200,30 @@ func preflightCachedFence(t *testing.T, ctx context.Context) cachedFenceManifest
 		metadata.BindingIdentity != binding.Identity() || metadata.ReplayStart != binding.SessionStart() || metadata.ReplayEnd != binding.SessionEnd() {
 		t.Fatalf("sealed artifact identity mismatch: %+v binding=%s", metadata, binding.Identity())
 	}
+	cursor, err := handle.BeginPlaybackThroughContext(ctx, end)
+	if err != nil {
+		t.Fatalf("prepare trusted requested prefix: %v", err)
+	}
+	prefix, err := cursor.RequestedPrefix()
+	if err != nil || !prefix.Valid() || prefix.ArtifactID() != metadata.ArtifactID || prefix.BindingID() != binding.Identity() || prefix.RequestedEnd() != end {
+		t.Fatalf("trusted requested prefix invalid: valid=%t artifact=%s binding=%s requested_end=%s records=%d err=%v",
+			prefix.Valid(), prefix.ArtifactID(), prefix.BindingID(), prefix.RequestedEnd(), prefix.PrefixRecords(), err)
+	}
+	prefixCounts := prefix.RecordCounts()
 	rowsBySymbol := make(map[string]int64)
+	rows := int64(0)
 	for _, fact := range binding.PriorCloseFacts() {
 		if fact.Status() == reference.PriorCloseValid {
-			rowsBySymbol[fact.Symbol()] = 0
+			count, ok := prefixCounts[fact.Symbol()]
+			if !ok || count < 0 {
+				t.Fatalf("trusted requested prefix lacks %s", fact.Symbol())
+			}
+			rowsBySymbol[fact.Symbol()] = count
+			rows += count
 		}
 	}
 	if len(rowsBySymbol) != 5_502 {
 		t.Fatalf("valid-prior population=%d want=5502", len(rowsBySymbol))
-	}
-	rows, err := scanCachedFencePlayback(ctx, handle, start, end, rowsBySymbol, nil)
-	if err != nil {
-		t.Fatalf("derive cached hydration oracle: %v", err)
 	}
 	values := int64(0)
 	for _, count := range rowsBySymbol {
@@ -181,7 +231,9 @@ func preflightCachedFence(t *testing.T, ctx context.Context) cachedFenceManifest
 			values++
 		}
 	}
-	return cachedFenceManifest{binding: binding, start: start, end: end, metadata: metadata, handle: handle, rowsBySymbol: rowsBySymbol,
+	t.Logf("GATE_E_PREPARED artifact=%s requested_end=%s prefix_records=%d selected_rows=%d values=%d empty=%d duration=%s", metadata.ArtifactID,
+		end.Format(time.RFC3339), prefix.PrefixRecords(), rows, values, int64(len(rowsBySymbol))-values, time.Since(started))
+	return cachedFenceManifest{binding: binding, start: start, end: end, metadata: metadata, handle: handle, cursor: cursor, rowsBySymbol: rowsBySymbol,
 		rows: rows, values: values, empties: int64(len(rowsBySymbol)) - values, preflight: time.Since(started)}
 }
 
@@ -205,11 +257,7 @@ func cachedFenceBinding(ctx context.Context) (reference.Binding, error) {
 	return reference.AssembleBinding(facts, universe, priors)
 }
 
-func scanCachedFencePlayback(ctx context.Context, handle *replayartifact.Handle, start, end time.Time, counts map[string]int64, consume func(playback.RecordEvidence) error) (int64, error) {
-	cursor, err := handle.BeginPlaybackThroughContext(ctx, end)
-	if err != nil {
-		return 0, err
-	}
+func scanCachedFencePlayback(ctx context.Context, cursor *playback.Cursor, start, end time.Time, counts map[string]int64, consume func(playback.RecordEvidence) error) (int64, error) {
 	if evidence, err := cursor.StartContext(ctx); err != nil || !evidence.Valid() || !evidence.Complete() {
 		return 0, fmt.Errorf("playback start: %v", err)
 	}
@@ -503,9 +551,16 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 		}
 		admission, completion := run.Engine().AdmitHydrationChunk(ctx, input)
 		if admission != engine.AdmissionAdmitted || completion == nil {
-			return errors.New("hydration chunk not admitted")
+			return fmt.Errorf("hydration chunk symbol=%s ordinal=%d emitted=%d total=%d admission=%s context=%v queue=%+v operational=%+v",
+				symbol, state.chunks, state.emitted, total, admission, ctx.Err(), attempt.QueueAccounting(), run.Engine().ObserveOperational())
 		}
-		got := <-completion
+		var got engine.HydrationDisposition
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("hydration chunk symbol=%s ordinal=%d emitted=%d total=%d completion context=%v queue=%+v operational=%+v",
+				symbol, state.chunks, state.emitted, total, ctx.Err(), attempt.QueueAccounting(), run.Engine().ObserveOperational())
+		case got = <-completion:
+		}
 		if got.Code != engine.DispositionHydrationChunkApplied {
 			return fmt.Errorf("hydration chunk %s=%s/%s queue=%+v operational=%+v", symbol, got.Code, got.Reason, attempt.QueueAccounting(), run.Engine().ObserveOperational())
 		}
@@ -514,7 +569,8 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 		state.rows = state.rows[:0]
 		return nil
 	}
-	rows, err := scanCachedFencePlayback(ctx, manifest.handle, manifest.start, manifest.end, counts, func(value playback.RecordEvidence) error {
+	progressRows := int64(0)
+	rows, err := scanCachedFencePlayback(ctx, manifest.cursor, manifest.start, manifest.end, counts, func(value playback.RecordEvidence) error {
 		v := value.Values()
 		row, err := engine.NewHydrationRow(value.Symbol(), value.WindowStart(), value.WindowEnd(), engine.AggregateValues{Open: v.Open, High: v.High, Low: v.Low, Close: v.Close,
 			Volume: v.Volume, VWAP: v.VWAP, AverageTradeSize: v.AverageTradeSize, ATSProvenance: engine.ATSProvenance(v.ATSProvenance)})
@@ -523,6 +579,10 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 		}
 		state := states[value.Symbol()]
 		state.rows = append(state.rows, row)
+		progressRows++
+		if progressRows%500_000 == 0 {
+			t.Logf("GATE_E_HYDRATION_PROGRESS rows=%d elapsed=%s queue=%+v", progressRows, time.Since(historicalStarted), attempt.QueueAccounting())
+		}
 		if len(state.rows) == cachedFenceRowsPerChunk {
 			return flush(value.Symbol())
 		}
@@ -537,6 +597,7 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 		}
 	}
 	result.historical = time.Since(historicalStarted)
+	t.Logf("GATE_E_HYDRATION rows=%d duration=%s", rows, result.historical)
 	if rows != manifest.rows {
 		t.Fatalf("timed rows=%d oracle=%d", rows, manifest.rows)
 	}
