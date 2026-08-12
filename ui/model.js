@@ -11,6 +11,7 @@ const CURRENT_LIFECYCLE = new Set(["live", "hydrating"]);
 const BACKEND_READY_RANKING_MODE = new Set(["qualified_current", "degraded_bootstrap"]);
 const TIMESTAMP_BASIS = new Set(["", "none", "participant", "sip_fallback", "mixed"]);
 const SPREAD_QUALITY = new Set(["", "reviewed_ordinary", "known_special", "unclassified"]);
+const EVALUATOR_INTEGRITY_CATEGORY = new Set(["candidate_target_mismatch", "support_contradiction", "population_accounting", "qualification_accounting", "uncertainty_accounting", "feature_accounting", "ranking_projection", "ranking_row", "tq_intent", "unknown_evaluator_integrity"]);
 
 function fail(message) { throw new Error(message); }
 function object(value, name) {
@@ -201,7 +202,17 @@ export function validateSnapshot(snapshot) {
 
   fields(snapshot.checkpoint, CHECKPOINT_FIELDS, "checkpoint"); bool(snapshot.checkpoint.installed, "checkpoint.installed"); CHECKPOINT_FIELDS.slice(1).forEach(name => decimal(snapshot.checkpoint[name], `checkpoint.${name}`));
   if (!sumDecimal(snapshot.checkpoint.submitted, snapshot.checkpoint.in_progress, snapshot.checkpoint.pending, snapshot.checkpoint.completed, snapshot.checkpoint.failed, snapshot.checkpoint.canceled, snapshot.checkpoint.superseded)) fail("checkpoint conflict");
-  fields(snapshot.operations, ["sample_accounting_valid", ...OPERATION_UINT_FIELDS, ...OPERATION_DECIMAL_FIELDS], "operations"); bool(snapshot.operations.sample_accounting_valid, "operations.sample_accounting_valid"); OPERATION_UINT_FIELDS.forEach(name => uint(snapshot.operations[name], `operations.${name}`)); OPERATION_DECIMAL_FIELDS.forEach(name => decimal(snapshot.operations[name], `operations.${name}`));
+  const operationFields = ["sample_accounting_valid", ...OPERATION_UINT_FIELDS, ...OPERATION_DECIMAL_FIELDS];
+  if (snapshot.operations.integrity_failure !== undefined) operationFields.push("integrity_failure");
+  fields(snapshot.operations, operationFields, "operations"); bool(snapshot.operations.sample_accounting_valid, "operations.sample_accounting_valid"); OPERATION_UINT_FIELDS.forEach(name => uint(snapshot.operations[name], `operations.${name}`)); OPERATION_DECIMAL_FIELDS.forEach(name => decimal(snapshot.operations[name], `operations.${name}`));
+  if (snapshot.operations.integrity_failure !== undefined) {
+    const failure = snapshot.operations.integrity_failure;
+    const diagnosticFields = ["category", "engine_sequence", "candidate_time", "expected_time"];
+    for (const name of ["first_symbol", "first_field", "first_reason"]) if (failure[name] !== undefined) diagnosticFields.push(name);
+    fields(failure, diagnosticFields, "operations.integrity_failure"); string(failure.category, "operations.integrity_failure.category"); if (!EVALUATOR_INTEGRITY_CATEGORY.has(failure.category)) fail("operations.integrity_failure.category is unknown"); decimal(failure.engine_sequence, "operations.integrity_failure.engine_sequence");
+    optionalTimestamp(failure.candidate_time, "operations.integrity_failure.candidate_time"); optionalTimestamp(failure.expected_time, "operations.integrity_failure.expected_time");
+    for (const name of ["first_symbol", "first_field", "first_reason"]) if (failure[name] !== undefined) string(failure[name], `operations.integrity_failure.${name}`);
+  }
 
   if (replay) {
     if (snapshot.replay === undefined || snapshot.replay === null) fail("replay context conflict");
@@ -264,6 +275,7 @@ export function buildViewModel(input, transport = "connected") {
     watermarkLagMS: snapshot.status.watermark_lag_ms, accountingValid: snapshot.status.accounting_valid, sampleAccountingValid: snapshot.operations.sample_accounting_valid, tqPressure: snapshot.tq.pressure_mode, tqAggregateOnly: snapshot.tq.aggregate_only,
     tqUnknown: snapshot.tq.unknown, tqRetainedBoundHit: snapshot.tq.retained_bound_hit, tqKnownPresent: snapshot.tq.known_present, tqKnownAbsent: snapshot.tq.known_absent,
     recoveryPurpose: snapshot.recovery.purpose, recoveryGeneration: snapshot.recovery.generation, rows,
+    suppression: snapshot.publication.suppression, lifecycleReason: snapshot.publication.lifecycle_reason, integrityFailure: snapshot.operations.integrity_failure || null,
     hydrationProgress: hydration.progress, hydrationIssueText: hydration.issueText, hydrationIssues: hydration.issues !== 0n,
     warming, finalizing,
     diagnostics: diagnosticEntries(snapshot),

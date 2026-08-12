@@ -199,6 +199,56 @@ func TestPC10HTTPRoutesCORSAndLifecycle(t *testing.T) {
 	assertStatusAndOneCapture(t, handler, source, http.MethodGet, "/api/v1/snapshot", http.StatusOK)
 }
 
+func TestSuppressedEvaluatorIntegrityRemainsServable(t *testing.T) {
+	runtime, binding, now := newSnapshotRuntime(t)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := runtime.Shutdown(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	owner := runtime.Engine()
+	makeSnapshotReady(t, owner, binding, *now)
+	owner.ArmEvaluatorAccountingFaultForTest()
+	admission, completion := owner.AdmitTimer(context.Background())
+	if admission != engine.AdmissionAdmitted || completion == nil {
+		t.Fatalf("fault timer admission=%s", admission)
+	}
+	disposition := <-completion
+	if disposition.Code != engine.DispositionAccountingIntegrity || disposition.SuppressionDisposition != engine.SuppressionRestartRequired {
+		t.Fatalf("evaluator failure=%+v", disposition)
+	}
+	handler, err := NewHandler(runtime, HandlerConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(path string) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		return response
+	}
+	if response := request("/livez"); response.Code != http.StatusOK {
+		t.Fatalf("livez=%d %s", response.Code, response.Body.String())
+	}
+	ready := request("/readyz")
+	var readiness readinessResponse
+	if ready.Code != http.StatusServiceUnavailable || json.Unmarshal(ready.Body.Bytes(), &readiness) != nil || readiness.Reason != "suppressed" || readiness.PublicationID == nil || readiness.BindingIdentity == nil {
+		t.Fatalf("readyz=%d %s", ready.Code, ready.Body.String())
+	}
+	snapshotResponse := request("/api/v1/snapshot")
+	var snapshot Snapshot
+	if snapshotResponse.Code != http.StatusOK || json.Unmarshal(snapshotResponse.Body.Bytes(), &snapshot) != nil {
+		t.Fatalf("snapshot=%d %s", snapshotResponse.Code, snapshotResponse.Body.String())
+	}
+	if snapshot.Publication.Lifecycle != "suppressed" || snapshot.Publication.LifecycleReason != "accounting_integrity" || snapshot.Publication.Suppression != "restart_required" ||
+		snapshot.Status.BackendReady || snapshot.Status.RankingCurrent || snapshot.Status.ReadinessReason != "suppressed" || snapshot.Ranking.Mode != "suppressed" || len(snapshot.Rows) != 0 || snapshot.Publication.BindingIdentity != binding.Identity() ||
+		snapshot.Operations.IntegrityFailure == nil || snapshot.Operations.IntegrityFailure.Category != "population_accounting" || snapshot.Operations.IntegrityFailure.EngineSequence == "0" ||
+		snapshot.Operations.IntegrityFailure.FirstSymbol != "" || snapshot.Operations.IntegrityFailure.FirstField != "accounting.population" || snapshot.Operations.IntegrityFailure.FirstReason != "identity_mismatch" {
+		t.Fatalf("servable suppression=%+v", snapshot)
+	}
+}
+
 func TestPC10HTTPBoundsLoopbackCancellationAndProgress(t *testing.T) {
 	var nilSource *countingCaptureSource
 	if _, err := NewHandler(nilSource, HandlerConfig{}); err == nil {

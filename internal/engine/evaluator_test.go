@@ -90,7 +90,10 @@ func TestC3POP02AccountingIntegrityAndOverlap(t *testing.T) {
 		t.Fatal("accounting contradiction did not terminate the transition")
 	}
 	view := runtime.observePublication()
-	if view.kind != publicationUnavailableSentinel || view.lifecycleReason != lifecycleReasonAccountingIntegrity || view.currentMarketClaim {
+	operational := runtime.ObserveOperational()
+	if view.kind != publicationUnavailableSentinel || view.lifecycleReason != lifecycleReasonAccountingIntegrity || view.currentMarketClaim ||
+		operational.IntegrityFailure == nil || operational.IntegrityFailure.Category != EvaluatorPopulationAccounting || operational.IntegrityFailure.EngineSequence == 0 ||
+		operational.IntegrityFailure.FirstField != "accounting.population" || operational.IntegrityFailure.FirstReason != "identity_mismatch" {
 		t.Fatalf("accounting mismatch escaped containment: %+v", view)
 	}
 	closeAndWait(t, runtime)

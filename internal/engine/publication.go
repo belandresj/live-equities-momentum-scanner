@@ -96,6 +96,7 @@ type privatePublication struct {
 	hydrationPolicyToken                                                    uint64
 	hydrationPolicyWaiting                                                  bool
 	installedCheckpoint                                                     bool
+	evaluatorIntegrity                                                      *EvaluatorIntegrityView
 	tq                                                                      TQView
 }
 
@@ -194,6 +195,7 @@ func (e *Engine) observePublication() publicationView {
 	copyValue := publicationView(*publication)
 	copyValue.watermark = immutableTimePointer(publication.watermark)
 	copyValue.aggregateEvaluation = cloneAggregateEvaluation(publication.aggregateEvaluation)
+	copyValue.evaluatorIntegrity = cloneEvaluatorIntegrity(publication.evaluatorIntegrity)
 	copyValue.tq = cloneTQView(publication.tq)
 	return copyValue
 }
@@ -329,7 +331,12 @@ func (e *Engine) completePublicationDecisionLocked(node *queueNode, disposition 
 		e.lastPubID = candidate.publicationID
 		e.storePublication(candidate)
 	case decisionIntegrityFailure:
-		e.storePublication(e.unavailableSentinelLocked())
+		if terminal := e.buildSuppressedPublicationLocked(node, disposition, prospectiveAdmission, prospectiveTransitions, prospectivePublications); terminal != nil {
+			e.lastPubID = terminal.publicationID
+			e.storePublication(terminal)
+		} else {
+			e.storePublication(e.unavailableSentinelLocked())
+		}
 	}
 	e.publicationFault = publicationFaultNone
 	return disposition
@@ -418,6 +425,7 @@ func (e *Engine) buildPublicationLocked(id, sequence uint64, disposition transit
 		hydrationPolicyToken:        e.state.hydration.lastPolicyToken,
 		hydrationPolicyWaiting:      e.state.hydration.policyWaiting,
 		installedCheckpoint:         e.state.installedCheckpoint != nil,
+		evaluatorIntegrity:          cloneEvaluatorIntegrity(e.state.evaluatorIntegrity),
 		tq:                          cloneTQView(e.tqViewLocked()),
 	}
 	candidate.currentMarketClaim = candidate.aggregateEvaluation.mode == rankingQualifiedCurrent ||
@@ -435,6 +443,37 @@ func (e *Engine) buildPublicationLocked(id, sequence uint64, disposition transit
 		candidate.publicationID = 0
 	}
 	return candidate, nil
+}
+
+// buildSuppressedPublicationLocked preserves an installed binding's terminal
+// integrity state as one coherent sealed capture. If even this construction
+// cannot validate, the no-claim sentinel remains the fail-closed fallback.
+func (e *Engine) buildSuppressedPublicationLocked(node *queueNode, disposition transitionDisposition, admission admissionCounters, transitions transitionCounters, publications publicationCounters) *privatePublication {
+	if e.state.binding == nil || e.state.evaluatorIntegrity == nil || e.state.lifecycle != lifecycleSuppressed || e.lastPubID == math.MaxUint64 || node == nil || node.admissionTime.IsZero() {
+		return nil
+	}
+	candidate, err := e.buildPublicationLocked(e.lastPubID+1, node.engineSequence, disposition, node.admissionTime.UTC(), admission, transitions, publications)
+	if err != nil {
+		return nil
+	}
+	evaluation := cloneAggregateEvaluation(e.state.aggregateEvaluator.current)
+	evaluation.mode, evaluation.reason, evaluation.rows, evaluation.tqIntentAvailable = rankingSuppressed, rankingReasonGlobalSuppression, nil, false
+	candidate.aggregateEvaluation = evaluation
+	candidate.currentMarketClaim = false
+	candidate.tq = cloneTQView(e.tqViewLocked())
+	candidate.tq.PublicationID = candidate.publicationID
+	if validatePublication(candidate) != nil {
+		return nil
+	}
+	return candidate
+}
+
+func cloneEvaluatorIntegrity(value *EvaluatorIntegrityView) *EvaluatorIntegrityView {
+	if value == nil {
+		return nil
+	}
+	copyValue := *value
+	return &copyValue
 }
 
 func validatePublication(candidate *privatePublication) error {

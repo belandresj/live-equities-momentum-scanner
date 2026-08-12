@@ -14,7 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/belandresj/live-equities-momentum-scanner/internal/checkpoint"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/massive"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/operations"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/reference"
@@ -47,6 +46,7 @@ func run(ctx context.Context, arguments []string) error {
 	tradingDate := flags.String("trading-date", "", "exchange-local trading date YYYY-MM-DD")
 	referenceDirectory := flags.String("reference-dir", filepath.Join("var", "reference"), "Component 1 cache directory")
 	checkpointDirectory := flags.String("checkpoint-dir", filepath.Join("var", "checkpoints"), "private local checkpoint directory")
+	checkpointMode := flags.String("checkpoint-mode", "on", "live checkpoint mode: on or off")
 	restOrigin := flags.String("rest-origin", "https://api.massive.com", "Massive HTTPS origin")
 	websocketEndpoint := flags.String("websocket-endpoint", "wss://socket.massive.com/stocks", "Massive stocks WebSocket endpoint")
 	replayArtifact := flags.String("replay-artifact", "", "validated complete aggregate replay artifact")
@@ -60,7 +60,7 @@ func run(ctx context.Context, arguments []string) error {
 		return errors.New("scanner flags are invalid")
 	}
 	if *runMode == "replay" {
-		for _, liveOnly := range []string{"trading-date", "checkpoint-dir", "rest-origin", "websocket-endpoint", "hydration-workers"} {
+		for _, liveOnly := range []string{"trading-date", "checkpoint-dir", "checkpoint-mode", "rest-origin", "websocket-endpoint", "hydration-workers"} {
 			if provided[liveOnly] {
 				return errors.New("replay mode rejects live-only flags")
 			}
@@ -73,6 +73,9 @@ func run(ctx context.Context, arguments []string) error {
 	}
 	if *runMode != "live" || *tradingDate == "" || *replayArtifact != "" || *observationStart != "" || *observationEnd != "" {
 		return errors.New("live mode requires one trading date and rejects replay flags")
+	}
+	if *checkpointMode != "on" && *checkpointMode != "off" {
+		return errors.New("checkpoint-mode must be on or off")
 	}
 	maximumNormalizedRecords, maximumResidentRecords, err := liveHydrationBounds(*hydrationWorkers, 1)
 	if err != nil {
@@ -103,23 +106,10 @@ func run(ctx context.Context, arguments []string) error {
 	if err != nil {
 		return errors.New("assemble immutable binding")
 	}
-	checkpointPath, err := filepath.Abs(*checkpointDirectory)
-	if err != nil {
-		return errors.New("resolve checkpoint directory")
-	}
-	store, err := checkpoint.NewStore(checkpoint.StoreConfig{Directory: checkpointPath, BindingIdentity: binding.Identity(), ArtifactByteLimit: 64 << 20, OperationDeadline: 30 * time.Second})
-	if err != nil {
-		return fmt.Errorf("configure checkpoint store: %w", err)
-	}
-	writer, err := checkpoint.NewWriter(runCtx, store)
-	if err != nil {
-		return err
-	}
 	startup, cancelStartup := context.WithTimeout(runCtx, 30*time.Second)
-	runtime, err := operations.NewWithCheckpoint(startup, binding, operations.DefaultConfig(), func() time.Time { return time.Now().UTC() }, writer)
+	runtime, store, err := composeLiveRuntime(startup, runCtx, binding, operations.DefaultConfig(), func() time.Time { return time.Now().UTC() }, *checkpointMode, *checkpointDirectory)
 	cancelStartup()
 	if err != nil {
-		writer.Close()
 		return err
 	}
 	adapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{Endpoint: *websocketEndpoint, Credential: credential, Queue: massive.LiveQueueConfig{FrameSlots: 512, MaxFrameBytes: 8 << 20, TotalFrameBytes: 64 << 20}})
@@ -152,7 +142,12 @@ func run(ctx context.Context, arguments []string) error {
 	go func() { done <- runtime.RunLive(runCtx, components) }()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
-	encoder := json.NewEncoder(os.Stdout)
+	operator := newOperatorRenderer(os.Stdout, os.Stderr)
+	if sample, err := captureLiveOperatorSample(runtime); err == nil {
+		if err := renderInitialOperator(operator, sample, func() error { return joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, false) }); err != nil {
+			return err
+		}
+	}
 	diagnosticEncoder := json.NewEncoder(os.Stderr)
 	mappingFailures := api.MappingFailures()
 	for {
@@ -163,6 +158,9 @@ func run(ctx context.Context, arguments []string) error {
 			}
 			return runCtx.Err()
 		case err := <-done:
+			if sample, captureErr := captureLiveOperatorSample(runtime); captureErr == nil {
+				_ = operator.Render(sample, true)
+			}
 			if shutdownErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, true, false); shutdownErr != nil {
 				return shutdownErr
 			}
@@ -183,17 +181,40 @@ func run(ctx context.Context, arguments []string) error {
 				return errors.New("encode snapshot mapper diagnostic")
 			}
 		case <-ticker.C:
-			if err := encoder.Encode(struct {
-				Status  operations.Status
-				Metrics operations.Metrics
-			}{runtime.Status(), runtime.Metrics()}); err != nil {
+			sample, err := captureLiveOperatorSample(runtime)
+			if err != nil {
 				if stopErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, false); stopErr != nil {
 					return stopErr
 				}
-				return errors.New("encode operational status")
+				return errors.New("capture operational status")
+			}
+			if err := operator.Render(sample, false); err != nil {
+				if stopErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, false); stopErr != nil {
+					return stopErr
+				}
+				return errors.New("write operational status")
 			}
 		}
 	}
+}
+
+func renderInitialOperator(renderer *operatorRenderer, sample liveOperatorSample, shutdown func() error) error {
+	if err := renderer.Render(sample, true); err != nil {
+		return errors.Join(errors.New("write operational status"), shutdown())
+	}
+	return nil
+}
+
+func captureLiveOperatorSample(runtime *operations.Runtime) (liveOperatorSample, error) {
+	capture, err := runtime.CaptureSnapshot()
+	if err != nil {
+		return liveOperatorSample{}, err
+	}
+	view, valid := operations.InspectSnapshotCapture(capture)
+	if !valid {
+		return liveOperatorSample{}, errors.New("invalid operational snapshot")
+	}
+	return liveOperatorSample{Status: view.Status, Metrics: view.Metrics, Ranked: len(view.Engine.Publication.AggregateEvaluation.Rows)}, nil
 }
 
 func encodeSnapshotMappingFailure(encoder *json.Encoder, failure snapshotapi.MappingFailure) error {

@@ -61,6 +61,19 @@ test("P-C11-STATE distinguishes exact empty, fewer, noncurrent, and independent 
     assert.equal(buildViewModel(state).current, false, mode);
   }
 
+  const suppressed = snapshotFixture(0);
+  suppressed.publication.lifecycle = "suppressed"; suppressed.publication.lifecycle_reason = "accounting_integrity"; suppressed.publication.suppression = "restart_required";
+  suppressed.status.backend_ready = false; suppressed.status.ranking_current = false; suppressed.status.readiness_reason = "suppressed";
+  suppressed.ranking.mode = "suppressed"; suppressed.ranking.reason = "global_suppression";
+  suppressed.operations.integrity_failure = { category: "support_contradiction", engine_sequence: "10725", candidate_time: "2026-08-08T15:59:58Z", expected_time: "2026-08-08T15:59:58Z", first_field: "support", first_reason: "contradictory_evaluator_support" };
+  const suppressedModel = buildViewModel(suppressed), suppressedDocument = new FakeDocument();
+  renderDashboard(suppressedDocument, { transport: "connected", model: suppressedModel });
+  assert.equal(suppressedModel.transport, "connected"); assert.equal(suppressedModel.rows.length, 0);
+  assert.match(suppressedDocument.body.textContent, /Transportconnected.*SCANNER SUPPRESSED · accounting_integrity · restart_required · support_contradiction at engine sequence 10725/s);
+  assert.doesNotMatch(suppressedDocument.body.textContent, /FROZEN · DISCONNECTED/);
+  const unknownDiagnostic = clone(suppressed); unknownDiagnostic.operations.integrity_failure.category = "provider_guess";
+  assert.throws(() => validateSnapshot(unknownDiagnostic), /category is unknown/);
+
   const fields = snapshotFixture(1); fields.rows[0].from_4am_change = { status: "warming", reason: "rolling_warmup", value_ratio: null }; fields.rows[0].hod_drawdown = { status: "unavailable", reason: "history_incomplete", value_ratio: null }; fields.rows[0].activity = { status: "invalid", reason: "invalid_input", value_ratio: null };
   const fieldModel = buildViewModel(fields); assert.equal(fieldModel.rows[0].from4am.state, "warming"); assert.equal(fieldModel.rows[0].hod.state, "unavailable"); assert.equal(fieldModel.rows[0].activity.state, "invalid");
 

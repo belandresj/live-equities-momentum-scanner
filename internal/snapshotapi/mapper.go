@@ -201,7 +201,7 @@ func mapCheckpoint(installed bool, metrics operations.Metrics) Checkpoint {
 }
 
 func mapOperations(metrics operations.Metrics, operational engine.OperationalView) Operations {
-	return Operations{SampleAccountingValid: metrics.AccountingValid, QueueCapacityFrames: nonnegativeInt(metrics.LiveQueue.CapacityFrames),
+	result := Operations{SampleAccountingValid: metrics.AccountingValid, QueueCapacityFrames: nonnegativeInt(metrics.LiveQueue.CapacityFrames),
 		QueueCurrentFrames: metrics.QueueCurrentFrames, QueueHighFrames: metrics.QueueHighFrames,
 		QueueCurrentBytes: nonnegativeInt(metrics.QueueCurrentBytes), QueueHighBytes: nonnegativeInt(metrics.QueueHighBytes),
 		Deliveries: decimal(metrics.Deliveries), ConsumerDeferred: decimal(metrics.ConsumerDeferred),
@@ -209,6 +209,12 @@ func mapOperations(metrics operations.Metrics, operational engine.OperationalVie
 		MaxProcessingDelayOneSecondMS: durationMilliseconds(metrics.MaxProcessingDelayOneSecond), HeapAllocBytes: decimal(metrics.HeapAllocBytes),
 		HeapInUseBytes: decimal(metrics.HeapInUseBytes), Goroutines: nonnegativeInt(metrics.Goroutines),
 		ConnectionRecoveryAttempts: decimal(operational.Connection.RecoveryAttempts)}
+	if failure := operational.IntegrityFailure; failure != nil {
+		result.IntegrityFailure = &IntegrityFailure{Category: string(failure.Category), EngineSequence: decimal(failure.EngineSequence),
+			CandidateTime: optionalNonzeroTime(failure.CandidateTime), ExpectedTime: optionalNonzeroTime(failure.ExpectedTime),
+			FirstSymbol: failure.FirstSymbol, FirstField: failure.FirstField, FirstReason: failure.FirstReason}
+	}
+	return result
 }
 
 func mapRow(row engine.ReplayRankingRowView, tq engine.TQSymbolView) (Row, error) {
@@ -356,6 +362,13 @@ func validateSnapshot(value Snapshot) error {
 	}
 	if len(value.Rows) > 20 || len(value.TQ.DesiredSymbols) > 20 {
 		return rejectMapping("product_row_bound")
+	}
+	if failure := value.Operations.IntegrityFailure; failure != nil {
+		if !oneOf(failure.Category, "candidate_target_mismatch", "support_contradiction", "population_accounting", "qualification_accounting", "uncertainty_accounting", "feature_accounting", "ranking_projection", "ranking_row", "tq_intent", "unknown_evaluator_integrity") ||
+			!validPositiveDecimal(failure.EngineSequence) || !validOptionalTimestamp(failure.CandidateTime) || !validOptionalTimestamp(failure.ExpectedTime) ||
+			(failure.FirstField == "") != (failure.FirstReason == "") {
+			return rejectMapping("evaluator_integrity_diagnostic")
+		}
 	}
 	seenRows := make(map[string]struct{}, len(value.Rows))
 	for index, row := range value.Rows {

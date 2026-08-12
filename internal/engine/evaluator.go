@@ -2,7 +2,6 @@ package engine
 
 import (
 	"container/heap"
-	"errors"
 	"math"
 	"time"
 
@@ -10,6 +9,68 @@ import (
 )
 
 const maximumRankingRows = 20
+
+// EvaluatorIntegrityCategory is the closed classification of the first
+// terminal evaluator invariant failure. It is diagnostic evidence only; the
+// lifecycle reason and suppression disposition remain authoritative.
+type EvaluatorIntegrityCategory string
+
+const (
+	EvaluatorCandidateTargetMismatch EvaluatorIntegrityCategory = "candidate_target_mismatch"
+	EvaluatorSupportContradiction    EvaluatorIntegrityCategory = "support_contradiction"
+	EvaluatorPopulationAccounting    EvaluatorIntegrityCategory = "population_accounting"
+	EvaluatorQualificationAccounting EvaluatorIntegrityCategory = "qualification_accounting"
+	EvaluatorUncertaintyAccounting   EvaluatorIntegrityCategory = "uncertainty_accounting"
+	EvaluatorFeatureAccounting       EvaluatorIntegrityCategory = "feature_accounting"
+	EvaluatorRankingProjection       EvaluatorIntegrityCategory = "ranking_projection"
+	EvaluatorRankingRow              EvaluatorIntegrityCategory = "ranking_row"
+	EvaluatorTQIntent                EvaluatorIntegrityCategory = "tq_intent"
+	EvaluatorUnknownIntegrity        EvaluatorIntegrityCategory = "unknown_evaluator_integrity"
+)
+
+type EvaluatorIntegrityView struct {
+	Category                 EvaluatorIntegrityCategory
+	InputKind                string
+	EngineSequence           uint64
+	CandidateTime            time.Time
+	ExpectedTime             time.Time
+	Lifecycle                string
+	HydrationPurpose         HydrationPurpose
+	HydrationGeneration      uint64
+	FenceEpoch               uint64
+	FenceThrough             uint64
+	FenceMarkerOrdinal       uint64
+	UniverseTotal            uint64
+	ValidPriorClose          uint64
+	InvalidOrMissingPrior    uint64
+	TrustedRankableMark      uint64
+	TrustedBelowPriceMark    uint64
+	NoPrintThroughT          uint64
+	InvalidMark              uint64
+	UnknownDueFailureOrFence uint64
+	QualificationUnresolved  uint64
+	FirstSymbol              string
+	FirstField               string
+	FirstReason              string
+}
+
+type evaluatorValidationResult struct {
+	Category    EvaluatorIntegrityCategory
+	FirstSymbol string
+	FirstField  string
+	FirstReason string
+}
+
+func (r *evaluatorValidationResult) valid() bool { return r == nil }
+func (r *evaluatorValidationResult) Error() string {
+	if r == nil {
+		return ""
+	}
+	return string(r.Category)
+}
+func invalidEvaluation(category EvaluatorIntegrityCategory, field, symbol, reason string) *evaluatorValidationResult {
+	return &evaluatorValidationResult{Category: category, FirstField: field, FirstSymbol: symbol, FirstReason: reason}
+}
 
 type rankingMode string
 
@@ -76,21 +137,23 @@ type aggregateRankingRow struct {
 }
 
 type aggregateEvaluationResult struct {
-	at                  time.Time
-	mode                rankingMode
-	reason              rankingReason
-	population          populationAccounting
-	qualification       qualificationAccounting
-	features            featureAccounting
-	uncertainty         uncertaintyAccounting
-	totalPassers        uint64
-	knownRankableCount  uint64
-	dayInvalidRankable  uint64
-	qualifiedDayInvalid uint64
-	rows                []aggregateRankingRow
-	updates             []aggregateSymbolEvaluationUpdate
-	invalidSupport      bool
-	tqIntentAvailable   bool
+	at                   time.Time
+	mode                 rankingMode
+	reason               rankingReason
+	population           populationAccounting
+	qualification        qualificationAccounting
+	features             featureAccounting
+	uncertainty          uncertaintyAccounting
+	totalPassers         uint64
+	knownRankableCount   uint64
+	dayInvalidRankable   uint64
+	qualifiedDayInvalid  uint64
+	rows                 []aggregateRankingRow
+	updates              []aggregateSymbolEvaluationUpdate
+	invalidSupport       bool
+	invalidSupportSymbol string
+	invalidSupportReason string
+	tqIntentAvailable    bool
 }
 
 type aggregateSymbolEvaluationUpdate struct {
@@ -199,13 +262,15 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 		expected = *e.state.committedT
 	}
 	if expected.IsZero() || !staged.at.Equal(expected) {
+		e.latchEvaluatorIntegrityLocked(node, staged, expected, invalidEvaluation(EvaluatorCandidateTargetMismatch, "candidate_time", "", "candidate_does_not_match_expected_target"))
 		return false
 	}
 	if e.evaluationFault {
 		staged.population.universeTotal++
 		e.evaluationFault = false
 	}
-	if validateAggregateEvaluation(staged) != nil {
+	if validation := validateAggregateEvaluation(staged); !validation.valid() {
+		e.latchEvaluatorIntegrityLocked(node, staged, expected, validation)
 		return false
 	}
 	if !e.candidateTargetSupportedLocked(staged.at) {
@@ -231,6 +296,41 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 		}
 	}
 	return true
+}
+
+// ArmEvaluatorAccountingFaultForTest exposes the existing single-use
+// deterministic fault seam to cross-package composition proofs. It mutates no
+// market fact and is consumed by the next evaluator validation.
+func (e *Engine) ArmEvaluatorAccountingFaultForTest() {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	e.evaluationFault = true
+	e.mu.Unlock()
+}
+
+func (e *Engine) latchEvaluatorIntegrityLocked(node *queueNode, staged aggregateEvaluationResult, expected time.Time, validation *evaluatorValidationResult) {
+	if e.state.evaluatorIntegrity != nil {
+		return
+	}
+	category := validation.Category
+	if category == "" {
+		category = EvaluatorUnknownIntegrity
+	}
+	p := staged.population
+	value := EvaluatorIntegrityView{
+		Category: category, InputKind: inputKindName(node.kind), EngineSequence: node.engineSequence,
+		CandidateTime: staged.at, ExpectedTime: expected, Lifecycle: string(e.state.lifecycle),
+		HydrationPurpose: e.state.hydration.generation.purpose, HydrationGeneration: e.state.hydration.generation.generation,
+		FenceEpoch: e.state.hydration.fenceEpoch, FenceThrough: e.state.hydration.fenceThrough, FenceMarkerOrdinal: e.state.hydration.fenceMarkerOrdinal,
+		UniverseTotal: p.universeTotal, ValidPriorClose: p.validPriorClose, InvalidOrMissingPrior: p.invalidOrMissingPriorClose,
+		TrustedRankableMark: p.trustedRankableMark, TrustedBelowPriceMark: p.trustedBelowPriceMark,
+		NoPrintThroughT: p.noPrintThroughT, InvalidMark: p.invalidMark, UnknownDueFailureOrFence: p.unknownDueFailureOrFence,
+		QualificationUnresolved: staged.qualification.unresolved,
+		FirstSymbol:             validation.FirstSymbol, FirstField: validation.FirstField, FirstReason: validation.FirstReason,
+	}
+	e.state.evaluatorIntegrity = &value
 }
 
 // applyAggregateCandidateLocked is the single C3 committed-boundary apply
@@ -316,6 +416,17 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 		invalidApplicableAtT := hasInvalidEvidence && invalid.windowStart.Before(at)
 		if coverage == coverageNoPrintThroughT && (hasMark || invalidApplicableAtT) {
 			result.invalidSupport = true
+			if result.invalidSupportSymbol == "" {
+				result.invalidSupportSymbol = symbol.symbol
+				switch {
+				case hasMark && invalidApplicableAtT:
+					result.invalidSupportReason = "no_print_with_mark_and_invalid_evidence"
+				case hasMark:
+					result.invalidSupportReason = "no_print_with_mark"
+				default:
+					result.invalidSupportReason = "no_print_with_invalid_evidence"
+				}
+			}
 		}
 
 		features := unavailablePriceRangeResult(at)
@@ -511,61 +622,68 @@ func sortedRankingRows(h rankingHeap, tq bool) []aggregateRankingRow {
 	return rows
 }
 
-func validateAggregateEvaluation(r aggregateEvaluationResult) error {
+func validateAggregateEvaluation(r aggregateEvaluationResult) *evaluatorValidationResult {
 	if r.mode == "" && r.at.IsZero() && len(r.rows) == 0 {
 		return nil
 	}
 	if r.invalidSupport {
-		return errors.New("contradictory evaluator support")
+		reason := r.invalidSupportReason
+		if reason == "" {
+			reason = "contradictory_evaluator_support"
+		}
+		return invalidEvaluation(EvaluatorSupportContradiction, "support", r.invalidSupportSymbol, reason)
 	}
 	if r.mode != rankingUnavailable && r.mode != rankingQualifiedCurrent && r.mode != rankingDegradedBootstrap && r.mode != rankingStale && r.mode != rankingSuppressed {
-		return errors.New("invalid ranking mode")
+		return invalidEvaluation(EvaluatorRankingProjection, "ranking.mode", "", "invalid_mode")
 	}
-	if !r.population.reconciles() || len(r.rows) > maximumRankingRows {
-		return errors.New("invalid population accounting")
+	if !r.population.reconciles() {
+		return invalidEvaluation(EvaluatorPopulationAccounting, "accounting.population", "", "identity_mismatch")
+	}
+	if len(r.rows) > maximumRankingRows {
+		return invalidEvaluation(EvaluatorRankingProjection, "ranking.rows", "", "row_bound_exceeded")
 	}
 	seen := make(map[string]struct{}, len(r.rows))
 	for i, row := range r.rows {
 		if row.rank != uint32(i+1) || row.symbol == "" || row.last < minimumQualificationPrice || !finiteEvaluator(row.last) || !finiteEvaluator(row.dayPercent) || row.markAge < 0 {
-			return errors.New("invalid ranking row")
+			return invalidEvaluation(EvaluatorRankingRow, "ranking.row", row.symbol, "invalid_row")
 		}
 		if i > 0 && !rankingPrecedes(r.rows[i-1], row) {
-			return errors.New("unordered ranking rows")
+			return invalidEvaluation(EvaluatorRankingRow, "ranking.order", row.symbol, "unordered_row")
 		}
 		if _, ok := seen[row.symbol]; ok {
-			return errors.New("duplicate ranking row")
+			return invalidEvaluation(EvaluatorRankingRow, "ranking.symbol", row.symbol, "duplicate_row")
 		}
 		seen[row.symbol] = struct{}{}
 		if row.tqIntentEligible != (r.mode == rankingQualifiedCurrent && r.tqIntentAvailable) {
-			return errors.New("invalid TQ intent eligibility")
+			return invalidEvaluation(EvaluatorTQIntent, "ranking.tq_intent", row.symbol, "eligibility_mismatch")
 		}
 	}
 	wantQualifiedRows := minUint64(r.totalPassers, maximumRankingRows)
 	wantDegradedRows := minUint64(r.knownRankableCount, maximumRankingRows)
 	if r.mode == rankingQualifiedCurrent && (r.reason != "" || r.population.unknownDueFailureOrFence != 0 || r.qualification.unresolved != 0 || uint64(len(r.rows)) != wantQualifiedRows) {
-		return errors.New("invalid qualified projection")
+		return invalidEvaluation(EvaluatorRankingProjection, "ranking.qualified", "", "projection_mismatch")
 	}
 	qualificationTotal := r.qualification.notYetPassed + r.qualification.provisional + r.qualification.finalized + r.qualification.unresolved
 	if qualificationTotal != r.population.trustedRankableMark ||
 		r.totalPassers+r.qualifiedDayInvalid != r.qualification.provisional+r.qualification.finalized ||
 		r.knownRankableCount+r.dayInvalidRankable != r.population.trustedRankableMark ||
 		r.qualifiedDayInvalid > r.dayInvalidRankable {
-		return errors.New("invalid qualification accounting")
+		return invalidEvaluation(EvaluatorQualificationAccounting, "accounting.qualification", "", "identity_mismatch")
 	}
 	if r.uncertainty.bootstrapOrigin+r.uncertainty.postBootstrapGap+r.uncertainty.localInvalid !=
 		r.population.unknownDueFailureOrFence+r.qualification.unresolved {
-		return errors.New("invalid uncertainty-origin accounting")
+		return invalidEvaluation(EvaluatorUncertaintyAccounting, "accounting.uncertainty", "", "identity_mismatch")
 	}
 	for _, counts := range []featureDimensionAccounting{r.features.dayPercent, r.features.from4AMPercent, r.features.hodDrawdown, r.features.sessionRange, r.features.rolling30, r.features.rolling60, r.features.activity} {
 		if !counts.reconciles(r.population.universeTotal) {
-			return errors.New("invalid feature accounting")
+			return invalidEvaluation(EvaluatorFeatureAccounting, "accounting.feature", "", "identity_mismatch")
 		}
 	}
 	if r.mode == rankingDegradedBootstrap && (r.knownRankableCount == 0 || (r.population.unknownDueFailureOrFence == 0 && r.qualification.unresolved == 0) || uint64(len(r.rows)) != wantDegradedRows) {
-		return errors.New("invalid degraded projection")
+		return invalidEvaluation(EvaluatorRankingProjection, "ranking.degraded", "", "projection_mismatch")
 	}
 	if r.mode == rankingDegradedBootstrap && (r.uncertainty.postBootstrapGap != 0 || r.uncertainty.localInvalid != 0 || r.uncertainty.bootstrapOrigin == 0) {
-		return errors.New("non-bootstrap degraded projection")
+		return invalidEvaluation(EvaluatorRankingProjection, "ranking.degraded", "", "non_bootstrap_uncertainty")
 	}
 	if r.mode == rankingDegradedBootstrap {
 		wantReason := rankingReasonQualificationPending
@@ -573,20 +691,20 @@ func validateAggregateEvaluation(r aggregateEvaluationResult) error {
 			wantReason = rankingReasonIncompletePopulation
 		}
 		if r.reason != wantReason {
-			return errors.New("invalid degraded reason")
+			return invalidEvaluation(EvaluatorRankingProjection, "ranking.reason", "", "degraded_reason_mismatch")
 		}
 	}
 	if r.mode == rankingUnavailable && r.reason != rankingReasonNoCommittedWatermark && r.reason != rankingReasonNoTrustedMarks && r.reason != rankingReasonIncompletePopulation {
-		return errors.New("invalid unavailable reason")
+		return invalidEvaluation(EvaluatorRankingProjection, "ranking.reason", "", "invalid_unavailable_reason")
 	}
 	if r.mode == rankingStale && r.reason != "" {
-		return errors.New("invalid stale reason")
+		return invalidEvaluation(EvaluatorRankingProjection, "ranking.reason", "", "invalid_stale_reason")
 	}
 	if r.mode == rankingSuppressed && r.reason != rankingReasonGlobalSuppression {
-		return errors.New("invalid suppressed reason")
+		return invalidEvaluation(EvaluatorRankingProjection, "ranking.reason", "", "invalid_suppressed_reason")
 	}
 	if (r.mode == rankingUnavailable || r.mode == rankingStale || r.mode == rankingSuppressed) && len(r.rows) != 0 {
-		return errors.New("rows in noncurrent projection")
+		return invalidEvaluation(EvaluatorRankingProjection, "ranking.rows", "", "rows_in_noncurrent_projection")
 	}
 	return nil
 }

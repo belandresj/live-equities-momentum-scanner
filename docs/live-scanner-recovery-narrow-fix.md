@@ -1,7 +1,6 @@
 # Live scanner recovery narrow fix
 
-**Status:** Owner-requested executable correction contract; implementation not
-started.
+**Status:** Active executable correction; S1 accepted, S2 pending.
 
 **Boundary and completed-contract authority:** Direct owner request on
 2026-08-11 to use the read-only recovery review and specify the narrow fix.
@@ -33,9 +32,55 @@ This is the sole ledger; prior corrections are evidence.
 
 | Item | State | Evidence/review | Next action |
 | --- | --- | --- | --- |
-| Correction contract | `contract_recorded` | Owner-directed boundary, current-worktree evidence, two proofs, and two slices recorded; focused evaluator/lifecycle review required after implementation | Implement S1 |
-| S1 — stable live path | `pending` | `P-NARROW-LIVE` | Compose and prove coalescing, terminality, visibility, and checkpoint-off startup |
-| S2 — measured mature cost | `pending` | `P-NARROW-MATURE` | Begin only after S1 acceptance |
+| Correction contract | `active` | Planning milestone `6381f6c`; focused evaluator/lifecycle review remains required after A-E | Implement S2 |
+| S1 — stable live path | `accepted` | `P-NARROW-LIVE` and Gate B passed 2026-08-11; exact evidence below | Measure the S2 17:15 boundary before any Activity change |
+| S2 — measured mature cost | `pending` | `P-NARROW-MATURE` | Begin from the accepted S1 boundary |
+
+### S1 acceptance evidence — 2026-08-11
+
+S1 preserves immediate canonical aggregate mutation while coalescing the
+full-population evaluator and immutable publication to the next live timer or
+hydration ingress fence. It also preserves the first typed evaluator failure,
+serves installed-binding warming and suppressed captures with HTTP 200 while
+`/readyz` returns 503, stops `RunLive` before any connection attempt in a
+terminal lifecycle, and adds a default-on live checkpoint switch whose off
+path constructs no store/writer and submits no checkpoint work.
+
+Gate A passed in fast-to-long order:
+
+```text
+go test -timeout 90s ./internal/engine -run 'TestLiveAggregateEvaluationCoalescing|TestIngressSuppressionReasonSurvivesTimerAndRejectedReconnect|TestC3POP02AccountingIntegrityAndOverlap' -count=1  # 2.31s
+go test -timeout 90s ./internal/operations -run '^TestSuppressedIngressCannotEnterReconnectHotLoop$' -count=1  # 0.89s
+go test -timeout 90s ./internal/snapshotapi -run 'TestLiveWarmupSnapshotIsServableAndBound|TestSuppressedEvaluatorIntegrityRemainsServable' -count=1  # 0.59s
+go test -timeout 90s ./cmd/scanner -run 'TestLiveOperator|TestInitialOperator' -count=1  # 0.58s
+perl -e 'alarm 90; exec @ARGV' node --test ui/model.test.mjs  # 0.34s, 18/18
+go test -timeout 90s ./internal/engine -run 'TestC3ACT|TestFreshHydrationActivityOptimizationsMatchValueOracle' -count=1  # 1.08s
+go test -timeout 90s ./cmd/scanner -run '^TestCheckpoint' -count=1  # 0.56s
+go test -timeout 90s ./internal/operations -run '^TestProductionCompositionCoalescesThousandAcceptedAggregates$' -count=1  # 0.58s
+```
+
+The 1,000-event composition admitted all inputs with one insert and 999
+revisions, zero rejected/canceled/closed/sequence-exhausted admission deltas,
+zero publication replacements before the timer, and exactly one replacement
+at the timer. The resulting population was universe `1`, valid prior `1`,
+trusted rankable `1`, covered `1`, unresolved `0`; aggregate/admission
+identities reconciled and queue occupancy returned to zero.
+
+The ordinary Gate B command `go test -short -timeout 2m ./...` passed in
+11.61 seconds. Orchestrator review rejected an initial proof that synthesized a
+sealed API capture with `unsafe`. The corrected proof used the production path
+from a real evaluator accounting fault through suppression, sealed runtime
+capture, and HTTP mapping; focused snapshot, engine, and UI checks passed in
+1.92 seconds, 1.63 seconds, and 0.43 seconds, and the repeated Gate B passed in
+8.65 seconds. `git diff --check` was clean.
+
+Construction prevents a pending accepted prefix from disappearing, clears it
+only after successful evaluator validation/apply, latches rather than replaces
+the first evaluator diagnostic, preserves deterministic replay behavior,
+prevents a suppressed/ended runtime from opening a socket, and makes
+checkpoint-off status explicit with zero checkpoint work. This proves S1
+semantics and ordinary conformance, not late-session capacity, provider
+behavior, or Gate F.
 
 ## Sections 1-4 — Outcome, scope, ownership, and settled boundary
 

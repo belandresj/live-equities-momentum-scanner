@@ -240,6 +240,25 @@ const (
 	inputOperationalIngressIntegrity
 )
 
+func inputKindName(kind inputKind) string {
+	switch kind {
+	case inputAggregate:
+		return "aggregate"
+	case inputTimer:
+		return "timer"
+	case inputAggregateIngressFence:
+		return "aggregate_ingress_fence"
+	case inputHydrationChunk:
+		return "hydration_chunk"
+	case inputHydrationTerminal:
+		return "hydration_terminal"
+	case inputReplayGroup:
+		return "replay_group"
+	default:
+		return "other"
+	}
+}
+
 type queueNode struct {
 	kind                   inputKind
 	binding                frozenBinding
@@ -303,6 +322,7 @@ type engineState struct {
 	evaluationRevision         uint64
 	aggregateEvaluator         aggregateEvaluatorState
 	aggregateProjectionPending bool
+	evaluatorIntegrity         *EvaluatorIntegrityView
 	clockMonotonic             bool
 	committedT                 *time.Time
 	latestTarget               *time.Time

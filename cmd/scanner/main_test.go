@@ -91,6 +91,7 @@ func TestC12RunModeConfigurationIsMutuallyExclusive(t *testing.T) {
 		{"replay missing bounds", []string{"--run-mode=replay", "--replay-artifact=/private/missing"}, "requires artifact"},
 		{"replay trading date", []string{"--run-mode=replay", "--replay-artifact=/private/missing", "--observation-start=09:30:00", "--observation-end=09:35:00", "--trading-date=2026-08-07"}, "live-only"},
 		{"replay checkpoint", []string{"--run-mode=replay", "--replay-artifact=/private/missing", "--observation-start=09:30:00", "--observation-end=09:35:00", "--checkpoint-dir=/tmp/checkpoints"}, "live-only"},
+		{"replay checkpoint mode", []string{"--run-mode=replay", "--replay-artifact=/private/missing", "--observation-start=09:30:00", "--observation-end=09:35:00", "--checkpoint-mode=off"}, "live-only"},
 		{"replay hydration workers", []string{"--run-mode=replay", "--replay-artifact=/private/missing", "--observation-start=09:30:00", "--observation-end=09:35:00", "--hydration-workers=1"}, "live-only"},
 		{"live replay flag", []string{"--trading-date=2026-08-07", "--observation-start=09:30:00"}, "rejects replay"},
 		{"live zero hydration workers", []string{"--trading-date=2026-08-07", "--hydration-workers=0"}, "hydration-workers"},
