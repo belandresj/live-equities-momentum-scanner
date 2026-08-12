@@ -66,10 +66,30 @@ func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error 
 			continue
 		}
 		r.setLiveSources(attempt, components.Adapter)
-		purpose, err := hydrationPurpose(r.engine.ObserveOperational())
+		view := r.engine.ObserveOperational()
+		var purpose engine.HydrationPurpose
+		preSession := view.Lifecycle == "awaiting_session"
+		if preSession {
+			purpose, err = r.awaitHydrationAuthorization(ctx, attempt)
+		} else {
+			purpose, err = hydrationPurpose(view)
+		}
 		if err != nil {
 			r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
-			return err
+			if !preSession {
+				return err
+			}
+			lastErr = err
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if terminalErr := terminalLiveStateError(r.engine.ObserveOperational()); terminalErr != nil {
+				return errors.Join(terminalErr, lastErr)
+			}
+			if r.recoveryBudgetExhausted() {
+				return r.finishRecoveryExhaustion(ctx, lastErr)
+			}
+			continue
 		}
 		fenceCommand, err := r.hydrate(ctx, components, attempt, purpose)
 		if err != nil {
@@ -117,6 +137,45 @@ func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error 
 		// terminal. Close and deliver that terminal so the engine, rather than
 		// the supervisor, owns the transition to recovery.
 		r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
+	}
+}
+
+// awaitHydrationAuthorization keeps the established aggregate epoch consumed
+// while the engine is legitimately waiting for the bound 04:00 session. The
+// engine-owned timer is the sole authority that advances awaiting_session to
+// hydrating; operations neither chooses that time nor admits a manual timer.
+func (r *Runtime) awaitHydrationAuthorization(ctx context.Context, attempt *massive.LiveAttempt) (engine.HydrationPurpose, error) {
+	for {
+		view := r.engine.ObserveOperational()
+		if err := terminalLiveStateError(view); err != nil {
+			return "", err
+		}
+		if purpose, err := hydrationPurpose(view); err == nil {
+			return purpose, nil
+		} else if view.Lifecycle != "awaiting_session" {
+			return "", err
+		}
+
+		wait := r.config.SampleCadence
+		if wait > 100*time.Millisecond {
+			wait = 100 * time.Millisecond
+		}
+		deliveryCtx, cancel := context.WithTimeout(ctx, wait)
+		started := time.Now()
+		result, ok, err := attempt.DeliverNextToEngine(deliveryCtx, r.engine)
+		cancel()
+		if ok {
+			r.observeDelivery(started, result)
+		}
+		if err != nil {
+			return "", errors.Join(errors.New("aggregate connection failed before hydration authorization"), err)
+		}
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		if !ok && !r.engine.ObserveOperational().Connection.Active {
+			return "", errors.New("aggregate connection ended before hydration authorization")
+		}
 	}
 }
 

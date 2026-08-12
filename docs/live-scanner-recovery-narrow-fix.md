@@ -1,13 +1,13 @@
 # Live scanner recovery narrow fix
 
 **Status:** Accepted for the fresh-start live milestone after corrected Gate E
-passed, and re-accepted after a closed-market vertical proof exposed and closed
-the first-session Activity/checkpoint equivalence defect. Final independent
-reviews found no actionable P1/P2 or authority drift. S1, S2, Gates A-E, the
-reader/playback prerequisites, and the credential-free private scanner vertical
-are accepted. Gate F remains a separate, unexecuted market-hours validation
-requiring exact authorization for its trading date, credentials, duration, and
-diagnostic path.
+passed, then re-accepted after closing the first-session Activity/checkpoint
+equivalence defect and the observed pre-04:00 RunLive ordering defect. Final
+independent reviews found no actionable P1/P2 or authority drift. S1, S2,
+Gates A-E, the reader/playback prerequisites, the credential-free private
+scanner vertical, and pre-session wait-to-hydration composition are accepted.
+Gate F remains a separate market-hours validation; one operator-started
+pre-session attempt supplied only the bounded startup failure recorded below.
 
 **Boundary and completed-contract authority:** Direct owner request on
 2026-08-11 to use the read-only recovery review and specify the narrow fix.
@@ -46,6 +46,7 @@ This is the sole ledger; prior corrections are evidence.
 | S2-P — production-playback preparation correction | `accepted_prerequisite` | Milestone `3ab1e1b`; one trusted requested-prefix manifest and reused same-open cursor reduce five strict parses to three. Exact reader-only proof validates 7,581,690 selected rows and 5,439/63 value/empty symbols in 2m6.65s; focused trust/resource, short/race/vet, and required review are clean. The new Gate E independently completed preparation in 1m21.202s and hydration in 2m27.780s | Complete; the new failure is downstream of playback and hydration |
 | S2-E — corrected cached composition | `accepted` | Newly authorized corrected Gate E passed in 233.93s: exact prefix/row/value/empty counts, queue high-water 320/512, zero rejection, 26,963 sent/read/admitted/dispositioned frames, ten coherent automatic cycles, live/qualified-current lifecycle, 20 ranking and T/Q rows, valid accounting/readiness, and deterministic shutdown | Complete; do not rerun unchanged evidence |
 | Post-E closed-market vertical | `accepted_after_correction` | `TestPV1RCVertical` initially rejected checkpoint projection because the first accelerated Activity lookup evaluated a nonexistent pre-session block and diverged from checkpoint rebuild. Both accelerated loops now clamp to the first valid 04:00:30 reference end. The direct boundary regression, checkpoint round trip, full scanner vertical through live A/T/Q/API/UI/shutdown, focused races, short suite, vet/diff, and focused review are clean | Complete; preserves Gate E and closes checkpoint-on launch composition without claiming provider behavior |
+| Pre-04:00 live startup ordering | `accepted_after_observed_correction` | The operator-started 2026-08-12 run loaded its Keychain credential, completed reference/binding and aggregate handshake, remained correctly `awaiting_session`, then RunLive incorrectly attempted hydration and exited. RunLive now retains and consumes that acknowledged attempt only while `awaiting_session`, waits for its automatic timer transition, and then starts ordinary hydration. Session-start and disconnect/cleanup regressions, focused race, complete non-short operations/scanner suites, short suite, vet/diff, and focused review are clean | Corrected locally; a later operator retry is new live evidence, not deterministic proof |
 
 ### S1 acceptance evidence — 2026-08-11
 
@@ -795,6 +796,48 @@ and ordinary short suite passed. A focused `gpt-5.6-sol` medium read-only review
 returned CLEAN with no actionable P1/P2 and confirmed exactly-once block
 traversal and no product or persisted-state change. Gate E was not rerun because
 its 17:15 hydrated boundary never exercises this first-session lookup advance.
+
+#### Observed pre-04:00 RunLive ordering correction — 2026-08-12
+
+The operator invoked the accepted private launcher before 04:00 ET. Credential
+loading, current-date reference/binding construction, and aggregate connection
+authentication progressed far enough for the engine to report
+`awaiting_session`. The process then exited with:
+
+```text
+engine lifecycle "awaiting_session" does not authorize hydration
+scanner exited before /livez became successful: exit status 1
+```
+
+The engine behavior was correct: a pre-session aggregate acknowledgement is
+retained, and only the engine-owned automatic timer at session start may move
+`awaiting_session` to `hydrating`. The operations composition was wrong because
+it derived hydration purpose immediately after the handshake and treated the
+expected pre-session lifecycle as fatal.
+
+`RunLive` now takes a distinct path only when that post-handshake lifecycle is
+`awaiting_session`. It retains the same acknowledged live attempt, consumes its
+bounded queue with <=100ms cancellable waits, and repeatedly observes engine
+lifecycle until the existing automatic timer authorizes hydration. It admits
+no timer and chooses no time. Provider/control facts remain dispositioned;
+after transition, the ordinary hydration pump continues on the same attempt.
+A pre-session disconnect flows through the existing close/drain and bounded
+recovery/exhaustion path, and cancellation still joins through
+`Runtime.Shutdown`. Every non-pre-session hydration-purpose error retains its
+prior immediate close-and-return behavior.
+
+The direct production-runtime regression proves an acknowledged attempt stays
+alive before 04:00, makes no REST hydration request, advances only after the
+automatic session-start timer, completes the empty start-of-session hydration
+and real ingress fence, reaches `live`/ready, and joins cleanly. Its adjacent
+disconnect proof verifies bounded exhaustion and reconciled adapter cleanup.
+Both passed 20 consecutive runs and ten focused race repetitions. The complete
+non-short operations/scanner suites, three closed-market vertical repetitions,
+and ordinary short suite passed. A focused `gpt-5.6-sol` medium read-only review
+returned CLEAN with no actionable P1/P2 and found no dequeue race, dropped
+fact, fabricated readiness, resource leak, manual timer ownership, or changed
+product/provider semantics. No agent-initiated credential access or live retry
+was performed during this correction.
 
 ## Sections 1-4 — Outcome, scope, ownership, and settled boundary
 

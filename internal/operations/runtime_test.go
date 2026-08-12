@@ -84,6 +84,168 @@ func TestC8RUNTIME01LifecycleReadinessShutdown(t *testing.T) {
 	}
 }
 
+func TestRunLiveWaitsForSessionBeforeHydration(t *testing.T) {
+	binding := operationsBinding(t)
+	start := binding.SessionStart()
+	clockNanos := &atomic.Int64{}
+	clockNanos.Store(start.Add(-time.Second).UnixNano())
+	clock := func() time.Time { return time.Unix(0, clockNanos.Load()).UTC() }
+	config := DefaultConfig()
+	config.EvaluationDelay = 0
+	config.SampleCadence = 10 * time.Millisecond
+	config.ConnectionAttemptDeadline = time.Second
+	config.ShutdownDeadline = 2 * time.Second
+	run, err := New(context.Background(), binding, config, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	disconnect := make(chan struct{})
+	var connections atomic.Int32
+	var failNew atomic.Bool
+	websocketServer := recoverableWebSocketServer(t, &connections, &failNew, disconnect)
+	defer websocketServer.Close()
+	adapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{
+		Endpoint: "ws" + strings.TrimPrefix(websocketServer.URL, "http"), Credential: "fixture",
+		Queue: massive.LiveQueueConfig{FrameSlots: 8, MaxFrameBytes: 4096, TotalFrameBytes: 16384}, Clock: clock,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hydrationServer := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("empty session-start hydration made a provider request")
+	}))
+	defer hydrationServer.Close()
+	hydrator, err := massive.NewHydrationWorker(hydrationServer.URL, func() (string, error) { return "fixture", nil }, hydrationServer.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	components := LiveComponents{Adapter: adapter, Hydrator: hydrator, Workers: 1, RowsPerChunk: 1, MaximumResponseBytes: 1 << 20,
+		MaximumNormalizedRecords: 57_600, MaximumResidentRecords: 57_600, Durations: capacityDurations()}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run.RunLive(ctx, components) }()
+
+	deadline := time.After(2 * time.Second)
+	for {
+		view := run.Engine().ObserveOperational()
+		if view.Lifecycle == "awaiting_session" && view.Connection.Active && view.Connection.Acknowledged {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("pre-session live composition exited: %v", err)
+		case <-deadline:
+			t.Fatalf("pre-session connection was not retained: %+v", view)
+		case <-time.After(time.Millisecond):
+		}
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("pre-session live composition exited before 04:00: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	clockNanos.Store(start.UnixNano())
+	deadline = time.After(2 * time.Second)
+	for !run.Status().BackendReady {
+		select {
+		case err := <-done:
+			t.Fatalf("live composition exited after 04:00 transition: %v", err)
+		case <-deadline:
+			t.Fatalf("session-start hydration/fence did not become ready: status=%+v engine=%+v", run.Status(), run.Engine().ObserveOperational())
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if got := run.Engine().ObserveOperational(); got.Lifecycle != "live" || got.Hydration.Purpose != engine.HydrationFreshBootstrap || !got.Hydration.FenceReconciled {
+		t.Fatalf("session-start live state=%+v", got)
+	}
+
+	cancel()
+	shutdown, stop := context.WithTimeout(context.Background(), config.ShutdownDeadline)
+	defer stop()
+	if err := run.Shutdown(shutdown); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("pre-session live shutdown=%v", err)
+		}
+	default:
+		t.Fatal("shutdown returned before pre-session RunLive joined")
+	}
+}
+
+func TestRunLivePreSessionDisconnectUsesBoundedRecovery(t *testing.T) {
+	binding := operationsBinding(t)
+	start := binding.SessionStart()
+	clock := func() time.Time { return start.Add(-time.Second) }
+	config := DefaultConfig()
+	config.SampleCadence = 10 * time.Millisecond
+	config.ConnectionAttemptDeadline = time.Second
+	config.ShutdownDeadline = 2 * time.Second
+	config.RecoveryAttempts = 1
+	run, err := New(context.Background(), binding, config, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	disconnect := make(chan struct{})
+	var connections atomic.Int32
+	var failNew atomic.Bool
+	websocketServer := recoverableWebSocketServer(t, &connections, &failNew, disconnect)
+	defer websocketServer.Close()
+	adapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{
+		Endpoint: "ws" + strings.TrimPrefix(websocketServer.URL, "http"), Credential: "fixture",
+		Queue: massive.LiveQueueConfig{FrameSlots: 8, MaxFrameBytes: 4096, TotalFrameBytes: 16384}, Clock: clock,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hydrationServer := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("pre-session disconnect reached hydration")
+	}))
+	defer hydrationServer.Close()
+	hydrator, err := massive.NewHydrationWorker(hydrationServer.URL, func() (string, error) { return "fixture", nil }, hydrationServer.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	components := LiveComponents{Adapter: adapter, Hydrator: hydrator, Workers: 1, RowsPerChunk: 1, MaximumResponseBytes: 1 << 20,
+		MaximumNormalizedRecords: 57_600, MaximumResidentRecords: 57_600, Durations: capacityDurations()}
+	done := make(chan error, 1)
+	go func() { done <- run.RunLive(context.Background(), components) }()
+
+	deadline := time.After(2 * time.Second)
+	for !run.Engine().ObserveOperational().Connection.Acknowledged {
+		select {
+		case err := <-done:
+			t.Fatalf("pre-session composition exited before disconnect: %v", err)
+		case <-deadline:
+			t.Fatalf("pre-session aggregate acknowledgement missing: %+v", run.Engine().ObserveOperational())
+		case <-time.After(time.Millisecond):
+		}
+	}
+	close(disconnect)
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "aggregate recovery attempts exhausted") ||
+			!strings.Contains(err.Error(), "aggregate connection ended before hydration authorization") {
+			t.Fatalf("pre-session disconnect=%v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("pre-session disconnect did not terminate: %+v", run.Engine().ObserveOperational())
+	}
+	shutdown, cancel := context.WithTimeout(context.Background(), config.ShutdownDeadline)
+	defer cancel()
+	if err := run.Shutdown(shutdown); err != nil {
+		t.Fatal(err)
+	}
+	if got := adapter.Accounting(); !got.Reconciles() || got.AttemptsActive != 0 || got.AttemptsConnected != 0 {
+		t.Fatalf("pre-session disconnect cleanup=%+v", got)
+	}
+}
+
 func TestC8RUNTIME01CheckpointPrePlanCannotReportReady(t *testing.T) {
 	binding := operationsBinding(t)
 	now := binding.SessionStart().Add(20 * time.Minute).UTC()
