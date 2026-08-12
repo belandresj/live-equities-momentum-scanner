@@ -50,7 +50,6 @@ records are never tie-breakers.
 | [`architecture/data-time-and-event-contract.md`](architecture/data-time-and-event-contract.md) | Approved architecture; session, identity, clocks, causal order, merge/reconciliation, watermark, replay, and checkpoint cutoff. |
 | [`architecture/scanner-state-engine-lifecycle.md`](architecture/scanner-state-engine-lifecycle.md) | Approved architecture; legal live/replay lifecycle, progress/exit, publication, recovery, suppression, session end, and shutdown. |
 | [`glossary.md`](glossary.md) | Approved vocabulary; controlling product/architecture text wins when more specific. |
-| [`live-coverage-and-partial-ranking-correction.md`](live-coverage-and-partial-ranking-correction.md) | Owner-directed 2026-08-11 product correction and executable two-slice plan: exact ordinary live coverage followed by symbol-local uncertainty containment and current partial ranking. |
 
 Phase 1 settles the eligible universe, prior-close basis, qualification, exact
 Day-% ranking/top 20, displayed V1 fields, one engine/state/watermark/evaluator,
@@ -70,6 +69,7 @@ and review records.
 | [`implementation-process.md`](implementation-process.md) | Owner-approved process, revised 2026-08-07: contract-first planning, revisable C7-C11 delivery, correction/reopening, bounded verification, risk-based review, integration, and final validation. |
 | [`specifications/focused-component-spec-template.md`](specifications/focused-component-spec-template.md) | Mandatory template, revised 2026-08-07: compact/modular routing, current-plan and correction records, single parent ledger, proof and slice rules. |
 | [`market-hours-validation.md`](market-hours-validation.md) | Procedure approved; execution pending a separate owner authorization. Not a private V1 RC gate and not credential authority by itself. |
+| [`live-scanner-recovery-narrow-fix.md`](live-scanner-recovery-narrow-fix.md) | Active owner-requested correction specification: compose live aggregate coalescing and terminal suppression behavior, measure and correct only the late-session Activity hotspot, and require sub-two-minute proofs before any longer cached-data or live run. The earlier bootstrap and incremental-evaluator documents remain evidence, not competing executable plans. |
 | [`v1-release-follow-on-goal.md`](v1-release-follow-on-goal.md) | Short handoff prompt for the subsequent autonomous C7-C11 goal. |
 | [`replay-rest-feasibility-benchmark.md`](replay-rest-feasibility-benchmark.md) | Completed non-authoritative C12 acquisition evidence record and separately gated rerun protocol. It authorizes no credentials, provider request, production change, rerun, or capacity claim. |
 | [`c12-implementation-goal.md`](c12-implementation-goal.md) | Owner-approved handoff prompt: close C11/private V1 RC, then implement and accept C4-S6, C12-S1, and C12-S2 sequentially. The focused component contracts remain authoritative. |
