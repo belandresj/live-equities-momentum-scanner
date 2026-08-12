@@ -224,7 +224,9 @@ func runHydrationLiveContention(t *testing.T, rate int) hydrationContentionResul
 		t.Logf("hydration_contention_tail_preload chunks=%d rows=%d elapsed=%s", preloadChunks,
 			preloadChunks*hydrationContentionChunkRows, time.Since(preloadStarted))
 	}
-	clock.set(boundary.Add(5 * time.Second))
+	if err := clock.advance(boundary.Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	engineBase = run.Engine().ObserveOperational()
 
 	var memoryBefore runtime.MemStats

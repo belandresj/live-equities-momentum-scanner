@@ -64,6 +64,18 @@ type Runtime struct {
 	metricsSnapshot           func() Metrics
 	timerCancel               context.CancelFunc
 	timerDone                 chan struct{}
+	automaticTimerObserverMu  sync.RWMutex
+	automaticTimerObserver    func(automaticTimerObservation)
+}
+
+// automaticTimerObservation is a package-private, read-only test seam for an
+// engine-owned timer completion. It is captured before runTimer performs any
+// follow-on T/Q synchronization or selects another ready ticker branch.
+type automaticTimerObservation struct {
+	disposition engine.TimerDisposition
+	timing      engine.EvaluationTimingView
+	capture     SnapshotCapture
+	captureErr  error
 }
 
 func New(ctx context.Context, binding reference.Binding, config Config, clock func() time.Time) (*Runtime, error) {
@@ -127,7 +139,8 @@ func (r *Runtime) runTimer(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-completion:
+			case disposition := <-completion:
+				r.captureAutomaticTimerObservation(disposition)
 				r.syncTQCommand(ctx)
 			}
 		case <-pressureTicker.C:
@@ -147,6 +160,31 @@ func (r *Runtime) runTimer(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func (r *Runtime) setAutomaticTimerObserver(observer func(automaticTimerObservation)) {
+	if r == nil {
+		return
+	}
+	r.automaticTimerObserverMu.Lock()
+	r.automaticTimerObserver = observer
+	r.automaticTimerObserverMu.Unlock()
+}
+
+func (r *Runtime) captureAutomaticTimerObservation(disposition engine.TimerDisposition) {
+	r.automaticTimerObserverMu.RLock()
+	observer := r.automaticTimerObserver
+	r.automaticTimerObserverMu.RUnlock()
+	if observer == nil {
+		return
+	}
+	capture, err := r.CaptureSnapshot()
+	observer(automaticTimerObservation{
+		disposition: disposition,
+		timing:      r.engine.ObserveEvaluationTiming(),
+		capture:     capture,
+		captureErr:  err,
+	})
 }
 
 func (r *Runtime) syncTQPressure(ctx context.Context) {

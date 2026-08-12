@@ -28,11 +28,12 @@ import (
 )
 
 const (
-	cachedFenceArtifact       = "/Users/joshuabelandres/Dev/live-equities-momentum-scanner/var/aggregate-replay/aggregate-replay-fce95a904bb37c3d63bfe0a2988ac78aa0e0a2ee4c8d171bdca27fcd00f8808a.jsonl"
-	cachedFenceReference      = "/Users/joshuabelandres/Dev/live-equities-momentum-scanner/var/reference"
-	cachedFenceArtifactID     = "sha256:fce95a904bb37c3d63bfe0a2988ac78aa0e0a2ee4c8d171bdca27fcd00f8808a"
-	cachedFenceRowsPerChunk   = 256
-	cachedFenceObservedPeriod = 30 * time.Second / 5_798
+	cachedFenceArtifact        = "/Users/joshuabelandres/Dev/live-equities-momentum-scanner/var/aggregate-replay/aggregate-replay-fce95a904bb37c3d63bfe0a2988ac78aa0e0a2ee4c8d171bdca27fcd00f8808a.jsonl"
+	cachedFenceReference       = "/Users/joshuabelandres/Dev/live-equities-momentum-scanner/var/reference"
+	cachedFenceArtifactID      = "sha256:fce95a904bb37c3d63bfe0a2988ac78aa0e0a2ee4c8d171bdca27fcd00f8808a"
+	cachedFenceRowsPerChunk    = 256
+	cachedFenceObservedPeriod  = 30 * time.Second / 5_798
+	cachedFenceMaximumInFlight = 128
 )
 
 type cachedFenceManifest struct {
@@ -179,6 +180,198 @@ func TestCachedHydrationFenceAcceptance(t *testing.T) {
 		result.heapBefore, result.heapAtFence, result.heapAfter, result.tq.Pressure, len(result.tq.Rows), result.accounting, result.ready)
 }
 
+// TestCachedHydrationFenceAutomaticTimerRehearsal is the compact prerequisite
+// for another full Gate E execution. It uses the production runtime and live
+// adapter, completes real hydration terminals and the adapter ingress fence,
+// observes readiness, advances ten distinct logical seconds only through the
+// runtime-owned automatic timer, and exercises the same deterministic teardown.
+func TestCachedHydrationFenceAutomaticTimerRehearsal(t *testing.T) {
+	productionCadence := os.Getenv("CACHED_HYDRATION_REHEARSAL_PRODUCTION_CADENCE") == "1"
+	rehearsalTimeout := 10 * time.Second
+	if productionCadence {
+		rehearsalTimeout = 20 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), rehearsalTimeout)
+	defer cancel()
+	binding := operationsBinding(t)
+	base := binding.SessionStart().Add(20 * time.Minute).UTC()
+	clock := &cachedFenceClock{now: base}
+	server := newCachedFenceServer(t, []string{"AAA"}, base, 1)
+	defer server.server.Close()
+	adapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{
+		Endpoint:   "ws" + strings.TrimPrefix(server.server.URL, "http"),
+		Credential: "cached-rehearsal-fixture",
+		Queue:      massive.LiveQueueConfig{FrameSlots: 512, MaxFrameBytes: 8 << 20, TotalFrameBytes: 64 << 20},
+		Clock:      clock.read,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := DefaultConfig()
+	config.SampleCadence = 20 * time.Millisecond
+	if productionCadence {
+		config.SampleCadence = time.Second
+	}
+	run, err := New(ctx, binding, config, clock.read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Engine().ArmEvaluationTimingForTest(time.Now)
+	cleanup := &cachedFenceRuntimeCleanup{run: run, binding: binding}
+	defer cleanup.shutdown(t)
+	attempt, started, err := adapter.Start(ctx, massive.OpenAggregateEpoch{BindingIdentity: binding.Identity(), CommandToken: 100, Durations: capacityDurations()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup.attempt = attempt
+	if delivered, err := massive.DeliverToEngine(ctx, run.Engine(), started); err != nil || delivered.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
+		t.Fatalf("rehearsal open delivery=%+v err=%v", delivered, err)
+	}
+	handshake, err := attempt.Handshake(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, delivery := range handshake {
+		got, deliveryErr := massive.DeliverToEngine(ctx, run.Engine(), delivery)
+		if deliveryErr != nil || (got.ControlDisposition.Code != engine.DispositionConnectionControlApplied && got.ControlDisposition.Code != engine.DispositionConnectionControlDeferred) {
+			t.Fatalf("rehearsal handshake delivery=%+v err=%v", got, deliveryErr)
+		}
+	}
+	run.setLiveSources(attempt, adapter)
+	queueBase := attempt.QueueAccounting()
+	server.framesRead = func() uint64 { return attempt.QueueAccounting().FramesRead - queueBase.FramesRead }
+	deliveryCtx, cancelDelivery := context.WithCancel(ctx)
+	deliveryDone := make(chan error, 1)
+	cleanup.deliveryCancel, cleanup.deliveryDone = cancelDelivery, deliveryDone
+	fenceDone := make(chan engine.HydrationDisposition, 1)
+	go func() {
+		for {
+			started := time.Now()
+			delivery, ok, deliveryErr := attempt.DeliverNextToEngine(deliveryCtx, run.Engine())
+			if ok {
+				run.observeDelivery(started, delivery)
+				if delivery.HydrationDisposition.Code != "" {
+					select {
+					case fenceDone <- delivery.HydrationDisposition:
+					default:
+					}
+				}
+			}
+			if deliveryErr != nil || !ok {
+				deliveryDone <- deliveryErr
+				return
+			}
+		}
+	}()
+	planAdmission, planCompletion := run.Engine().AdmitHydrationPlan(ctx, engine.HydrationPlanInput{
+		SchemaVersion: engine.HydrationPlanSchemaV1, BindingIdentity: binding.Identity(), Purpose: engine.HydrationFreshBootstrap, ConnectionEpoch: attempt.Epoch(),
+		Budgets: engine.HydrationPlanBudgets{Workers: 1, RowsPerChunk: 1, MaximumResponseBytes: 1 << 20, MaximumNormalizedRecords: 57_600, MaximumResidentRecords: 57_600},
+	})
+	if planAdmission != engine.AdmissionAdmitted || planCompletion == nil {
+		t.Fatalf("rehearsal hydration plan admission=%s", planAdmission)
+	}
+	plan := <-planCompletion
+	if plan.Code != engine.DispositionHydrationPlanApplied || len(plan.Plan.Requests()) != 1 {
+		t.Fatalf("rehearsal hydration plan=%+v", plan)
+	}
+	if err := clock.advance(base.Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	close(server.start)
+	var fenceCommand engine.HydrationFenceCommand
+	for _, token := range plan.Plan.Requests() {
+		terminal, err := engine.NewHydrationTerminalInput(token, token.ResultID(), engine.HydrationCompletedEmpty, engine.HydrationReasonNone, 1, 1, 1, 0, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		admission, completion := run.Engine().AdmitHydrationTerminal(ctx, terminal)
+		if admission != engine.AdmissionAdmitted || completion == nil {
+			t.Fatalf("rehearsal hydration terminal admission=%s", admission)
+		}
+		got := <-completion
+		if got.Code != engine.DispositionHydrationTerminalApplied {
+			t.Fatalf("rehearsal hydration terminal=%s/%s", got.Code, got.Reason)
+		}
+		if got.FenceCommand.CommandToken() != 0 {
+			fenceCommand = got.FenceCommand
+		}
+	}
+	if fenceCommand.CommandToken() == 0 {
+		t.Fatal("rehearsal hydration did not issue an ingress fence")
+	}
+	capture, err := massive.CaptureAggregateIngressFenceCommandFromEngine(fenceCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := attempt.CaptureAggregateIngressFence(ctx, run.Engine(), capture); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	case disposition := <-fenceDone:
+		if disposition.Code != engine.DispositionAggregateIngressFenceApplied {
+			t.Fatalf("rehearsal fence=%s/%s", disposition.Code, disposition.Reason)
+		}
+	}
+	for !run.Status().BackendReady {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("rehearsal readiness: %v engine=%+v", ctx.Err(), run.Engine().ObserveOperational())
+		case <-time.After(time.Millisecond):
+		}
+	}
+	close(server.pause)
+	select {
+	case err := <-server.done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("rehearsal producer did not pause")
+	}
+	for {
+		queue := attempt.QueueAccounting()
+		if queue.FramesQueued == 0 && queue.FramesClassifying == 0 && queue.FramesRead-queueBase.FramesRead == queue.FramesDispositioned-queueBase.FramesDispositioned {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("rehearsal tail did not drain: %+v", queue)
+		case <-time.After(time.Millisecond):
+		}
+	}
+	priorTimingSequence := run.Engine().ObserveEvaluationTiming().EngineSequence
+	priorPublicationID := run.Engine().ObserveOperational().PublicationID
+	automaticTimer := observeCachedFenceAutomaticTimers(run)
+	defer run.setAutomaticTimerObserver(nil)
+	cycleTimeout := time.Second
+	if config.SampleCadence == time.Second {
+		cycleTimeout = 5 * time.Second
+	}
+	for cycle := 0; cycle < 10; cycle++ {
+		cycleCtx, stopCycle := context.WithTimeout(ctx, cycleTimeout)
+		automatic, err := awaitCachedFenceAutomaticCycle(cycleCtx, run, clock, automaticTimer, base.Add(time.Duration(cycle+6)*time.Second), priorTimingSequence, priorPublicationID)
+		stopCycle()
+		if err != nil {
+			t.Fatalf("rehearsal cycle %d: %v", cycle+1, err)
+		}
+		view := automatic.capture
+		if view.Engine.Publication.PublicationID != automatic.publicationID || automatic.total >= 2*time.Second {
+			t.Fatalf("rehearsal cycle %d timer_publication=%d API_publication=%d total=%s", cycle+1, automatic.publicationID, view.Engine.Publication.PublicationID, automatic.total)
+		}
+		priorTimingSequence, priorPublicationID = automatic.timing.EngineSequence, automatic.publicationID
+	}
+	metrics := run.Metrics()
+	if !metrics.AccountingValid || !metrics.LiveQueue.Reconciles() || !metrics.Adapter.Reconciles() || run.Engine().ObserveOperational().Lifecycle != "live" {
+		t.Fatalf("rehearsal final accounting metrics=%+v engine=%+v", metrics, run.Engine().ObserveOperational())
+	}
+	cleanup.shutdown(t)
+	if status := run.Status(); status.ProcessLive || status.BackendReady || status.Reason != ReasonRuntimeUnavailable {
+		t.Fatalf("rehearsal deterministic shutdown status=%+v", status)
+	}
+}
+
 func preflightCachedFence(t *testing.T, ctx context.Context) cachedFenceManifest {
 	t.Helper()
 	started := time.Now()
@@ -195,6 +388,12 @@ func preflightCachedFence(t *testing.T, ctx context.Context) cachedFenceManifest
 	if err != nil {
 		t.Fatalf("validate sealed artifact: %v", err)
 	}
+	prepared := false
+	defer func() {
+		if !prepared {
+			_ = handle.Close()
+		}
+	}()
 	metadata := handle.Metadata()
 	if metadata.ArtifactID != cachedFenceArtifactID || metadata.AggregateRecords != 7_671_171 || metadata.CoverageEntries != 5_691 || metadata.EmptySymbols != 172 ||
 		metadata.BindingIdentity != binding.Identity() || metadata.ReplayStart != binding.SessionStart() || metadata.ReplayEnd != binding.SessionEnd() {
@@ -233,6 +432,7 @@ func preflightCachedFence(t *testing.T, ctx context.Context) cachedFenceManifest
 	}
 	t.Logf("GATE_E_PREPARED artifact=%s requested_end=%s prefix_records=%d selected_rows=%d values=%d empty=%d duration=%s", metadata.ArtifactID,
 		end.Format(time.RFC3339), prefix.PrefixRecords(), rows, values, int64(len(rowsBySymbol))-values, time.Since(started))
+	prepared = true
 	return cachedFenceManifest{binding: binding, start: start, end: end, metadata: metadata, handle: handle, cursor: cursor, rowsBySymbol: rowsBySymbol,
 		rows: rows, values: values, empties: int64(len(rowsBySymbol)) - values, preflight: time.Since(started)}
 }
@@ -296,19 +496,173 @@ type cachedFenceClock struct {
 	now time.Time
 }
 
-func (c *cachedFenceClock) read() time.Time     { c.mu.RLock(); defer c.mu.RUnlock(); return c.now }
-func (c *cachedFenceClock) set(value time.Time) { c.mu.Lock(); c.now = value; c.mu.Unlock() }
+func TestCachedFenceClockRejectsRegression(t *testing.T) {
+	start := time.Date(2026, 8, 7, 21, 15, 5, 0, time.UTC)
+	clock := &cachedFenceClock{now: start}
+	if err := clock.advance(start.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := clock.advance(start); err == nil {
+		t.Fatal("cached fence clock admitted a regression")
+	}
+	if got := clock.read(); got != start.Add(time.Second) {
+		t.Fatalf("rejected regression mutated clock to %s", got)
+	}
+}
+
+func (c *cachedFenceClock) read() time.Time { c.mu.RLock(); defer c.mu.RUnlock(); return c.now }
+
+func (c *cachedFenceClock) advance(value time.Time) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if value.Before(c.now) {
+		return fmt.Errorf("cached fence clock regression: %s -> %s", c.now.Format(time.RFC3339Nano), value.Format(time.RFC3339Nano))
+	}
+	c.now = value
+	return nil
+}
+
+type cachedFenceRuntimeCleanup struct {
+	run            *Runtime
+	attempt        *massive.LiveAttempt
+	binding        reference.Binding
+	deliveryCancel context.CancelFunc
+	deliveryDone   <-chan error
+	deliveryJoined bool
+	once           sync.Once
+}
+
+func (c *cachedFenceRuntimeCleanup) shutdown(t *testing.T) {
+	t.Helper()
+	c.once.Do(func() {
+		deadline, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stop()
+		if c.attempt != nil {
+			closeCommand := massive.CloseEpochCommand{BindingIdentity: c.binding.Identity(), ConnectionEpoch: c.attempt.Epoch(), CommandToken: 999, Cause: massive.CloseControlledStop}
+			closeErr := c.attempt.Close(closeCommand)
+			if closeErr != nil && c.deliveryCancel != nil {
+				c.deliveryCancel()
+			}
+			if c.deliveryDone != nil && !c.deliveryJoined {
+				deliveryDeadline := time.NewTimer(4 * time.Second)
+				select {
+				case <-c.deliveryDone:
+					c.deliveryJoined = true
+					if !deliveryDeadline.Stop() {
+						select {
+						case <-deliveryDeadline.C:
+						default:
+						}
+					}
+				case <-deliveryDeadline.C:
+					if c.deliveryCancel != nil {
+						c.deliveryCancel()
+					}
+					cancelJoinDeadline := time.NewTimer(time.Second)
+					select {
+					case <-c.deliveryDone:
+						c.deliveryJoined = true
+						if !cancelJoinDeadline.Stop() {
+							select {
+							case <-cancelJoinDeadline.C:
+							default:
+							}
+						}
+					case <-cancelJoinDeadline.C:
+						t.Errorf("delivery loop did not join during cleanup")
+					}
+				case <-deadline.Done():
+					t.Errorf("delivery loop did not join during cleanup")
+				}
+			}
+			if c.deliveryCancel != nil {
+				c.deliveryCancel()
+			}
+		}
+		if err := c.run.Shutdown(deadline); err != nil {
+			t.Errorf("shutdown: %v", err)
+		}
+	})
+}
+
+type cachedFenceCycle struct {
+	timing        engine.EvaluationTimingView
+	total         time.Duration
+	publicationID uint64
+	capture       SnapshotCaptureView
+}
+
+func observeCachedFenceAutomaticTimers(run *Runtime) <-chan automaticTimerObservation {
+	observations := make(chan automaticTimerObservation, 2)
+	run.setAutomaticTimerObserver(func(observation automaticTimerObservation) {
+		select {
+		case observations <- observation:
+			return
+		default:
+		}
+		select {
+		case <-observations:
+		default:
+		}
+		select {
+		case observations <- observation:
+		default:
+		}
+	})
+	return observations
+}
+
+func awaitCachedFenceAutomaticCycle(ctx context.Context, run *Runtime, clock *cachedFenceClock, observations <-chan automaticTimerObservation, sampledAt time.Time, priorTimingSequence, priorPublicationID uint64) (cachedFenceCycle, error) {
+	if err := clock.advance(sampledAt); err != nil {
+		return cachedFenceCycle{}, err
+	}
+	target := sampledAt.Add(-run.config.EvaluationDelay).Truncate(time.Second)
+	if target.Before(run.binding.SessionStart()) {
+		target = run.binding.SessionStart()
+	}
+	if target.After(run.binding.SessionEnd()) {
+		target = run.binding.SessionEnd()
+	}
+	var lastPublication engine.ReplayPublicationView
+	var lastTiming engine.EvaluationTimingView
+	for {
+		var observation automaticTimerObservation
+		select {
+		case <-ctx.Done():
+			return cachedFenceCycle{}, fmt.Errorf("automatic timer target %s: %w; last publication id=%d sequence=%d disposition=%s watermark=%v timing_sequence=%d prior_sequence=%d prior_publication=%d",
+				target.Format(time.RFC3339), ctx.Err(), lastPublication.PublicationID, lastPublication.LastEngineSequence, lastPublication.LastDisposition,
+				lastPublication.Watermark, lastTiming.EngineSequence, priorTimingSequence, priorPublicationID)
+		case observation = <-observations:
+		}
+		captured, captureOK := InspectSnapshotCapture(observation.capture)
+		timing := observation.timing
+		operational := captured.Engine.Operational
+		publication := captured.Engine.Publication
+		lastPublication, lastTiming = publication, timing
+		if operational.Lifecycle == "suppressed" || operational.Lifecycle == "ended" || operational.Suppression != "" {
+			return cachedFenceCycle{}, fmt.Errorf("automatic timer reached terminal lifecycle=%s reason=%s suppression=%s", operational.Lifecycle, operational.LifecycleReason, operational.Suppression)
+		}
+		if observation.captureErr == nil && captureOK && observation.disposition.Code == engine.DispositionTimerApplied &&
+			observation.disposition.EngineSequence == timing.EngineSequence && publication.Watermark != nil && publication.Watermark.Equal(target) &&
+			publication.LastDisposition == engine.DispositionTimerApplied && publication.LastEngineSequence == timing.EngineSequence &&
+			publication.LastEngineSequence > priorTimingSequence && publication.PublicationID > priorPublicationID &&
+			operational.PublicationID == publication.PublicationID && operational.LastEngineSequence == publication.LastEngineSequence {
+			return cachedFenceCycle{timing: timing, total: timing.Stage + timing.Apply + timing.Publication, publicationID: publication.PublicationID, capture: captured}, nil
+		}
+	}
+}
 
 type cachedFenceServer struct {
-	server  *httptest.Server
-	start   chan struct{}
-	pause   chan struct{}
-	done    chan error
-	frames  []string
-	period  time.Duration
-	catchUp bool
-	sent    atomic.Uint64
-	once    sync.Once
+	server     *httptest.Server
+	start      chan struct{}
+	pause      chan struct{}
+	done       chan error
+	frames     []string
+	period     time.Duration
+	catchUp    bool
+	sent       atomic.Uint64
+	framesRead func() uint64
+	once       sync.Once
 }
 
 func newCachedFenceServer(t *testing.T, symbols []string, at time.Time, rate int) *cachedFenceServer {
@@ -365,6 +719,28 @@ func (s *cachedFenceServer) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	index := 0
 	send := func() bool {
+		for {
+			sent, read := s.sent.Load(), uint64(0)
+			if s.framesRead != nil {
+				read = s.framesRead()
+			}
+			if sent <= read || sent-read < cachedFenceMaximumInFlight {
+				break
+			}
+			timer := time.NewTimer(time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				s.done <- ctx.Err()
+				return false
+			case <-s.pause:
+				timer.Stop()
+				s.done <- nil
+				<-ctx.Done()
+				return false
+			case <-timer.C:
+			}
+		}
 		if err := write(s.frames[index%len(s.frames)]); err != nil {
 			s.done <- err
 			return false
@@ -460,17 +836,13 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 		t.Fatal(err)
 	}
 	run.Engine().ArmEvaluationTimingForTest(time.Now)
-	defer func() {
-		shutdown, stop := context.WithTimeout(context.Background(), 10*time.Second)
-		defer stop()
-		if err := run.Shutdown(shutdown); err != nil {
-			t.Errorf("shutdown: %v", err)
-		}
-	}()
+	cleanup := &cachedFenceRuntimeCleanup{run: run, binding: manifest.binding}
+	defer cleanup.shutdown(t)
 	attempt, started, err := adapter.Start(ctx, massive.OpenAggregateEpoch{BindingIdentity: manifest.binding.Identity(), CommandToken: 100, Durations: capacityDurations()})
 	if err != nil {
 		t.Fatal(err)
 	}
+	cleanup.attempt = attempt
 	if delivered, err := massive.DeliverToEngine(ctx, run.Engine(), started); err != nil || delivered.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
 		t.Fatalf("open delivery=%+v err=%v", delivered, err)
 	}
@@ -486,6 +858,7 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 	}
 	run.setLiveSources(attempt, adapter)
 	queueBase := attempt.QueueAccounting()
+	server.framesRead = func() uint64 { return attempt.QueueAccounting().FramesRead - queueBase.FramesRead }
 	planAdmission, planCompletion := run.Engine().AdmitHydrationPlan(ctx, engine.HydrationPlanInput{SchemaVersion: engine.HydrationPlanSchemaV1,
 		BindingIdentity: manifest.binding.Identity(), Purpose: engine.HydrationFreshBootstrap, ConnectionEpoch: attempt.Epoch(),
 		Budgets: engine.HydrationPlanBudgets{Workers: 2, RowsPerChunk: cachedFenceRowsPerChunk, MaximumResponseBytes: 2 << 30,
@@ -497,11 +870,14 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 	if planDisposition.Code != engine.DispositionHydrationPlanApplied || planDisposition.Plan.Start() != manifest.start || planDisposition.Plan.End() != manifest.end || len(planDisposition.Plan.Requests()) != len(manifest.rowsBySymbol) {
 		t.Fatalf("hydration plan=%+v start=%s end=%s requests=%d", planDisposition, planDisposition.Plan.Start(), planDisposition.Plan.End(), len(planDisposition.Plan.Requests()))
 	}
-	clock.set(manifest.end.Add(5 * time.Second))
+	if err := clock.advance(manifest.end.Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	close(server.start)
 
 	deliveryCtx, cancelDelivery := context.WithCancel(ctx)
 	deliveryDone := make(chan error, 1)
+	cleanup.deliveryCancel, cleanup.deliveryDone = cancelDelivery, deliveryDone
 	fenceDone := make(chan engine.HydrationDisposition, 1)
 	go func() {
 		for {
@@ -684,35 +1060,29 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 		time.Sleep(time.Millisecond)
 	}
 	result.tailDrain = time.Since(tailStarted)
+	priorTimingSequence := run.Engine().ObserveEvaluationTiming().EngineSequence
+	priorPublicationID := run.Engine().ObserveOperational().PublicationID
+	automaticTimer := observeCachedFenceAutomaticTimers(run)
+	defer run.setAutomaticTimerObserver(nil)
 	for cycle := 0; cycle < 10; cycle++ {
 		runtime.GC()
 		var beforeCycle, afterCycle runtime.MemStats
 		runtime.ReadMemStats(&beforeCycle)
-		clock.set(manifest.end.Add(time.Duration(cycle+1) * time.Second))
-		started := time.Now()
-		admission, completion := run.Engine().AdmitTimer(ctx)
-		if admission != engine.AdmissionAdmitted || completion == nil {
-			t.Fatalf("Gate E cycle %d timer admission=%s", cycle+1, admission)
-		}
-		disposition := <-completion
-		result.cycleLock[cycle] = time.Since(started)
-		if disposition.Code != engine.DispositionTimerApplied {
-			t.Fatalf("Gate E cycle %d timer=%s/%s", cycle+1, disposition.Code, disposition.Reason)
-		}
-		timing := run.Engine().ObserveEvaluationTiming()
-		if timing.EngineSequence != disposition.EngineSequence {
-			t.Fatalf("Gate E cycle %d timing sequence=%d disposition=%d", cycle+1, timing.EngineSequence, disposition.EngineSequence)
-		}
-		result.cycleStage[cycle], result.cycleApply[cycle], result.cyclePublication[cycle] = timing.Stage, timing.Apply, timing.Publication
-		capture, err := run.CaptureSnapshot()
+		cycleCtx, stopCycle := context.WithTimeout(ctx, 5*time.Second)
+		automatic, err := awaitCachedFenceAutomaticCycle(cycleCtx, run, clock, automaticTimer, manifest.end.Add(time.Duration(cycle+6)*time.Second), priorTimingSequence, priorPublicationID)
+		stopCycle()
 		if err != nil {
-			t.Fatalf("Gate E cycle %d API capture: %v", cycle+1, err)
+			t.Fatalf("Gate E cycle %d: %v", cycle+1, err)
 		}
-		view, ok := InspectSnapshotCapture(capture)
-		if !ok {
-			t.Fatalf("Gate E cycle %d sealed API capture invalid", cycle+1)
-		}
+		timing := automatic.timing
+		result.cycleLock[cycle] = automatic.total
+		result.cycleStage[cycle], result.cycleApply[cycle], result.cyclePublication[cycle] = timing.Stage, timing.Apply, timing.Publication
+		view := automatic.capture
 		result.cyclePublicationID[cycle] = view.Engine.Publication.PublicationID
+		if result.cyclePublicationID[cycle] != automatic.publicationID {
+			t.Fatalf("Gate E cycle %d API publication=%d automatic timer publication=%d", cycle+1, result.cyclePublicationID[cycle], automatic.publicationID)
+		}
+		priorTimingSequence, priorPublicationID = timing.EngineSequence, automatic.publicationID
 		runtime.ReadMemStats(&afterCycle)
 		result.cycleAlloc[cycle] = afterCycle.TotalAlloc - beforeCycle.TotalAlloc
 		t.Logf("GATE_E cycle=%d stage=%s apply=%s publication=%s total_lock=%s allocated_bytes=%d publication_id=%d", cycle+1, timing.Stage, timing.Apply, timing.Publication, result.cycleLock[cycle], result.cycleAlloc[cycle], result.cyclePublicationID[cycle])
@@ -741,15 +1111,6 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 	result.fenceReconciled, result.ready, result.accounting = view.Hydration.FenceReconciled, status.BackendReady && status.RankingCurrent, metrics.AccountingValid && operationalAccountingValid(view) && queue.Reconciles() && metrics.Adapter.Reconciles()
 	result.tq = run.Engine().ObserveTQ()
 
-	closeCommand := massive.CloseEpochCommand{BindingIdentity: manifest.binding.Identity(), ConnectionEpoch: attempt.Epoch(), CommandToken: 999, Cause: massive.CloseControlledStop}
-	_ = attempt.Close(closeCommand)
-	cancelDelivery()
-	select {
-	case <-deliveryDone:
-	case <-time.After(10 * time.Second):
-		t.Error("delivery loop did not join")
-	}
-	run.closeAndDrain(attempt, closeCommand.CommandToken, closeCommand.Cause)
 	return result
 }
 

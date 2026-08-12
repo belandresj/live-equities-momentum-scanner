@@ -1,9 +1,10 @@
 # Live scanner recovery narrow fix
 
-**Status:** Reopened after the newly authorized Gate E completed corrected
-playback and hydration but failed at the first measured cycle because the
-engine was already sealed; S1, Gates A-D, and the reader/playback prerequisites
-remain accepted.
+**Status:** Accepted for the fresh-start live milestone after corrected Gate E
+passed and the final independent review found no actionable P1/P2 or authority
+drift. S1, S2, Gates A-E, and the reader/playback prerequisites are accepted.
+Gate F remains a separate, unexecuted market-hours validation requiring exact
+authorization for its trading date, credentials, duration, and diagnostic path.
 
 **Boundary and completed-contract authority:** Direct owner request on
 2026-08-11 to use the read-only recovery review and specify the narrow fix.
@@ -35,12 +36,12 @@ This is the sole ledger; prior corrections are evidence.
 
 | Item | State | Evidence/review | Next action |
 | --- | --- | --- | --- |
-| Correction contract | `reopened` | Planning milestone `6381f6c`; the first two Gate E attempts failed before completing hydration. The newly authorized execution completed corrected playback and hydration, then reached cycle 1 with a sealed engine | Preserve all three failures; do not run Gate F or claim A-E acceptance |
+| Correction contract | `accepted` | The owner authorized one further full Gate E execution after the exact cycle-1 cause was proven and corrected. Gate E passed, the final `gpt-5.6-sol` medium review returned CLEAN/PASS, and final verification is recorded below | Preserve accepted A-E evidence; Gate F remains separate and unexecuted |
 | S1 — stable live path | `accepted` | `P-NARROW-LIVE` and Gate B passed 2026-08-11; exact evidence below | Preserve; no S1 rerun is required by S2-P |
-| S2 — measured mature cost | `proof_incomplete` | Activity correction and synthetic A-D evidence pass; the newly authorized Gate E completed 7,581,690 hydration rows and progressed through terminal/fence/readiness/tail-drain setup, but cycle 1 timer admission was `not_admitted_closed` before any cycle timing was captured | Preserve exact evidence; correct only through a separately authorized continuation and never rerun this unchanged Gate E |
+| S2 — measured mature cost | `accepted` | Activity correction and synthetic A-D evidence pass. Corrected Gate E completed 7,581,690 hydration rows, then ten exact runtime-owned cycles in 73.53-122.18ms each against the two-second limit, with monotonically increasing publication IDs | Complete for the fresh-start live milestone; this is current-host cached-data evidence, not provider latency or an SLA |
 | S2-R — production-reader resource diagnosis | `accepted_prerequisite` | Corrected exact reader validates all 2,584,011,150 bytes and 7,671,171 records in 40.53s with 20.30 MB peak RSS; compact trust/scale/repository/race/vet/review evidence is clean | Complete; reused by S2-P and any later authorized composition |
 | S2-P — production-playback preparation correction | `accepted_prerequisite` | Milestone `3ab1e1b`; one trusted requested-prefix manifest and reused same-open cursor reduce five strict parses to three. Exact reader-only proof validates 7,581,690 selected rows and 5,439/63 value/empty symbols in 2m6.65s; focused trust/resource, short/race/vet, and required review are clean. The new Gate E independently completed preparation in 1m21.202s and hydration in 2m27.780s | Complete; the new failure is downstream of playback and hydration |
-| S2-E — corrected cached composition | `failed_once_stop` | The exactly authorized command ran once from clean commit `3ab1e1b`. It prepared the exact 7,587,384-record prefix, hydrated all 7,581,690 selected rows with zero observed frame rejection/backlog at every progress point, then cycle 1 timer admission returned `not_admitted_closed`; cleanup exceeded 10s. Exit 1; `real 251.51`, `user 236.77`, `sys 46.84` | Preserve; no unchanged rerun, Gate F, or acceptance review |
+| S2-E — corrected cached composition | `accepted` | Newly authorized corrected Gate E passed in 233.93s: exact prefix/row/value/empty counts, queue high-water 320/512, zero rejection, 26,963 sent/read/admitted/dispositioned frames, ten coherent automatic cycles, live/qualified-current lifecycle, 20 ranking and T/Q rows, valid accounting/readiness, and deterministic shutdown | Complete; do not rerun unchanged evidence |
 
 ### S1 acceptance evidence — 2026-08-11
 
@@ -535,6 +536,219 @@ provider failure. The unchanged Gate E is not rerun. The conditional final
 acceptance review and acceptance verification do not apply, Gate F remains
 unexecuted, and no credentials, live requests, deployment, push, rebase, or
 amend occurred.
+
+### S2-E bounded continuation and stop evidence — 2026-08-11
+
+The owner authorized at most two additional full Gate E executions, only after
+a compact deterministic rehearsal, one `gpt-5.6-sol` medium harness review,
+focused tests, the ordinary short suite, focused race, vet, and diff checks.
+The continuation also required automatic runtime timer ownership, monotonic
+clock choreography, ten measured cycles, and deterministic cleanup on every
+failure exit.
+
+The corrected harness removes manual timer admission entirely. Its injected
+clock rejects regression and advances from requested end plus five seconds at
+the hydration fence to plus six through plus fifteen seconds for the ten
+cycles. Each cycle is accepted only from one sealed production snapshot whose
+watermark equals the intended target, last disposition is `timer_applied`,
+publication sequence exactly equals the measured timing sequence, and
+publication/operational identities agree. The same captured snapshot supplies
+the API/publication assertion. Cleanup owns the attempt from successful start,
+requests a controlled close, bounds graceful terminal delivery at four
+seconds, cancels and bounds the post-cancel join at one second, and preserves
+the remainder of one ten-second deadline for runtime timer, adapter, engine,
+and writer joins. Failed preflight validation closes its artifact handle before
+ownership can transfer.
+
+`TestCachedHydrationFenceAutomaticTimerRehearsal` uses the production runtime,
+automatic timer, live adapter, successful-empty hydration terminal, real
+adapter ingress fence, readiness transition, ten exact logical cycles, sealed
+captures, accounting, and deterministic shutdown. Its initial run rejected a
+fixture chronology that captured the fence before `end+5s`; after correction
+it passed, then passed 20 consecutive focused runs. The monotonic-clock
+counterexample passed, as did ten focused race repetitions. The ordinary
+`go test -short -timeout 2m ./...`, `go vet ./...`, and `git diff --check` were
+clean before each full execution.
+
+The required `gpt-5.6-sol` medium read-only review initially found three P2
+proof defects: independently sampled timing/publication identities, cleanup
+that could exhaust its deadline before runtime joins, and a preflight handle
+leak. All three were corrected and the same reviewer found no remaining P1/P2.
+After full execution 1, the reviewer correctly rejected disposition-coupled
+fixture backpressure as a P1 false-pass mechanism. The final containment caps
+only frames written but not yet read by the production adapter; read-to-
+disposition lag, the 512-frame production queue, and every capacity rejection
+remain unconstrained and observable. Focused re-review found that correction
+clean with no remaining P1/P2.
+
+Full execution 1 of 2 used the authorized command unchanged. Preparation
+completed in `1m20.301853291s`. Hydration reached 7,500,000 rows in
+`2m8.114519125s`, then the fixture's wall-clock WebSocket writer had accumulated
+an unbounded transport/kernel-buffer lead over the consumer. A late stall
+filled the 512-frame production queue and rejected one frame. The engine
+correctly entered `suppressed/ingress_integrity`, fenced the 5,502 hydration
+requests, and a subsequent chunk returned `hydration_fenced/historical_context`.
+The run failed in 225.52 seconds (`real 227.49`, `user 225.23`, `sys 40.03`).
+This is harness load-shaping evidence, not an Activity, playback, artifact,
+hydration-data, or product-semantics failure. The adjacent cleanup correction
+also treats an already-terminal attempt's rejected second close as a reason to
+cancel immediately while still requiring `Runtime.Shutdown`/`Wait`.
+
+After the transport-only correction and repeated clean fast ladder, full
+execution 2 of 2 again prepared the exact 7,587,384-record prefix with
+7,581,690 selected rows, 5,439 value symbols, and 63 successful-empty symbols
+in `1m20.706354959s`. All 7,581,690 hydration rows completed in
+`2m18.30437725s`. Every emitted 500,000-row progress point reported zero
+oversize, capacity, receipt, and gate/close rejection with zero queued frames;
+the last point was 7,500,000 rows at `2m0.983517375s` with 22,778 frames read,
+admitted, and dispositioned.
+
+The final permitted run then failed before completing measured cycle 1:
+
+```text
+GATE_E_HYDRATION rows=7581690 duration=2m18.30437725s
+Gate E cycle 1: automatic timer target 2026-08-07T21:15:02Z: context deadline exceeded
+--- FAIL: TestCachedHydrationFenceAcceptance (233.88s)
+real 235.92
+user 233.36
+sys 43.03
+```
+
+No cycle timing, allocation, or publication vector was accepted. The exact
+correlation requirement prevents inferring a cycle from another timer,
+pressure/TQ publication, or independently sampled snapshot. The two additional
+full-execution budget is exhausted. Per the direct stop condition, no further
+correction or Gate E execution, final acceptance review, acceptance commit, or
+Gate F is performed. No credential, provider request, deployment, push,
+rebase, or amend occurred.
+
+#### Cycle-1 timeout exact-cause proof — 2026-08-11
+
+The final timeout was not timer starvation, a blocked coverage fence, mature
+evaluation cost, or failure to advance `T`. The compact rehearsal originally
+used a 20 ms evaluation cadence while production uses a one-second evaluation
+cadence alongside the runtime's separate one-second pressure ticker. Running
+the otherwise identical compact production runtime, live adapter, hydration
+terminal, ingress fence, readiness, and shutdown path with the production
+one-second cadence reproduced the Gate E cycle-1 timeout under the same
+five-second cycle bound.
+
+The augmented failure evidence captured both the latest immutable publication
+and the engine's latest evaluation timing. Three consecutive production-
+cadence runs reported the same causal shape:
+
+```text
+automatic timer target 2026-08-07T08:20:02Z: context deadline exceeded;
+last publication id=29 sequence=29 disposition=tq_applied
+watermark=2026-08-07 08:20:02 +0000 UTC
+timing_sequence=27 prior_sequence=9 prior_publication=9
+```
+
+The target watermark proves logical time reached the requested cycle. Timing
+sequence 27 proves the automatic timer completed its full evaluator boundary.
+The later publication sequence 29 with `tq_applied` proves the timer
+publication was replaced, not absent. Source inspection closes the remaining
+causal gap: `Runtime.runTimer` creates the evaluation and pressure tickers
+together; both have a one-second cadence in production. The evaluation branch
+completes the timer and then returns to the same select loop. The already-ready
+pressure branch admits `TQPressureTick` and its result, whose T/Q revision
+replaces the single atomic publication cell. External one-millisecond polling
+cannot observe the transient sequence-27 timer publication once sequences 28
+and 29 have completed synchronously in that goroutine.
+
+As a control, the original 20 ms rehearsal passed three consecutive complete
+ten-cycle runs in 0.21 seconds each. At that cadence the timer publication
+normally remains visible before the next one-second pressure boundary. The
+only changed variable in the distinguishing failure was restoring the
+production evaluation cadence. Empty hydration and no ranked T/Q rows were
+sufficient, so the 7,581,690-row state, mature Activity work, and T/Q command
+acknowledgement are not necessary causes.
+
+The failed Gate E assertion therefore tested observability of a transient
+atomic-cell occupant, not whether the automatic timer ran. The smallest
+justified correction is to observe and seal the timer disposition, timing, and
+snapshot synchronously at the runtime-owned automatic-timer completion point,
+before `syncTQCommand` or another co-ready pressure branch can replace the
+publication. That observer must remain test-only/read-only, must not admit a
+timer or choose time, and must preserve exact target, disposition, engine
+sequence, publication ID, and sealed-snapshot correlation. Polling faster or
+loosening identity would not prove the required cycle.
+
+#### Cycle-observation correction and resumed fast ladder — 2026-08-11
+
+The runtime now exposes one package-private, read-only automatic-timer
+observation seam. It is invoked only after the completion returned by
+`Runtime.runTimer`'s own `AdmitTimer` and before `syncTQCommand` or another
+ticker selection. When enabled by Gate E, it seals that timer disposition, the
+matching evaluation timing, and one production `CaptureSnapshot`. It does not
+admit a timer, choose logical time, mutate engine state, or alter behavior when
+no observer is installed.
+
+The Gate E consumer accepts an observation only when the returned timer
+disposition is `timer_applied`, its engine sequence equals both the timing
+sequence and sealed publication sequence, the publication watermark equals the
+requested target, publication ID advances, and operational/publication
+identities agree. Its bounded size-two channel is single-producer and
+nonblocking; dropping evidence can cause only an honest timeout because a later
+cycle has a distinct target and cannot substitute. Deferred unregistration is
+race-safe and every shutdown path still joins the runtime timer.
+
+The first corrected production-cadence rehearsal reached cycle 9 and then
+exposed an adjacent deterministic harness defect: the outer rehearsal deadline
+was exactly ten seconds although ten production ticks themselves require ten
+seconds. The production-cadence rehearsal budget is now twenty seconds while
+each individual cycle remains bounded at five seconds. This changes no Gate E
+or product timing limit.
+
+Verification after both corrections:
+
+- the exact one-second production-cadence rehearsal passed all ten cycles in
+  10.01 seconds, including under `-race`;
+- the focused rehearsal plus monotonic-clock counterexample passed 20
+  consecutive repetitions;
+- the focused race proof passed 10 consecutive repetitions;
+- `go test -short -timeout 2m ./...` passed; and
+- the same `gpt-5.6-sol` medium reviewer reported no remaining P1/P2 in the
+  complete affected observation boundary.
+
+At this point no further full Gate E execution had been performed. The owner
+subsequently authorized one exact corrected execution; its acceptance evidence
+follows.
+
+#### Corrected Gate E acceptance and final review — 2026-08-11
+
+The newly authorized exact recorded command passed once:
+
+```text
+/usr/bin/time -p env CACHED_HYDRATION_ACCEPTANCE=1 CACHED_HYDRATION_RATE_MULTIPLIER=1 go test -timeout 8m ./internal/operations -run '^TestCachedHydrationFenceAcceptance$' -count=1 -v
+```
+
+Preparation validated artifact
+`sha256:fce95a904bb37c3d63bfe0a2988ac78aa0e0a2ee4c8d171bdca27fcd00f8808a`,
+the 7,587,384-record requested prefix, 7,581,690 selected hydration rows,
+5,439 value symbols, and 63 successful-empty symbols in 1m20.721s. Hydration
+completed in 2m13.786s. The live fixture and production adapter reported
+26,963 frames sent/read/admitted/dispositioned, zero oversize/capacity/receipt/
+gate-or-close rejection, and a real queue high-water of 320 against 512 slots.
+
+All ten automatic runtime-owned cycles produced exact correlated observations.
+Publication IDs increased from 38,679 through 38,715. Total measured lock time
+ranged from 73.528ms to 122.177ms, with the maximum far below the fixed
+two-second limit. The final view was `live` and `qualified_current` with 20
+ranking rows, aggregate-only T/Q with 20 rows, reconciled accounting, readiness
+true, and a deterministic shutdown. The test passed in 233.93 seconds
+(`real 236.11`, `user 232.36`, `sys 40.66`).
+
+The required final read-only `gpt-5.6-sol` medium review inspected the complete
+preparation-through-shutdown diff and returned CLEAN/PASS: no actionable P1/P2,
+no changed market or product semantics, no competing timer/evaluator owner, and
+no false-pass route through fixture pacing or publication correlation. Its
+independent production-cadence rehearsal also passed in 10.44 seconds.
+
+Gate E is accepted for this correction. The evidence proves local cached-data
+composition on this host; it does not prove provider reachability, credentials,
+current-market latency, or launch safety under live market-hours conditions.
+Those claims remain allocated solely to separately authorized Gate F.
 
 ## Sections 1-4 — Outcome, scope, ownership, and settled boundary
 
