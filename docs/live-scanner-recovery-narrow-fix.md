@@ -1,8 +1,9 @@
 # Live scanner recovery narrow fix
 
-**Status:** Reopened after the authorized replacement Gate E exhausted its
-7m30s internal deadline during hydration preload; S1 and Gates A-D remain
-accepted, and the reader/playback prerequisites are corrected and proved.
+**Status:** Reopened after the newly authorized Gate E completed corrected
+playback and hydration but failed at the first measured cycle because the
+engine was already sealed; S1, Gates A-D, and the reader/playback prerequisites
+remain accepted.
 
 **Boundary and completed-contract authority:** Direct owner request on
 2026-08-11 to use the read-only recovery review and specify the narrow fix.
@@ -34,11 +35,12 @@ This is the sole ledger; prior corrections are evidence.
 
 | Item | State | Evidence/review | Next action |
 | --- | --- | --- | --- |
-| Correction contract | `reopened` | Planning milestone `6381f6c`; the initial Gate E process was externally terminated before preload and the authorized replacement later canceled during preload at its exact 7m30s context deadline | Preserve both failures; do not run Gate F or claim A-E acceptance |
+| Correction contract | `reopened` | Planning milestone `6381f6c`; the first two Gate E attempts failed before completing hydration. The newly authorized execution completed corrected playback and hydration, then reached cycle 1 with a sealed engine | Preserve all three failures; do not run Gate F or claim A-E acceptance |
 | S1 — stable live path | `accepted` | `P-NARROW-LIVE` and Gate B passed 2026-08-11; exact evidence below | Preserve; no S1 rerun is required by S2-P |
-| S2 — measured mature cost | `proof_incomplete` | Activity correction and synthetic A-D evidence pass; replacement Gate E reached production hydration but canceled before terminal/fence/cycles, so cached composition remains unproved | Preserve implementation/evidence; another Gate E requires a new explicit authorization |
+| S2 — measured mature cost | `proof_incomplete` | Activity correction and synthetic A-D evidence pass; the newly authorized Gate E completed 7,581,690 hydration rows and progressed through terminal/fence/readiness/tail-drain setup, but cycle 1 timer admission was `not_admitted_closed` before any cycle timing was captured | Preserve exact evidence; correct only through a separately authorized continuation and never rerun this unchanged Gate E |
 | S2-R — production-reader resource diagnosis | `accepted_prerequisite` | Corrected exact reader validates all 2,584,011,150 bytes and 7,671,171 records in 40.53s with 20.30 MB peak RSS; compact trust/scale/repository/race/vet/review evidence is clean | Complete; reused by S2-P and any later authorized composition |
-| S2-P — production-playback preparation correction | `accepted_prerequisite` | One trusted requested-prefix manifest and reused same-open cursor reduce five strict parses to three. Exact reader-only proof validates 7,581,690 selected rows and 5,439/63 value/empty symbols in 2m6.65s; focused trust/resource, short/race/vet, and required review are clean | Stop; do not rerun Gate E without new explicit authorization and do not run Gate F |
+| S2-P — production-playback preparation correction | `accepted_prerequisite` | Milestone `3ab1e1b`; one trusted requested-prefix manifest and reused same-open cursor reduce five strict parses to three. Exact reader-only proof validates 7,581,690 selected rows and 5,439/63 value/empty symbols in 2m6.65s; focused trust/resource, short/race/vet, and required review are clean. The new Gate E independently completed preparation in 1m21.202s and hydration in 2m27.780s | Complete; the new failure is downstream of playback and hydration |
+| S2-E — corrected cached composition | `failed_once_stop` | The exactly authorized command ran once from clean commit `3ab1e1b`. It prepared the exact 7,587,384-record prefix, hydrated all 7,581,690 selected rows with zero observed frame rejection/backlog at every progress point, then cycle 1 timer admission returned `not_admitted_closed`; cleanup exceeded 10s. Exit 1; `real 251.51`, `user 236.77`, `sys 46.84` | Preserve; no unchanged rerun, Gate F, or acceptance review |
 
 ### S1 acceptance evidence — 2026-08-11
 
@@ -440,6 +442,99 @@ this proves the corrected exact reader/preparation boundary, not hydration
 throughput, the ten cycles, or Gate E's eight-minute composition. The consumed
 replacement Gate E was not rerun, and Gate F, credentials, provider requests,
 deployment, push, rebase, and amend remain unexecuted.
+
+### S2-E newly authorized corrected Gate E execution — 2026-08-11
+
+The owner authorized exactly one new Gate E execution against the corrected
+three-pass playback implementation. Before execution, the complete diff was
+classified as only the recorded S2-P playback preparation, proof, diagnostics,
+and ledger correction. The required persisted-trust review remained recorded
+clean with no P1/P2. Focused canonical/adversarial and requested-prefix/end
+proofs, the ordinary short suite, focused short race for playback,
+replayartifact, replay, and operations, vet, and diff checking were clean. The
+unchanged exact 2m6.65s prepared-playback result was reused rather than rerun.
+The exact correction was committed as clean milestone `3ab1e1b`.
+
+The compact production trust proof then passed. Exact preflight revalidated:
+
+| Field | Exact value |
+| --- | --- |
+| Artifact path | `/Users/joshuabelandres/Dev/live-equities-momentum-scanner/var/aggregate-replay/aggregate-replay-fce95a904bb37c3d63bfe0a2988ac78aa0e0a2ee4c8d171bdca27fcd00f8808a.jsonl` |
+| Bytes / file SHA-256 | `2,584,011,150` / `e7e33c7981ed55cb12408ee1145f78e69c11caca52fc34b3c08484a1857db189` |
+| Artifact / binding | `sha256:fce95a904bb37c3d63bfe0a2988ac78aa0e0a2ee4c8d171bdca27fcd00f8808a` / `session-binding-v1:b68b50821b19ec69073cf039bc61a9d193825578b65708e49aec892aa97b7f7d` |
+| Reference paths | `prior-close/2026-08-06.json`; `universe/2026-08-07.json` under the recorded reference root |
+| Interval / artifact records / symbols | `[2026-08-07T08:00:00Z,2026-08-08T00:00:00Z)` / `7,671,171` / `5,691` |
+
+The authorized command ran exactly once:
+
+```text
+/usr/bin/time -p env CACHED_HYDRATION_ACCEPTANCE=1 CACHED_HYDRATION_RATE_MULTIPLIER=1 go test -timeout 8m ./internal/operations -run '^TestCachedHydrationFenceAcceptance$' -count=1 -v
+```
+
+Corrected preparation completed in `1m21.202046333s` with the exact requested
+prefix: 7,587,384 prefix records, 7,581,690 selected valid-prior rows, 5,439
+value symbols, and 63 successful-empty symbols. Hydration then reported:
+
+| Selected rows reached | Elapsed | Frames read/admitted/dispositioned | Queued/classifying | Rejections |
+| ---: | ---: | ---: | ---: | ---: |
+| 500,000 | 5.338652250s | 1,039 / 1,039 / 1,039 | 0 / 0 | 0 |
+| 1,000,000 | 10.755792333s | 2,082 / 2,082 / 2,082 | 0 / 0 | 0 |
+| 1,500,000 | 17.191512958s | 3,290 / 3,290 / 3,290 | 0 / 0 | 0 |
+| 2,000,000 | 24.532217500s | 4,681 / 4,681 / 4,681 | 0 / 0 | 0 |
+| 2,500,000 | 30.902669875s | 5,886 / 5,886 / 5,886 | 0 / 0 | 0 |
+| 3,000,000 | 38.170984500s | 7,249 / 7,249 / 7,249 | 0 / 0 | 0 |
+| 3,500,000 | 45.645396958s | 8,666 / 8,666 / 8,666 | 0 / 0 | 0 |
+| 4,000,000 | 53.446065750s | 10,148 / 10,148 / 10,148 | 0 / 0 | 0 |
+| 4,500,000 | 1m2.301471750s | 11,801 / 11,801 / 11,801 | 0 / 0 | 0 |
+| 5,000,000 | 1m11.965345916s | 13,616 / 13,616 / 13,616 | 0 / 0 | 0 |
+| 5,500,000 | 1m22.247946083s | 15,511 / 15,511 / 15,511 | 0 / 0 | 0 |
+| 6,000,000 | 1m33.152342333s | 17,545 / 17,545 / 17,545 | 0 / 0 | 0 |
+| 6,500,000 | 1m48.108407458s | 20,248 / 20,248 / 20,248 | 0 / 0 | 0 |
+| 7,000,000 | 1m59.386353166s | 22,390 / 22,390 / 22,390 | 0 / 0 | 0 |
+| 7,500,000 | 2m11.294447708s | 24,598 / 24,598 / 24,598 | 0 / 0 | 0 |
+
+All 7,581,690 rows completed in `2m27.779621916s`. At every emitted progress
+boundary, oversize, capacity, receipt, and gate/close rejections were zero;
+queued bytes and terminal/fence queue counters were also zero. The harness then
+advanced past terminal application, the real ingress fence, first readiness,
+the producer pause, and tail drain—the cycle loop is reachable only after each
+of those succeeds—but it did not emit their durations or final accounting
+snapshots before failure.
+
+Cycle 1 failed before any stage/apply/publication/total-lock/allocation or
+publication-ID measurement:
+
+```text
+cached_hydration_fence_acceptance_test.go:172: Gate E cycle 1 timer admission=not_admitted_closed
+cached_hydration_fence_acceptance_test.go:467: shutdown: live adapter cleanup deadline exceeded
+--- FAIL: TestCachedHydrationFenceAcceptance (249.51s)
+FAIL
+FAIL github.com/belandresj/live-equities-momentum-scanner/internal/operations 249.938s
+FAIL
+real 251.51
+user 236.77
+sys 46.84
+```
+
+Process exit status was 1. No cycle completed, so none of the ten cycle timing
+or allocation vectors exists. Final lifecycle, ranking mode/rows, queue
+high-water, fence reconciliation, heap-at-fence/after-GC, T/Q state, or
+checkpoint-off accounting was collected. This absence is preserved rather
+than inferred as success.
+
+The narrowest demonstrated boundary is post-hydration Gate E clock/lifecycle
+coordination before cycle measurement. The harness holds its injected clock at
+requested end plus five seconds while the production runtime's one-second timer
+is active, then moves that clock backward to requested end plus one second for
+cycle 1. A clock-regression transition requires termination and seals the
+engine. The observed `not_admitted_closed` proves the engine was sealed before
+the explicit cycle-1 timer could link; the trace did not emit which preceding
+timer performed the sealing transition. This is not a playback, hydration
+throughput, queue-capacity, Activity timing, ranking, T/Q, checkpoint, or
+provider failure. The unchanged Gate E is not rerun. The conditional final
+acceptance review and acceptance verification do not apply, Gate F remains
+unexecuted, and no credentials, live requests, deployment, push, rebase, or
+amend occurred.
 
 ## Sections 1-4 — Outcome, scope, ownership, and settled boundary
 
