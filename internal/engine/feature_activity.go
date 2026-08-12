@@ -487,7 +487,7 @@ func evaluateActivityFeatures(binding *installedBinding, state *symbolAggregateS
 		result.referenceCount = len(activity.referenceLookup.transactions)
 		transactionRank := upperBoundActivityValue(activity.referenceLookup.transactions, target.transactions)
 		expansionRank := upperBoundActivityValue(activity.referenceLookup.expansions, target.expansionBPS)
-		for blockEnd := activityBlockEnd(binding, lookupUpper); !blockEnd.After(upper); blockEnd = blockEnd.Add(activityBlockDuration) {
+		for blockEnd := firstActivityReferenceEndAfter(binding, lookupUpper); !blockEnd.After(upper); blockEnd = blockEnd.Add(activityBlockDuration) {
 			value, status, reason, eligible := activityReferenceValue(state, binding, blockEnd)
 			if status != featureCurrent {
 				result.activity = aggregateFeatureField{status: status, reason: reason}
@@ -636,7 +636,7 @@ func advanceActivityReferenceLookup(activity *activityFeatureState, state *symbo
 		return
 	}
 	oldUpper, upper := activity.referenceLookup.at.Add(-activityBlockDuration), at.Add(-activityBlockDuration)
-	for end := activityBlockEnd(binding, oldUpper); !end.After(upper); end = end.Add(activityBlockDuration) {
+	for end := firstActivityReferenceEndAfter(binding, oldUpper); !end.After(upper); end = end.Add(activityBlockDuration) {
 		value, status, _, eligible := activityReferenceValue(state, binding, end)
 		if status != featureCurrent {
 			activity.referenceLookup = activityReferenceLookup{}
@@ -648,6 +648,20 @@ func advanceActivityReferenceLookup(activity *activityFeatureState, state *symbo
 		}
 	}
 	activity.referenceLookup.at = at
+}
+
+// firstActivityReferenceEndAfter returns the first valid session-aligned
+// reference-block end strictly after floor. activityBlockEnd alone cannot be
+// used before session start because Go duration division truncates negative
+// offsets toward zero, which can manufacture sessionStart as the end of a
+// nonexistent pre-session block.
+func firstActivityReferenceEndAfter(binding *installedBinding, floor time.Time) time.Time {
+	end := activityBlockEnd(binding, floor)
+	first := binding.sessionStart.Add(activityBlockDuration)
+	if end.Before(first) {
+		return first
+	}
+	return end
 }
 
 func removeActivityReferenceLookupBlock(activity *activityFeatureState, state *symbolAggregateState, binding *installedBinding, end time.Time) {

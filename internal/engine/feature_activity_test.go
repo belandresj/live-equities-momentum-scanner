@@ -620,6 +620,34 @@ func TestFreshHydrationActivityOptimizationsMatchValueOracle(t *testing.T) {
 	}
 }
 
+func TestActivityReferenceLookupFirstSessionAdvanceMatchesFullScan(t *testing.T) {
+	binding := installedBindingForQualification(t, testBinding(t))
+	start := binding.sessionStart
+	state := &symbolAggregateState{tail: make(map[int64]*canonicalAggregate)}
+	installExactCoverage(state, binding, start, start.Add(time.Minute), nil)
+	for ordinal := 0; ordinal < 60; ordinal++ {
+		at := start.Add(time.Duration(ordinal) * time.Second)
+		installActivityTestRecord(state, at, activityValues(100, float64(ordinal%3)))
+	}
+
+	activity := ensureActivityState(state)
+	if !rebuildActivityReferenceLookup(activity, state, binding, start) || !activity.referenceLookup.valid || len(activity.referenceLookup.transactions) != 0 {
+		t.Fatalf("session-start lookup=%+v", activity.referenceLookup)
+	}
+	at := start.Add(time.Minute)
+	got := evaluateActivityFeatures(binding, state, at)
+	if got.activity.status != featureWarming || got.activity.reason != featureReasonReferenceWarmup || got.referenceCount != 1 {
+		t.Fatalf("first accelerated evaluation=%+v", got)
+	}
+	applyActivityResult(state, binding, got)
+	if !activity.referenceLookup.valid || activity.referenceLookup.at != at || len(activity.referenceLookup.transactions) != 1 || len(activity.referenceLookup.expansions) != 1 {
+		t.Fatalf("first lookup advance=%+v", activity.referenceLookup)
+	}
+	if repeated := evaluateActivityFeatures(binding, state, at); repeated != got {
+		t.Fatalf("accelerated repeat=%+v want=%+v", repeated, got)
+	}
+}
+
 func TestActivityStableSummaryAndDeferredFinalizationEquivalence(t *testing.T) {
 	binding := installedBindingForQualification(t, testBinding(t))
 	start := binding.sessionStart

@@ -1,10 +1,13 @@
 # Live scanner recovery narrow fix
 
 **Status:** Accepted for the fresh-start live milestone after corrected Gate E
-passed and the final independent review found no actionable P1/P2 or authority
-drift. S1, S2, Gates A-E, and the reader/playback prerequisites are accepted.
-Gate F remains a separate, unexecuted market-hours validation requiring exact
-authorization for its trading date, credentials, duration, and diagnostic path.
+passed, and re-accepted after a closed-market vertical proof exposed and closed
+the first-session Activity/checkpoint equivalence defect. Final independent
+reviews found no actionable P1/P2 or authority drift. S1, S2, Gates A-E, the
+reader/playback prerequisites, and the credential-free private scanner vertical
+are accepted. Gate F remains a separate, unexecuted market-hours validation
+requiring exact authorization for its trading date, credentials, duration, and
+diagnostic path.
 
 **Boundary and completed-contract authority:** Direct owner request on
 2026-08-11 to use the read-only recovery review and specify the narrow fix.
@@ -42,6 +45,7 @@ This is the sole ledger; prior corrections are evidence.
 | S2-R — production-reader resource diagnosis | `accepted_prerequisite` | Corrected exact reader validates all 2,584,011,150 bytes and 7,671,171 records in 40.53s with 20.30 MB peak RSS; compact trust/scale/repository/race/vet/review evidence is clean | Complete; reused by S2-P and any later authorized composition |
 | S2-P — production-playback preparation correction | `accepted_prerequisite` | Milestone `3ab1e1b`; one trusted requested-prefix manifest and reused same-open cursor reduce five strict parses to three. Exact reader-only proof validates 7,581,690 selected rows and 5,439/63 value/empty symbols in 2m6.65s; focused trust/resource, short/race/vet, and required review are clean. The new Gate E independently completed preparation in 1m21.202s and hydration in 2m27.780s | Complete; the new failure is downstream of playback and hydration |
 | S2-E — corrected cached composition | `accepted` | Newly authorized corrected Gate E passed in 233.93s: exact prefix/row/value/empty counts, queue high-water 320/512, zero rejection, 26,963 sent/read/admitted/dispositioned frames, ten coherent automatic cycles, live/qualified-current lifecycle, 20 ranking and T/Q rows, valid accounting/readiness, and deterministic shutdown | Complete; do not rerun unchanged evidence |
+| Post-E closed-market vertical | `accepted_after_correction` | `TestPV1RCVertical` initially rejected checkpoint projection because the first accelerated Activity lookup evaluated a nonexistent pre-session block and diverged from checkpoint rebuild. Both accelerated loops now clamp to the first valid 04:00:30 reference end. The direct boundary regression, checkpoint round trip, full scanner vertical through live A/T/Q/API/UI/shutdown, focused races, short suite, vet/diff, and focused review are clean | Complete; preserves Gate E and closes checkpoint-on launch composition without claiming provider behavior |
 
 ### S1 acceptance evidence — 2026-08-11
 
@@ -749,6 +753,48 @@ Gate E is accepted for this correction. The evidence proves local cached-data
 composition on this host; it does not prove provider reachability, credentials,
 current-market latency, or launch safety under live market-hours conditions.
 Those claims remain allocated solely to separately authorized Gate F.
+
+#### Post-E Activity/checkpoint vertical correction — 2026-08-12
+
+Before recommending an unattended 04:00 scanner start, the credential-free
+`TestPV1RCVertical` was run on the accepted Gate E commit. It failed before
+restart, adapter, API, or UI at checkpoint projection:
+
+```text
+checkpoint_projection_rejected / projection_invariant
+```
+
+The distinguishing diagnostic compared evaluations at the same committed
+timestamp. The live accelerated Activity state reported
+`unavailable/history_incomplete`, while the checkpoint rebuild's authoritative
+full scan reported `warming/reference_warmup` with one reference.
+
+The exact cause was the accelerated lookup's first advance. Its lookup was
+initialized at the 04:00 session boundary; subtracting the 30-second target
+window produced 03:59:30. Go duration division truncates negative offsets
+toward zero, so `activityBlockEnd` mapped that pre-session floor to 04:00 and
+the fast path evaluated a nonexistent `[03:59:30,04:00)` reference block. The
+checkpoint rebuild did not use that fast traversal and remained correct.
+
+Both accelerated traversal sites now share a helper returning the first valid
+session-aligned reference end strictly after their floor, clamped to 04:00:30.
+Exact in-session block ends advance to the next block; nonaligned floors select
+their containing block end. Thus an existing lookup representing ends through
+the old floor neither repeats nor skips a block. Activity formulas, eligibility,
+percentiles, correction behavior, bounds, market time, and checkpoint schema
+are unchanged.
+
+The new regression recreates a session-start lookup, evaluates and advances at
+the first +60-second boundary, and proves repeated accelerated evaluation is
+stable. It passed 20 consecutive runs. The previously failing vertical then
+passed through checkpoint write/load/install, checkpoint catch-up hydration,
+production live A/T/Q enrichment, snapshot HTTP serialization, the production
+dashboard view model, and joined shutdown. The engine/scanner suites, ten
+focused checkpoint/Activity race repetitions, three vertical race repetitions,
+and ordinary short suite passed. A focused `gpt-5.6-sol` medium read-only review
+returned CLEAN with no actionable P1/P2 and confirmed exactly-once block
+traversal and no product or persisted-state change. Gate E was not rerun because
+its 17:15 hydrated boundary never exercises this first-session lookup advance.
 
 ## Sections 1-4 — Outcome, scope, ownership, and settled boundary
 
