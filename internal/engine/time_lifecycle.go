@@ -80,7 +80,7 @@ func (e *Engine) accountingCoherentLocked() bool {
 	return e.state.aggregates.reconciles() && e.state.connectionAccounting.reconciles() &&
 		counters.started == counters.inProgress+counters.resultsCommitted &&
 		counters.resultsCommitted == classified &&
-		counters.admittedExternal == uint64(len(e.queue))+counters.ownerInProgress+counters.completedExternal
+		counters.admittedExternal == uint64(e.externalQueueOccupancyLocked())+counters.ownerInProgress+counters.completedExternal
 }
 
 func suppressionDispositionFor(mode RunMode, reason lifecycleReason) SuppressionDisposition {

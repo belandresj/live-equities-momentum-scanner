@@ -914,9 +914,9 @@ func TestC6LEDGER01OrderedChunkTerminalSupersession(t *testing.T) {
 
 // TestC6MERGE01ProductionHistoricalDispositionMatrix is P-C6-MERGE. It proves
 // C6 rows use Component 2's fill-only canonical decisions: historical cannot
-// overwrite live, equality deduplicates, conflicts make coverage unknown, and
-// provider completed_value remains only a provider terminal fact. It does not
-// prove the later fence/lifecycle/no-print composition.
+// overwrite live, equality deduplicates, resolved REST/live discrepancies stay
+// diagnostic-only, and unresolved historical ambiguity remains fail-closed. It
+// does not prove the later fence/lifecycle/no-print composition.
 func TestC6MERGE01ProductionHistoricalDispositionMatrix(t *testing.T) {
 	binding := testBinding(t)
 	start := binding.SessionStart()
@@ -946,7 +946,7 @@ func TestC6MERGE01ProductionHistoricalDispositionMatrix(t *testing.T) {
 		closeAndWait(t, e)
 	})
 
-	t.Run("unequal historical cannot overwrite live and coverage stays unknown", func(t *testing.T) {
+	t.Run("unequal historical cannot overwrite live and coverage stays exact", func(t *testing.T) {
 		now := start.Add(3 * time.Second)
 		e, token := plannedHydrationEngine(t, binding, &now)
 		live := liveAggregate(binding, "AAA", start, 1, 2)
@@ -961,10 +961,42 @@ func TestC6MERGE01ProductionHistoricalDispositionMatrix(t *testing.T) {
 		terminal, _ := NewHydrationTerminalInput(token, token.ResultID(), HydrationCompletedValue, HydrationReasonNone, 1, 1, 10, 1, 1, 1)
 		term := admitHydrationTerminal(t, e, terminal)
 		observation := e.observeHydration()
-		if term.Code != DispositionHydrationTerminalApplied || observation.Accounting.CompletedValue != 1 || observation.Requests[0].coverage != hydrationCoverageUnknown {
+		if term.Code != DispositionHydrationTerminalApplied || observation.Accounting.CompletedValue != 1 || observation.Requests[0].coverage != hydrationCoverageCandidateComplete {
 			t.Fatalf("provider-success/canonical-coverage separation = %+v state=%+v", term, observation)
 		}
 		assertCanonicalClose(t, e, "AAA", start, 10)
+		state := aggregateState(t, e, "AAA")
+		if state.historicalConflict != nil && state.historicalConflict.has(sessionSlot(e.state.binding, start)) || !exactAggregateCoverage(state, e.state.binding, start, start.Add(time.Second)) {
+			t.Fatalf("resolved REST/live discrepancy poisoned canonical coverage: %+v", state)
+		}
+		closeAndWait(t, e)
+	})
+
+	t.Run("source specific ATS provenance remains diagnostic only", func(t *testing.T) {
+		now := start.Add(3 * time.Second)
+		e, token := plannedHydrationEngine(t, binding, &now)
+		live := liveAggregate(binding, "AAA", start, 1, 2)
+		live.Live.ArrayIndex = 1
+		admitProductionAggregate(t, e, live)
+		row, _ := NewHydrationRow("AAA", start, start.Add(time.Second), AggregateValues{
+			Open: 10, High: 10, Low: 10, Close: 10, Volume: 100, VWAP: 10,
+			AverageTradeSize: 10, ATSProvenance: ATSRESTFloorVolumeOverTrades,
+		})
+		chunk, _ := NewHydrationChunkInput(token, token.ResultID(), 0, 1, 0, 1, []HydrationRow{row})
+		if got := admitHydrationChunk(t, e, chunk); got.Rows != (HydrationRowAccounting{Consumed: 1, ConflictOrWithdrawal: 1}) {
+			t.Fatalf("ATS provenance diagnostic accounting = %+v", got)
+		}
+		terminal, _ := NewHydrationTerminalInput(token, token.ResultID(), HydrationCompletedValue, HydrationReasonNone, 1, 1, 10, 1, 1, 1)
+		if got := admitHydrationTerminal(t, e, terminal); got.Code != DispositionHydrationTerminalApplied || e.observeHydration().Requests[0].coverage != hydrationCoverageCandidateComplete {
+			t.Fatalf("ATS provenance poisoned request coverage: disposition=%+v state=%+v", got, e.observeHydration())
+		}
+		record := aggregateRecord(t, e, "AAA", start)
+		state := aggregateState(t, e, "AAA")
+		if record.values != live.Values || record.authority.source != AggregateSourceLive ||
+			state.historicalConflict != nil && state.historicalConflict.has(sessionSlot(e.state.binding, start)) ||
+			!exactAggregateCoverage(state, e.state.binding, start, start.Add(time.Second)) {
+			t.Fatalf("ATS provenance changed canonical live authority or coverage: record=%+v state=%+v", record, state)
+		}
 		closeAndWait(t, e)
 	})
 
@@ -986,9 +1018,30 @@ func TestC6MERGE01ProductionHistoricalDispositionMatrix(t *testing.T) {
 			t.Fatalf("historical/historical conflict = %+v", got)
 		}
 		assertNoIdentity(t, e, "AAA", start)
+		later := liveAggregate(binding, "AAA", start.Add(2*time.Second), 1, 2)
+		later.Values = AggregateValues{Open: 11, High: 12, Low: 10, Close: 11, Volume: 5_000, VWAP: 11, AverageTradeSize: 10, ATSProvenance: ATSLiveProviderAverage}
+		if got := admitProductionAggregate(t, e, later); got.Code != DispositionAggregateInserted {
+			t.Fatalf("later live authority = %+v", got)
+		}
 		terminal, _ := NewHydrationTerminalInput(token, token.ResultID(), HydrationCompletedValue, HydrationReasonNone, 1, 1, 10, 1, 1, 1)
-		if got := admitHydrationTerminal(t, e, terminal); got.Code != DispositionHydrationTerminalApplied || e.observeHydration().Requests[0].coverage != hydrationCoverageUnknown {
-			t.Fatalf("withdrawn provider result = %+v state=%+v", got, e.observeHydration())
+		terminalDisposition := admitHydrationTerminal(t, e, terminal)
+		if terminalDisposition.Code != DispositionHydrationTerminalApplied || e.observeHydration().Requests[0].coverage != hydrationCoverageUnknown {
+			t.Fatalf("withdrawn provider result = %+v state=%+v", terminalDisposition, e.observeHydration())
+		}
+		fence, _ := NewAggregateIngressFenceInput(terminalDisposition.FenceCommand, AggregateIngressFenceComplete, 2, 1, now)
+		admission, completion := e.AdmitAggregateIngressFence(context.Background(), fence)
+		if admission != AdmissionAdmitted || completion == nil || awaitHydrationDisposition(t, completion).Code != DispositionAggregateIngressFenceApplied {
+			t.Fatalf("historical ambiguity fence admission=%s", admission)
+		}
+		canonical := e.ObserveReplayDeterministic().Canonical[0]
+		state := aggregateState(t, e, "AAA")
+		if state.historicalConflict == nil || !state.historicalConflict.has(sessionSlot(e.state.binding, start)) ||
+			exactAggregateCoverage(state, e.state.binding, start, now) || canonical.Qualification.Status != "unresolved" ||
+			canonical.Features.HODDrawdown.Status != "invalid" || canonical.Features.HODDrawdown.Reason != "historical_conflict" ||
+			canonical.Features.SessionRange.Status != "invalid" || canonical.Features.Rolling30.Status != "invalid" ||
+			canonical.Features.Rolling60.Status != "invalid" || canonical.Features.Activity.Status != "unavailable" ||
+			canonical.Features.Activity.Reason != "history_incomplete" {
+			t.Fatalf("historical/historical ambiguity did not remain fail-closed: canonical=%+v state=%+v", canonical, state)
 		}
 		closeAndWait(t, e)
 	})

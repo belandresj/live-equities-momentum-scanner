@@ -152,28 +152,12 @@ func (e *Engine) projectCheckpointLocked(created time.Time) CheckpointProjection
 		image.Symbols[index] = projected
 	}
 	image.Counts = checkpointStructureCounts(image)
-	if err := e.validateProjectedCheckpointLocked(image); err != nil {
+	if !boundedCheckpointCandidate(image) || image.Population != len(image.Symbols) ||
+		image.Counts != checkpointStructureCounts(image) || image.Counts.RecordsWithState+image.Counts.EmptyStateRecords != image.Population {
 		return CheckpointProjectionResult{Disposition: CheckpointProjectionRejected, Reason: CheckpointReasonProjectionInvariant}
 	}
 	e.state.checkpointSequence++
-	return CheckpointProjectionResult{Disposition: CheckpointProjected, Image: image.Clone()}
-}
-
-func (e *Engine) validateProjectedCheckpointLocked(image checkpoint.Image) error {
-	binding, evaluator, err := buildCheckpointBinding(e.state.binding, image)
-	if err != nil {
-		return err
-	}
-	scratch := &Engine{mode: e.mode, state: &engineState{lifecycle: lifecycleLive, binding: binding, aggregateEvaluator: evaluator, committedT: immutableTime(image.T0), clockMonotonic: true}}
-	scratch.applyAggregateCandidateLocked(image.T0, image.T0)
-	got := scratch.stageAggregateEvaluationAtLocked(image.T0, image.T0)
-	if err := validateAggregateEvaluation(got); err != nil {
-		return err
-	}
-	if !aggregateEvaluationEqual(got, e.state.aggregateEvaluator.current) {
-		return errors.New("evaluation mismatch")
-	}
-	return nil
+	return CheckpointProjectionResult{Disposition: CheckpointProjected, Image: image}
 }
 
 func projectCheckpointBinding(b *installedBinding) checkpoint.Binding {
@@ -208,6 +192,7 @@ func projectCheckpointSymbol(binding *installedBinding, symbol *coreSymbol, eval
 		}
 	}
 	sort.Slice(starts, func(i, j int) bool { return starts[i] < starts[j] })
+	r.Tail = make([]checkpoint.Aggregate, 0, len(starts))
 	for _, start := range starts {
 		r.Tail = append(r.Tail, projectAggregate(*state.tail[start]))
 	}
@@ -303,7 +288,10 @@ func projectActivity(state *symbolAggregateState, binding *installedBinding, t0 
 	if source == nil {
 		return nil
 	}
-	r := &checkpoint.Activity{BoundExceeded: source.boundExceeded}
+	r := &checkpoint.Activity{BoundExceeded: source.boundExceeded,
+		References:    make([]checkpoint.ActivitySummary, 0, len(source.references)),
+		Mutable:       make([]checkpoint.ActivityMutable, 0, len(source.mutable)),
+		FoldedTargets: make([]checkpoint.ActivityTargetBlock, 0, len(source.foldedTargets))}
 	keys := sortedInt64Keys(source.references)
 	for _, end := range keys {
 		if end <= t0.Unix() {
@@ -415,7 +403,9 @@ func projectQualification(source *qualificationState, t0 time.Time) *checkpoint.
 		return nil
 	}
 	r := &checkpoint.Qualification{AccountedThrough: source.accountedThrough, Finalized: source.finalized, FinalProofEnd: source.finalProofEnd,
-		BoundExceeded: source.boundExceeded, Invalid: source.invalid, UnresolvedOrigin: uint8(source.unresolvedOrigin)}
+		BoundExceeded: source.boundExceeded, Invalid: source.invalid, UnresolvedOrigin: uint8(source.unresolvedOrigin),
+		FinalizedGateBars: make([]checkpoint.QualificationGateBar, 0, len(source.finalizedGateBars)),
+		Proofs:            make([]int64, 0, len(source.proofs)), Dirty: make([]int64, 0, len(source.dirty))}
 	for _, start := range sortedInt64Keys(source.finalizedGateBars) {
 		if start < t0.Unix() {
 			b := source.finalizedGateBars[start]
@@ -696,6 +686,11 @@ func buildCheckpointSymbol(binding *installedBinding, source checkpoint.Symbol, 
 	if err != nil {
 		return nil, err
 	}
+	if state.priceRange != nil {
+		for _, record := range state.tail {
+			retainMutablePriceRangeEvidence(state.priceRange, *record)
+		}
+	}
 	state.activity, err = restoreActivity(source.Activity, binding, t0)
 	if err != nil {
 		return nil, err
@@ -705,6 +700,7 @@ func buildCheckpointSymbol(binding *installedBinding, source checkpoint.Symbol, 
 		return nil, err
 	}
 	recomputeLatest(state)
+	rebuildTailCoverage(state, binding)
 	if source.CommittedMark != nil {
 		wanted := source.CommittedMark.WindowStart
 		mark, ok := latestMarkBefore(state, t0)

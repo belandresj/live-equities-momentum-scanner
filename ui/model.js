@@ -8,7 +8,7 @@ const KNOWN_FIELD_REASON = new Set(["", "before_first_print", "history_incomplet
 const KNOWN_TQ_STATUS = new Set(["unselected", "warming", "current", "stale", "unavailable", "invalid", "pressure_shed"]);
 const KNOWN_TQ_REASON = new Set(["", "coverage", "coverage_warming", "five_second_warming", "qualifying_original_prints", "unequal_repeat", "one_sided_quote", "crossed_quote", "stale_quote", "insufficient_coverage", "pressure", "replay_unavailable"]);
 const CURRENT_LIFECYCLE = new Set(["live", "hydrating"]);
-const BACKEND_READY_RANKING_MODE = new Set(["qualified_current", "degraded_bootstrap"]);
+const BACKEND_READY_RANKING_MODE = new Set(["qualified_current", "degraded_bootstrap", "degraded_current"]);
 const TIMESTAMP_BASIS = new Set(["", "none", "participant", "sip_fallback", "mixed"]);
 const SPREAD_QUALITY = new Set(["", "reviewed_ordinary", "known_special", "unclassified"]);
 const EVALUATOR_INTEGRITY_CATEGORY = new Set(["candidate_target_mismatch", "support_contradiction", "population_accounting", "qualification_accounting", "uncertainty_accounting", "feature_accounting", "ranking_projection", "ranking_row", "tq_intent", "unknown_evaluator_integrity"]);
@@ -199,6 +199,15 @@ export function validateSnapshot(snapshot) {
   fields(tq.commands, COMMAND_FIELDS, "tq.commands"); COMMAND_FIELDS.forEach(name => decimal(tq.commands[name], `tq.commands.${name}`));
   if (!sumDecimal(tq.commands.issued, tq.commands.pending, tq.commands.acknowledged, tq.commands.failed, tq.commands.fenced)) fail("TQ command conflict");
   if (!new Set(["normal", "taq_degraded", "aggregate_only"]).has(tq.pressure_mode) || status.tq_pressure_mode !== tq.pressure_mode || status.tq_shed !== tq.shed || tq.aggregate_only !== (tq.pressure_mode === "aggregate_only") || tq.shed !== (tq.pressure_mode !== "normal")) fail("TQ pressure conflict");
+  if (ranking.mode === "degraded_bootstrap" || ranking.mode === "degraded_current") {
+    if (tq.desired_symbols.length !== 0) fail("partial ranking promoted TQ membership");
+    for (const row of snapshot.rows) {
+      const membership = row.tq_membership, tape = row.tape_rate, spread = row.spread;
+      if (membership.desired || membership.provider_present || membership.provider_membership_unknown ||
+          tape.status !== "unselected" || tape.reason !== "" || tape.trade_coverage || tape.one_second.status !== "unselected" || tape.one_second.reason !== "" || tape.one_second.trades_per_second !== null || tape.five_second.status !== "unselected" || tape.five_second.reason !== "" || tape.five_second.trades_per_second !== null || tape.timestamp_basis !== "" || tape.lifecycle_records_observed ||
+          spread.status !== "unselected" || spread.reason !== "" || spread.quote_coverage || spread.cents !== null || spread.basis_points !== null || spread.valid_duration_ms !== 0 || spread.quality !== "") fail("partial ranking exposed TQ state");
+    }
+  }
 
   fields(snapshot.checkpoint, CHECKPOINT_FIELDS, "checkpoint"); bool(snapshot.checkpoint.installed, "checkpoint.installed"); CHECKPOINT_FIELDS.slice(1).forEach(name => decimal(snapshot.checkpoint[name], `checkpoint.${name}`));
   if (!sumDecimal(snapshot.checkpoint.submitted, snapshot.checkpoint.in_progress, snapshot.checkpoint.pending, snapshot.checkpoint.completed, snapshot.checkpoint.failed, snapshot.checkpoint.canceled, snapshot.checkpoint.superseded)) fail("checkpoint conflict");
@@ -251,6 +260,7 @@ function hydrationView(recovery) {
 export function buildViewModel(input, transport = "connected") {
   const snapshot = validateSnapshot(input);
   const current = snapshot.status.backend_ready && snapshot.ranking.mode === "qualified_current" && transport === "connected";
+  const partial = snapshot.status.backend_ready && snapshot.ranking.mode === "degraded_current" && transport === "connected";
   const replay = snapshot.publication.run_mode === "replay";
   const rowsCurrent = current || replay && snapshot.status.ranking_current && snapshot.ranking.mode === "qualified_current" && transport === "connected";
   const rows = snapshot.rows.map(row => {
@@ -269,7 +279,7 @@ export function buildViewModel(input, transport = "connected") {
   const finalizing = warming && hydration.planned > 0n && hydration.open === 0n;
   return {
     schemaVersion: snapshot.schema_version, sampleID: snapshot.sample.id, sampledAt: snapshot.sample.sampled_at, publicationID: snapshot.publication.id,
-    transport, current, rowsCurrent, replay, replayLogicalTime: replay ? snapshot.replay.logical_time : null,
+    transport, current, partial, rowsCurrent, replay, replayLogicalTime: replay ? snapshot.replay.logical_time : null,
     processLive: snapshot.status.process_live, backendReady: snapshot.status.backend_ready, readinessReason: snapshot.status.readiness_reason,
     lifecycle: snapshot.publication.lifecycle, rankingMode: snapshot.ranking.mode, rankingReason: snapshot.ranking.reason, committedT: snapshot.publication.committed_t,
     watermarkLagMS: snapshot.status.watermark_lag_ms, accountingValid: snapshot.status.accounting_valid, sampleAccountingValid: snapshot.operations.sample_accounting_valid, tqPressure: snapshot.tq.pressure_mode, tqAggregateOnly: snapshot.tq.aggregate_only,

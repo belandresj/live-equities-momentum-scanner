@@ -6,6 +6,14 @@ import { renderDashboard } from "./render.js";
 import { replaySnapshotFixture, snapshotFixture } from "./test-fixture.js";
 
 const clone = value => structuredClone(value);
+function clearPartialTQ(snapshot) {
+  snapshot.tq.desired_symbols = []; snapshot.tq.known_present = 0;
+  for (const row of snapshot.rows) {
+    row.tq_membership = { desired: false, provider_present: false, provider_membership_unknown: false };
+    row.tape_rate = { status: "unselected", reason: "", trade_coverage: false, one_second: { status: "unselected", reason: "", trades_per_second: null }, five_second: { status: "unselected", reason: "", trades_per_second: null }, timestamp_basis: "", lifecycle_records_observed: false };
+    row.spread = { status: "unselected", reason: "", quote_coverage: false, cents: null, basis_points: null, valid_duration_ms: 0, quality: "" };
+  }
+}
 
 test("P-C11-STATE preserves server order, units, zero, and TQ trust", () => {
   const snapshot = snapshotFixture(20);
@@ -42,6 +50,7 @@ test("P-C11-STATE distinguishes exact empty, fewer, noncurrent, and independent 
 
   const degradedSnapshot = snapshotFixture(1);
   degradedSnapshot.ranking.mode = "degraded_bootstrap"; degradedSnapshot.ranking.reason = "incomplete_population";
+  clearPartialTQ(degradedSnapshot);
   const degraded = buildViewModel(degradedSnapshot);
   assert.equal(degraded.current, false, "backend-ready degraded output is never presented as qualified current");
   assert.equal(degraded.backendReady, true, "legal degraded bootstrap preserves the server readiness fact");
@@ -49,6 +58,20 @@ test("P-C11-STATE distinguishes exact empty, fewer, noncurrent, and independent 
   const degradedDocument = new FakeDocument(); renderDashboard(degradedDocument, { transport: "connected", model: degraded });
   assert.match(degradedDocument.body.textContent, /DEGRADED.*Backendready.*Rankingdegraded_bootstrap · incomplete_population/s);
   assert.doesNotMatch(degradedDocument.body.textContent, /NONCURRENT/);
+
+  const partialSnapshot = snapshotFixture(1);
+  partialSnapshot.ranking.mode = "degraded_current"; partialSnapshot.ranking.reason = "qualification_incomplete";
+  partialSnapshot.ranking.total_passers = 0;
+  partialSnapshot.accounting.qualification.provisional = 0; partialSnapshot.accounting.qualification.unresolved = 1;
+  partialSnapshot.accounting.uncertainty.local_invalid = 1;
+  assert.throws(() => buildViewModel(partialSnapshot), /partial ranking promoted TQ membership/, "partial mode must reject retained qualified T/Q state");
+  clearPartialTQ(partialSnapshot);
+  const partial = buildViewModel(partialSnapshot);
+  assert.equal(partial.backendReady, true); assert.equal(partial.current, false); assert.equal(partial.partial, true); assert.equal(partial.rowsCurrent, false);
+  const partialDocument = new FakeDocument(); renderDashboard(partialDocument, { transport: "connected", model: partial });
+  assert.match(partialDocument.body.textContent, /PARTIAL · CURRENT DATA.*Backendready.*Rankingdegraded_current · qualification_incomplete.*PARTIAL RANKING · current trusted marks ordered by Day % · qualification is not asserted/s);
+  assert.match(partialDocument.body.textContent, /Server-ranked top 20 trusted marks by Day %, qualification not asserted/);
+  assert.equal(partialDocument.getElementById("scanner-table").dataset.publicationState, "noncurrent");
 
   const ended = snapshotFixture(1);
   ended.publication.lifecycle = "ended"; ended.publication.lifecycle_reason = "session_end"; ended.status.backend_ready = false; ended.status.readiness_reason = "lifecycle_not_ready";

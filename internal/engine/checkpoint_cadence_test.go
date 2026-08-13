@@ -91,6 +91,19 @@ func TestC7CADENCE01EngineWriterTrace(t *testing.T) {
 		e.state.aggregateEvaluator.current = e.stageAggregateEvaluationAtLocked(at, at)
 		e.maybeSubmitCheckpointLocked(at)
 		e.mu.Unlock()
+		if offset := at.Sub(binding.SessionStart()); offset > 0 && offset%(30*time.Second) == 0 {
+			deadline := time.Now().Add(2 * time.Second)
+			for {
+				operations := e.CheckpointOperations()
+				if operations.ProjectionStarted == operations.Projected+operations.ProjectionRejected {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("checkpoint projection did not settle: %+v", operations)
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}
 	}
 	start := binding.SessionStart()
 	for _, offset := range []time.Duration{time.Second, 17 * time.Second, 29 * time.Second} {
@@ -180,4 +193,77 @@ func TestC7CADENCE01EngineWriterTrace(t *testing.T) {
 		t.Fatal(err)
 	}
 	closeAndWait(t, e)
+}
+
+func TestCKHOTSameT0CorrectionRejectsDetachedProjection(t *testing.T) {
+	binding := testBinding(t)
+	start := binding.SessionStart()
+	t0 := start.Add(30 * time.Second)
+	now := t0.Add(time.Second)
+	e := aggregateEngine(t, binding, RunModeLive, &now)
+	input := liveAggregate(binding, "AAA", start, 1, 1)
+	applyAggregate(t, e, input, DispositionAggregateInserted, ReasonNone)
+	proveAggregateCoverage(t, e, "AAA", start, t0)
+	submitter := &checkpointDiscardSubmitter{}
+	e.mu.Lock()
+	e.checkpointSubmitter = submitter
+	e.state.lifecycle = lifecycleLive
+	e.state.liveEpoch, e.state.liveEpochActive, e.state.aggregateAcknowledged = 1, true, true
+	e.applyAggregateCandidateLocked(t0, t0)
+	e.state.aggregateEvaluator.current = e.stageAggregateEvaluationAtLocked(t0, t0)
+	e.maybeSubmitCheckpointLocked(now)
+	// Hold the test-owned projection before its first continuation.
+	e.queue = nil
+	e.internalQueued = 0
+	e.state.checkpointProjectionQueued = false
+	if operations := e.state.checkpointOperations; operations.ProjectionInProgress != 1 || !operations.Reconciles() {
+		e.mu.Unlock()
+		t.Fatalf("active projection accounting=%+v", operations)
+	}
+	correction := freezeAggregateInput(input)
+	correction.Values.Close, correction.Values.High, correction.Values.VWAP = 11, 11, 11
+	correction.Live.FrameSequence = 2
+	if code, reason := e.applyAggregateLocked(correction, now); code != DispositionAggregateRevised || reason != ReasonNone {
+		e.mu.Unlock()
+		t.Fatalf("pre-T0 correction=%s/%s", code, reason)
+	}
+	for e.state.checkpointProjectionActive {
+		e.continueCheckpointProjectionLocked()
+	}
+	operations := e.state.checkpointOperations
+	e.mu.Unlock()
+	if operations.ProjectionInProgress != 0 || operations.ProjectionRejected != 1 || operations.LastProjectionFailure != "pre_t0_mutation" || submitter.submitted.Load() != 0 || !operations.Reconciles() {
+		t.Fatalf("dirty detached image escaped operations=%+v submitted=%d", operations, submitter.submitted.Load())
+	}
+	closeAndWait(t, e)
+}
+
+func TestCKHOTNearCapacityInternalQueueAccountingIsConstantShape(t *testing.T) {
+	const external = 8191
+	e := &Engine{capacity: 8192, changed: make(chan struct{}), state: &engineState{clockMonotonic: true}}
+	e.queue = make([]*queueNode, external)
+	for index := range e.queue {
+		e.queue[index] = &queueNode{kind: inputAggregate}
+	}
+	e.counters.started = external
+	e.counters.resultsCommitted = external
+	e.counters.admittedExternal = external
+	e.state.checkpointProjectionActive = true
+	e.state.checkpointProjection = &checkpointProjectionWork{started: time.Now()}
+	e.enqueueCheckpointProjectionLocked()
+	if len(e.queue) != 8192 || e.internalQueued != 1 || e.externalQueueOccupancyLocked() != external || !e.accountingCoherentLocked() {
+		t.Fatalf("near-capacity continuation accounting queue=%d internal=%d external=%d coherent=%t", len(e.queue), e.internalQueued, e.externalQueueOccupancyLocked(), e.accountingCoherentLocked())
+	}
+	// Rejection makes the continuation stale but does not misclassify it as an
+	// external admission while it remains physically queued.
+	e.rejectCheckpointProjectionLocked(e.state.checkpointProjection, "projection_invariant")
+	if e.internalQueued != 1 || e.externalQueueOccupancyLocked() != external || !e.accountingCoherentLocked() {
+		t.Fatalf("stale continuation accounting internal=%d external=%d coherent=%t", e.internalQueued, e.externalQueueOccupancyLocked(), e.accountingCoherentLocked())
+	}
+	// Model the consumer's eventual dequeue of the stale tail node.
+	e.queue = e.queue[:len(e.queue)-1]
+	e.internalQueued--
+	if e.internalQueued != 0 || e.externalQueueOccupancyLocked() != external || !e.accountingCoherentLocked() {
+		t.Fatalf("dequeued continuation accounting internal=%d external=%d coherent=%t", e.internalQueued, e.externalQueueOccupancyLocked(), e.accountingCoherentLocked())
+	}
 }

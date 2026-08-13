@@ -195,10 +195,22 @@ type UncertaintyAccounting struct {
 	LocalInvalid     uint64 `json:"local_invalid"`
 }
 
+type PopulationTransitionDiagnostic struct {
+	BootstrapUnknown                 uint64 `json:"bootstrap_unknown"`
+	TrustedByLaterLiveMark           uint64 `json:"trusted_by_later_live_mark"`
+	NoLaterEligibleMark              uint64 `json:"no_later_eligible_mark"`
+	LatestMarkNotLiveAuthority       uint64 `json:"latest_mark_not_live_authority"`
+	NoStrictlyOlderLocalizedConflict uint64 `json:"no_strictly_older_localized_conflict"`
+	ConflictAtOrAfterMark            uint64 `json:"conflict_at_or_after_mark"`
+	InvalidAtOrAfterMark             uint64 `json:"invalid_at_or_after_mark"`
+	IncompletePostMarkCoverage       uint64 `json:"incomplete_post_mark_coverage"`
+}
+
 type Accounting struct {
-	Population    PopulationAccounting    `json:"population"`
-	Qualification QualificationAccounting `json:"qualification"`
-	Uncertainty   UncertaintyAccounting   `json:"uncertainty"`
+	Population                     PopulationAccounting           `json:"population"`
+	Qualification                  QualificationAccounting        `json:"qualification"`
+	Uncertainty                    UncertaintyAccounting          `json:"uncertainty"`
+	PopulationTransitionDiagnostic PopulationTransitionDiagnostic `json:"population_transition_diagnostic"`
 }
 
 type RecoveryWork struct {
@@ -272,14 +284,36 @@ type TQ struct {
 }
 
 type Checkpoint struct {
-	Installed  bool   `json:"installed"`
-	Submitted  string `json:"submitted"`
-	InProgress string `json:"in_progress"`
-	Pending    string `json:"pending"`
-	Completed  string `json:"completed"`
-	Failed     string `json:"failed"`
-	Canceled   string `json:"canceled"`
-	Superseded string `json:"superseded"`
+	Installed             bool    `json:"installed"`
+	Eligible              string  `json:"eligible"`
+	PressureDeferred      string  `json:"pressure_deferred"`
+	ProjectionStarted     string  `json:"projection_started"`
+	ProjectionInProgress  string  `json:"projection_in_progress"`
+	Projected             string  `json:"projected"`
+	ProjectionRejected    string  `json:"projection_rejected"`
+	SubmitRejected        string  `json:"submit_rejected"`
+	Submitted             string  `json:"submitted"`
+	Outstanding           string  `json:"outstanding"`
+	InProgress            string  `json:"in_progress"`
+	Pending               string  `json:"pending"`
+	Completed             string  `json:"completed"`
+	Failed                string  `json:"failed"`
+	Canceled              string  `json:"canceled"`
+	Superseded            string  `json:"superseded"`
+	LastAttemptedT0       *string `json:"last_attempted_t0,omitempty"`
+	LastProjectedT0       *string `json:"last_projected_t0,omitempty"`
+	LastSubmittedT0       *string `json:"last_submitted_t0,omitempty"`
+	LastSuccessfulT0      *string `json:"last_successful_t0,omitempty"`
+	UsableAgeMS           uint64  `json:"usable_age_ms"`
+	ProjectionTotalMS     uint64  `json:"projection_total_ms"`
+	ProjectionLockMS      uint64  `json:"projection_lock_ms"`
+	ArtifactBytes         string  `json:"artifact_bytes"`
+	WriteMS               uint64  `json:"write_ms"`
+	EncodeMS              uint64  `json:"encode_ms"`
+	ReopenValidationMS    uint64  `json:"reopen_validation_ms"`
+	LastFailureStep       string  `json:"last_failure_step,omitempty"`
+	LastProjectionFailure string  `json:"last_projection_failure,omitempty"`
+	LastSubmitFailure     string  `json:"last_submit_failure,omitempty"`
 }
 
 type Operations struct {

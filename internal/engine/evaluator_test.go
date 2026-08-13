@@ -151,6 +151,7 @@ func TestC3PROJ01ModesAndIndependentFields(t *testing.T) {
 		t.Fatalf("qualified independent fields = %+v", exact)
 	}
 	degradedEngine := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationUnresolved}, {"BBB", reference.PriorCloseValid, 10, 0, qualificationUnresolved}})
+	degradedEngine.state.lifecycle = lifecycleHydrating
 	degraded := degradedEngine.stageAggregateEvaluationLocked(at)
 	if degraded.mode != rankingDegradedBootstrap || degraded.population.coveredPopulation != 1 || degraded.population.unresolvedPopulation != 1 || len(degraded.rows) != 1 || degraded.rows[0].tqIntentEligible {
 		t.Fatalf("degraded projection = %+v", degraded)
@@ -163,11 +164,15 @@ func TestC3PROJ01ModesAndIndependentFields(t *testing.T) {
 	if exactEmpty.mode != rankingQualifiedCurrent || exactEmpty.totalPassers != 0 || len(exactEmpty.rows) != 0 {
 		t.Fatalf("exact empty projection = %+v", exactEmpty)
 	}
-	qualificationOnly := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationUnresolved}}).stageAggregateEvaluationLocked(at)
+	qualificationOnlyEngine := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationUnresolved}})
+	qualificationOnlyEngine.state.lifecycle = lifecycleHydrating
+	qualificationOnly := qualificationOnlyEngine.stageAggregateEvaluationLocked(at)
 	if qualificationOnly.mode != rankingDegradedBootstrap || qualificationOnly.reason != rankingReasonQualificationPending {
 		t.Fatalf("qualification-only degradation = %+v", qualificationOnly)
 	}
-	populationOnly := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationNotYetPassed}, {"BBB", reference.PriorCloseValid, 10, 0, qualificationUnresolved}}).stageAggregateEvaluationLocked(at)
+	populationOnlyEngine := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationNotYetPassed}, {"BBB", reference.PriorCloseValid, 10, 0, qualificationUnresolved}})
+	populationOnlyEngine.state.lifecycle = lifecycleHydrating
+	populationOnly := populationOnlyEngine.stageAggregateEvaluationLocked(at)
 	if populationOnly.mode != rankingDegradedBootstrap || populationOnly.reason != rankingReasonIncompletePopulation {
 		t.Fatalf("population-only degradation = %+v", populationOnly)
 	}
@@ -192,6 +197,76 @@ func TestC3PROJ01ModesAndIndependentFields(t *testing.T) {
 	wrongReason.reason = rankingReasonNoTrustedMarks
 	if validateAggregateEvaluation(wrongReason) == nil {
 		t.Fatal("wrong suppressed reason validated")
+	}
+}
+
+func TestSlice2LocalUncertaintyPublishesCurrentPartialRanking(t *testing.T) {
+	at := time.Date(2026, 8, 13, 15, 15, 0, 0, time.UTC)
+	postBootstrap := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationUnresolved}}).stageAggregateEvaluationLocked(at)
+	if postBootstrap.mode != rankingDegradedCurrent || postBootstrap.uncertainty.bootstrapOrigin != 1 || validateAggregateEvaluation(postBootstrap) != nil {
+		t.Fatalf("live lifecycle retained startup-only degraded_bootstrap: %+v", postBootstrap)
+	}
+	laterMarkEngine := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationUnresolved}})
+	laterMarkState := laterMarkEngine.state.binding.symbols[0].aggregates
+	position := LivePosition{ConnectionEpoch: 1, FrameSequence: 2}
+	laterMarkState.latest.record.authority = aggregateEvidence{source: AggregateSourceLive, live: position}
+	laterMarkState.latest.record.greatestLiveSupport = &position
+	for _, record := range laterMarkState.tail {
+		record.authority = aggregateEvidence{source: AggregateSourceLive, live: position}
+		record.greatestLiveSupport = &position
+	}
+	laterMarkEngine.state.aggregateEvaluator.coverage[0] = coverageUnknownFailureOrFence
+	laterMark := laterMarkEngine.stageAggregateEvaluationLocked(at)
+	if laterMark.mode != rankingDegradedCurrent || laterMark.population.trustedRankableMark != 1 || laterMark.population.unknownDueFailureOrFence != 0 ||
+		laterMark.qualification.unresolved != 1 || laterMark.populationTransition.trustedByLaterLiveMark != 1 || len(laterMark.rows) != 1 || validateAggregateEvaluation(laterMark) != nil {
+		t.Fatalf("later trusted mark did not restore primary trust while retaining qualification uncertainty: %+v", laterMark)
+	}
+
+	qualificationOnlyEngine := evaluatorProofEngine(at, []evaluatorSymbol{
+		{"AAA", reference.PriorCloseValid, 10, 14, qualificationNotYetPassed},
+		{"BBB", reference.PriorCloseValid, 10, 12, qualificationUnresolved},
+	})
+	qualificationOnlyEngine.mode = RunModeLive
+	qualification := qualificationOnlyEngine.state.binding.symbols[1].aggregates.qualification
+	qualification.invalid = true
+	qualification.unresolvedOrigin = uncertaintyLocalInvalid
+	qualification.result.unresolvedOrigin = uncertaintyLocalInvalid
+	qualificationOnly := qualificationOnlyEngine.stageAggregateEvaluationLocked(at)
+	if qualificationOnly.mode != rankingDegradedCurrent || qualificationOnly.reason != rankingReasonQualificationPending ||
+		qualificationOnly.population.unresolvedPopulation != 0 || qualificationOnly.qualification.unresolved != 1 ||
+		qualificationOnly.uncertainty.localInvalid != 1 || len(qualificationOnly.rows) != 2 ||
+		qualificationOnly.rows[0].symbol != "AAA" || qualificationOnly.rows[1].symbol != "BBB" ||
+		qualificationOnly.rows[0].tqIntentEligible || qualificationOnly.rows[1].tqIntentEligible || validateAggregateEvaluation(qualificationOnly) != nil {
+		t.Fatalf("qualification-local partial projection = %+v", qualificationOnly)
+	}
+
+	populationEngine := evaluatorProofEngine(at, []evaluatorSymbol{
+		{"AAA", reference.PriorCloseValid, 10, 14, qualificationNotYetPassed},
+		{"BBB", reference.PriorCloseValid, 10, 0, qualificationUnresolved},
+	})
+	populationEngine.mode = RunModeLive
+	populationEngine.state.aggregateEvaluator.coverage[1] = aggregateCoverageConsequence{outcome: coverageOutcomeUnknown, origin: uncertaintyLocalInvalid}
+	population := populationEngine.stageAggregateEvaluationLocked(at)
+	if population.mode != rankingDegradedCurrent || population.reason != rankingReasonIncompletePopulation ||
+		population.population.unresolvedPopulation != 1 || population.qualification.unresolved != 0 || population.uncertainty.localInvalid != 1 ||
+		len(population.rows) != 1 || population.rows[0].symbol != "AAA" || population.rows[0].tqIntentEligible || validateAggregateEvaluation(population) != nil {
+		t.Fatalf("population-local partial projection = %+v", population)
+	}
+
+	bad := cloneAggregateEvaluation(population)
+	bad.rows[0].tqIntentEligible = true
+	if validation := validateAggregateEvaluation(bad); validation == nil || validation.Category != EvaluatorTQIntent {
+		t.Fatalf("partial projection promoted T/Q: %+v", validation)
+	}
+	replay := evaluatorProofEngine(at, []evaluatorSymbol{
+		{"AAA", reference.PriorCloseValid, 10, 14, qualificationNotYetPassed},
+		{"BBB", reference.PriorCloseValid, 10, 0, qualificationUnresolved},
+	})
+	replay.mode = RunModeReplay
+	replay.state.aggregateEvaluator.coverage[1] = aggregateCoverageConsequence{outcome: coverageOutcomeUnknown, origin: uncertaintyLocalInvalid}
+	replayEvaluation := replay.stageAggregateEvaluationLocked(at)
+	if replayEvaluation.mode != rankingUnavailable || replayEvaluation.reason != rankingReasonNoTrustedMarks || len(replayEvaluation.rows) != 0 {
+		t.Fatalf("live partial mode changed replay semantics: %+v", replayEvaluation)
 	}
 }
 
@@ -286,7 +361,7 @@ func evaluatorProofEngine(at time.Time, specs []evaluatorSymbol) *Engine {
 			installExactCoverage(binding.symbols[i].aggregates, binding, coverageStart, at, nil)
 		}
 	}
-	engine := &Engine{state: &engineState{binding: binding, lifecycle: lifecycleLive, committedT: immutableTime(at), clockMonotonic: true}}
+	engine := &Engine{mode: RunModeLive, state: &engineState{binding: binding, lifecycle: lifecycleLive, committedT: immutableTime(at), clockMonotonic: true}}
 	engine.state.aggregateEvaluator.coverage = make(map[int]aggregateCoverageConsequence)
 	for i, spec := range specs {
 		if spec.mark == 0 && spec.priorStatus == reference.PriorCloseValid {

@@ -33,7 +33,7 @@ Sections 8-19 are completed here after just-in-time V2 UI reconnaissance.
 | --- | --- | --- | --- |
 | Boundary/reconnaissance plan | `accepted` | Direct owner V1 program revision; exact source list recorded before bounded content inspection | Complete |
 | Completed contract | `accepted_current_plan` | Focused review corrections add full T/Q trust disclosure, fail-closed semantic coherence, additive compatibility, C10-matching response bounds, exact accessibility assertions, and delayed-refresh containment; focused re-review clean | Begin C11-S1 |
-| `C11-S1` API/view-state integration | `accepted_after_final_review_correction` | The validator accepts the two backend-ready ranking modes permitted by Phase 1 while only `qualified_current` receives current presentation; response-sample zero is rejected. Direct model/render and identity regressions, all 20 focused tests, ordinary verification, affected race, and diff checks pass; same-reviewer re-review is clean | Complete |
+| `C11-S1` API/view-state integration | `accepted_after_degraded_current_correction` | The validator accepts the third backend-ready mode, reserves green/current presentation for `qualified_current`, rejects any partial publication that exposes T/Q membership or measurements, and presents `degraded_current` as explicit current-data partial ranking. The exact sealed HTTP JSON from the Runtime composition passes the production UI model; focused final review is clean. | Complete |
 | `C11-S2` visual/interaction/accessibility | `accepted` | `P-C11-VISUAL` passes in production Chrome at 1440x900: six required states, exact 12-column/20-row fit, computed contrast/focus/semantics, safe hostile text, delayed/disconnected freeze, exact-origin CORS, and UI-only restart all pass; final-review corrections did not invalidate those observations | Complete |
 | Final component review | `accepted_after_correction` | Mandatory read-only review found the ready/degraded and sample-identity boundary defects; both were corrected with distinguishing proofs, and two focused same-reviewer re-reviews found no remaining P1/P2 | Complete; integrated private V1 RC later accepted |
 
@@ -188,8 +188,8 @@ relationships. Unknown additive root or nested properties are ignored for
 within-major compatibility; required properties and known meanings remain
 mandatory. Any contradictory known facts reject the whole response atomically.
 In particular, backend-ready coherence requires `process_live`,
-`backend_ready`, and `ranking_current` true, `ranking.mode` equal to either
-`qualified_current` or `degraded_bootstrap`, a present committed watermark/lag,
+`backend_ready`, and `ranking_current` true, `ranking.mode` equal to
+`qualified_current`, `degraded_bootstrap`, or `degraded_current`, a present committed watermark/lag,
 valid accounting, and a C10-permitted live/hydrating lifecycle. Only
 `qualified_current` receives the green/current presentation. A legal
 backend-ready `degraded_bootstrap` response is accepted without changing the
@@ -197,6 +197,10 @@ server readiness fact, but its rows and publication remain prominently
 non-qualified/degraded in the presentation. Its connected primary label is
 `DEGRADED`, not the false claim `NONCURRENT`; transport delay or loss still
 takes precedence as `REFRESH DELAYED` or `FROZEN · DISCONNECTED`.
+An accepted `degraded_current` response uses the distinct `PARTIAL · CURRENT
+DATA` label and a persistent explanation that rows are trusted current marks in
+raw Day-% order and do not assert qualification. Its table never receives the
+green qualified-current presentation.
 Any known noncurrent fact takes fail-closed precedence; a response claiming
 ready/current simultaneously with ended, suppressed, stale, unavailable,
 missing-watermark, invalid accounting, or false process-live is invalid rather
@@ -209,6 +213,7 @@ inference:
 | Qualified current with zero rows | Explicit “No symbols currently qualify”; never loading or error. |
 | Qualified current with 1..19 rows | Render only those rows; no placeholders or client backfill. |
 | `ranking.mode=degraded_bootstrap`, including legal backend-ready output | Preserve the server backend-ready fact but show a prominent incomplete-population band; rows may be shown only as degraded, never qualified current. |
+| `ranking.mode=degraded_current` with backend readiness | Preserve the server currentness fact, show `PARTIAL · CURRENT DATA`, state that qualification is not asserted, render the server's raw trusted-mark order without client filtering, and keep T/Q unselected. |
 | `stale`, `suppressed`, `ended`, or `unavailable` ranking/lifecycle | Exact server mode/reason in a persistent noncurrent band; retained rows, if supplied, remain visibly noncurrent. |
 | Aggregate field `warming`, `unavailable`, or `invalid` | Per-cell status token and keyboard/focus-accessible reason; no fabricated zero. |
 | T/Q `warming`, `unavailable`, `invalid`, `pressure_shed`, or uncovered | Tape/Spread cell independently noncurrent; aggregate rank and aggregate fields remain intact. Tape detail still states coverage, timestamp basis, and lifecycle observation; Spread detail still states coverage, duration, and quality. |

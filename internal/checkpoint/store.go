@@ -158,10 +158,11 @@ type Store struct {
 }
 
 type WriteResult struct {
-	Disposition WriteDisposition
-	Step        WriteStep
-	Entry       ManifestEntry
-	Err         error
+	Disposition                                             WriteDisposition
+	Step                                                    WriteStep
+	Entry                                                   ManifestEntry
+	Err                                                     error
+	TotalDuration, EncodeDuration, ReopenValidationDuration time.Duration
 }
 
 func NewStore(config StoreConfig) (*Store, error) {
@@ -280,7 +281,14 @@ func (s *Store) loadPath(ctx context.Context, path string, entry ManifestEntry) 
 	return candidate, nil
 }
 
-func (s *Store) Write(ctx context.Context, image Image) WriteResult {
+func (s *Store) Write(ctx context.Context, image Image) (result WriteResult) {
+	started := time.Now()
+	var encodeDuration, reopenDuration time.Duration
+	defer func() {
+		result.TotalDuration = time.Since(started)
+		result.EncodeDuration = encodeDuration
+		result.ReopenValidationDuration = reopenDuration
+	}()
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if ctx == nil {
@@ -331,7 +339,9 @@ func (s *Store) Write(ctx context.Context, image Image) WriteResult {
 		file.Close()
 		return fail(StepPayloadEncode, err)
 	}
+	encodeStarted := time.Now()
 	entry.FileBytes, entry.PayloadSHA256, err = Encode(operation, file, image, s.byteLimit)
+	encodeDuration = time.Since(encodeStarted)
 	if err != nil {
 		file.Close()
 		return fail(StepPayloadEncode, err)
@@ -354,8 +364,11 @@ func (s *Store) Write(ctx context.Context, image Image) WriteResult {
 	if err := step(StepReopenValidation); err != nil {
 		return fail(StepReopenValidation, err)
 	}
-	if candidate, err := s.loadPath(operation, tempPath, entry); err != nil || candidate.Image.Sequence != image.Sequence {
-		return fail(StepReopenValidation, errors.Join(err, ErrInvalid))
+	reopenStarted := time.Now()
+	candidate, reopenErr := s.loadPath(operation, tempPath, entry)
+	reopenDuration = time.Since(reopenStarted)
+	if reopenErr != nil || candidate.Image.Sequence != image.Sequence {
+		return fail(StepReopenValidation, errors.Join(reopenErr, ErrInvalid))
 	}
 	if err := step(StepGenerationRename); err != nil {
 		return fail(StepGenerationRename, err)

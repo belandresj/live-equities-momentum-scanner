@@ -20,8 +20,9 @@ type Binding struct {
 }
 
 // Image is a detached, semantic as-of-T0 projection. Slice and map values are
-// intentionally representation-neutral; the engine's typed projection and
-// installation admissions deep-copy at both ownership boundaries.
+// intentionally representation-neutral. Live persistence transfers one image
+// into a Request; untrusted startup candidates are still defensively copied
+// before admission and installation.
 type Image struct {
 	SchemaVersion, ProducerMode string
 	Binding                     Binding

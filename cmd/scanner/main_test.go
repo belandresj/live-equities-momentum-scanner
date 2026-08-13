@@ -12,12 +12,26 @@ import (
 	"testing"
 	"time"
 
+	"github.com/belandresj/live-equities-momentum-scanner/internal/massive"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/operations"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/reference"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/replay"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/session"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/snapshotapi"
 )
+
+func TestProductionLiveQueueUsesOwnerSelectedRetryHeadroom(t *testing.T) {
+	config := productionLiveQueueConfig()
+	if config.FrameSlots != 32768 || config.TotalFrameBytes != 128<<20 || config.MaxFrameBytes != 8<<20 {
+		t.Fatalf("production live queue=%+v", config)
+	}
+	if config.FrameSlots != massive.MaximumLiveFrameSlots || config.TotalFrameBytes != massive.MaximumLiveQueueBytes {
+		t.Fatalf("production live queue=%+v", config)
+	}
+	if attempts := operations.DefaultConfig().RecoveryAttempts; attempts != 5 {
+		t.Fatalf("production recovery attempts=%d", attempts)
+	}
+}
 
 func TestC10ScannerCompositionJoinsAPIAndRuntime(t *testing.T) {
 	binding := scannerTestBinding(t)
@@ -113,7 +127,7 @@ func TestC12RunModeConfigurationIsMutuallyExclusive(t *testing.T) {
 }
 
 func TestLiveHydrationWorkerBounds(t *testing.T) {
-	if liveHydrationResponseByteBudget != 2<<30 {
+	if liveHydrationResponseByteBudget != 4<<30 {
 		t.Fatalf("live cumulative response budget = %d", liveHydrationResponseByteBudget)
 	}
 	for _, test := range []struct {

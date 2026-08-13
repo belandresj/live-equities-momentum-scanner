@@ -330,6 +330,9 @@ func (r *Runtime) hydrate(ctx context.Context, components LiveComponents, attemp
 	defer cancelPump()
 	pumpDone := make(chan error, 1)
 	go func() {
+		if r.beforeHydrationPump != nil {
+			r.beforeHydrationPump(attempt)
+		}
 		for {
 			started := time.Now()
 			result, ok, err := attempt.DeliverNextToEngine(pumpCtx, r.engine)

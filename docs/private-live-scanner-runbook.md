@@ -60,9 +60,18 @@ The launcher invokes the scanner with these exact settings:
 --hydration-workers 2
 --reference-dir <repo>/var/reference
 --checkpoint-dir <repo>/var/checkpoints
+--diagnostic-dir <repo>/var/diagnostics (scanner default)
 --api-address 127.0.0.1:8080
 --allow-origin http://127.0.0.1:4173
 ```
+
+For the 2026-08-12 owner-run retry, the scanner's internal bounded delivery
+settings are 32,768 raw-frame slots, 128 MiB total queued payload, 8 MiB per
+frame, a 4-GiB cumulative (not resident) hydration-transfer allowance, and five
+finite connection/recovery attempts. The launcher remains at two hydration
+workers. These settings add containment headroom only; exact readiness,
+coverage, accounting, page/request limits, and fail-closed terminal behavior
+are unchanged.
 
 It invokes the independent dashboard with:
 
@@ -76,6 +85,12 @@ The script resolves the repository from its own location, so its absolute path
 also works from another directory. It builds private runtime binaries under
 the ignored `var/run-private-scanner/bin` directory and then remains in the
 foreground supervising both processes.
+
+The scanner retains at most one fixed-cardinality ingress incident per process
+and, on a typed terminal, writes a create-without-overwrite JSON record under
+`var/diagnostics` with owner-only directory/file permissions. It contains
+absolute queue/accounting operands and at most 60 one-second samples; it does
+not contain credentials, provider URLs/prose, symbols, or raw payloads.
 
 ## URLs and status interpretation
 

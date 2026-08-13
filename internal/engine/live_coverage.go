@@ -155,6 +155,10 @@ func (e *Engine) applyLiveCoverageFenceLocked(node *queueNode) (DispositionCode,
 	e.state.hydration.fenceEpoch = e.state.liveEpoch
 	e.state.hydration.fenceThrough = input.throughFrameSequence
 	e.state.hydration.fenceMarkerOrdinal = input.markerOrdinal
+	// The accepted fence is complete run support through this exact target.
+	// Carry that boundary into the sole evaluator path so a later timer clock
+	// sample cannot strand committed T one second behind supported coverage.
+	e.state.latestTarget = immutableTime(target)
 	e.state.hydration.revision++
 	return DispositionLiveCoverageFenceApplied, ReasonNone
 }

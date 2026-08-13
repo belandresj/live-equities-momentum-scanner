@@ -292,6 +292,9 @@ func (e *Engine) completePublicationDecisionLocked(node *queueNode, disposition 
 				candidate, err = e.buildPublicationLocked(nextID, node.engineSequence, disposition, generatedAt,
 					prospectiveAdmission, prospectiveTransitions, prospectivePublications)
 				e.state.evaluationTiming.Publication = e.evaluationTimingElapsed(publicationStarted)
+				if node.kind == inputAggregateIngressFence {
+					e.state.fenceTiming.Publication = e.state.evaluationTiming.Publication
+				}
 				if err != nil || e.publicationFault == publicationFaultBuild ||
 					e.publicationFault == publicationFaultValidation || validatePublication(candidate) != nil {
 					disposition.Code, disposition.Reason = DispositionPublicationIntegrity, ReasonPublication
@@ -332,6 +335,9 @@ func (e *Engine) completePublicationDecisionLocked(node *queueNode, disposition 
 	case decisionReplaced:
 		e.lastPubID = candidate.publicationID
 		e.storePublication(candidate)
+		if candidate.lifecycle != lifecycleSuppressed && candidate.kind == publicationNormal {
+			e.state.lastCoherentPublication = candidate
+		}
 	case decisionIntegrityFailure:
 		if terminal := e.buildSuppressedPublicationLocked(node, disposition, prospectiveAdmission, prospectiveTransitions, prospectivePublications); terminal != nil {
 			e.lastPubID = terminal.publicationID
@@ -340,8 +346,34 @@ func (e *Engine) completePublicationDecisionLocked(node *queueNode, disposition 
 			e.storePublication(e.unavailableSentinelLocked())
 		}
 	}
+	if node.kind == inputAggregateIngressFence {
+		e.finishFenceTimingLocked()
+	}
 	e.publicationFault = publicationFaultNone
 	return disposition
+}
+
+func (e *Engine) finishFenceTimingLocked() {
+	timing := &e.state.fenceTiming
+	timing.PublicationID = e.lastPubID
+	timing.Total = e.evaluationTimingElapsed(e.state.fenceTimingStarted)
+	e.state.fenceTimingStarted = time.Time{}
+	parts := []time.Duration{timing.CoverageFinalization, timing.SymbolMaintenance, timing.EvaluationStage, timing.EvaluationApply, timing.Publication}
+	var attributed time.Duration
+	for _, part := range parts {
+		if part < 0 || attributed > time.Duration(math.MaxInt64)-part {
+			timing.Valid = false
+			timing.InvalidReason = "nonmonotonic_or_overflow"
+			return
+		}
+		attributed += part
+	}
+	if timing.Total < 0 || attributed > timing.Total {
+		timing.Valid = false
+		timing.InvalidReason = "nonmonotonic_or_overlap"
+		return
+	}
+	timing.ResidualOrderedOverhead = timing.Total - attributed
 }
 
 func classifyCompletedTransition(counters *transitionCounters, code DispositionCode) {
@@ -389,7 +421,7 @@ func prospectiveAccountingCoherent(e *Engine, admission admissionCounters, trans
 	return e.state.aggregates.reconciles() && e.state.connectionAccounting.reconciles() && transitions.reconciles() &&
 		admission.started == admission.inProgress+admission.resultsCommitted &&
 		admission.resultsCommitted == classified &&
-		admission.admittedExternal == uint64(len(e.queue))+admission.ownerInProgress+admission.completedExternal &&
+		admission.admittedExternal == uint64(e.externalQueueOccupancyLocked())+admission.ownerInProgress+admission.completedExternal &&
 		publications.reconciles(transitions.completedExternal+transitions.completedInternal)
 }
 
@@ -403,7 +435,7 @@ func (e *Engine) buildPublicationLocked(id, sequence uint64, disposition transit
 		mode: e.mode, lifecycle: e.state.lifecycle, lastDisposition: disposition.Code,
 		dispositionReason: disposition.Reason, lastEngineSequence: sequence,
 		watermark: immutableTimePointer(e.state.committedT), generatedAt: generatedAt,
-		queueCapacity: e.capacity, requiredReserve: e.reserve, queueOccupancy: len(e.queue),
+		queueCapacity: e.capacity, requiredReserve: e.reserve, queueOccupancy: e.externalQueueOccupancyLocked(),
 		admission: admission, transitions: transitions, publications: publications,
 		aggregates: e.state.aggregates, aggregateIntegrity: e.state.aggregateIntegrity,
 		connectionControls: e.state.connectionAccounting, connectionEpoch: e.state.liveEpoch,
@@ -431,7 +463,8 @@ func (e *Engine) buildPublicationLocked(id, sequence uint64, disposition transit
 		tq:                          cloneTQView(e.tqViewLocked()),
 	}
 	candidate.currentMarketClaim = candidate.aggregateEvaluation.mode == rankingQualifiedCurrent ||
-		candidate.aggregateEvaluation.mode == rankingDegradedBootstrap
+		candidate.aggregateEvaluation.mode == rankingDegradedBootstrap ||
+		candidate.aggregateEvaluation.mode == rankingDegradedCurrent
 	candidate.tq.PublicationID = id
 	if e.state.binding != nil {
 		candidate.bindingIdentity = e.state.binding.identity
@@ -517,7 +550,7 @@ func validatePublication(candidate *privatePublication) error {
 		return errors.New("evaluation watermark mismatch")
 	}
 	if (candidate.bindingIdentity == "") != (candidate.tradingDate == "") ||
-		candidate.currentMarketClaim != (candidate.aggregateEvaluation.mode == rankingQualifiedCurrent || candidate.aggregateEvaluation.mode == rankingDegradedBootstrap) ||
+		candidate.currentMarketClaim != (candidate.aggregateEvaluation.mode == rankingQualifiedCurrent || candidate.aggregateEvaluation.mode == rankingDegradedBootstrap || candidate.aggregateEvaluation.mode == rankingDegradedCurrent) ||
 		validateAggregateEvaluation(candidate.aggregateEvaluation) != nil || !validTQPublication(candidate.tq, candidate.publicationID, candidate.aggregateEvaluation) {
 		return errors.New("invalid publication claim")
 	}

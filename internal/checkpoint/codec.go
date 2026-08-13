@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"time"
 )
 
@@ -128,22 +127,13 @@ func Decode(ctx context.Context, input io.Reader, limit int64) (Candidate, int64
 	if ctx == nil || input == nil || limit <= 0 || limit > AbsoluteByteCeiling {
 		return Candidate{}, 0, ErrLimit
 	}
-	spool, err := os.CreateTemp("", ".scanner-checkpoint-decode-")
-	if err != nil {
-		return Candidate{}, 0, err
-	}
-	spoolPath := spool.Name()
-	defer os.Remove(spoolPath)
-	defer spool.Close()
-	if err := spool.Chmod(0600); err != nil {
-		return Candidate{}, 0, err
-	}
 	reader := &boundedByteReader{ctx: ctx, input: bufio.NewReaderSize(input, 32<<10), limit: limit}
 	if err := reader.expect([]byte(`{"format":"scanner-checkpoint-v1","payload":`)); err != nil {
 		return Candidate{}, reader.count, err
 	}
 	digest := sha256.New()
-	if err := copyJSONObject(reader, io.MultiWriter(spool, digest)); err != nil {
+	var payload bytes.Buffer
+	if err := copyJSONObject(reader, io.MultiWriter(&payload, digest)); err != nil {
 		return Candidate{}, reader.count, err
 	}
 	if err := reader.expect([]byte(`,"payload_sha256":"`)); err != nil {
@@ -176,29 +166,14 @@ func Decode(ctx context.Context, input io.Reader, limit int64) (Candidate, int64
 			return Candidate{}, reader.count, ErrInvalid
 		}
 	}
-	if _, err := spool.Seek(0, io.SeekStart); err != nil {
-		return Candidate{}, reader.count, err
-	}
-	if err := rejectDuplicateKeysReader(&contextReader{ctx: ctx, input: spool}); err != nil {
+	if err := validateArrayLengthsReader(&contextReader{ctx: ctx, input: bytes.NewReader(payload.Bytes())}); err != nil {
 		if errors.Is(err, ErrCanceled) {
 			return Candidate{}, reader.count, ErrCanceled
 		}
-		return Candidate{}, reader.count, ErrInvalid
-	}
-	if _, err := spool.Seek(0, io.SeekStart); err != nil {
-		return Candidate{}, reader.count, err
-	}
-	if err := validateArrayLengthsReader(&contextReader{ctx: ctx, input: spool}); err != nil {
-		if errors.Is(err, ErrCanceled) {
-			return Candidate{}, reader.count, ErrCanceled
-		}
-		return Candidate{}, reader.count, err
-	}
-	if _, err := spool.Seek(0, io.SeekStart); err != nil {
 		return Candidate{}, reader.count, err
 	}
 	var image Image
-	if err := strictJSONReader(&contextReader{ctx: ctx, input: spool}, &image); err != nil {
+	if err := strictJSONReader(&contextReader{ctx: ctx, input: bytes.NewReader(payload.Bytes())}, &image); err != nil {
 		return Candidate{}, reader.count, err
 	}
 	if image.SchemaVersion != SchemaV1 || image.ProducerMode != ProducerLive {
@@ -342,6 +317,7 @@ func validateArrayLengthsReader(input io.Reader) error {
 		switch delim {
 		case '{':
 			required, present := requiredFixedFieldMask(path), uint8(0)
+			seen := make(map[string]struct{})
 			for decoder.More() {
 				keyToken, err := decoder.Token()
 				if err != nil {
@@ -351,6 +327,10 @@ func validateArrayLengthsReader(input io.Reader) error {
 				if !ok {
 					return ErrInvalid
 				}
+				if _, duplicate := seen[key]; duplicate {
+					return ErrInvalid
+				}
+				seen[key] = struct{}{}
 				present |= fixedFieldMask(path, key)
 				child := key
 				if path != "" {

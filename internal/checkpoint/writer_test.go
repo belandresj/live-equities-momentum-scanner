@@ -32,7 +32,11 @@ func TestC7CADENCE01WriterCoalescingAccounting(t *testing.T) {
 		image := fixtureImage(sequence, 2)
 		image.T0 = image.T0.Add(time.Duration(sequence) * 30 * time.Second)
 		image.CreatedAt = image.T0.Add(time.Second)
-		return Request{BindingIdentity: "binding-a", RequestID: sequence, ArtifactSequence: sequence, T0: image.T0, Image: image}
+		request, ok := NewRequest("binding-a", sequence, &image)
+		if !ok || image.SchemaVersion != "" || image.Symbols != nil {
+			t.Fatalf("request %d did not consume detached image", sequence)
+		}
+		return request
 	}
 	if got := writer.Submit(request(1)); got.Disposition != SubmitAccepted {
 		t.Fatal(got)
@@ -50,8 +54,25 @@ func TestC7CADENCE01WriterCoalescingAccounting(t *testing.T) {
 	if got.Disposition != SubmitAccepted || got.Superseded == nil || got.Superseded.RequestID != 2 || got.Superseded.Disposition != TerminalSuperseded {
 		t.Fatalf("replacement=%+v", got)
 	}
-	third.Image.Binding.Identity = "mutated-after-submit"
-	if accounting := writer.Accounting(); !accounting.Reconciles() || accounting != (WriterAccounting{Submitted: 3, InProgress: 1, Pending: 1, Superseded: 1}) {
+	// A shallow alias retained before the defensive constructor cannot mutate
+	// accepted writer bytes.
+	aliasImage := fixtureImage(4, 2)
+	aliasImage.T0 = aliasImage.T0.Add(4 * 30 * time.Second)
+	aliasImage.CreatedAt = aliasImage.T0.Add(time.Second)
+	retained := aliasImage
+	isolated, ok := NewRequest("binding-a", 4, &aliasImage)
+	if !ok {
+		t.Fatal("isolated request")
+	}
+	aliasSubmit := writer.Submit(isolated)
+	if aliasSubmit.Disposition != SubmitAccepted || aliasSubmit.Superseded == nil || aliasSubmit.Superseded.RequestID != 3 {
+		t.Fatalf("alias submit=%+v", aliasSubmit)
+	}
+	retained.Symbols[0].Symbol = "MUTATED"
+	if isolated.image.Symbols[0].Symbol == "MUTATED" {
+		t.Fatal("retained shallow alias mutated isolated request")
+	}
+	if accounting := writer.Accounting(); !accounting.Reconciles() || accounting.Submitted != 4 || accounting.InProgress != 1 || accounting.Pending != 1 || accounting.Superseded != 2 {
 		t.Fatalf("paused accounting=%+v", accounting)
 	}
 	close(release)
@@ -65,13 +86,13 @@ func TestC7CADENCE01WriterCoalescingAccounting(t *testing.T) {
 		}
 		seen[result.RequestID] = result
 	}
-	if seen[1].Disposition != TerminalCompleted || seen[3].Disposition != TerminalCompleted {
+	if seen[1].Disposition != TerminalCompleted || seen[4].Disposition != TerminalCompleted {
 		t.Fatalf("terminals=%+v", seen)
 	}
-	if loaded := store.Load(context.Background()); loaded.Disposition != LoadedLatest || loaded.Candidate.Image.Sequence != 3 || loaded.Candidate.Image.Binding.Identity != "binding-a" {
+	if loaded := store.Load(context.Background()); loaded.Disposition != LoadedLatest || loaded.Candidate.Image.Sequence != 4 || loaded.Candidate.Image.Binding.Identity != "binding-a" || loaded.Candidate.Image.Symbols[0].Symbol == "MUTATED" {
 		t.Fatalf("detached latest=%+v", loaded)
 	}
-	if accounting := writer.Accounting(); !accounting.Reconciles() || accounting != (WriterAccounting{Submitted: 3, Completed: 2, Superseded: 1}) {
+	if accounting := writer.Accounting(); !accounting.Reconciles() || accounting.Submitted != 4 || accounting.Completed != 2 || accounting.Superseded != 2 || accounting.LastSuccessfulT0.IsZero() || accounting.LastArtifactBytes <= 0 || accounting.LastWriteDuration <= 0 || accounting.LastEncodeDuration <= 0 || accounting.LastReopenValidationDuration <= 0 {
 		t.Fatalf("terminal accounting=%+v", accounting)
 	}
 	writer.Close()
@@ -133,7 +154,7 @@ func TestC7CADENCE01WriterCoalescingAccounting(t *testing.T) {
 		if err := cancelWriter.Wait(wait); err != nil {
 			t.Fatal(err)
 		}
-		if accounting := cancelWriter.Accounting(); !accounting.Reconciles() || accounting != (WriterAccounting{Submitted: 2, Canceled: 2}) {
+		if accounting := cancelWriter.Accounting(); !accounting.Reconciles() || accounting.Submitted != 2 || accounting.Canceled != 2 {
 			t.Fatalf("cancel accounting=%+v", accounting)
 		}
 	})
@@ -180,4 +201,24 @@ func TestC7CADENCE01WriterCoalescingAccounting(t *testing.T) {
 			t.Fatalf("bounded accounting=%+v", accounting)
 		}
 	})
+}
+
+func TestProjectionBuilderIsolatesEachSourceSymbol(t *testing.T) {
+	image := fixtureImage(9, 1)
+	builder, ok := NewProjectionBuilder(image.SchemaVersion, image.ProducerMode, image.Binding, image.T0, image.CreatedAt, image.Sequence, uint64(image.Population))
+	if !ok {
+		t.Fatal("projection builder")
+	}
+	source := image.Symbols[0]
+	if !builder.AddSymbol(0, source) {
+		t.Fatal("add symbol")
+	}
+	source.Symbol = "MUTATED"
+	if len(source.Tail) != 0 {
+		source.Tail[0].Values.Close = -1
+	}
+	request, ok := builder.Finish(image.Binding.Identity, 1)
+	if !ok || request.image.Symbols[0].Symbol == "MUTATED" || len(request.image.Symbols[0].Tail) != 0 && request.image.Symbols[0].Tail[0].Values.Close == -1 {
+		t.Fatalf("builder retained source alias: ok=%t request=%+v", ok, request)
+	}
 }

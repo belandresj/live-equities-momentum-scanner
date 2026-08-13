@@ -1,9 +1,10 @@
 # Live coverage and partial-ranking correction
 
-**Status:** Owner-directed executable correction plan, revised 2026-08-11.
-Slice 1 is accepted after invariant-level correction, complete focused proof,
-and clean read-only re-review. Slice 2 remains planned and depends on the
-accepted Slice 1 boundary.
+**Status:** Accepted correction, 2026-08-13. Slice 1 is reaccepted after live
+evidence exposed and correction removed an evaluator-scheduling gap. Slice 2
+now contains symbol-local uncertainty in `degraded_current`; focused, ordinary,
+race, exact-wire UI, and production-composition proofs pass and final focused
+read-only review is clean. No live-provider request was made for Slice 2.
 
 ## Decision and outcome
 
@@ -73,9 +74,11 @@ For each bound symbol and one-second aggregate identity:
    remains retained, prevents absence for that identity, and prevents trust in
    an older mark when it is newer than that mark and before the evaluation
    watermark.
-4. A historical conflict may coexist with the accepted live canonical value.
-   It does not erase that value, but it prevents exactness for every dependent
-   historical field or qualification fact whose interval includes the conflict.
+4. A REST/live discrepancy may coexist with the accepted live canonical value
+   only as a bounded diagnostic. Valid live precedence establishes that
+   identity's correctness, so the discrepancy does not install historical-
+   conflict state or prevent exact dependent fields or qualification. An
+   unresolved historical/historical conflict remains fail-closed.
 5. When structural-invalid evidence is retained for an identity previously
    marked absent, the engine revokes that absence immediately. An ordinary
    fence must not reinstall it while the invalid evidence remains applicable.
@@ -106,10 +109,10 @@ qualification interval exact. Current-mark trust and qualification-history
 quality are evaluated separately before row eligibility is derived.
 
 Source disagreement is not automatically whole-symbol uncertainty. The
-canonical merge rule still gives accepted live evidence authority over
-overlapping REST evidence. A resolved conflict remains a bounded
-historical-quality diagnostic and affects current-mark trust only when the
-unresolved evidence could hide a newer mark.
+canonical merge rule gives accepted live evidence authority over overlapping
+REST evidence. That resolved discrepancy remains a bounded diagnostic and does
+not change coverage, fields, qualification, or current-mark trust. Only
+unresolved evidence that could hide a newer mark has those consequences.
 
 Ranking modes are:
 
@@ -245,18 +248,31 @@ Required behavior:
   new T/Q membership exactly as for `degraded_bootstrap`; and
 - preserve the exact qualified path and all existing ranking formulas.
 
-Primary proof:
+Primary proof is a matched allocation across the existing sole-owner
+boundaries, not one monolithic fixture:
 
-- Extend the production-composition scenario with equivalent overlap,
-  conflicting overlap, a later live correction/mark, an isolated unknown
-  historical identity, an unusable qualification contributor, and a genuine
-  global stream gap. Prove separately that a later trusted mark can restore
-  current-mark trust without erasing an earlier qualification limitation. The
-  symbol-local cases must retain a current `qualified_current` or
-  `degraded_current` publication with mode-consistent rows; only systemic
-  ambiguity or zero trusted marks may make the scanner unavailable. Prove the
-  snapshot/readiness mapping and production UI model consume the same sealed
-  publication.
+- the production `RunLive` composition proves normalized valid/quiet facts,
+  equivalent and conflicting REST/live overlap, hydration, and ordinary live
+  fences reach the sole Engine path;
+- Engine admission proofs cover the later live correction/mark, isolated
+  unknown historical identity, unusable qualification contributor, zero
+  trusted marks, replay isolation, and the global-gap counterexamples;
+- a real Runtime/Engine composition installs a trusted mark plus an
+  attributable local defect, then proves the sealed snapshot, readiness 200,
+  exact counters/rows, no T/Q, and subsequent transport-loss readiness 503;
+  and
+- the exact JSON bytes emitted from that sealed capture pass the production UI
+  validator/model, while the renderer proof asserts the partial label,
+  non-qualified caption, retained styling, and T/Q rejection.
+
+Malformed aggregate websocket frames are intentionally normalized into
+`DeliveryNormalizationDrop` and do not become Engine canonical/local-defect
+facts. The `RunLive` proof must not fabricate an adapter path that production
+contains before Engine admission; Slice 2 begins at the Engine evidence
+boundary for attributable structural-invalid input. Together the matched
+proofs require symbol-local cases to retain a current `qualified_current` or
+`degraded_current` publication with mode-consistent rows; only systemic
+ambiguity or zero trusted marks may make the scanner unavailable.
 
 Slice 2 acceptance requires focused Engine/Runtime/API/UI tests, ordinary
 verification, `git diff --check`, and a narrow read-only review of current-mark
@@ -303,14 +319,34 @@ attributable structural-invalid input independently of whether that input
 becomes the one bounded newest retained identity. This preserves the prohibition
 on generalized rejected-identity history while preventing false no-print.
 
+The 2026-08-13 live run reopened the production-advancement claim. An accepted
+ordinary live-coverage fence advanced `supportedThrough`, but
+`inputLiveCoverageFence` was not an evaluator cause. Runtime waits for that
+fence and admits the timer afterward; when fence capture and timer admission
+straddled a whole-second boundary, the timer targeted one unsupported second
+later and committed `T` remained frozen. The prior runtime proof advanced its
+injected clock in exact one-second steps and therefore did not distinguish this
+production chronology.
+
+The correction carries the accepted fence's exact target into the existing sole
+target/evaluator path and stages and applies that target on the fence
+transition. The dangerous counterexample uses fence target `T+1` with admission
+clock `T+2`: the fence must commit exactly `T+1`, and the unsupported later
+timer must not advance it. Supported same-target timers remain evaluator causes
+because processing time can cross the strict correction horizon while market
+`T` is unchanged, especially at the session-end cap; a separate regression
+requires provisional qualification to finalize in that case. Replay,
+hydration-ingress fences, ranking modes, checkpoint mechanics, and market
+semantics are unchanged.
+
 | Item | Status | Evidence / correction record |
 | --- | --- | --- |
 | Parent decision and two-slice plan | accepted, revised | Owner directed robustness over perfect all-symbol history on 2026-08-11. The outcome and two-slice sequence remain; the evidence/time model and both slice boundaries are revised after the blocking Slice 1 review. |
-| Slice 1 invariant-preserving ordinary live coverage | accepted 2026-08-11 | `go test -short -timeout 30s ./internal/engine -run '^TestSlice1' -count=1` passes. The proof covers no older mark and older accepted mark; invalid identity at `T0`, strictly inside `[T0,T1)`, and exactly at `T1` with nonzero evaluation delay; coherent unsuppressed publication at `T1`; next-fence applicability; endpoint-first then late-interior invalid ordering; immediate absence revocation; exact population, qualification, uncertainty-origin, aggregate, admission, and transition accounting. `go test -short -timeout 30s ./internal/operations -run '^TestSlice1RuntimeRunLiveInstallsOrdinaryLiveCoverage$' -count=1` passes production `Runtime.RunLive` hydration, FIFO fences, printing/quiet symbols, and REST/live overlap/conflict preservation. `go test -short -timeout 2m ./...` and `git diff --check` pass. The focused evidence is deterministic and does not establish live-provider timing, entitlements, current population, or Slice 2 partial-ranking behavior. |
-| Slice 1 read-only review | accepted 2026-08-11 | Required `gpt-5.6-sol` medium review first found the endpoint-first/late-interior ordering counterexample above. After correction and the new regression, focused re-review found the P1 resolved and no remaining P1/P2 in coverage mutation, half-open advancement, evaluator validation, stale-mark trust, accounting, or Runtime production composition. |
-| Slice 2 local containment and `degraded_current` | planned | Depends on accepted Slice 1 evidence/time behavior and consumes it without coverage repair. |
-| Slice 2 read-only review | planned | Required before combined acceptance. |
-| Combined production-composition acceptance | planned | No runnable claim until both slices pass. |
+| Slice 1 invariant-preserving ordinary live coverage | reaccepted after correction 2026-08-13 | The 2026-08-13 live run invalidated the claim that every accepted ordinary fence can advance committed `T`: fence capture and timer admission crossing a second left the timer unsupported. The exact chronology regression in `TestLiveAggregateEvaluationCoalescing` now proves the fence commits its captured supported target and the following unsupported timer cannot advance it. A second regression proves a supported same-target timer still performs strict correction-horizon qualification finalization at session-end-capped `T`. Focused Engine and Runtime Slice 1 proofs pass; `go test -short -timeout 2m ./...`, focused race proofs, `go vet ./internal/engine ./internal/operations`, and `git diff --check` pass. Preserve the prior identity/coverage proofs; they were not invalidated. |
+| Slice 1 read-only review | accepted 2026-08-11; focused correction re-review clean 2026-08-13 | The required `gpt-5.6-sol` medium correction review found that a proposed generic same-target skip could omit strict correction-horizon maintenance and same-`T` hydration revisions. The skip and obsolete proof claim were removed, and the strict-horizon regression was added. Focused re-review found the implementation issue resolved and no remaining P1/P2 in the live-fence evaluator correction. Review was read-only and made no provider request. |
+| Slice 2 local containment and `degraded_current` | accepted 2026-08-13 | Live lifecycle now publishes raw Day-% rows from trusted marks when remaining defects are symbol-local; potentially displaced marks stay excluded, qualification uncertainty stays explicit, and partial modes cannot create or expose T/Q. Later accepted live marks restore primary trust when post-mark coverage is exact without erasing historical/qualification limitations. `degraded_bootstrap` is startup-hydration-only; replay is unchanged. The real Runtime/Engine proof carries a local defect through a sealed snapshot to `/readyz` and snapshot 200, feeds those exact JSON bytes through the production UI model, then proves transport loss returns readiness 503. Focused Engine/Operations/API/UI tests, `go test -short -timeout 2m ./...`, affected `-race`, affected `go vet`, and `git diff --check` pass. |
+| Slice 2 read-only review | accepted after correction 2026-08-13 | Required `gpt-5.6-sol` medium review found four P2s and then a P1 validator contradiction: later-mark trust depended on an unrelated conflict bit, bootstrap mode lacked a startup boundary, UI accepted partial T/Q, production/exact-wire proof was incomplete, and legal retained-bootstrap `degraded_current` could be rejected. All received distinguishing corrections. Final same-reviewer re-review found no remaining P1/P2 implementation or acceptance gap. |
+| Combined production-composition acceptance | accepted 2026-08-13 | Matched proofs cover `RunLive` normalization/hydration/fences, Engine current-mark and qualification containment, Runtime readiness/API/transport failure, and exact sealed-wire UI consumption without crossing or duplicating ownership boundaries. This is a local runnable-code claim, not a market-hours/provider observation. |
 | Final integrated read-only review | planned | Required after combined acceptance. |
 
 If later evidence invalidates an accepted claim, mark only that item reopened,

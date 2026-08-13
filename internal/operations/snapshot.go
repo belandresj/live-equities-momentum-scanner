@@ -16,13 +16,14 @@ type SnapshotCapture struct{ sealed *sealedSnapshotCapture }
 // SnapshotCaptureView is a detached inspection copy. It cannot be converted
 // back into a SnapshotCapture.
 type SnapshotCaptureView struct {
-	SampleID    uint64
-	SampledAt   time.Time
-	ProcessLive bool
-	Engine      engine.SnapshotView
-	Status      Status
-	Metrics     Metrics
-	Replay      *ReplayCaptureView
+	SampleID        uint64
+	SampledAt       time.Time
+	ProcessLive     bool
+	Engine          engine.SnapshotView
+	Status          Status
+	Metrics         Metrics
+	IngressIncident *IngressIncident
+	Replay          *ReplayCaptureView
 }
 
 type sealedSnapshotCapture struct{ view SnapshotCaptureView }
@@ -51,6 +52,7 @@ func (r *Runtime) CaptureSnapshot() (SnapshotCapture, error) {
 	return SnapshotCapture{sealed: &sealedSnapshotCapture{view: SnapshotCaptureView{
 		SampleID: r.captureSequence, SampledAt: sampledAt, ProcessLive: processLive,
 		Engine: view, Status: deriveStatus(processLive, r.binding, r.config, sampledAt, view.Operational), Metrics: metrics,
+		IngressIncident: r.FirstIngressIncident(),
 	}}}, nil
 }
 
@@ -69,6 +71,17 @@ func cloneSnapshotCaptureView(value SnapshotCaptureView) SnapshotCaptureView {
 	result.Metrics.Engine.Watermark = cloneTime(value.Metrics.Engine.Watermark)
 	result.Metrics.Engine.Hydration.SupportedThrough = cloneTime(value.Metrics.Engine.Hydration.SupportedThrough)
 	result.Metrics.Engine.IntegrityFailure = cloneIntegrityFailure(value.Metrics.Engine.IntegrityFailure)
+	if value.IngressIncident != nil {
+		incident := *value.IngressIncident
+		incident.Engine.Watermark = cloneTime(value.IngressIncident.Engine.Watermark)
+		incident.Engine.Hydration.SupportedThrough = cloneTime(value.IngressIncident.Engine.Hydration.SupportedThrough)
+		incident.Engine.IntegrityFailure = cloneIntegrityFailure(value.IngressIncident.Engine.IntegrityFailure)
+		incident.PriorEngine.Watermark = cloneTime(value.IngressIncident.PriorEngine.Watermark)
+		incident.PriorEngine.Hydration.SupportedThrough = cloneTime(value.IngressIncident.PriorEngine.Hydration.SupportedThrough)
+		incident.PriorEngine.IntegrityFailure = cloneIntegrityFailure(value.IngressIncident.PriorEngine.IntegrityFailure)
+		incident.LastCoherentProjection = cloneLastCoherentProjection(value.IngressIncident.LastCoherentProjection)
+		result.IngressIncident = &incident
+	}
 	if value.Replay != nil {
 		copyValue := ReplayCaptureView(cloneReplayCaptureContext(ReplayCaptureContext(*value.Replay)))
 		result.Replay = &copyValue

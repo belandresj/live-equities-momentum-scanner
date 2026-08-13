@@ -89,7 +89,7 @@ func TestC3FEAT01PriceRangeBoundaryTable(t *testing.T) {
 		closeAndWait(t, flat)
 	})
 
-	t.Run("localized conflict preserves independent fields", func(t *testing.T) {
+	t.Run("resolved historical live discrepancy preserves price and range fields", func(t *testing.T) {
 		now := start.Add(time.Second)
 		e := aggregateEngine(t, binding, RunModeLive, &now)
 		first := liveAggregate(binding, "AAA", start, 1, 1)
@@ -109,12 +109,12 @@ func TestC3FEAT01PriceRangeBoundaryTable(t *testing.T) {
 		applyAggregate(t, e, latest, DispositionAggregateInserted, ReasonNone)
 		proveAggregateCoverage(t, e, "AAA", start, now)
 		got := priceRangeResult(t, e, "AAA", now)
-		if got.dayPercent.status != featureCurrent || got.from4AMPercent.status != featureCurrent || got.rolling30.status != featureCurrent {
-			t.Fatalf("independent fields were cleared: %+v", got)
-		}
-		for name, field := range map[string]aggregateFeatureField{"hod": got.hodDrawdown, "session": got.sessionRange, "rolling60": got.rolling60} {
-			if field.status != featureInvalid || field.reason != featureReasonHistoricalConflict {
-				t.Fatalf("%s conflict status = %+v", name, field)
+		for name, field := range map[string]aggregateFeatureField{
+			"day": got.dayPercent, "from4am": got.from4AMPercent, "hod": got.hodDrawdown,
+			"session": got.sessionRange, "rolling30": got.rolling30, "rolling60": got.rolling60,
+		} {
+			if field.status != featureCurrent {
+				t.Fatalf("%s was invalidated by a resolved REST/live discrepancy: %+v all=%+v", name, field, got)
 			}
 		}
 		closeAndWait(t, e)

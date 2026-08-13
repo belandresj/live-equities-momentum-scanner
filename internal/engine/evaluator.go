@@ -78,6 +78,7 @@ const (
 	rankingUnavailable       rankingMode = "unavailable"
 	rankingQualifiedCurrent  rankingMode = "qualified_current"
 	rankingDegradedBootstrap rankingMode = "degraded_bootstrap"
+	rankingDegradedCurrent   rankingMode = "degraded_current"
 	rankingStale             rankingMode = "stale"
 	rankingSuppressed        rankingMode = "suppressed"
 )
@@ -126,6 +127,21 @@ type uncertaintyAccounting struct {
 	bootstrapOrigin, postBootstrapGap, localInvalid uint64
 }
 
+// populationTransitionDiagnostic explains the narrow bootstrap-unknown
+// population decision without changing the primary population partition. Its
+// reason bins are mutually exclusive and exhaustive over bootstrapUnknown.
+type populationTransitionDiagnostic struct {
+	bootstrapUnknown, trustedByLaterLiveMark, noLaterEligibleMark uint64
+	latestMarkNotLiveAuthority, noStrictlyOlderLocalizedConflict  uint64
+	conflictAtOrAfterMark, invalidAtOrAfterMark                   uint64
+	incompletePostMarkCoverage                                    uint64
+}
+
+func (d populationTransitionDiagnostic) reconciles() bool {
+	return d.bootstrapUnknown == d.trustedByLaterLiveMark+d.noLaterEligibleMark+d.latestMarkNotLiveAuthority+
+		d.noStrictlyOlderLocalizedConflict+d.conflictAtOrAfterMark+d.invalidAtOrAfterMark+d.incompletePostMarkCoverage
+}
+
 type aggregateRankingRow struct {
 	rank                                      uint32
 	symbol                                    string
@@ -144,6 +160,7 @@ type aggregateEvaluationResult struct {
 	qualification        qualificationAccounting
 	features             featureAccounting
 	uncertainty          uncertaintyAccounting
+	populationTransition populationTransitionDiagnostic
 	totalPassers         uint64
 	knownRankableCount   uint64
 	dayInvalidRankable   uint64
@@ -236,8 +253,9 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 	}
 	changed := (node.kind == inputTimer || node.kind == inputReplayGroup) && code == DispositionTimerApplied
 	changed = changed || (node.kind == inputAggregateIngressFence && code == DispositionAggregateIngressFenceApplied)
+	changed = changed || (node.kind == inputLiveCoverageFence && code == DispositionLiveCoverageFenceApplied)
 	changed = changed || (e.mode == RunModeReplay && node.kind == inputAggregate && (code == DispositionAggregateInserted || code == DispositionAggregateRevised ||
-		code == DispositionAggregateWithdrawn || (code == DispositionAggregateRejected && (reason == ReasonHistoricalLiveConflict || reason == ReasonStructural))))
+		code == DispositionAggregateWithdrawn || (code == DispositionAggregateRejected && reason == ReasonStructural)))
 	if !changed {
 		return true
 	}
@@ -254,7 +272,7 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 		staged = e.stageAggregateEvaluationLocked(*e.state.committedT)
 	}
 	expected := time.Time{}
-	if e.mode == RunModeLive && candidate != nil && (node.kind == inputTimer || node.kind == inputAggregateIngressFence) {
+	if e.mode == RunModeLive && candidate != nil && (node.kind == inputTimer || node.kind == inputAggregateIngressFence || node.kind == inputLiveCoverageFence) {
 		expected = staged.at
 	} else if (node.kind == inputTimer || node.kind == inputReplayGroup || node.kind == inputAggregateIngressFence) && e.state.latestTarget != nil {
 		expected = *e.state.latestTarget
@@ -281,6 +299,9 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 	applyStarted := e.evaluationTimingStart()
 	e.applyStagedAggregateCandidateLocked(staged, node.admissionTime)
 	e.state.evaluationTiming.Apply = e.evaluationTimingElapsed(applyStarted)
+	if node.kind == inputAggregateIngressFence {
+		e.state.fenceTiming.EvaluationApply = e.state.evaluationTiming.Apply
+	}
 	consumePending := e.mode == RunModeLive && e.state.aggregateProjectionPending
 	evaluationChanged := !aggregateEvaluationEqual(e.state.aggregateEvaluator.current, staged)
 	if evaluationChanged {
@@ -386,6 +407,72 @@ func (e *Engine) stageAggregateEvaluationLocked(at time.Time) aggregateEvaluatio
 	return e.stageAggregateEvaluationAtLocked(at, at)
 }
 
+type populationTransitionDecision uint8
+
+const (
+	populationTransitionNotApplicable populationTransitionDecision = iota
+	populationTransitionTrustedByLaterLiveMark
+	populationTransitionNoLaterEligibleMark
+	populationTransitionLatestMarkNotLiveAuthority
+	populationTransitionNoStrictlyOlderLocalizedConflict
+	populationTransitionConflictAtOrAfterMark
+	populationTransitionInvalidAtOrAfterMark
+	populationTransitionIncompletePostMarkCoverage
+)
+
+// classifyPopulationTransition reports why an exact bootstrap-origin unknown
+// consequence can or cannot remain field-local while a later mark supplies the
+// primary population partition. It deliberately does not clear the consequence:
+// historical features and qualification still consume the incomplete prefix.
+func classifyPopulationTransition(binding *installedBinding, state *symbolAggregateState, mark canonicalAggregate, hasMark bool, at time.Time, coverage aggregateCoverageConsequence, invalid *invalidMarkEvidence) populationTransitionDecision {
+	if coverage != coverageUnknownFailureOrFence || binding == nil {
+		return populationTransitionNotApplicable
+	}
+	if state == nil || !hasMark || mark.windowStart.Before(binding.sessionStart) || !mark.windowStart.Before(at) || mark.windowEnd.After(at) {
+		return populationTransitionNoLaterEligibleMark
+	}
+	if mark.authority.source != AggregateSourceLive || mark.greatestLiveSupport == nil ||
+		mark.authority.live.ConnectionEpoch == 0 || mark.authority.live.FrameSequence == 0 {
+		return populationTransitionLatestMarkNotLiveAuthority
+	}
+	if state.historicalConflict != nil && bitmapHasRange(state.historicalConflict, binding, mark.windowStart, at) {
+		return populationTransitionConflictAtOrAfterMark
+	}
+	if invalid != nil && !invalid.windowStart.Before(mark.windowStart) && invalid.windowStart.Before(at) {
+		return populationTransitionInvalidAtOrAfterMark
+	}
+	// Exact coverage includes the mark identity and every later second through
+	// interval can hide a newer mark. The unresolved prefix itself is the
+	// historical/qualification limitation; it need not also contain a conflict.
+	if !exactAggregateCoverage(state, binding, mark.windowStart, at) {
+		return populationTransitionIncompletePostMarkCoverage
+	}
+	return populationTransitionTrustedByLaterLiveMark
+}
+
+func recordPopulationTransition(diagnostic *populationTransitionDiagnostic, decision populationTransitionDecision) {
+	if diagnostic == nil || decision == populationTransitionNotApplicable {
+		return
+	}
+	diagnostic.bootstrapUnknown++
+	switch decision {
+	case populationTransitionTrustedByLaterLiveMark:
+		diagnostic.trustedByLaterLiveMark++
+	case populationTransitionNoLaterEligibleMark:
+		diagnostic.noLaterEligibleMark++
+	case populationTransitionLatestMarkNotLiveAuthority:
+		diagnostic.latestMarkNotLiveAuthority++
+	case populationTransitionNoStrictlyOlderLocalizedConflict:
+		diagnostic.noStrictlyOlderLocalizedConflict++
+	case populationTransitionConflictAtOrAfterMark:
+		diagnostic.conflictAtOrAfterMark++
+	case populationTransitionInvalidAtOrAfterMark:
+		diagnostic.invalidAtOrAfterMark++
+	case populationTransitionIncompletePostMarkCoverage:
+		diagnostic.incompletePostMarkCoverage++
+	}
+}
+
 func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggregateEvaluationResult {
 	result := aggregateEvaluationResult{at: at, mode: rankingUnavailable, reason: rankingReasonNoCommittedWatermark, tqIntentAvailable: e.mode != RunModeReplay}
 	if e.state.binding == nil || at.IsZero() {
@@ -408,6 +495,22 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 		symbol := &e.state.binding.symbols[index]
 		result.population.universeTotal++
 		state := symbol.aggregates
+		evaluationState := state
+		var projectionState symbolAggregateState
+		if state != nil {
+			projectionState = *state
+			if state.tailCoverageBuilt {
+				if state.tailCoverageUsable {
+					projectionState.evaluationTailPresence = &state.tailCoverage
+				}
+			} else {
+				var tailPresence evaluationTailWindow
+				if buildEvaluationTailPresence(state, e.state.binding, &tailPresence) {
+					projectionState.evaluationTailPresence = &tailPresence
+				}
+			}
+			evaluationState = &projectionState
+		}
 		var mark canonicalAggregate
 		hasMark := false
 		if state != nil {
@@ -416,6 +519,15 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 		coverage, hasCoverageConsequence := e.state.aggregateEvaluator.coverage[index]
 		invalid, hasInvalidEvidence := e.state.aggregateEvaluator.invalidMarks[index]
 		invalidApplicableAtT := hasInvalidEvidence && invalid.windowStart.Before(at)
+		var invalidEvidence *invalidMarkEvidence
+		if hasInvalidEvidence {
+			invalidEvidence = &invalid
+		}
+		populationTransition := populationTransitionNotApplicable
+		if hasCoverageConsequence {
+			populationTransition = classifyPopulationTransition(e.state.binding, evaluationState, mark, hasMark, at, coverage, invalidEvidence)
+		}
+		populationMarkTrusted := populationTransition == populationTransitionTrustedByLaterLiveMark
 		if coverage == coverageNoPrintThroughT && (hasMark || invalidApplicableAtT) {
 			result.invalidSupport = true
 			if result.invalidSupportSymbol == "" {
@@ -435,7 +547,6 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 		activity := unavailableActivityResult(at)
 		var projectedQualification *qualificationState
 		if state != nil {
-			projectionState := *state
 			projectionState.qualification = cloneQualificationState(state.qualification)
 			projectionSymbol := *symbol
 			projectionSymbol.aggregates = &projectionState
@@ -453,7 +564,7 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 		if !validPrior {
 			features.dayPercent = aggregateFeatureField{status: featureUnavailable, reason: featureReasonPriorCloseUnavailable}
 		}
-		if hasCoverageConsequence && coverage.outcome == coverageOutcomeUnknown {
+		if hasCoverageConsequence && coverage.outcome == coverageOutcomeUnknown && !populationMarkTrusted {
 			unknown := aggregateFeatureField{status: featureUnavailable, reason: featureReasonHistoryIncomplete}
 			features.from4AMPercent, features.hodDrawdown, features.sessionRange = unknown, unknown, unknown
 			features.rolling30, features.rolling60, activity.activity = unknown, unknown, unknown
@@ -466,8 +577,9 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 			continue
 		}
 		result.population.validPriorClose++
+		recordPopulationTransition(&result.populationTransition, populationTransition)
 
-		if hasCoverageConsequence && coverage.outcome == coverageOutcomeUnknown {
+		if hasCoverageConsequence && coverage.outcome == coverageOutcomeUnknown && !populationMarkTrusted {
 			result.population.unknownDueFailureOrFence++
 			countUncertaintyOrigin(&result.uncertainty, coverage.origin)
 			allUnresolvedBootstrap = allUnresolvedBootstrap && coverage.origin == uncertaintyBootstrapOrigin
@@ -546,7 +658,7 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 	case result.population.unknownDueFailureOrFence == 0 && qualificationComplete:
 		result.mode, result.reason = rankingQualifiedCurrent, ""
 		result.rows = sortedRankingRows(*qualified, e.mode != RunModeReplay)
-	case result.knownRankableCount > 0 && allUnresolvedBootstrap:
+	case e.mode == RunModeLive && e.state.lifecycle == lifecycleHydrating && result.knownRankableCount > 0 && allUnresolvedBootstrap:
 		result.mode = rankingDegradedBootstrap
 		if result.population.unknownDueFailureOrFence != 0 {
 			result.reason = rankingReasonIncompletePopulation
@@ -554,8 +666,14 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 			result.reason = rankingReasonQualificationPending
 		}
 		result.rows = sortedRankingRows(*degraded, false)
-	case result.knownRankableCount > 0:
-		result.mode, result.reason = rankingUnavailable, rankingReasonIncompletePopulation
+	case e.mode == RunModeLive && result.knownRankableCount > 0:
+		result.mode = rankingDegradedCurrent
+		if result.population.unknownDueFailureOrFence != 0 {
+			result.reason = rankingReasonIncompletePopulation
+		} else {
+			result.reason = rankingReasonQualificationPending
+		}
+		result.rows = sortedRankingRows(*degraded, false)
 	default:
 		result.mode, result.reason = rankingUnavailable, rankingReasonNoTrustedMarks
 	}
@@ -635,11 +753,16 @@ func validateAggregateEvaluation(r aggregateEvaluationResult) *evaluatorValidati
 		}
 		return invalidEvaluation(EvaluatorSupportContradiction, "support", r.invalidSupportSymbol, reason)
 	}
-	if r.mode != rankingUnavailable && r.mode != rankingQualifiedCurrent && r.mode != rankingDegradedBootstrap && r.mode != rankingStale && r.mode != rankingSuppressed {
+	if r.mode != rankingUnavailable && r.mode != rankingQualifiedCurrent && r.mode != rankingDegradedBootstrap && r.mode != rankingDegradedCurrent && r.mode != rankingStale && r.mode != rankingSuppressed {
 		return invalidEvaluation(EvaluatorRankingProjection, "ranking.mode", "", "invalid_mode")
 	}
 	if !r.population.reconciles() {
 		return invalidEvaluation(EvaluatorPopulationAccounting, "accounting.population", "", "identity_mismatch")
+	}
+	if !r.populationTransition.reconciles() ||
+		r.populationTransition.trustedByLaterLiveMark > r.population.trustedRankableMark+r.population.trustedBelowPriceMark ||
+		r.populationTransition.bootstrapUnknown-r.populationTransition.trustedByLaterLiveMark > r.population.unknownDueFailureOrFence {
+		return invalidEvaluation(EvaluatorPopulationAccounting, "accounting.population_transition", "", "identity_mismatch")
 	}
 	if len(r.rows) > maximumRankingRows {
 		return invalidEvaluation(EvaluatorRankingProjection, "ranking.rows", "", "row_bound_exceeded")
@@ -696,6 +819,18 @@ func validateAggregateEvaluation(r aggregateEvaluationResult) *evaluatorValidati
 			return invalidEvaluation(EvaluatorRankingProjection, "ranking.reason", "", "degraded_reason_mismatch")
 		}
 	}
+	if r.mode == rankingDegradedCurrent && (r.knownRankableCount == 0 || (r.population.unknownDueFailureOrFence == 0 && r.qualification.unresolved == 0) || uint64(len(r.rows)) != wantDegradedRows) {
+		return invalidEvaluation(EvaluatorRankingProjection, "ranking.degraded_current", "", "projection_mismatch")
+	}
+	if r.mode == rankingDegradedCurrent {
+		wantReason := rankingReasonQualificationPending
+		if r.population.unknownDueFailureOrFence != 0 {
+			wantReason = rankingReasonIncompletePopulation
+		}
+		if r.reason != wantReason {
+			return invalidEvaluation(EvaluatorRankingProjection, "ranking.reason", "", "degraded_current_reason_mismatch")
+		}
+	}
 	if r.mode == rankingUnavailable && r.reason != rankingReasonNoCommittedWatermark && r.reason != rankingReasonNoTrustedMarks && r.reason != rankingReasonIncompletePopulation {
 		return invalidEvaluation(EvaluatorRankingProjection, "ranking.reason", "", "invalid_unavailable_reason")
 	}
@@ -724,7 +859,7 @@ func cloneAggregateEvaluation(r aggregateEvaluationResult) aggregateEvaluationRe
 	return r
 }
 func aggregateEvaluationEqual(a, b aggregateEvaluationResult) bool {
-	if a.at != b.at || a.mode != b.mode || a.reason != b.reason || a.population != b.population || a.qualification != b.qualification || a.features != b.features || a.uncertainty != b.uncertainty || a.totalPassers != b.totalPassers || a.knownRankableCount != b.knownRankableCount || a.dayInvalidRankable != b.dayInvalidRankable || a.qualifiedDayInvalid != b.qualifiedDayInvalid || a.invalidSupport != b.invalidSupport || a.tqIntentAvailable != b.tqIntentAvailable || len(a.rows) != len(b.rows) {
+	if a.at != b.at || a.mode != b.mode || a.reason != b.reason || a.population != b.population || a.qualification != b.qualification || a.features != b.features || a.uncertainty != b.uncertainty || a.populationTransition != b.populationTransition || a.totalPassers != b.totalPassers || a.knownRankableCount != b.knownRankableCount || a.dayInvalidRankable != b.dayInvalidRankable || a.qualifiedDayInvalid != b.qualifiedDayInvalid || a.invalidSupport != b.invalidSupport || a.tqIntentAvailable != b.tqIntentAvailable || len(a.rows) != len(b.rows) {
 		return false
 	}
 	for i := range a.rows {

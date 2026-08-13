@@ -121,7 +121,8 @@ const (
 	TerminalUnsupportedMessage           TerminalReason = "unsupported_message"
 	TerminalHeartbeatFailureUnclassified TerminalReason = "heartbeat_failure_unclassified"
 	TerminalFrameOversize                TerminalReason = "frame_oversize"
-	TerminalFrameCapacity                TerminalReason = "frame_capacity"
+	TerminalFrameSlotCapacity            TerminalReason = "frame_slot_capacity"
+	TerminalFrameByteCapacity            TerminalReason = "frame_byte_capacity"
 	TerminalReceiptRegression            TerminalReason = "receipt_regression"
 	TerminalStatusAmbiguous              TerminalReason = "status_ambiguous"
 	TerminalIngressAmbiguity             TerminalReason = "ingress_ambiguity"
@@ -148,6 +149,16 @@ type TerminalResult struct {
 	BindingIdentity            string
 	ConnectionEpoch            uint64
 	Position                   engine.LivePosition
+	CausalPosition             engine.LivePosition
+	PositionApplicable         bool
+	ArrayIndexApplicable       bool
+	QueueAtCause               LiveQueueAccounting
+	AdapterAtCause             AdapterAccounting
+	CauseAccountingCapturedAt  time.Time
+	IncomingFrameBytes         int
+	ActiveDeliveryKind         DeliveryKind
+	ActiveDeliveryStartedAt    time.Time
+	ActiveDeliveryAgeAtCause   time.Duration
 	CompletedAt                time.Time
 	Source                     TerminalSource
 	Reason                     TerminalReason
@@ -183,6 +194,21 @@ type EngineDeliveryResult struct {
 	LiveCoverageDisposition engine.LiveCoverageFenceDisposition
 	TQDisposition           engine.Disposition
 	ConsumerDeferred        bool
+	// Terminal is the adapter-owned immutable first terminal cause carried
+	// alongside (never inferred from) the engine's lifecycle disposition.
+	Terminal *TerminalResult
+	// PriorEngine is the engine publication immediately before a terminal
+	// control is admitted. Together with the post-completion publication it
+	// identifies the first invalid transition without inferring adapter cause.
+	PriorEngine           engine.OperationalView
+	PriorEngineApplicable bool
+	PriorPublication      engine.ReplayPublicationView
+}
+
+type ActiveDeliveryDiagnostic struct {
+	Kind      DeliveryKind
+	StartedAt time.Time
+	Age       time.Duration
 }
 
 type AdapterAccounting struct {
@@ -339,12 +365,21 @@ type pendingCommand struct {
 }
 
 type terminalCause struct {
-	source           TerminalSource
-	reason           TerminalReason
-	fenceAfter       uint64
-	ingressIntegrity bool
-	at               time.Time
-	closeCause       CloseCause
+	source                                   TerminalSource
+	reason                                   TerminalReason
+	fenceAfter                               uint64
+	ingressIntegrity                         bool
+	at                                       time.Time
+	closeCause                               CloseCause
+	position                                 engine.LivePosition
+	positionApplicable, arrayIndexApplicable bool
+	queueAtCause                             LiveQueueAccounting
+	adapterAtCause                           AdapterAccounting
+	accountingCapturedAt                     time.Time
+	incomingFrameBytes                       int
+	activeDeliveryKind                       DeliveryKind
+	activeDeliveryStartedAt                  time.Time
+	activeDeliveryAgeAtCause                 time.Duration
 }
 
 type LiveAttempt struct {
@@ -378,6 +413,9 @@ type LiveAttempt struct {
 	closeCommand                  *CloseEpochCommand
 	terminalDelivery              AdapterDelivery
 	terminalReturned              bool
+	activeDeliveryKind            DeliveryKind
+	activeDeliveryStartedAt       time.Time
+	beforeEngineDelivery          func(AdapterDelivery)
 	captureToken                  uint64
 	handshakeDone                 chan struct{}
 	handshakeDeliveries           []AdapterDelivery
@@ -398,6 +436,19 @@ func (a *LiveAttempt) TQNormalizationAccounting() TQNormalizationAccounting {
 	a.tqAccountingMu.Lock()
 	defer a.tqAccountingMu.Unlock()
 	return a.tqAccounting
+}
+
+func (a *LiveAttempt) ActiveDeliveryDiagnostic() ActiveDeliveryDiagnostic {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	result := ActiveDeliveryDiagnostic{Kind: a.activeDeliveryKind, StartedAt: a.activeDeliveryStartedAt}
+	if !result.StartedAt.IsZero() {
+		result.Age = time.Since(result.StartedAt)
+		if result.Age < 0 {
+			result.Age = 0
+		}
+	}
+	return result
 }
 
 func (a *LiveAttempt) accountTQ(normalized bool) {
@@ -585,24 +636,40 @@ func (a *LiveAttempt) readWorker() {
 			if a.ctx.Err() != nil {
 				reason = TerminalContextCanceled
 			}
-			a.triggerTerminal(TerminalReader, reason, 0, false)
+			position, applicable := a.queue.lastRawPosition(a.epoch)
+			a.triggerTerminalAt(TerminalReader, reason, 0, false, position, applicable, false)
 			return
 		}
 		if kind != socketMessageText && kind != socketMessageBinary {
-			a.queue.tryEnqueue(a.epoch, kind, a.adapter.now(), nil)
+			_, _, _ = a.queue.tryEnqueue(a.epoch, kind, a.adapter.now(), nil)
 			a.triggerTerminal(TerminalProtocol, TerminalUnsupportedMessage, 0, false)
 			return
 		}
 		receivedAt := a.adapter.now()
-		_, reason := a.queue.tryEnqueue(a.epoch, kind, receivedAt, data)
+		// The attempt lock is the active-delivery ownership boundary. Hold it
+		// across queue admission and capacity-cause construction so a concurrent
+		// engine delivery cannot finish or change between rejection and capture.
+		a.mu.Lock()
+		_, reason, accountingAtCause := a.queue.tryEnqueue(a.epoch, kind, receivedAt, data)
+		if reason == FrameRejectedSlotCapacity || reason == FrameRejectedByteCapacity {
+			position, applicable := a.queue.lastRawPosition(a.epoch)
+			terminalReason := TerminalFrameSlotCapacity
+			if reason == FrameRejectedByteCapacity {
+				terminalReason = TerminalFrameByteCapacity
+			}
+			cause := a.reserveCapacityTerminalLocked(terminalReason, len(data), position, applicable, accountingAtCause)
+			a.mu.Unlock()
+			a.completeReservedTerminal(cause)
+			return
+		}
+		a.mu.Unlock()
 		if reason != FrameAdmitted {
+			position, applicable := a.queue.lastRawPosition(a.epoch)
 			switch reason {
 			case FrameRejectedOversize:
-				a.triggerTerminal(TerminalProtocol, TerminalFrameOversize, 0, true)
-			case FrameRejectedCapacity:
-				a.triggerTerminal(TerminalProtocol, TerminalFrameCapacity, 0, true)
+				a.triggerTerminalAt(TerminalProtocol, TerminalFrameOversize, 0, true, position, applicable, false)
 			case FrameRejectedReceipt:
-				a.triggerTerminal(TerminalProtocol, TerminalReceiptRegression, 0, true)
+				a.triggerTerminalAt(TerminalProtocol, TerminalReceiptRegression, 0, true, position, applicable, false)
 			default:
 				if a.ctx.Err() == nil {
 					a.triggerTerminal(TerminalProtocol, TerminalContextCanceled, 0, false)
@@ -668,8 +735,8 @@ func (a *LiveAttempt) awaitHandshakeStatus(parent context.Context, status Status
 	_, extra := cursor.Next()
 	a.queue.complete(frame, false)
 	if !first || extra || result.Kind != LiveResultStatus || !cursor.Accounting().Reconciles() {
-		a.triggerTerminal(TerminalProtocol, TerminalStatusAmbiguous, frame.sequence, true)
 		position := engine.LivePosition{ConnectionEpoch: a.epoch, FrameSequence: frame.sequence}
+		a.triggerTerminalAt(TerminalProtocol, TerminalStatusAmbiguous, frame.sequence, true, position, true, false)
 		return controlDelivery(a.binding.Identity(), a.epoch, engine.IngressIntegrityFailure, 0, engine.ControlAmbiguous, position, frame.receivedAt), errTransportFailed
 	}
 	outcome := engine.ControlSucceeded
@@ -680,7 +747,7 @@ func (a *LiveAttempt) awaitHandshakeStatus(parent context.Context, status Status
 	}
 	delivery := controlDelivery(a.binding.Identity(), a.epoch, kind, a.openToken, outcome, result.Position, result.Status.ReceiptTime)
 	if outcome != engine.ControlSucceeded {
-		a.triggerTerminal(TerminalProtocol, TerminalStatusAmbiguous, frame.sequence, true)
+		a.triggerTerminalAt(TerminalProtocol, TerminalStatusAmbiguous, frame.sequence, true, result.Position, true, true)
 		return delivery, errTransportFailed
 	}
 	return delivery, nil
@@ -961,6 +1028,25 @@ func (a *LiveAttempt) DeliverNextToEngine(ctx context.Context, state *engine.Eng
 	if !ok {
 		return EngineDeliveryResult{}, false, nil
 	}
+	a.mu.Lock()
+	a.activeDeliveryKind, a.activeDeliveryStartedAt = delivery.Kind, time.Now()
+	if delivery.Kind == DeliveryAggregateIngressFence {
+		delivery.AggregateIngressFence.deliveryStartedAt = a.activeDeliveryStartedAt
+	}
+	beforeEngineDelivery := a.beforeEngineDelivery
+	a.mu.Unlock()
+	if beforeEngineDelivery != nil {
+		beforeEngineDelivery(delivery)
+	}
+	terminalObservationPending := false
+	defer func() {
+		if terminalObservationPending {
+			return
+		}
+		a.mu.Lock()
+		a.activeDeliveryKind, a.activeDeliveryStartedAt = "", time.Time{}
+		a.mu.Unlock()
+	}()
 	// Once dequeue succeeds, ownership has transferred. A separate internal
 	// lifetime guarantees admission and completion; caller cancellation may
 	// stop waiting for the next item but cannot drop this causal predecessor.
@@ -969,7 +1055,22 @@ func (a *LiveAttempt) DeliverNextToEngine(ctx context.Context, state *engine.Eng
 	trace.WithRegion(context.Background(), "engine_owner_wait", func() {
 		result, err = DeliverToEngine(context.Background(), state, delivery)
 	})
+	if result.Terminal != nil {
+		terminalObservationPending = true
+	}
 	return result, true, err
+}
+
+// AcknowledgeTerminalObservation closes the diagnostic interval only after
+// operations has latched the immutable adapter terminal. It changes no queue,
+// engine, or lifecycle state.
+func (a *LiveAttempt) AcknowledgeTerminalObservation() {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	a.activeDeliveryKind, a.activeDeliveryStartedAt = "", time.Time{}
+	a.mu.Unlock()
 }
 
 // nextForProof preserves the accepted C5 adapter-boundary tests without
@@ -996,12 +1097,16 @@ func (a *LiveAttempt) mapResult(result LiveResult, frame queuedLiveFrame) (Adapt
 		return AdapterDelivery{Kind: DeliveryNormalizationDrop, Position: result.Position, Rejection: result.Rejection}, true
 	case LiveResultAmbiguous:
 		delivery := controlDelivery(a.binding.Identity(), a.epoch, engine.IngressIntegrityFailure, 0, engine.ControlAmbiguous, result.Position, frame.receivedAt)
-		a.triggerTerminal(TerminalProtocol, TerminalIngressAmbiguity, frame.sequence, true)
+		if terminal := a.triggerTerminalAt(TerminalProtocol, TerminalIngressAmbiguity, frame.sequence, true, result.Position, true, true); terminal != nil {
+			delivery.Terminal = *terminal
+		}
 		return delivery, true
 	case LiveResultStatus:
 		if pending == nil {
 			delivery := controlDelivery(a.binding.Identity(), a.epoch, engine.IngressIntegrityFailure, 0, engine.ControlAmbiguous, result.Position, result.Status.ReceiptTime)
-			a.triggerTerminal(TerminalProtocol, TerminalStatusAmbiguous, frame.sequence, true)
+			if terminal := a.triggerTerminalAt(TerminalProtocol, TerminalStatusAmbiguous, frame.sequence, true, result.Position, true, true); terminal != nil {
+				delivery.Terminal = *terminal
+			}
 			return delivery, true
 		}
 		<-pending.writeDone
@@ -1072,14 +1177,74 @@ func (a *LiveAttempt) detachAndAccountPending(pending *pendingCommand, outcome e
 }
 
 func (a *LiveAttempt) triggerTerminal(source TerminalSource, reason TerminalReason, fenceAfter uint64, ingress bool) {
+	a.triggerTerminalAt(source, reason, fenceAfter, ingress, engine.LivePosition{}, false, false)
+}
+
+func (a *LiveAttempt) triggerTerminalAt(source TerminalSource, reason TerminalReason, fenceAfter uint64, ingress bool, position engine.LivePosition, positionApplicable, arrayIndexApplicable bool) *TerminalResult {
+	return a.triggerTerminalAtWithCapacity(source, reason, fenceAfter, ingress, position, positionApplicable, arrayIndexApplicable, 0, nil)
+}
+
+// reserveCapacityTerminalLocked requires a.mu. The read worker uses it while
+// still holding the same lock that covered queue rejection, making the active
+// engine delivery fields exact at the capacity-cause linearization point.
+func (a *LiveAttempt) reserveCapacityTerminalLocked(reason TerminalReason, incomingFrameBytes int, position engine.LivePosition, positionApplicable bool, queueAtCause LiveQueueAccounting) *terminalCause {
+	return a.reserveTerminalCauseLocked(TerminalProtocol, reason, 0, true, position, positionApplicable, false, incomingFrameBytes, &queueAtCause)
+}
+
+func (a *LiveAttempt) triggerTerminalAtWithCapacity(source TerminalSource, reason TerminalReason, fenceAfter uint64, ingress bool, position engine.LivePosition, positionApplicable, arrayIndexApplicable bool, incomingFrameBytes int, queueAtCause *LiveQueueAccounting) *TerminalResult {
 	a.mu.Lock()
+	cause := a.reserveTerminalCauseLocked(source, reason, fenceAfter, ingress, position, positionApplicable, arrayIndexApplicable, incomingFrameBytes, queueAtCause)
+	a.mu.Unlock()
+	return a.completeReservedTerminal(cause)
+}
+
+func (a *LiveAttempt) reserveTerminalCauseLocked(source TerminalSource, reason TerminalReason, fenceAfter uint64, ingress bool, position engine.LivePosition, positionApplicable, arrayIndexApplicable bool, incomingFrameBytes int, queueAtCause *LiveQueueAccounting) *terminalCause {
 	if a.terminal != nil || a.finished {
-		a.mu.Unlock()
-		return
+		return nil
 	}
-	cause := &terminalCause{source: source, reason: reason, fenceAfter: fenceAfter, ingressIntegrity: ingress, at: a.adapter.now()}
+	cause := &terminalCause{source: source, reason: reason, fenceAfter: fenceAfter, ingressIntegrity: ingress, at: a.adapter.now(),
+		position: position, positionApplicable: positionApplicable, arrayIndexApplicable: arrayIndexApplicable,
+		incomingFrameBytes: incomingFrameBytes, activeDeliveryKind: a.activeDeliveryKind, activeDeliveryStartedAt: a.activeDeliveryStartedAt}
+	if !cause.activeDeliveryStartedAt.IsZero() {
+		cause.activeDeliveryAgeAtCause = time.Since(cause.activeDeliveryStartedAt)
+		if cause.activeDeliveryAgeAtCause < 0 {
+			cause.activeDeliveryAgeAtCause = 0
+		}
+	}
+	// Each accounting family is internally coherent under its owner's lock.
+	// Capture both before cancellation and cleanup mutate either family.
+	if queueAtCause != nil {
+		cause.queueAtCause = *queueAtCause
+	} else {
+		cause.queueAtCause = a.queue.snapshot()
+	}
+	// Reserve the immutable first cause before releasing the attempt owner.
+	// Cleanup does not start until the adapter owner's coherent accounting is
+	// captured, so neither accounting family is sampled after cleanup mutation.
+	a.terminal = cause
+	return cause
+}
+
+func (a *LiveAttempt) completeReservedTerminal(cause *terminalCause) *TerminalResult {
+	if cause == nil {
+		return nil
+	}
+	cause.adapterAtCause = a.adapter.Accounting()
+	cause.accountingCapturedAt = a.adapter.now()
+	a.mu.Lock()
 	a.beginTerminalLocked(cause)
 	a.mu.Unlock()
+	terminal := terminalResultAtCause(a, cause)
+	return &terminal
+}
+
+func terminalResultAtCause(a *LiveAttempt, cause *terminalCause) TerminalResult {
+	return TerminalResult{BindingIdentity: a.binding.Identity(), ConnectionEpoch: a.epoch,
+		CausalPosition: cause.position, PositionApplicable: cause.positionApplicable, ArrayIndexApplicable: cause.arrayIndexApplicable,
+		QueueAtCause: cause.queueAtCause, AdapterAtCause: cause.adapterAtCause, CauseAccountingCapturedAt: cause.accountingCapturedAt,
+		IncomingFrameBytes: cause.incomingFrameBytes, ActiveDeliveryKind: cause.activeDeliveryKind,
+		ActiveDeliveryStartedAt: cause.activeDeliveryStartedAt, ActiveDeliveryAgeAtCause: cause.activeDeliveryAgeAtCause,
+		CompletedAt: cause.at, Source: cause.source, Reason: cause.reason, CloseCause: cause.closeCause}
 }
 
 func (a *LiveAttempt) beginTerminalLocked(cause *terminalCause) {
@@ -1170,7 +1335,8 @@ func (a *LiveAttempt) cleanupTerminal(cause *terminalCause) {
 	a.adapter.mu.Unlock()
 	accounting := a.queue.snapshot()
 	position := engine.LivePosition{ConnectionEpoch: a.epoch, FrameSequence: marker.sequence}
-	terminal := TerminalResult{BindingIdentity: a.binding.Identity(), ConnectionEpoch: a.epoch, Position: position, CompletedAt: cause.at, Source: cause.source, Reason: cause.reason, CloseCause: cause.closeCause, FramesFenced: accounting.FramesFenced}
+	terminal := terminalResultAtCause(a, cause)
+	terminal.Position, terminal.FramesFenced = position, accounting.FramesFenced
 	if pending != nil {
 		terminal.PendingCommandToken = pending.token
 		terminal.PendingExpectedStatusCount = pending.expectedCount
@@ -1227,6 +1393,25 @@ func DeliverToEngine(ctx context.Context, state *engine.Engine, delivery Adapter
 	}
 	switch delivery.Kind {
 	case DeliveryControl, DeliveryTerminal:
+		priorEngine := engine.OperationalView{}
+		priorPublication := engine.ReplayPublicationView{}
+		priorEngineApplicable := false
+		if delivery.Terminal.Reason != "" {
+			prior := state.ObserveSnapshot()
+			priorEngine = prior.Operational
+			priorPublication = prior.Publication
+			priorEngineApplicable = true
+		}
+		terminalResult := func(result EngineDeliveryResult) EngineDeliveryResult {
+			if delivery.Terminal.Reason != "" {
+				terminal := delivery.Terminal
+				result.Terminal = &terminal
+				result.PriorEngine = priorEngine
+				result.PriorEngineApplicable = priorEngineApplicable
+				result.PriorPublication = priorPublication
+			}
+			return result
+		}
 		if (delivery.Control.Kind == engine.TradeQuoteSubscriptionResult ||
 			delivery.Control.Kind == engine.TradeQuoteCommandWriteResult && delivery.Control.Outcome != engine.ControlSucceeded) && len(delivery.TQSymbols) == 1 {
 			input, inputErr := engine.NewTQCommandResultInput(delivery.tqCommand, delivery.Control.Position, delivery.Control.ReceiptTime, delivery.Control.Outcome)
@@ -1235,7 +1420,7 @@ func DeliverToEngine(ctx context.Context, state *engine.Engine, delivery Adapter
 			}
 			if inputErr == nil {
 				admission, completion := state.AdmitTQCommandResult(ctx, input)
-				result := EngineDeliveryResult{Admission: admission}
+				result := terminalResult(EngineDeliveryResult{Admission: admission})
 				if admission != engine.AdmissionAdmitted || completion == nil {
 					return result, nil
 				}
@@ -1248,7 +1433,7 @@ func DeliverToEngine(ctx context.Context, state *engine.Engine, delivery Adapter
 			}
 		}
 		admission, completion := state.AdmitConnectionControl(ctx, delivery.Control)
-		result := EngineDeliveryResult{Admission: admission}
+		result := terminalResult(EngineDeliveryResult{Admission: admission})
 		if admission != engine.AdmissionAdmitted || completion == nil {
 			return result, nil
 		}

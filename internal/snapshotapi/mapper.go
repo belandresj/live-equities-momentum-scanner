@@ -161,13 +161,17 @@ func mapRanking(value engine.ReplayEvaluationView) Ranking {
 }
 
 func mapAccounting(value engine.ReplayEvaluationView) Accounting {
-	p, q, u := value.Population, value.Qualification, value.Uncertainty
+	p, q, u, d := value.Population, value.Qualification, value.Uncertainty, value.PopulationTransition
 	return Accounting{
 		Population: PopulationAccounting{UniverseTotal: p.UniverseTotal, ValidPriorClose: p.ValidPriorClose, InvalidOrMissingPriorClose: p.InvalidOrMissingPriorClose,
 			TrustedRankableMark: p.TrustedRankableMark, TrustedBelowPriceMark: p.TrustedBelowPriceMark, NoPrintThroughT: p.NoPrintThroughT,
 			InvalidMark: p.InvalidMark, UnknownDueFailureOrFence: p.UnknownDueFailureOrFence, CoveredPopulation: p.CoveredPopulation, UnresolvedPopulation: p.UnresolvedPopulation},
 		Qualification: QualificationAccounting{NotYetPassed: q.NotYetPassed, Provisional: q.Provisional, Finalized: q.Finalized, Unresolved: q.Unresolved},
 		Uncertainty:   UncertaintyAccounting{BootstrapOrigin: u.BootstrapOrigin, PostBootstrapGap: u.PostBootstrapGap, LocalInvalid: u.LocalInvalid},
+		PopulationTransitionDiagnostic: PopulationTransitionDiagnostic{BootstrapUnknown: d.BootstrapUnknown, TrustedByLaterLiveMark: d.TrustedByLaterLiveMark,
+			NoLaterEligibleMark: d.NoLaterEligibleMark, LatestMarkNotLiveAuthority: d.LatestMarkNotLiveAuthority,
+			NoStrictlyOlderLocalizedConflict: d.NoStrictlyOlderLocalizedConflict, ConflictAtOrAfterMark: d.ConflictAtOrAfterMark,
+			InvalidAtOrAfterMark: d.InvalidAtOrAfterMark, IncompletePostMarkCoverage: d.IncompletePostMarkCoverage},
 	}
 }
 
@@ -195,9 +199,22 @@ func mapTQ(value engine.TQView) TQ {
 }
 
 func mapCheckpoint(installed bool, metrics operations.Metrics) Checkpoint {
-	a := metrics.Checkpoint
-	return Checkpoint{Installed: installed, Submitted: decimal(a.Submitted), InProgress: decimal(a.InProgress), Pending: decimal(a.Pending),
-		Completed: decimal(a.Completed), Failed: decimal(a.Failed), Canceled: decimal(a.Canceled), Superseded: decimal(a.Superseded)}
+	w, e := metrics.Checkpoint, metrics.CheckpointEngine
+	age := time.Duration(0)
+	if !e.LastSuccessfulT0.IsZero() && metrics.SampledAt.After(e.LastSuccessfulT0) {
+		age = metrics.SampledAt.Sub(e.LastSuccessfulT0)
+	}
+	return Checkpoint{Installed: installed, Eligible: decimal(e.Eligible), PressureDeferred: decimal(e.PressureDeferred),
+		ProjectionStarted: decimal(e.ProjectionStarted), ProjectionInProgress: decimal(e.ProjectionInProgress), Projected: decimal(e.Projected), ProjectionRejected: decimal(e.ProjectionRejected),
+		SubmitRejected: decimal(e.SubmitRejected), Submitted: decimal(e.Submitted), Outstanding: decimal(e.Outstanding),
+		InProgress: decimal(w.InProgress), Pending: decimal(w.Pending), Completed: decimal(e.Completed), Failed: decimal(e.Failed),
+		Canceled: decimal(e.Canceled), Superseded: decimal(e.Superseded), LastAttemptedT0: optionalNonzeroTime(e.LastAttemptedT0),
+		LastProjectedT0: optionalNonzeroTime(e.LastProjectedT0), LastSubmittedT0: optionalNonzeroTime(e.LastSubmittedT0),
+		LastSuccessfulT0: optionalNonzeroTime(e.LastSuccessfulT0), UsableAgeMS: durationMilliseconds(age),
+		ProjectionTotalMS: durationMilliseconds(e.LastProjectionTotal), ProjectionLockMS: durationMilliseconds(e.LastProjectionLock),
+		ArtifactBytes: decimal(uint64(max(0, w.LastArtifactBytes))), WriteMS: durationMilliseconds(w.LastWriteDuration),
+		EncodeMS: durationMilliseconds(w.LastEncodeDuration), ReopenValidationMS: durationMilliseconds(w.LastReopenValidationDuration),
+		LastFailureStep: string(w.LastFailureStep), LastProjectionFailure: e.LastProjectionFailure, LastSubmitFailure: e.LastSubmitFailure}
 }
 
 func mapOperations(metrics operations.Metrics, operational engine.OperationalView) Operations {
@@ -267,6 +284,7 @@ func mapRate(status engine.TQFieldStatus, reason string, value float64) RateMeas
 
 func validateSnapshot(value Snapshot) error {
 	p, w, hr, tq, commands, checkpoint := value.Accounting.Population, value.Recovery.Work, value.Recovery.Rows, value.TQ.Facts, value.TQ.Commands, value.Checkpoint
+	d := value.Accounting.PopulationTransitionDiagnostic
 	if value.SchemaVersion != SchemaVersion {
 		return rejectMapping("schema_version")
 	}
@@ -295,7 +313,7 @@ func validateSnapshot(value Snapshot) error {
 	if !oneOf(value.Status.ReadinessReason, "", "runtime_unavailable", "binding_mismatch", "not_live_mode", "lifecycle_not_ready", "suppressed", "aggregate_unacknowledged", "fence_pending", "ranking_noncurrent", "watermark_missing", "watermark_stale", "accounting_invalid") {
 		return rejectMapping("readiness_reason")
 	}
-	if !oneOf(value.Ranking.Mode, "unavailable", "qualified_current", "degraded_bootstrap", "stale", "suppressed") {
+	if !oneOf(value.Ranking.Mode, "unavailable", "qualified_current", "degraded_bootstrap", "degraded_current", "stale", "suppressed") {
 		return rejectMapping("ranking_mode")
 	}
 	if !oneOf(value.Ranking.Reason, "", "no_committed_watermark", "no_trusted_marks", "incomplete_population", "qualification_incomplete", "global_suppression", "replay_warming") {
@@ -309,7 +327,9 @@ func validateSnapshot(value Snapshot) error {
 		return rejectMapping("tq_pressure_consistency")
 	}
 	if !validOptionalTimestamp(value.Publication.CommittedT) || !validOptionalTimestamp(value.Recovery.Start) || !validOptionalTimestamp(value.Recovery.End) ||
-		!validOptionalTimestamp(value.Recovery.SupportedThrough) || !validOptionalTimestamp(value.Publication.HydrationFence.SupportedThrough) {
+		!validOptionalTimestamp(value.Recovery.SupportedThrough) || !validOptionalTimestamp(value.Publication.HydrationFence.SupportedThrough) ||
+		!validOptionalTimestamp(checkpoint.LastAttemptedT0) || !validOptionalTimestamp(checkpoint.LastProjectedT0) ||
+		!validOptionalTimestamp(checkpoint.LastSubmittedT0) || !validOptionalTimestamp(checkpoint.LastSuccessfulT0) {
 		return rejectMapping("optional_time")
 	}
 	if (value.Publication.CommittedT == nil) != (value.Status.WatermarkLagMS == nil) ||
@@ -329,6 +349,11 @@ func validateSnapshot(value Snapshot) error {
 	if !sumUint64Equals(p.ValidPriorClose, p.TrustedRankableMark, p.TrustedBelowPriceMark, p.NoPrintThroughT, p.InvalidMark, p.UnknownDueFailureOrFence) {
 		return rejectMapping("population_mark_identity")
 	}
+	if !sumUint64Equals(d.BootstrapUnknown, d.TrustedByLaterLiveMark, d.NoLaterEligibleMark, d.LatestMarkNotLiveAuthority,
+		d.NoStrictlyOlderLocalizedConflict, d.ConflictAtOrAfterMark, d.InvalidAtOrAfterMark, d.IncompletePostMarkCoverage) ||
+		d.TrustedByLaterLiveMark > p.TrustedRankableMark+p.TrustedBelowPriceMark || d.BootstrapUnknown-d.TrustedByLaterLiveMark > p.UnknownDueFailureOrFence {
+		return rejectMapping("population_transition_diagnostic_identity")
+	}
 	if !sumDecimalEquals(w.Planned, w.Open, w.CompletedValue, w.CompletedEmpty, w.Failed, w.Canceled, w.Fenced) {
 		return rejectMapping("recovery_work_identity")
 	}
@@ -341,8 +366,20 @@ func validateSnapshot(value Snapshot) error {
 	if !sumDecimalEquals(commands.Issued, commands.Pending, commands.Acknowledged, commands.Failed, commands.Fenced) {
 		return rejectMapping("tq_command_identity")
 	}
-	if !sumDecimalEquals(checkpoint.Submitted, checkpoint.InProgress, checkpoint.Pending, checkpoint.Completed, checkpoint.Failed, checkpoint.Canceled, checkpoint.Superseded) {
+	if !sumDecimalEquals(checkpoint.Submitted, checkpoint.Outstanding, checkpoint.Completed, checkpoint.Failed, checkpoint.Canceled, checkpoint.Superseded) {
 		return rejectMapping("checkpoint_identity")
+	}
+	if !sumDecimalEquals(checkpoint.Eligible, checkpoint.PressureDeferred, checkpoint.ProjectionStarted) ||
+		!sumDecimalEquals(checkpoint.ProjectionStarted, checkpoint.ProjectionInProgress, checkpoint.Projected, checkpoint.ProjectionRejected) ||
+		!sumDecimalEquals(checkpoint.Projected, checkpoint.Submitted, checkpoint.SubmitRejected) {
+		return rejectMapping("checkpoint_projection_identity")
+	}
+	if checkpoint.ProjectionInProgress != "0" && checkpoint.ProjectionInProgress != "1" {
+		return rejectMapping("checkpoint_projection_in_progress")
+	}
+	if !oneOf(checkpoint.LastProjectionFailure, "", "sequence_exhausted", "ownership_invalidated", "projection_invariant", "pre_t0_mutation", "sequence_changed", "shutdown") ||
+		!oneOf(checkpoint.LastSubmitFailure, "", "request_invalid", "writer_rejected") {
+		return rejectMapping("checkpoint_failure_reason")
 	}
 	if !validReplaySnapshot(value) {
 		return rejectMapping("replay_consistency")
@@ -352,10 +389,13 @@ func validateSnapshot(value Snapshot) error {
 		value.Ranking.KnownRankableCount, value.Ranking.DayInvalidRankable, value.Ranking.QualifiedDayInvalid,
 		value.Accounting.Qualification.NotYetPassed, value.Accounting.Qualification.Provisional, value.Accounting.Qualification.Finalized, value.Accounting.Qualification.Unresolved,
 		value.Accounting.Uncertainty.BootstrapOrigin, value.Accounting.Uncertainty.PostBootstrapGap, value.Accounting.Uncertainty.LocalInvalid,
+		d.BootstrapUnknown, d.TrustedByLaterLiveMark, d.NoLaterEligibleMark, d.LatestMarkNotLiveAuthority, d.NoStrictlyOlderLocalizedConflict,
+		d.ConflictAtOrAfterMark, d.InvalidAtOrAfterMark, d.IncompletePostMarkCoverage,
 		value.TQ.KnownPresent, value.TQ.KnownAbsent, value.TQ.Unknown, value.Operations.QueueCapacityFrames,
 		value.TQ.PressureMisses, value.TQ.RetainedTrades, value.TQ.RetainedQuotes, value.TQ.RetainedFingerprints,
 		value.Operations.QueueCurrentFrames, value.Operations.QueueHighFrames, value.Operations.QueueCurrentBytes, value.Operations.QueueHighBytes,
-		value.Operations.MeanProcessingDelayMS, value.Operations.MaxProcessingDelayMS, value.Operations.MaxProcessingDelayOneSecondMS, value.Operations.Goroutines} {
+		value.Operations.MeanProcessingDelayMS, value.Operations.MaxProcessingDelayMS, value.Operations.MaxProcessingDelayOneSecondMS, value.Operations.Goroutines,
+		checkpoint.UsableAgeMS, checkpoint.ProjectionTotalMS, checkpoint.ProjectionLockMS, checkpoint.WriteMS, checkpoint.EncodeMS, checkpoint.ReopenValidationMS} {
 		if count > maximumExactJSONInteger {
 			return rejectMapping("exact_json_integer_bound")
 		}

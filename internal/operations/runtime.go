@@ -22,7 +22,7 @@ type Config struct {
 }
 
 func DefaultConfig() Config {
-	return Config{EngineCapacity: 8192, RequiredReserve: 128, RecoveryAttempts: 3, EvaluationDelay: 4 * time.Second, ReadinessTolerance: 2 * time.Second, SampleCadence: time.Second, ConnectionAttemptDeadline: 60 * time.Second, ShutdownDeadline: 10 * time.Second}
+	return Config{EngineCapacity: 8192, RequiredReserve: 128, RecoveryAttempts: 5, EvaluationDelay: 4 * time.Second, ReadinessTolerance: 2 * time.Second, SampleCadence: time.Second, ConnectionAttemptDeadline: 60 * time.Second, ShutdownDeadline: 10 * time.Second}
 }
 
 func (c Config) valid() bool {
@@ -41,6 +41,7 @@ type Runtime struct {
 	processLive               atomic.Bool
 	joined                    atomic.Bool
 	writer                    *checkpoint.Writer
+	checkpointResultDone      chan struct{}
 	metricsMu                 sync.Mutex
 	liveMu                    sync.Mutex
 	shutdownMu                sync.Mutex
@@ -64,8 +65,16 @@ type Runtime struct {
 	metricsSnapshot           func() Metrics
 	timerCancel               context.CancelFunc
 	timerDone                 chan struct{}
+	ingressSamplerCancel      context.CancelFunc
+	ingressSamplerDone        chan struct{}
 	automaticTimerObserverMu  sync.RWMutex
 	automaticTimerObserver    func(automaticTimerObservation)
+	ingressIncident           ingressIncidentLatch
+	ingressHistory            ingressDiagnosticHistory
+	// beforeHydrationPump is a package-private diagnostic-test seam. A nil
+	// hook is the complete production behavior; tests use it only to hold the
+	// consumer while exercising the fixed production queue ceiling.
+	beforeHydrationPump func(*massive.LiveAttempt)
 }
 
 // automaticTimerObservation is a package-private, read-only test seam for an
@@ -86,7 +95,11 @@ func NewWithCheckpoint(ctx context.Context, binding reference.Binding, config Co
 	if ctx == nil || binding.Identity() == "" || !config.valid() || clock == nil {
 		return nil, errors.New("invalid scanner runtime configuration")
 	}
-	owner, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: clock, Capacity: config.EngineCapacity, RequiredReserve: config.RequiredReserve, EvaluationDelay: &config.EvaluationDelay, CheckpointSubmitter: writer})
+	var submitter checkpoint.Submitter
+	if writer != nil {
+		submitter = writer
+	}
+	owner, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: clock, Capacity: config.EngineCapacity, RequiredReserve: config.RequiredReserve, EvaluationDelay: &config.EvaluationDelay, CheckpointSubmitter: submitter})
 	if err != nil {
 		return nil, err
 	}
@@ -111,10 +124,32 @@ func NewWithCheckpoint(ctx context.Context, binding reference.Binding, config Co
 		}
 	}
 	runtime.processLive.Store(true)
+	if writer != nil {
+		runtime.checkpointResultDone = make(chan struct{})
+		go runtime.runCheckpointResults()
+	}
 	timerCtx, cancelTimer := context.WithCancel(context.Background())
 	runtime.timerCancel, runtime.timerDone = cancelTimer, make(chan struct{})
 	go runtime.runTimer(timerCtx)
+	ingressSamplerCtx, cancelIngressSampler := context.WithCancel(context.Background())
+	runtime.ingressSamplerCancel, runtime.ingressSamplerDone = cancelIngressSampler, make(chan struct{})
+	go runtime.runIngressDiagnosticSampler(ingressSamplerCtx)
 	return runtime, nil
+}
+
+func (r *Runtime) runCheckpointResults() {
+	defer close(r.checkpointResultDone)
+	for {
+		result, err := r.writer.NextResult(context.Background())
+		if err != nil {
+			return
+		}
+		admission, completion := r.engine.AdmitCheckpointTerminal(context.Background(), result)
+		if admission != engine.AdmissionAdmitted || completion == nil {
+			continue
+		}
+		<-completion
+	}
 }
 
 func (r *Runtime) runTimer(ctx context.Context) {
@@ -141,6 +176,7 @@ func (r *Runtime) runTimer(ctx context.Context) {
 				return
 			case disposition := <-completion:
 				r.captureAutomaticTimerObservation(disposition)
+				r.recordEngineDispositionIncident(disposition.Code, disposition.Reason)
 				r.syncTQCommand(ctx)
 			}
 		case <-pressureTicker.C:
@@ -158,6 +194,67 @@ func (r *Runtime) runTimer(ctx context.Context) {
 				r.syncTQPressure(ctx)
 				r.syncTQCommand(ctx)
 			}
+		}
+	}
+}
+
+func (r *Runtime) recordEngineTransitionIncident(result massive.EngineDeliveryResult) {
+	switch {
+	case result.AggregateDisposition.Code != "":
+		r.recordEngineDispositionIncident(result.AggregateDisposition.Code, result.AggregateDisposition.Reason)
+	case result.ControlDisposition.Code != "":
+		r.recordEngineDispositionIncident(result.ControlDisposition.Code, result.ControlDisposition.Reason)
+	case result.HydrationDisposition.Code != "":
+		r.recordEngineDispositionIncident(result.HydrationDisposition.Code, result.HydrationDisposition.Reason)
+	case result.LiveCoverageDisposition.Code != "":
+		r.recordEngineDispositionIncident(result.LiveCoverageDisposition.Code, result.LiveCoverageDisposition.Reason)
+	case result.TQDisposition.Code != "":
+		r.recordEngineDispositionIncident(result.TQDisposition.Code, result.TQDisposition.Reason)
+	}
+}
+
+func (r *Runtime) recordEngineDispositionIncident(code engine.DispositionCode, reason engine.DispositionReason) {
+	if r == nil || !engineTerminalDisposition(code) {
+		return
+	}
+	view := r.engine.ObserveOperational()
+	metrics := r.Metrics()
+	identities, count := ingressIdentityResults(metrics)
+	history, historyCount := r.ingressHistory.snapshot()
+	projection, projectionInvalid := lastCoherentProjection(r.engine.ObserveLastCoherentPublication())
+	r.ingressIncident.set(IngressIncident{
+		Owner: IngressOwnerEngineTransition, Source: "engine_transition", Reason: string(code), Binding: r.binding.Identity(),
+		Epoch: view.Connection.Epoch, Lifecycle: view.Lifecycle, LifecycleReason: view.LifecycleReason, Suppression: view.Suppression,
+		Hydration: view.Hydration, Queue: metrics.LiveQueue, QueueHighFrames: metrics.QueueHighFrames, QueueHighBytes: metrics.QueueHighBytes,
+		Adapter: metrics.Adapter, PriorEngine: metrics.Engine, Engine: view, Identities: identities, IdentityCount: count,
+		History: history, HistoryCount: historyCount, FenceTiming: r.engine.ObserveFenceTiming(),
+		LastCoherentProjection: projection, LastCoherentProjectionInvalid: projectionInvalid,
+		CapturedAt: metrics.SampledAt, EngineCapturedAt: r.clock().UTC(),
+	})
+	_ = reason
+}
+
+func engineTerminalDisposition(code engine.DispositionCode) bool {
+	switch code {
+	case engine.DispositionClockRegression, engine.DispositionAggregateIntegrity, engine.DispositionPublicationIntegrity,
+		engine.DispositionAccountingIntegrity, engine.DispositionReplayFailed, engine.DispositionIngressIntegrity,
+		engine.DispositionHydrationIntegrity, engine.DispositionRecoveryExhausted, engine.DispositionSequenceExhausted:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *Runtime) runIngressDiagnosticSampler(ctx context.Context) {
+	defer close(r.ingressSamplerDone)
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			r.captureIngressDiagnosticSample()
 		}
 	}
 }
@@ -193,12 +290,14 @@ func (r *Runtime) syncTQPressure(ctx context.Context) {
 		return
 	}
 	metrics := r.metricsSnapshot()
-	if !metrics.LiveQueue.Reconciles() || !metrics.Adapter.Reconciles() {
+	if failedIdentity, failed := firstFailedIngressIdentity(metrics); failed {
+		prior := r.engine.ObserveSnapshot()
 		admission, completion := r.engine.AdmitOperationalIngressIntegrity(ctx)
 		if admission == engine.AdmissionAdmitted && completion != nil {
 			select {
 			case <-ctx.Done():
 			case <-completion:
+				r.recordRuntimeAccountingIncident(failedIdentity, metrics, prior.Publication)
 			}
 		}
 		return
@@ -230,6 +329,113 @@ func (r *Runtime) syncTQPressure(ctx context.Context) {
 	if attempt != nil {
 		attempt.SetTQShedding(r.engine.ObserveTQ().ShedTradesQuotes)
 	}
+}
+
+func (r *Runtime) recordRuntimeAccountingIncident(reason string, metrics Metrics, priorPublications ...engine.ReplayPublicationView) {
+	priorPublication := engine.ReplayPublicationView{}
+	if len(priorPublications) > 0 {
+		priorPublication = priorPublications[0]
+	}
+	view := r.engine.ObserveOperational()
+	identities, count := ingressIdentityResults(metrics)
+	history, historyCount := r.ingressHistory.snapshot()
+	projection, projectionInvalid := lastCoherentProjection(priorPublication)
+	r.ingressIncident.set(IngressIncident{
+		Owner: IngressOwnerRuntimeAccounting, Source: "sync_tq_pressure_accounting_guard", Reason: reason,
+		Binding: r.binding.Identity(), Epoch: view.Connection.Epoch, Lifecycle: view.Lifecycle,
+		LifecycleReason: view.LifecycleReason, Suppression: view.Suppression, Hydration: metrics.Engine.Hydration,
+		Queue: metrics.LiveQueue, QueueHighFrames: metrics.QueueHighFrames, QueueHighBytes: metrics.QueueHighBytes,
+		Adapter: metrics.Adapter, PriorEngine: metrics.Engine, Engine: view, Identities: identities,
+		IdentityCount: count, History: history, HistoryCount: historyCount,
+		FenceTiming: r.engine.ObserveFenceTiming(), LastCoherentProjection: projection, LastCoherentProjectionInvalid: projectionInvalid,
+		CapturedAt: metrics.SampledAt, EngineCapturedAt: r.clock().UTC(),
+	})
+}
+
+func (r *Runtime) recordAdapterTerminal(result massive.EngineDeliveryResult) {
+	if result.Terminal == nil {
+		return
+	}
+	terminal := *result.Terminal
+	if terminal.Reason == massive.TerminalCloseRequested || terminal.Reason == massive.TerminalContextCanceled {
+		return
+	}
+	view := r.engine.ObserveOperational()
+	metrics := Metrics{SampledAt: terminal.CauseAccountingCapturedAt, LiveQueue: terminal.QueueAtCause, Adapter: terminal.AdapterAtCause, Engine: result.PriorEngine}
+	metrics.Deliveries = r.deliveryCount.Load()
+	r.deliveryWindowMu.Lock()
+	metrics.MaxProcessingDelayOneSecond = time.Duration(r.deliveryOneSecondMaxNanos)
+	r.deliveryWindowMu.Unlock()
+	identities, count := ingressIdentityResults(metrics)
+	history, historyCount := r.ingressHistory.snapshot()
+	projection, projectionInvalid := lastCoherentProjection(result.PriorPublication)
+	r.ingressIncident.set(IngressIncident{
+		Owner: IngressOwnerAdapterTerminal, Source: string(terminal.Source), Reason: string(terminal.Reason),
+		Binding: terminal.BindingIdentity, Epoch: terminal.ConnectionEpoch, Position: terminal.CausalPosition,
+		PositionApplicable: terminal.PositionApplicable, ArrayIndexApplicable: terminal.ArrayIndexApplicable,
+		Lifecycle: view.Lifecycle, LifecycleReason: view.LifecycleReason, Suppression: view.Suppression,
+		Hydration: result.PriorEngine.Hydration, Queue: terminal.QueueAtCause, QueueHighFrames: terminal.QueueAtCause.HighFramesQueued, QueueHighBytes: terminal.QueueAtCause.HighQueuedBytes,
+		IncomingFrameBytes: terminal.IncomingFrameBytes, ActiveDeliveryKind: terminal.ActiveDeliveryKind,
+		ActiveDeliveryStartedAt: terminal.ActiveDeliveryStartedAt, ActiveDeliveryAgeAtCause: terminal.ActiveDeliveryAgeAtCause,
+		Adapter: terminal.AdapterAtCause, PriorEngine: result.PriorEngine, Engine: view,
+		Identities: identities, IdentityCount: count, History: history, HistoryCount: historyCount,
+		FenceTiming: r.engine.ObserveFenceTiming(), LastCoherentProjection: projection, LastCoherentProjectionInvalid: projectionInvalid,
+		CapturedAt: terminal.CauseAccountingCapturedAt, EngineCapturedAt: r.clock().UTC(),
+	})
+}
+
+func (r *Runtime) captureIngressDiagnosticSample() {
+	if r == nil {
+		return
+	}
+	metrics := r.Metrics()
+	r.metricsMu.Lock()
+	attempt := r.attempt
+	r.metricsMu.Unlock()
+	active := massive.ActiveDeliveryDiagnostic{}
+	if attempt != nil {
+		active = attempt.ActiveDeliveryDiagnostic()
+	}
+	r.ingressHistory.add(ingressDiagnosticSampleFromMetrics(metrics, active))
+}
+
+func ingressDiagnosticSampleFromMetrics(metrics Metrics, active massive.ActiveDeliveryDiagnostic) IngressDiagnosticSample {
+	q, h := metrics.LiveQueue, metrics.Engine.Hydration.Accounting
+	return IngressDiagnosticSample{
+		CapturedAt: metrics.SampledAt, FramesRead: q.FramesRead, FramesAdmitted: q.FramesAdmitted,
+		FramesDispositioned: q.FramesDispositioned, FramesFenced: q.FramesFenced,
+		FramesRejectedSlot: q.FramesRejectedSlotCapacity, FramesRejectedByte: q.FramesRejectedByteCapacity,
+		QueuedFrames: q.FramesQueued, ClassifyingFrames: q.FramesClassifying, HighFrames: q.HighFramesQueued,
+		QueuedBytes: q.QueuedBytes, HighBytes: q.HighQueuedBytes, CapacityFrames: q.CapacityFrames, CapacityBytes: q.CapacityBytes,
+		OldestFrameAge: q.OldestFrameAge, ActiveDeliveryKind: active.Kind, ActiveDeliveryAge: active.Age,
+		MaxDeliveryDelayOneSecond: metrics.MaxProcessingDelayOneSecond, Deliveries: metrics.Deliveries,
+		Lifecycle: metrics.Engine.Lifecycle, HydrationPlanned: h.Planned, HydrationOpen: h.Open,
+	}
+}
+
+func (r *Runtime) FirstIngressIncident() *IngressIncident {
+	if r == nil {
+		return nil
+	}
+	if current := r.ingressIncident.get(); current != nil {
+		return current
+	}
+	// DeliverToEngine suppresses before observeDelivery can latch the adapter's
+	// exact immutable terminal. Do not let a concurrent API snapshot replace
+	// that transport first cause with the engine consequence during this narrow
+	// interval; a later call supplies the direct-engine fallback if needed.
+	r.metricsMu.Lock()
+	attempt := r.attempt
+	r.metricsMu.Unlock()
+	if attempt != nil && attempt.ActiveDeliveryDiagnostic().Kind != "" {
+		return nil
+	}
+	view := r.engine.ObserveOperational()
+	if view.Lifecycle == "suppressed" {
+		publication := r.engine.ObserveSnapshot().Publication
+		r.recordEngineDispositionIncident(publication.LastDisposition, publication.DispositionReason)
+	}
+	return r.ingressIncident.get()
 }
 
 func defaultTQPressureSample(metrics Metrics) engine.TQPressureSample {
@@ -345,6 +551,16 @@ func (r *Runtime) Shutdown(ctx context.Context) error {
 			return errors.New("live adapter cleanup deadline exceeded")
 		}
 	}
+	if r.ingressSamplerCancel != nil {
+		r.ingressSamplerCancel()
+	}
+	if r.ingressSamplerDone != nil {
+		select {
+		case <-r.ingressSamplerDone:
+		case <-deadline.Done():
+			return errors.New("ingress diagnostic sampler shutdown deadline exceeded")
+		}
+	}
 	if r.timerCancel != nil {
 		r.timerCancel()
 	}
@@ -355,17 +571,20 @@ func (r *Runtime) Shutdown(ctx context.Context) error {
 			return errors.New("scanner timer shutdown deadline exceeded")
 		}
 	}
-	r.engine.Close()
 	if r.writer != nil {
 		r.writer.Close()
-	}
-	if err := r.engine.Wait(deadline); err != nil {
-		return errors.New("scanner runtime shutdown deadline exceeded")
-	}
-	if r.writer != nil {
 		if err := r.writer.Wait(deadline); err != nil {
 			return errors.New("checkpoint writer shutdown deadline exceeded")
 		}
+		select {
+		case <-r.checkpointResultDone:
+		case <-deadline.Done():
+			return errors.New("checkpoint result join deadline exceeded")
+		}
+	}
+	r.engine.Close()
+	if err := r.engine.Wait(deadline); err != nil {
+		return errors.New("scanner runtime shutdown deadline exceeded")
 	}
 	r.joined.Store(true)
 	return nil

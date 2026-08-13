@@ -28,6 +28,7 @@ type AggregateIngressFenceFact struct {
 	ThroughFrameSequence uint64
 	MarkerOrdinal        uint64
 	CapturedAt           time.Time
+	deliveryStartedAt    time.Time
 }
 
 type LiveCoverageFenceFact struct {
@@ -62,6 +63,9 @@ func (a *LiveAttempt) CaptureLiveCoverageFence(ctx context.Context, state *engin
 }
 
 func EngineAggregateIngressFence(fact AggregateIngressFenceFact) (engine.AggregateIngressFenceInput, error) {
+	if !fact.deliveryStartedAt.IsZero() {
+		return engine.NewAggregateIngressFenceInputAtDelivery(fact.Command, fact.State, fact.ThroughFrameSequence, fact.MarkerOrdinal, fact.CapturedAt, fact.deliveryStartedAt)
+	}
 	return engine.NewAggregateIngressFenceInput(fact.Command, fact.State, fact.ThroughFrameSequence, fact.MarkerOrdinal, fact.CapturedAt)
 }
 

@@ -170,6 +170,117 @@ func TestLiveAggregateEvaluationCoalescing(t *testing.T) {
 		}
 	})
 
+	t.Run("ordinary live fence commits its captured second after admission crosses a second", func(t *testing.T) {
+		binding := hydrationPopulationBinding(t, []string{"AAA", "BBB"})
+		start := binding.SessionStart()
+		t0, fenceTarget, admissionAt := start.Add(2*time.Second), start.Add(3*time.Second), start.Add(4*time.Second)
+		now := t0
+		e := acknowledgedHydrationEngine(t, binding, &now, t0, lifecycleLive)
+		defer closeAndWait(t, e)
+
+		e.mu.Lock()
+		e.state.hydration.fenceReconciled = true
+		e.state.hydration.fenceEpoch = 1
+		e.state.hydration.fenceThrough = 1
+		e.state.hydration.fenceMarkerOrdinal = 1
+		e.state.hydration.supportedThrough = immutableTime(t0)
+		if e.state.aggregateEvaluator.coverage == nil {
+			e.state.aggregateEvaluator.coverage = make(map[int]aggregateCoverageConsequence)
+		}
+		for index := range e.state.binding.symbols {
+			state := ensureAggregateState(&e.state.binding.symbols[index])
+			if !installExactCoverage(state, e.state.binding, start, t0, nil) {
+				e.mu.Unlock()
+				t.Fatal("initial exact coverage setup failed")
+			}
+			e.state.aggregateEvaluator.coverage[index] = coverageNoPrintThroughT
+		}
+		e.mu.Unlock()
+
+		admission, timer := e.AdmitTimer(context.Background())
+		if admission != AdmissionAdmitted || awaitTimerDisposition(t, timer).Code != DispositionTimerApplied {
+			t.Fatal("initial supported timer was not applied")
+		}
+		initial := e.observePublication()
+		if initial.watermark == nil || !initial.watermark.Equal(t0) || initial.aggregateEvaluation.at != t0 {
+			t.Fatalf("initial publication = %+v", initial)
+		}
+
+		command, err := e.IssueLiveCoverageFence()
+		if err != nil {
+			t.Fatal(err)
+		}
+		fact, err := NewLiveCoverageFenceInput(command, LiveCoverageFenceComplete, 1, 2, fenceTarget)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Production waits for the raw-frame marker before admitting the timer.
+		// Model a fence whose exact captured target is one second older than the
+		// admission clock; the old path then sampled admissionAt for the timer,
+		// found it unsupported, and left committed T frozen at t0 indefinitely.
+		now = admissionAt
+		admission, completion := e.AdmitLiveCoverageFence(context.Background(), fact)
+		if admission != AdmissionAdmitted || completion == nil {
+			t.Fatalf("coverage admission = %s", admission)
+		}
+		disposition := <-completion
+		if disposition.Code != DispositionLiveCoverageFenceApplied {
+			t.Fatalf("coverage disposition = %+v", disposition)
+		}
+		afterFence := e.observePublication()
+		if afterFence.watermark == nil || !afterFence.watermark.Equal(fenceTarget) || afterFence.aggregateEvaluation.at != fenceTarget ||
+			afterFence.lastEngineSequence != disposition.EngineSequence || afterFence.publicationID != initial.publicationID+1 {
+			t.Fatalf("accepted fence did not commit its exact target: initial=%+v after=%+v", initial, afterFence)
+		}
+
+		admission, timer = e.AdmitTimer(context.Background())
+		if admission != AdmissionAdmitted || awaitTimerDisposition(t, timer).Code != DispositionTimerApplied {
+			t.Fatal("post-fence timer was not applied")
+		}
+		afterUnsupportedTimer := e.observePublication()
+		if afterUnsupportedTimer.watermark == nil || !afterUnsupportedTimer.watermark.Equal(fenceTarget) ||
+			afterUnsupportedTimer.aggregateEvaluation.at != fenceTarget {
+			t.Fatalf("unsupported later timer changed the committed boundary: %+v", afterUnsupportedTimer)
+		}
+	})
+
+	t.Run("supported same-target timer preserves strict correction-horizon finalization", func(t *testing.T) {
+		binding := hydrationPopulationBinding(t, []string{"AAA"})
+		target := binding.SessionEnd()
+		now := target.Add(-time.Second)
+		e := aggregateEngine(t, binding, RunModeLive, &now)
+		defer closeAndWait(t, e)
+
+		e.mu.Lock()
+		e.state.lifecycle = lifecycleLive
+		installEvaluatorMarkOnSymbol(&e.state.binding.symbols[0], target, 12, qualificationProvisional)
+		e.state.binding.symbols[0].prior = frozenPriorClose{symbol: "AAA", status: reference.PriorCloseValid, close: 10}
+		e.state.committedT = immutableTime(target)
+		e.state.latestTarget = immutableTime(target)
+		e.state.aggregateEvaluator.current = e.stageAggregateEvaluationAtLocked(target, target)
+		e.state.liveEpoch, e.state.liveEpochActive, e.state.aggregateAcknowledged = 1, true, true
+		e.state.aggregateAckPosition = LivePosition{ConnectionEpoch: 1, FrameSequence: 1}
+		e.state.hydration.fenceReconciled, e.state.hydration.fenceEpoch, e.state.hydration.fenceThrough = true, 1, 1
+		e.state.hydration.fenceMarkerOrdinal = 1
+		e.state.hydration.supportedThrough = immutableTime(target)
+		e.mu.Unlock()
+		now = target.Add(correctionHorizon + time.Nanosecond)
+
+		qualification := e.state.binding.symbols[0].aggregates.qualification
+		if qualification.finalized || qualification.result.status != qualificationProvisional {
+			t.Fatalf("precondition qualification = %+v", qualification)
+		}
+		admission, timer := e.AdmitTimer(context.Background())
+		disposition := awaitTimerDisposition(t, timer)
+		if admission != AdmissionAdmitted || disposition.Code != DispositionTimerApplied {
+			t.Fatalf("same-target timer admission=%s disposition=%+v", admission, disposition)
+		}
+		qualification = e.state.binding.symbols[0].aggregates.qualification
+		if !qualification.finalized || qualification.result.status != qualificationFinalized || !qualification.result.at.Equal(target) {
+			t.Fatalf("same-target timer skipped strict horizon finalization: %+v", qualification)
+		}
+	})
+
 	t.Run("invalid candidate retains pending work", func(t *testing.T) {
 		at := time.Date(2026, 8, 6, 15, 0, 0, 0, time.UTC)
 		e := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationFinalized}})

@@ -38,10 +38,12 @@ Sections 8-19 are completed here after its just-in-time V2 reconnaissance.
 | Boundary/reconnaissance plan | `accepted` | Direct owner V1 program revision; C7 finally accepted; recorded V2 scope inspected | Complete |
 | Completed contract | `accepted_current_plan` | Two slices and two primary proofs preserve the existing engine-owned lifecycle/readiness boundary; no new competing owner or consequential interface requires pre-implementation review | Implement `C8-S1` |
 | `C8-S1` runtime/lifecycle | `accepted_after_correction` | 2026-08-10 live-start evidence invalidated the use of one 60-second wall-clock deadline for both connection establishment and full-population hydration. Corrected `P-C8-RUNTIME` proves the connection deadline is handshake-only, finite C6 hydration can outlive it, the subscribed live tail is consumed concurrently, and every causal predecessor is drained through the ingress fence before readiness; affected race clean. | Complete |
-| `C8-S1` live response-bound/failure containment | `accepted_after_correction` | A 2026-08-10 two-worker launch reached 4,558/5,517 terminal symbols without live-queue loss, then exposed an undersized 512 MiB cumulative REST transfer bound and a proof-byte accounting defect that converted bounded exhaustion into global suppression. Production now allows 2 GiB; the proof byte is excluded from accepted terminal accounting; and terminal engine suppression exits the live supervisor instead of reconnect-spinning. Focused provider/engine/supervisor proofs, ordinary verification, and race verification pass. | Complete |
+| `C8-S1` live response-bound/failure containment | `accepted_after_correction` | A 2026-08-10 two-worker launch reached 4,558/5,517 terminal symbols without live-queue loss, then exposed an undersized 512 MiB cumulative REST transfer bound and a proof-byte accounting defect that converted bounded exhaustion into global suppression. The accepted correction raised production to 2 GiB; the later owner-selected pre-retry setting is 4 GiB. The proof byte is excluded from accepted terminal accounting, and terminal engine suppression exits the live supervisor instead of reconnect-spinning. Focused provider/engine/supervisor proofs, ordinary verification, and race verification pass. | Complete |
+| Owner-selected live-retry headroom | `accepted_after_correction_review` | The 2026-08-12 owner directed loosening only self-imposed delivery limits before the next run. Production selects 32,768 C5 frame slots under the unchanged 128-MiB/8-MiB byte guards, raises the nonresident cumulative REST transfer allowance from 2 to 4 GiB, and allows five recovery attempts instead of three. Review exposed and correction removed quadratic slice dequeue and a scheduler-dependent saturation fixture. Full-ceiling wrap/saturation/drain race and an 8,192-slot Runtime capacity control/failure race now pass; the latter proves cross-component behavior without claiming a full 32,768-slot provider composition. The isolated production-configuration 216-frame/s proof dispositioned 12,960/12,960 frames and 25,920 aggregates with queue high-water 2, final depth zero, and no rejection. Two hydration workers, resident-record bounds, provider page/request bounds, readiness/currentness, accounting, and terminal semantics remain unchanged. Final `gpt-5.6-sol` medium re-review returned CLEAN/PASS. | Complete locally; use the new settings for the separately authorized owner-run observation. |
 | `C8-S1` hydration-pin/fence finalization | `accepted_after_deterministic_correction` | The request-symbol index, progressive canonical folding, bounded feature maintenance, and coalesced aggregate projection preserve the exact fence/readiness semantics while removing the measured dominant costs. Final-source full 1x passed all 7,581,690 rows and 28,377 frames with zero rejection, queue high-water 293, 490.875 ms fence, 650.808 ms drain, and ready/accounting true. | Complete locally; separately authorized provider confirmation remains pending |
 | 2026-08-11 engine-to-API correction | `accepted_after_correction_review` | [`live-engine-api-first-ready-correction.md`](../live-engine-api-first-ready-correction.md) proves small and 5,691-symbol first-ready/post-fence publications map through the production Runtime/API boundary and fixes a reasonless timer erasing the fixed `ingress_integrity` suppression cause. The initial post-fence-publication P2 and diagnostic-wiring P2 are closed; focused re-reviews found no remaining P1/P2. No provider or credential was accessed. | Complete locally; original failed live capture and provider confirmation remain unavailable/deferred |
 | Cached hydration fence correction | `accepted_deterministically` | [`live-fence-finalization-cached-hydration-correction.md`](../live-fence-finalization-cached-hydration-correction.md) records the sealed-artifact full 1x pass, a second current-source full 1x pass, the strengthened 3,072,000-row bounded 2x burst pass, and the preserved honest sustained-2x failure. No provider or credential was accessed. | Complete; do not rerun sustained full 2x |
+| Checkpoint hot-path measurement composition | `finally_accepted` | [`live-checkpoint-hot-path-correction.md`](../live-checkpoint-hot-path-correction.md) adds fixed-cardinality projection/submit/terminal/timing/byte facts, returns writer terminals to engine accounting, and proves a real completed/discoverable artifact. Three real-consumer dense 6,000-symbol boundaries limited observation delay to 55.523ms and aggregate delivery to 66.874ms; focused re-review is clean. | Preserve for V1 integration; provider capacity remains unproved |
 | `C8-S2` measurements/load | `accepted_after_correction` | `P-C8-LOAD`: 6,000-symbol bound population, 100 active aggregate symbols, 20 corrections, 20 duplicates, 20 rejects, and 60 normalized T/Q facts correctly fenced without acknowledged membership; 53.67 s end-to-end and exact accounting | Complete |
 | Final component review | `accepted_after_2026-08-10_correction` | Focused re-review confirmed the hydration-deadline/live-tail correction plus synchronized concurrent-terminal diagnostics and an explicit active-attempt shutdown join. No P1/P2 finding remains; uncached ordinary, focused race, vet, UI-model, and diff checks pass. Unchanged non-short load evidence is reused. | Complete |
 | Private daily operational finalization | `accepted_after_final_review` | `./scripts/run-private-scanner` supplies the exact two-worker/persistent-path workflow, isolates credentials, gates dashboard startup on `/livez`, reports engine `/readyz`, and contains both processes. Public-wrapper/fake-process tests, current-source capacity evidence, ordinary/race/vet/UI checks, and correction/re-review are clean. | Complete locally; exact-date provider observation remains separately authorized |
@@ -158,6 +160,13 @@ claim, queue capacity/occupancy, bounded admission/disposition accounting,
 aggregate accounting, connection/ack state, hydration purpose/accounting/fence,
 and suppression. C10 may map it but cannot mutate it.
 
+The engine's current-market claim includes `qualified_current`,
+`degraded_bootstrap`, and the owner-approved `degraded_current` partial mode.
+Operations does not infer those modes from counters: it accepts the sealed
+engine claim, then independently requires live process/lifecycle, acknowledged
+transport, reconciled fence, current watermark, and valid operational
+accounting. T/Q remains outside readiness for every aggregate ranking mode.
+
 The runtime admits one engine timer per sampler interval. Before an ordinary
 live timer, the engine issues an unforgeable current-binding/current-epoch
 coverage command; C5 appends its fact after the concrete raw-frame tail, and
@@ -167,11 +176,12 @@ pre-ack, post-admission, and stale-epoch facts are fenced. This realizes
 `LIFE-LIVE-02`/`03` without adding a watermark or adapter-owned currentness.
 
 Current local settings are: engine capacity 8,192 with 128 required-input
-reserve; C5 queue 512 frames (the accepted C5 hard limit), 64 MiB total, 8 MiB
+reserve; C5 queue 32,768 frames, 128 MiB total, 8 MiB
 per frame; four-second evaluation delay; one-second sampler cadence; two-second
-readiness tolerance past the exact causal target; three recovery attempts; 60
+readiness tolerance past the exact causal target; five recovery attempts; 60
 seconds to establish and acknowledge each connection attempt; C6's finite
-full-population hydration plan with eight workers, at most two pages and three
+full-population hydration plan with two workers in the supported launcher (one,
+two, four, or eight are valid), at most two pages and three
 15-second attempts per page, explicit byte/record limits, and parent/shutdown
 cancellation; and ten-second controlled shutdown. Hydration has no unrelated
 whole-plan wall-clock success deadline. Constructors reject nonpositive,
@@ -245,14 +255,15 @@ correction loop and updates this sole delivery ledger without an owner stop.
 ## 20. Slice evidence, corrections, and limitations
 
 `C8-S1` now provides the runnable `cmd/scanner` composition, bounded binding
-installation, lazy C7 latest-to-previous installation, up to three consecutive
+installation, lazy C7 latest-to-previous installation, up to five consecutive
 failed recovery attempts, a 60-second connection establishment/acknowledgement
 deadline, finite C6 hydration whose lifetime is rooted in the live operation
 rather than that connection deadline, concurrent subscribed-live-tail delivery
 during hydration, explicit retry or exhaustion policy facts, one-second engine
 timers, engine-issued C5 live-coverage fences, and a ten-second joined shutdown. The
-queue setting was corrected from the provisional 4,096 frames to the accepted
-C5 hard limit of 512. The original establishment bound was corrected from 30
+queue setting was revised by the owner-authorized D4 correction from 1,024 to
+8,192 frames, then by the owner's pre-retry headroom direction to 32,768 frames,
+under the unchanged 128 MiB byte ceiling. The original establishment bound was corrected from 30
 to 60 seconds using C7's accepted fresh-bootstrap median of about 36.6 seconds,
 but 2026-08-10 evidence showed that benchmark did not justify a production
 full-universe hydration deadline. The deadline now ends after the WebSocket
@@ -266,7 +277,10 @@ cumulative REST response budget. It was a whole-plan transfer bound rather
 than a resident-memory limit and stopped a healthy two-worker hydration at
 4,558 of 5,517 terminal symbols. Production now uses a 2 GiB cumulative bound,
 more than three times the approximately 625 MiB complete transfer projected
-from that observation. C6's 16 MiB page, two-page, three-attempt,
+from that observation. The owner's 2026-08-12 pre-retry direction raises this
+nonresident cumulative allowance to 4 GiB to remove another avoidable
+whole-plan exhaustion point; it does not raise any page or resident-memory
+bound. C6's 16 MiB page, two-page, three-attempt,
 15-second-per-attempt, interval-row, and worker-resident bounds remain intact.
 The downloader no longer includes the single over-bound proof byte in terminal
 accounting, and the engine accepts an ordinary failed terminal that exactly

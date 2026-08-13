@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -197,6 +201,137 @@ func TestPC10HTTPRoutesCORSAndLifecycle(t *testing.T) {
 		t.Fatalf("terminal readiness = code %d body=%s", response.Code, response.Body.String())
 	}
 	assertStatusAndOneCapture(t, handler, source, http.MethodGet, "/api/v1/snapshot", http.StatusOK)
+}
+
+// TestSlice2LocalDefectProductionComposition proves the live Runtime -> Engine
+// -> sealed snapshot -> HTTP boundary. One trusted live mark remains usable
+// after a different symbol contributes attributable structural-invalid
+// evidence inside already fenced coverage; the defect is local, readiness
+// stays 200, rows carry no T/Q, and a later transport loss still fails closed.
+func TestSlice2LocalDefectProductionComposition(t *testing.T) {
+	binding := snapshotBinding(t, "AAA", "BBB")
+	now := binding.SessionStart().Add(time.Minute)
+	config := operations.DefaultConfig()
+	config.SampleCadence = 10 * time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	runtime, err := operations.New(ctx, binding, config, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { shutdownSnapshotRuntime(t, runtime) })
+	owner := runtime.Engine()
+	ackAt := now.Add(-config.EvaluationDelay)
+	applySnapshotControl(t, owner, binding, engine.ConnectionAttempt, 1, 1, engine.LivePosition{}, ackAt)
+	applySnapshotControl(t, owner, binding, engine.AggregateCommandWriteResult, 1, 2, engine.LivePosition{}, ackAt)
+	applySnapshotControl(t, owner, binding, engine.AggregateSubscriptionResult, 1, 2, engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 1}, ackAt)
+
+	budgets := engine.HydrationPlanBudgets{Workers: 1, RowsPerChunk: 1, MaximumResponseBytes: 1 << 20, MaximumNormalizedRecords: 57_600, MaximumResidentRecords: 57_600}
+	admission, completion := owner.AdmitHydrationPlan(ctx, engine.HydrationPlanInput{SchemaVersion: engine.HydrationPlanSchemaV1, BindingIdentity: binding.Identity(), Purpose: engine.HydrationFreshBootstrap, ConnectionEpoch: 1, Budgets: budgets})
+	if admission != engine.AdmissionAdmitted || completion == nil {
+		t.Fatal("hydration plan not admitted")
+	}
+	plan := <-completion
+	requests := plan.Plan.Requests()
+	if plan.Code != engine.DispositionHydrationPlanApplied || len(requests) != 2 {
+		t.Fatalf("hydration plan=%+v requests=%d", plan, len(requests))
+	}
+	markStart := now.Add(-10 * time.Second)
+	mark := engine.AggregateInput{SchemaVersion: engine.AggregateSchemaV1, BindingIdentity: binding.Identity(), Source: engine.AggregateSourceLive,
+		Symbol: "AAA", WindowStart: markStart, WindowEnd: markStart.Add(time.Second), DeliveryTime: markStart.Add(time.Second),
+		Values: engine.AggregateValues{Open: 12, High: 12, Low: 12, Close: 12, Volume: 1000, VWAP: 12, AverageTradeSize: 10, ATSProvenance: engine.ATSLiveProviderAverage},
+		Live:   engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 2}}
+	if admitted, completed := owner.AdmitAggregate(ctx, mark); admitted != engine.AdmissionAdmitted || (<-completed).Code != engine.DispositionAggregateInserted {
+		t.Fatal("trusted live mark was not installed")
+	}
+	var fence engine.HydrationFenceCommand
+	for _, request := range requests {
+		terminal, terminalErr := engine.NewHydrationTerminalInput(request, request.ResultID(), engine.HydrationCompletedEmpty, engine.HydrationReasonNone, 1, 1, 10, 0, 0, 0)
+		if terminalErr != nil {
+			t.Fatal(terminalErr)
+		}
+		_, terminalCompletion := owner.AdmitHydrationTerminal(ctx, terminal)
+		result := <-terminalCompletion
+		if result.Code != engine.DispositionHydrationTerminalApplied {
+			t.Fatalf("hydration terminal=%+v", result)
+		}
+		if result.FenceCommand.CommandToken() != 0 {
+			fence = result.FenceCommand
+		}
+	}
+	fenceInput, err := engine.NewAggregateIngressFenceInput(fence, engine.AggregateIngressFenceComplete, 2, 1, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, fenceCompletion := owner.AdmitAggregateIngressFence(ctx, fenceInput)
+	if result := <-fenceCompletion; result.Code != engine.DispositionAggregateIngressFenceApplied {
+		t.Fatalf("hydration fence=%+v", result)
+	}
+
+	invalid := engine.AggregateInput{SchemaVersion: engine.AggregateSchemaV1, BindingIdentity: binding.Identity(), Source: engine.AggregateSourceLive,
+		Symbol: "BBB", WindowStart: markStart, WindowEnd: markStart.Add(time.Second), DeliveryTime: now,
+		Values: engine.AggregateValues{Open: 10, High: 10, Low: 10, Close: math.NaN(), Volume: 1000, VWAP: 10, AverageTradeSize: 10, ATSProvenance: engine.ATSLiveProviderAverage},
+		Live:   engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 3}}
+	admitted, invalidCompletion := owner.AdmitAggregate(ctx, invalid)
+	if admitted != engine.AdmissionAdmitted || invalidCompletion == nil {
+		t.Fatal("attributable invalid aggregate was not admitted to the owner FIFO")
+	}
+	if result := <-invalidCompletion; result.Code != engine.DispositionAggregateRejected || result.Reason != engine.ReasonStructural {
+		t.Fatalf("invalid aggregate=%+v", result)
+	}
+	if admitted, completed := owner.AdmitTimer(ctx); admitted != engine.AdmissionAdmitted || (<-completed).Code != engine.DispositionTimerApplied {
+		t.Fatal("same-target evaluation timer was not applied")
+	}
+
+	capture, err := runtime.CaptureSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapped, err := Map(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mapped.Status.BackendReady || !mapped.Status.RankingCurrent || mapped.Ranking.Mode != "degraded_current" || mapped.Ranking.Reason != "incomplete_population" ||
+		len(mapped.Rows) != 1 || mapped.Rows[0].Symbol != "AAA" || len(mapped.TQ.DesiredSymbols) != 0 || mapped.Rows[0].TQMembership.Desired ||
+		mapped.Accounting.Population.TrustedRankableMark != 1 || mapped.Accounting.Population.UnknownDueFailureOrFence != 1 || mapped.Accounting.Uncertainty.PostBootstrapGap != 1 {
+		t.Fatalf("local defect snapshot status=%+v ranking=%+v rows=%+v accounting=%+v tq=%+v", mapped.Status, mapped.Ranking, mapped.Rows, mapped.Accounting, mapped.TQ)
+	}
+	source := &countingCaptureSource{runtime: runtime}
+	handler, err := NewHandler(source, HandlerConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStatusAndOneCapture(t, handler, source, http.MethodGet, "/readyz", http.StatusOK)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/snapshot", nil))
+	var wire Snapshot
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &wire) != nil || wire.Ranking.Mode != "degraded_current" || len(wire.Rows) != 1 {
+		t.Fatalf("partial snapshot HTTP=%d body=%s", response.Code, response.Body.String())
+	}
+	probePath := filepath.Join(t.TempDir(), "degraded-current.json")
+	if err := os.WriteFile(probePath, response.Body.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	modelPath, err := filepath.Abs(filepath.Join("..", "..", "ui", "model.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := `import {readFile} from "node:fs/promises"; import {pathToFileURL} from "node:url";
+const snapshot=JSON.parse(await readFile(process.argv[1],"utf8"));
+const {buildViewModel}=await import(pathToFileURL(process.argv[2]).href);
+const model=buildViewModel(snapshot);
+if (!model.partial || model.current || model.rowsCurrent || model.rankingMode!=="degraded_current" || model.rows.length!==1 || model.rows[0].symbol!=="AAA" || model.rows[0].tape.primary!=="—" || model.rows[0].spread.primary!=="—") process.exit(23);`
+	command := exec.Command("node", "--input-type=module", "-e", probe, probePath, modelPath)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("exact sealed HTTP publication failed production UI model: %v: %s", err, output)
+	}
+
+	lost := engine.ConnectionControlInput{SchemaVersion: engine.ConnectionControlSchemaV1, BindingIdentity: binding.Identity(), Kind: engine.ConnectionLost,
+		ConnectionEpoch: 1, Position: engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 4}, ReceiptTime: now, Outcome: engine.ControlFailed}
+	if admitted, completed := owner.AdmitConnectionControl(ctx, lost); admitted != engine.AdmissionAdmitted || (<-completed).Code != engine.DispositionConnectionControlApplied {
+		t.Fatal("global transport loss was not applied")
+	}
+	assertStatusAndOneCapture(t, handler, source, http.MethodGet, "/readyz", http.StatusServiceUnavailable)
 }
 
 func TestSuppressedEvaluatorIntegrityRemainsServable(t *testing.T) {

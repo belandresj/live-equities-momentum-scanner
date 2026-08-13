@@ -22,7 +22,7 @@ function cell(document, value, state, detail, overallCurrent, band = 0, focusKey
 function buildTable(document, model) {
   const shell = element(document, "div", "table-shell");
   const table = element(document, "table"); table.id = "scanner-table"; table.dataset.publicationState = model.rowsCurrent ? "current" : "noncurrent";
-  table.append(textElement(document, "caption", "Server-ranked top 20 qualifying equities"));
+  table.append(textElement(document, "caption", model.partial ? "Server-ranked top 20 trusted marks by Day %, qualification not asserted" : "Server-ranked top 20 qualifying equities"));
   const thead = element(document, "thead"), header = element(document, "tr");
   for (const label of ["Rank", "Symbol", "Last", "Day %", "From 4AM %", "HOD DD %", "Day Range %", "60 MIN Range %", "30 MIN Range %", "Activity", "Tape Rate", "Spread"]) { const th = textElement(document, "th", label); th.setAttribute("scope", "col"); header.append(th); }
   thead.append(header); table.append(thead);
@@ -53,7 +53,7 @@ export function renderDashboard(document, event, options = {}) {
   const main = element(document, "main"), model = event.model;
   const header = element(document, "header"), title = element(document, "div"); title.append(textElement(document, "p", "LIVE EQUITIES", "eyebrow"), textElement(document, "h1", "Momentum Scanner"));
   const replayState = event.transport === "refresh_delayed" ? " · REFRESH DELAYED" : event.transport === "disconnected" ? " · FROZEN · DISCONNECTED" : "";
-  const primaryState = !model ? "" : model.replay ? `HISTORICAL · NONLIVE${replayState}` : model.current ? "CURRENT" : event.transport === "refresh_delayed" ? "REFRESH DELAYED" : event.transport === "disconnected" ? "FROZEN · DISCONNECTED" : model.backendReady && model.rankingMode === "degraded_bootstrap" ? "DEGRADED" : model.finalizing ? "FINALIZING" : model.warming ? "WARMING" : "NONCURRENT";
+  const primaryState = !model ? "" : model.replay ? `HISTORICAL · NONLIVE${replayState}` : model.current ? "CURRENT" : model.partial ? "PARTIAL · CURRENT DATA" : event.transport === "refresh_delayed" ? "REFRESH DELAYED" : event.transport === "disconnected" ? "FROZEN · DISCONNECTED" : model.backendReady && model.rankingMode === "degraded_bootstrap" ? "DEGRADED" : model.finalizing ? "FINALIZING" : model.warming ? "WARMING" : "NONCURRENT";
   const warmupProgress = model?.warming && event.transport === "connected" ? ` · ${model.hydrationProgress}${model.hydrationIssueText}` : "";
   const live = textElement(document, "div", model ? `${primaryState}${warmupProgress} · publication ${model.publicationID} · ${model.rows.length} ranked` : event.error ? `Scanner API disconnected: ${event.error}` : "Connecting to scanner API", "status-live");
   live.id = "status-live"; live.dataset.state = model?.current && !model.replay ? "current" : "warning"; header.append(title, live); main.append(header);
@@ -72,6 +72,12 @@ export function renderDashboard(document, event, options = {}) {
     suppressed.dataset.state = "suppressed";
     suppressed.textContent = `SCANNER SUPPRESSED · ${model.lifecycleReason || "integrity failure"} · ${model.suppression || "restart required"}${model.integrityFailure ? ` · ${model.integrityFailure.category} at engine sequence ${model.integrityFailure.engine_sequence}` : ""}`;
     main.append(suppressed);
+  }
+  if (model?.partial) {
+    const partial = element(document, "div", "message");
+    partial.dataset.state = "partial";
+    partial.textContent = `PARTIAL RANKING · current trusted marks ordered by Day % · qualification is not asserted · ${model.rankingReason || "symbol-local uncertainty"}`;
+    main.append(partial);
   }
   if (model) main.append(buildDiagnostics(document, model, detailsOpen));
   const message = element(document, "div", "message"); message.id = "message";

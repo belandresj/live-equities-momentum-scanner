@@ -23,7 +23,11 @@ import (
 	"github.com/belandresj/live-equities-momentum-scanner/internal/snapshotapi"
 )
 
-const liveHydrationResponseByteBudget = int64(2 << 30)
+const liveHydrationResponseByteBudget = int64(4 << 30)
+
+func productionLiveQueueConfig() massive.LiveQueueConfig {
+	return massive.LiveQueueConfig{FrameSlots: massive.MaximumLiveFrameSlots, MaxFrameBytes: 8 << 20, TotalFrameBytes: massive.MaximumLiveQueueBytes}
+}
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -46,6 +50,7 @@ func run(ctx context.Context, arguments []string) error {
 	tradingDate := flags.String("trading-date", "", "exchange-local trading date YYYY-MM-DD")
 	referenceDirectory := flags.String("reference-dir", filepath.Join("var", "reference"), "Component 1 cache directory")
 	checkpointDirectory := flags.String("checkpoint-dir", filepath.Join("var", "checkpoints"), "private local checkpoint directory")
+	diagnosticDirectory := flags.String("diagnostic-dir", filepath.Join("var", "diagnostics"), "private local bounded incident directory")
 	checkpointMode := flags.String("checkpoint-mode", "on", "live checkpoint mode: on or off")
 	restOrigin := flags.String("rest-origin", "https://api.massive.com", "Massive HTTPS origin")
 	websocketEndpoint := flags.String("websocket-endpoint", "wss://socket.massive.com/stocks", "Massive stocks WebSocket endpoint")
@@ -60,7 +65,7 @@ func run(ctx context.Context, arguments []string) error {
 		return errors.New("scanner flags are invalid")
 	}
 	if *runMode == "replay" {
-		for _, liveOnly := range []string{"trading-date", "checkpoint-dir", "checkpoint-mode", "rest-origin", "websocket-endpoint", "hydration-workers"} {
+		for _, liveOnly := range []string{"trading-date", "checkpoint-dir", "checkpoint-mode", "diagnostic-dir", "rest-origin", "websocket-endpoint", "hydration-workers"} {
 			if provided[liveOnly] {
 				return errors.New("replay mode rejects live-only flags")
 			}
@@ -76,6 +81,9 @@ func run(ctx context.Context, arguments []string) error {
 	}
 	if *checkpointMode != "on" && *checkpointMode != "off" {
 		return errors.New("checkpoint-mode must be on or off")
+	}
+	if *diagnosticDirectory == "" {
+		return errors.New("diagnostic-dir is required")
 	}
 	maximumNormalizedRecords, maximumResidentRecords, err := liveHydrationBounds(*hydrationWorkers, 1)
 	if err != nil {
@@ -112,7 +120,7 @@ func run(ctx context.Context, arguments []string) error {
 	if err != nil {
 		return err
 	}
-	adapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{Endpoint: *websocketEndpoint, Credential: credential, Queue: massive.LiveQueueConfig{FrameSlots: 512, MaxFrameBytes: 8 << 20, TotalFrameBytes: 64 << 20}})
+	adapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{Endpoint: *websocketEndpoint, Credential: credential, Queue: productionLiveQueueConfig()})
 	if err != nil {
 		_ = runtime.Shutdown(context.Background())
 		return err
@@ -158,13 +166,24 @@ func run(ctx context.Context, arguments []string) error {
 			}
 			return runCtx.Err()
 		case err := <-done:
+			var diagnosticErr error
+			incident := runtime.FirstIngressIncident()
 			if sample, captureErr := captureLiveOperatorSample(runtime); captureErr == nil {
 				_ = operator.Render(sample, true)
+				incident = sample.IngressIncident
+			}
+			if incident != nil {
+				path, persistErr := persistIngressIncident(*diagnosticDirectory, incident)
+				if persistErr != nil {
+					diagnosticErr = persistErr
+				} else {
+					fmt.Fprintf(os.Stderr, "Ingress diagnostic persisted · %s\n", path)
+				}
 			}
 			if shutdownErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, true, false); shutdownErr != nil {
 				return shutdownErr
 			}
-			return err
+			return errors.Join(err, diagnosticErr)
 		case err := <-apiDone:
 			if shutdownErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, true); shutdownErr != nil {
 				return shutdownErr
@@ -214,7 +233,8 @@ func captureLiveOperatorSample(runtime *operations.Runtime) (liveOperatorSample,
 	if !valid {
 		return liveOperatorSample{}, errors.New("invalid operational snapshot")
 	}
-	return liveOperatorSample{Status: view.Status, Metrics: view.Metrics, Ranked: len(view.Engine.Publication.AggregateEvaluation.Rows)}, nil
+	evaluation := view.Engine.Publication.AggregateEvaluation
+	return liveOperatorSample{Status: view.Status, Metrics: view.Metrics, IngressIncident: view.IngressIncident, Evaluation: evaluation, Ranked: len(evaluation.Rows)}, nil
 }
 
 func encodeSnapshotMappingFailure(encoder *json.Encoder, failure snapshotapi.MappingFailure) error {

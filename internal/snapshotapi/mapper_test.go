@@ -34,13 +34,16 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 		t.Fatal(err)
 	}
 	hash := sha256.Sum256(body)
-	const goldenSHA256 = "58d44b81c24042faa77cf8e873171aa0686adf1e6ca2574a670b9ab9ee800428"
+	const goldenSHA256 = "99185cc12dbd701e5f5446710c769cf0c028397588a618880d56840c8dc10685"
 	if got := hex.EncodeToString(hash[:]); got != goldenSHA256 {
 		t.Fatalf("snapshot golden SHA-256 = %s", got)
 	}
 	if snapshot.Sample.ID != "9007199254740999" || snapshot.Publication.ID != "9007199254741001" || snapshot.Publication.AggregateAckPosition.ArrayIndex != 7 ||
 		snapshot.Publication.HydrationFence.MarkerOrdinal != "9" || snapshot.Status.WatermarkLagMS == nil || *snapshot.Status.WatermarkLagMS != 0 || len(snapshot.Rows) != 1 {
 		t.Fatalf("identity/fence/zero mapping = %+v", snapshot)
+	}
+	if snapshot.Accounting.PopulationTransitionDiagnostic != (PopulationTransitionDiagnostic{BootstrapUnknown: 1, TrustedByLaterLiveMark: 1}) {
+		t.Fatalf("population-transition diagnostic mapping = %+v", snapshot.Accounting.PopulationTransitionDiagnostic)
 	}
 	row := snapshot.Rows[0]
 	if row.From4AMChange.ValueRatio == nil || *row.From4AMChange.ValueRatio != 0 || row.HODDrawdown.ValueRatio != nil ||
@@ -68,6 +71,9 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 		{"population", func(v *operations.SnapshotCaptureView) {
 			v.Engine.Publication.AggregateEvaluation.Population.ValidPriorClose++
 		}},
+		{"population transition diagnostic", func(v *operations.SnapshotCaptureView) {
+			v.Engine.Publication.AggregateEvaluation.PopulationTransition.NoLaterEligibleMark++
+		}},
 		{"hydration work planned", func(v *operations.SnapshotCaptureView) { v.Engine.Operational.Hydration.Accounting.Planned++ }},
 		{"hydration work open", func(v *operations.SnapshotCaptureView) { v.Engine.Operational.Hydration.Accounting.Open++ }},
 		{"hydration work value", func(v *operations.SnapshotCaptureView) { v.Engine.Operational.Hydration.Accounting.CompletedValue++ }},
@@ -84,7 +90,12 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 		{"hydration rows integrity", func(v *operations.SnapshotCaptureView) { v.Engine.Operational.Hydration.Rows.Integrity++ }},
 		{"TQ facts", func(v *operations.SnapshotCaptureView) { v.Engine.TQ.Accounting.Rejected++ }},
 		{"TQ commands", func(v *operations.SnapshotCaptureView) { v.Engine.TQ.Commands.Failed++ }},
-		{"checkpoint", func(v *operations.SnapshotCaptureView) { v.Metrics.Checkpoint.Failed++ }},
+		{"checkpoint", func(v *operations.SnapshotCaptureView) { v.Metrics.CheckpointEngine.Failed++ }},
+		{"checkpoint projection gauge", func(v *operations.SnapshotCaptureView) {
+			v.Metrics.CheckpointEngine.Eligible = 3
+			v.Metrics.CheckpointEngine.ProjectionStarted = 3
+			v.Metrics.CheckpointEngine.ProjectionInProgress = 2
+		}},
 	} {
 		t.Run(mutation.name, func(t *testing.T) {
 			changed := schemaCapture()
@@ -203,6 +214,11 @@ func TestPC10SchemaPublicationStateCorpus(t *testing.T) {
 		wantRows int
 	}{
 		{"qualified current", func(*operations.SnapshotCaptureView) {}, "qualified_current", 1},
+		{"checkpoint projection in progress", func(v *operations.SnapshotCaptureView) {
+			v.Metrics.CheckpointEngine.Eligible++
+			v.Metrics.CheckpointEngine.ProjectionStarted++
+			v.Metrics.CheckpointEngine.ProjectionInProgress = 1
+		}, "qualified_current", 1},
 		{"exact empty", func(v *operations.SnapshotCaptureView) {
 			v.Engine.Publication.AggregateEvaluation.Rows = nil
 			v.Engine.Publication.AggregateEvaluation.TotalPassers = 0
@@ -214,6 +230,19 @@ func TestPC10SchemaPublicationStateCorpus(t *testing.T) {
 			v.Status.BackendReady, v.Status.RankingCurrent = false, false
 			v.Status.Reason = operations.ReasonRankingNoncurrent
 		}, "degraded_bootstrap", 1},
+		{"degraded current", func(v *operations.SnapshotCaptureView) {
+			v.Engine.Publication.AggregateEvaluation.Mode = "degraded_current"
+			v.Engine.Publication.AggregateEvaluation.Reason = "qualification_incomplete"
+			v.Engine.Publication.AggregateEvaluation.TotalPassers = 0
+			v.Engine.Publication.AggregateEvaluation.Qualification = engine.ReplayQualificationAccountingView{Unresolved: 1}
+			v.Engine.Publication.AggregateEvaluation.Uncertainty = engine.ReplayUncertaintyView{LocalInvalid: 1}
+			v.Engine.Publication.AggregateEvaluation.Rows[0].TQIntentEligible = false
+			v.Engine.TQ.Desired, v.Engine.TQ.Rows = nil, nil
+			v.Engine.TQ.Accounting.KnownPresent = 0
+			v.Engine.TQ.Commands = engine.TQCommandAccountingView{}
+			v.Status.BackendReady, v.Status.RankingCurrent = true, true
+			v.Status.Reason = operations.ReasonNone
+		}, "degraded_current", 1},
 		{"pressure shed", func(v *operations.SnapshotCaptureView) {
 			v.Engine.TQ.Pressure = engine.TQPressureDegraded
 			v.Engine.TQ.ShedTradesQuotes = true
@@ -259,6 +288,9 @@ func TestPC10SchemaPublicationStateCorpus(t *testing.T) {
 			}
 			if snapshot.Ranking.Mode != test.wantMode || len(snapshot.Rows) != test.wantRows {
 				t.Fatalf("mode/rows = %q/%d", snapshot.Ranking.Mode, len(snapshot.Rows))
+			}
+			if test.name == "checkpoint projection in progress" && snapshot.Checkpoint.ProjectionInProgress != "1" {
+				t.Fatalf("active checkpoint projection=%+v", snapshot.Checkpoint)
 			}
 		})
 	}
@@ -380,6 +412,7 @@ func schemaCapture() operations.SnapshotCaptureView {
 	population := engine.ReplayPopulationView{UniverseTotal: 2, ValidPriorClose: 2, TrustedRankableMark: 1, NoPrintThroughT: 1, CoveredPopulation: 2}
 	evaluation := engine.ReplayEvaluationView{At: target, Mode: "qualified_current", Population: population,
 		Qualification: engine.ReplayQualificationAccountingView{Provisional: 1}, TotalPassers: 1, KnownRankableCount: 1, TQIntentAvailable: true,
+		PopulationTransition: engine.ReplayPopulationTransitionDiagnosticView{BootstrapUnknown: 1, TrustedByLaterLiveMark: 1},
 		Rows: []engine.ReplayRankingRowView{{Rank: 1, Symbol: "AAA", Last: 10, DayPercent: .25, MarkAge: 250 * time.Millisecond,
 			From4AMPercent: engine.ReplayFieldView{Status: "current", Value: 0}, HODDrawdown: engine.ReplayFieldView{Status: "unavailable", Reason: "before_first_print"},
 			SessionRange: engine.ReplayFieldView{Status: "current", Value: .5}, Rolling30: engine.ReplayFieldView{Status: "warming", Reason: "rolling_warmup"},
@@ -399,7 +432,9 @@ func schemaCapture() operations.SnapshotCaptureView {
 		TradingDate: operational.TradingDate, RunMode: engine.RunModeLive, Lifecycle: "live", LastEngineSequence: operational.LastEngineSequence,
 		Watermark: &target, GeneratedAt: at, CurrentMarketClaim: true, AggregateEvaluation: evaluation}
 	metrics := operations.Metrics{SampledAt: at, Engine: operational, LiveQueue: massive.LiveQueueAccounting{CapacityFrames: 512, CapacityBytes: 64 << 20},
-		Checkpoint: checkpoint.WriterAccounting{Submitted: 1, Completed: 1}, QueueCurrentFrames: 2, QueueHighFrames: 3, QueueCurrentBytes: 100, QueueHighBytes: 200,
+		Checkpoint:         checkpoint.WriterAccounting{Submitted: 1, Completed: 1},
+		CheckpointEngine:   engine.CheckpointOperations{Eligible: 1, ProjectionStarted: 1, Projected: 1, Submitted: 1, Completed: 1},
+		QueueCurrentFrames: 2, QueueHighFrames: 3, QueueCurrentBytes: 100, QueueHighBytes: 200,
 		Deliveries: 10, ConsumerDeferred: 1, MeanProcessingDelay: 2 * time.Millisecond, MaxProcessingDelay: 3 * time.Millisecond,
 		MaxProcessingDelayOneSecond: time.Millisecond, HeapAllocBytes: 1 << 20, HeapInUseBytes: 2 << 20, Goroutines: 8, AccountingValid: true}
 	status := operations.Status{ProcessLive: true, BackendReady: true, RankingCurrent: true, Lifecycle: "live", RankingMode: "qualified_current", SampledAt: at,

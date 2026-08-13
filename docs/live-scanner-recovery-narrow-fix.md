@@ -1,13 +1,23 @@
 # Live scanner recovery narrow fix
 
-**Status:** Accepted for the fresh-start live milestone after corrected Gate E
-passed, then re-accepted after closing the first-session Activity/checkpoint
-equivalence defect and the observed pre-04:00 RunLive ordering defect. Final
-independent reviews found no actionable P1/P2 or authority drift. S1, S2,
-Gates A-E, the reader/playback prerequisites, the credential-free private
-scanner vertical, and pre-session wait-to-hydration composition are accepted.
-Gate F remains a separate market-hours validation; one operator-started
-pre-session attempt supplied only the bounded startup failure recorded below.
+**Status:** Deterministic S1/S2 and Gates A-E remain accepted. Gate F D1 and one
+subsequently authorized checkpoint-off observation identified the first typed
+cause as `adapter_terminal/protocol/frame_capacity`. Hydration completed cleanly
+before the queue rejection. D2 decisive capacity diagnostics and provisional
+2x bounded queue headroom are implemented and verified. One authorized D2 run
+crossed the old slot limit without suppression, then exposed 487 unresolved
+canonical states as the current ranking blocker. D3 proved the hydration-
+conflict population mechanism; its narrow projection correction, complete local
+verification, and required focused review/re-review are clean. The subsequent
+D3 retry completed hydration but selected a 6.2-second ingress-fence stall and
+`frame_slot_capacity`. The routed D4 retained-tail correction now passes the
+full-universe cost, 60-cycle latency, and sustained 216-frame/s local proofs.
+The D5 correction now applies deterministic valid-live precedence at the
+REST/live identity itself: unequal historical overlap remains diagnostic but
+does not poison coverage, features, qualification, or ranking. The routed
+checkpoint hot-path correction is finally accepted after bounded projection
+and decoder corrections and a clean focused final re-review. No provider
+request is authorized here.
 
 **Boundary and completed-contract authority:** Direct owner request on
 2026-08-11 to use the read-only recovery review and specify the narrow fix.
@@ -33,13 +43,15 @@ This is one C3/C7/C8/C10 correction. Pause C12 and preserve its files.
 
 | Document | Normative responsibility | Coverage | Read for | Depends on |
 | --- | --- | --- | --- | --- |
-| This file | Compact single-file correction contract, Sections 1-19 | `NARROW-*`, `P-NARROW-*`, S1/S2 | Every implementation, proof, review, or correction | Accepted dependencies named above |
+| This file | Parent recovery boundary and sole cross-correction ledger | `NARROW-*`, `P-NARROW-*`, S1/S2, Gate F routing | Every recovery task | Accepted dependencies named above |
+| [`live-fence-finalization-and-burst-capacity-correction.md`](live-fence-finalization-and-burst-capacity-correction.md) | D4 fence attribution, last-coherent incident evidence, bounded finalization correction, and owner-selected 32,768-slot retry headroom under the unchanged byte guard | `FENCE-*`, `P-FENCE-*`, D4-S1/S2 | Implementing or reviewing the post-D3 live-fence correction | This parent; D1-D3 diagnostic |
+| [`live-checkpoint-hot-path-correction.md`](live-checkpoint-hot-path-correction.md) | C7 projection ownership, bounded FIFO continuation, checkpoint diagnostics, usable terminal composition, and restart reacceptance | `CKHOT-*`, `P-CKHOT-*`, CKHOT-S1/S2 | Implementing or reviewing checkpoint hot-path correction | This parent; accepted C7/C8 contracts |
 
 This is the sole ledger; prior corrections are evidence.
 
 | Item | State | Evidence/review | Next action |
 | --- | --- | --- | --- |
-| Correction contract | `accepted` | The owner authorized one further full Gate E execution after the exact cycle-1 cause was proven and corrected. Gate E passed, the final `gpt-5.6-sol` medium review returned CLEAN/PASS, and final verification is recorded below | Preserve accepted A-E evidence; Gate F remains separate and unexecuted |
+| Correction contract | `accepted` | The owner authorized one further full Gate E execution after the exact cycle-1 cause was proven and corrected. Gate E passed, the final `gpt-5.6-sol` medium review returned CLEAN/PASS, and final verification is recorded below | Preserve accepted A-E evidence; Gate F remains separate, with its one D1 observation and offline D2 evidence recorded below |
 | S1 — stable live path | `accepted` | `P-NARROW-LIVE` and Gate B passed 2026-08-11; exact evidence below | Preserve; no S1 rerun is required by S2-P |
 | S2 — measured mature cost | `accepted` | Activity correction and synthetic A-D evidence pass. Corrected Gate E completed 7,581,690 hydration rows, then ten exact runtime-owned cycles in 73.53-122.18ms each against the two-second limit, with monotonically increasing publication IDs | Complete for the fresh-start live milestone; this is current-host cached-data evidence, not provider latency or an SLA |
 | S2-R — production-reader resource diagnosis | `accepted_prerequisite` | Corrected exact reader validates all 2,584,011,150 bytes and 7,671,171 records in 40.53s with 20.30 MB peak RSS; compact trust/scale/repository/race/vet/review evidence is clean | Complete; reused by S2-P and any later authorized composition |
@@ -47,6 +59,262 @@ This is the sole ledger; prior corrections are evidence.
 | S2-E — corrected cached composition | `accepted` | Newly authorized corrected Gate E passed in 233.93s: exact prefix/row/value/empty counts, queue high-water 320/512, zero rejection, 26,963 sent/read/admitted/dispositioned frames, ten coherent automatic cycles, live/qualified-current lifecycle, 20 ranking and T/Q rows, valid accounting/readiness, and deterministic shutdown | Complete; do not rerun unchanged evidence |
 | Post-E closed-market vertical | `accepted_after_correction` | `TestPV1RCVertical` initially rejected checkpoint projection because the first accelerated Activity lookup evaluated a nonexistent pre-session block and diverged from checkpoint rebuild. Both accelerated loops now clamp to the first valid 04:00:30 reference end. The direct boundary regression, checkpoint round trip, full scanner vertical through live A/T/Q/API/UI/shutdown, focused races, short suite, vet/diff, and focused review are clean | Complete; preserves Gate E and closes checkpoint-on launch composition without claiming provider behavior |
 | Pre-04:00 live startup ordering | `accepted_after_observed_correction` | The operator-started 2026-08-12 run loaded its Keychain credential, completed reference/binding and aggregate handshake, remained correctly `awaiting_session`, then RunLive incorrectly attempted hydration and exited. RunLive now retains and consumes that acknowledged attempt only while `awaiting_session`, waits for its automatic timer transition, and then starts ordinary hydration. Session-start and disconnect/cleanup regressions, focused race, complete non-short operations/scanner suites, short suite, vet/diff, and focused review are clean | Corrected locally; a later operator retry is new live evidence, not deterministic proof |
+| Gate F live ingress first-cause diagnosis | `cause_identified_fix_not_implemented` | D1 preserves adapter source/reason/causal position and cause-time accounting. One separately authorized checkpoint-off run on 2026-08-12 completed 5,511/5,511 hydration requests (5,395 value, 116 empty, zero failed/canceled/fenced), briefly entered live/watermark_stale, then reported `adapter_terminal/protocol/frame_capacity` after frame 42,220 and suppressed with same-binding recovery allowed. The terminal renderer omitted the retained queue operands, so slot versus byte-budget exhaustion remains unresolved and no behavioral correction is selected. | Stop. Do not tune or retry. A subsequent correction slice must first expose/use the retained capacity operands, then correct only the proven owning mechanism. |
+| Gate F D2 decisive capacity evidence | `accepted_offline` | Split slot/byte reasons, exact rejection operands and active engine-delivery attribution, a strict 60-sample one-second absolute-counter history, atomic no-overwrite local persistence, and provisional 1,024-frame/128-MiB burst headroom pass matched production-composition cases, full short, focused race, vet, diff checks, and clean focused re-review. | Stop. Do not run the provider without separate authorization. |
+| Gate F D2 authorized live observation | `correction_required` | One checkpoint-off/two-worker run completed 5,511/5,511 hydration and a reconciled fence with no capacity terminal. Queue high-water 813/1,024 frames and 424,594/134,217,728 bytes directly selects slot pressure in this run, while the earlier run's missing operands remain historically unknowable. Ranking remained unavailable because 486 bootstrap-origin uncertainties plus one local invalid left 487/5,694 population states unresolved; watermark froze at 13:32:10 EDT while ingestion continued. | Diagnose the deterministic hydration-to-live canonical population transition. Do not rerun live, grow the queue, weaken readiness, or fabricate coverage. |
+| Gate F D3 one-symbol population correction | `semantic_premise_superseded_by_d5` | The matched proof correctly reproduced the then-current implementation but assumed every unequal REST/live overlap installed unresolved historical-conflict state. DTE-MERGE-04 makes unknownness conditional on correctness being unestablished; valid live precedence establishes correctness. The transition diagnostic remains bounded legacy/other-uncertainty evidence, but it is no longer the ordinary REST/live path. | Preserve the historical observation and diagnostic accounting; use D5 semantics for new valid-live overlap. Existing in-memory conflict bits are not repaired retroactively. |
+| Gate F D3 authorized retry | `correction_required` | Hydration completed 5,511/5,511 with zero failed/canceled/fenced work. During the exact aggregate ingress fence, consumer delivery stopped for at least 6.235s; 1,195 messages were admitted in the next scheduled second, the 1,024-slot queue saturated at only 400,909/134,217,728 bytes, and frame 78,459 selected `protocol/frame_slot_capacity`. The fence later published `live/degraded_bootstrap/incomplete_population`, but terminal replacement/incident projection did not retain its D3 ledger. | Do not rerun unchanged. Execute the routed D4 S1/S2 correction; live retry remains separately authorized. |
+| Gate F D4 fence/capacity correction | `accepted_local_correction_ready_for_authorized_retry` | The exact cached 5,502-symbol/7,581,690-row 1x path completed the original fence in 361.096ms (333.357ms attributed). After the authorized live retry exposed retained-tail inflation, the corrected 5,694-symbol/961-record unique-tail proof staged three boundaries in 322.106–397.037ms and applied them in 0.797–1.658ms; 60 advancing cycles averaged 399.871ms and peaked at 601.020ms. A credential-free 60-second run dispositioned all 12,960 frames at 216 frames/s with queue high-water 6, final queue zero, and no rejection. Review found and correction fixed one stale negative derived-coverage view after direct hydration compaction; its regression, ordinary suite, focused race, vet/diff, and `gpt-5.6-sol` medium re-review are clean. | Local correction complete and ready for an exact-date authorized provider retry. Do not infer provider latency, a live SLA, or authorization from local acceptance. |
+| Gate F D5 REST/live precedence correction | `accepted_local_correction_ready_for_live_validation` | Live-first unequal REST now retains the live values/provenance, increments existing `conflict_or_withdrawal` accounting, installs no historical-conflict bit, preserves exact slot/request coverage, and does not invoke conflict-driven feature/evaluator work. Focused engine/runtime/snapshot proofs cover unequal OHLCV/VWAP/ATS, provenance-only ATS difference, current HOD/session/rolling ranges/Activity, `not_yet_passed`, preserved passing qualification, `qualified_current`, API diagnostic projection, and historical/historical fail-closed behavior. Affected-package short/race/vet, repository short, and diff checks pass. | A new separately authorized live run is required to validate provider behavior. Existing in-memory conflict bits are not repaired retroactively; restart/re-hydration uses the corrected rule. |
+| Activity mutable-block rotation correction | `accepted_local_correction_ready_for_live_validation` | A live aggregate could allocate the 34th aligned 30-second mutable block before ordinary maintenance rotated the oldest block, even though the oldest block was already strictly beyond the 16-minute correction horizon. That transient ordering error invoked terminal symbol-local `state_bound_exceeded` and discarded Activity state. Recompute now finalizes expired blocks before allocating the incoming block. The exact 33-to-32-to-33 boundary regression, focused race, Activity semantics, engine short/vet, and repository short proofs pass. | A fresh process is required because an existing bound-exceeded symbol intentionally cannot reconstruct state already discarded. Preserve the 33-block bound and strict horizon semantics. |
+| Pre-retry operational headroom | `accepted_local_ready_for_owner_run` | Direct owner direction on 2026-08-12 selects 32,768 raw-frame slots under the unchanged 128-MiB/8-MiB byte guards, a 4-GiB cumulative hydration-transfer allowance with unchanged resident bounds, and five recovery attempts. Review exposed and correction removed quadratic FIFO dequeue plus a scheduler-dependent proof. Exact full-ceiling ring wrap/saturation/drain race, an 8,192-slot Runtime saturation control/typed failure repeated five times under race, and an isolated 216-frame/s production-config run (12,960/12,960 frames, high-water 2, zero rejection) pass. Production configuration, ordinary verification, vet/diff, and final `gpt-5.6-sol` medium re-review are clean. These are lower-level containment settings; readiness, reconciliation, provider request/page bounds, two-worker launcher configuration, and market semantics are unchanged. | Local headroom correction complete. The owner may run the scanner; do not infer a provider SLA or trading edge. |
+| Checkpoint hot-path correction | `finally_accepted` | Monolithic no-scratch projection still held the owner for 14.493/26.963s and was abandoned. Three real-consumer dense 6,000-symbol FIFO-continuation boundaries limited maximum owner hold to 20.870ms, aggregate delivery to 66.874ms, and observation to 55.523ms with stable 3.435-GB post-GC heap; alias-isolated handoff prevents retained writer aliases; real completion returns to engine/API accounting. Bounded decode plus the exact two-worker control yielded 524.029ms median restart versus 1.381s fresh (62.1% faster). Focused re-review is clean. | Preserve for V1 integration; provider validation remains separately authorized. |
+
+### Gate F D5 deterministic REST/live precedence correction — 2026-08-12
+
+The D3 implementation premise was too conservative. The authorized live
+evidence contained 38 conflict/withdrawal rows among 7,175,675 hydration rows,
+affecting 25 symbols. Nineteen otherwise rankable symbols remained
+qualification-unresolved, and eight displayed symbols had price/range fields
+suppressed. D3 treated every unequal REST/live overlap as unresolved historical
+truth even though DTE-MERGE-04 already selects the valid live record and makes
+unknownness conditional on correctness not being established.
+
+D5 corrects the lowest applicable decision. When an admitted historical row
+differs from valid live authority for the same `(symbol, window_start)`, the
+engine retains the live canonical record and its provenance, records bounded
+current/incoming provenance evidence, returns the existing
+`historical_live_conflict` disposition, and increments the existing hydration
+`conflict_or_withdrawal` bin. It does not set the historical-conflict bitmap,
+downgrade the request from candidate-complete coverage, revoke presence, or
+run feature/evaluator mutation for that diagnostic. The rule applies to
+OHLCV, VWAP, ATS value, and source-specific ATS provenance differences.
+
+Historical/historical unequal evidence still withdraws any arrival-order-only
+historical value, sets the conflict bitmap, makes coverage unknown, invalidates
+dependent fields, and leaves qualification unresolved. Repeated unequal live
+evidence at one causal position still enters canonical integrity containment;
+invalid rows, stale/wrong binding/generation/token evidence, absent live
+authority, and structural ambiguity retain their existing behavior. No
+last-row-wins path, formula, threshold, correction horizon, ranking order,
+watermark rule, readiness tolerance, checkpoint performance bound, or Activity
+state bound changed.
+
+Primary regressions are
+`TestC6MERGE01ProductionHistoricalDispositionMatrix`,
+`TestD3OneSymbolHydrationConflictPopulationTransition`,
+`TestResolvedRESTLiveDiscrepancyPreservesQualificationAndFeatures`,
+`TestC3FEAT01PriceRangeBoundaryTable`,
+`TestSlice1RuntimeRunLiveInstallsOrdinaryLiveCoverage`, and
+`TestLiveFirstReadyResolvedDiscrepancyIsTransportable`. Focused and complete
+affected-package short tests pass; `go test -short -timeout 2m ./...` passes;
+focused race tests for engine, operations, and snapshot API pass; and
+`go vet ./internal/engine ./internal/operations ./internal/snapshotapi` plus
+`git diff --check` pass. These deterministic proofs establish engine and local
+projection semantics, not current provider behavior. No credential or provider
+request was used. Existing process-memory conflict bits are intentionally not
+rewritten; a new run/re-hydration is required to exercise D5 against provider
+data.
+
+### Gate F D3 exact population blocker — 2026-08-12
+
+The following records the observed D3 mechanism and its then-accepted narrow
+projection repair. D5 supersedes its assumption that a valid-live REST
+discrepancy must create unresolved conflict state; the retained text remains
+historical evidence rather than current merge semantics.
+
+The one-symbol matched proof establishes causality. An equal REST row against
+an already accepted live identity deduplicates, completes request coverage,
+and finishes with one trusted rankable/covered symbol. Changing only that REST
+row to unequal produces `conflict_or_withdrawal`, flips the whole hydration
+request to unknown, promotes it to symbol-wide `bootstrap_origin` at the
+initial fence, and keeps it sticky through an identical later accepted live
+mark and ordinary coverage fence. Final population is one unresolved symbol.
+
+The localized historical conflict is legitimate for history-dependent
+features. The bug is its unconditional precedence over a later independently
+trustworthy current mark in population accounting. Existing state already has
+the localized conflict bitmap, canonical mark authority, and exact interval
+coverage, so this is a narrow population-projection/coverage-finalization fix,
+not a foundational redesign. The 486 live bootstrap-origin states are now
+mechanistically explained; the separate one `local_invalid` state is not.
+Exact transition evidence and verification are recorded in
+[`live-ingress-first-cause-diagnostic.md`](live-ingress-first-cause-diagnostic.md#16-d3-one-symbol-population-transition-proof).
+
+The implemented correction leaves the unknown consequence and conflict bitmap
+intact for features and qualification. Only the primary population projection
+may trust a later mark, and only for bootstrap-origin uncertainty with valid
+live authority, a strictly older localized conflict, no conflict or invalid
+evidence at/after the mark, and exact canonical coverage over
+`[mark.window_start,T)`. Consequently the unequal case now has the requested
+trusted/covered population while its history-dependent fields and qualification
+remain unavailable or unresolved. Conflict at/after the mark, incomplete
+post-mark coverage, absent later live authority, post-bootstrap provider
+failure/fence, later structural invalidity, and historical-only authority all
+remain unresolved. The exact commands, results, invalidated claim, and
+limitations are recorded in the diagnostic. The required review initially
+found the row-status masking and unbounded proof waits; both were corrected,
+and focused re-review returned CLEAN/PASS with no remaining P1/P2. Complete
+post-review verification is green. No live request was made.
+
+The retry diagnostic is an overlapping ledger, not a new population. Its
+denominator is each valid-prior symbol carrying the exact bootstrap-origin
+unknown consequence. Each such symbol is counted once as trusted by a later
+live mark, no later eligible mark, latest mark lacking independent live
+authority, no strictly older localized conflict, conflict at/after the mark,
+invalid evidence at/after the mark, or incomplete exact post-mark coverage.
+The denominator equals the seven bins; rejected bins remain bounded by
+`unknown_due_failure_or_fence`, and the trusted bin remains bounded by trusted
+population. The immutable snapshot API exposes the ledger under
+`accounting.population_transition_diagnostic`; while non-ready, the operator
+prints the same counters plus unresolved population and `local_invalid`. This
+allows a future separately authorized run to distinguish a predicate miss from
+the already-known unrelated residual without retaining symbols or payloads.
+Focused review found and closed one P2: the terminal suppression branch had
+returned before printing the ledger. The terminal and ordinary non-ready paths
+now share one renderer, a forced suppressed final-sample regression passes,
+and focused re-review returned CLEAN/PASS with no remaining P1/P2.
+
+### Gate F D2 decisive capacity evidence — 2026-08-12
+
+D2 preserves the historical live reason as `frame_capacity`; it cannot infer
+which conjunct failed after the fact. A future rejection is now typed as
+`frame_slot_capacity` or `frame_byte_capacity` and prints/persists the exact
+queue/capacity/incoming-frame operands, last accepted position, high-water,
+oldest age, and active engine delivery kind/start/age. The retained history is
+exactly the last 60 scheduled one-second absolute-counter samples; terminal
+paths cannot insert off-cadence points. The final JSON name is atomically
+published only after a protected temporary file and its bytes are synced, and
+an existing record is never overwritten.
+
+The bounded production-composition capacity case now fails at the Massive
+adapter with `protocol/frame_slot_capacity`, exactly 1,024 queued/high-water
+frames, one rejection, a hydrating engine with one REST request still open, and
+the unchanged ingress-integrity suppression transition. The matched case at
+the same 1,024-frame/128-MiB/8-MiB limits remains live/ready and accounting-
+valid. Every other D1 candidate retains a matched fault/control proof, and real
+concurrent delivery does not trip the runtime accounting guard.
+
+The D2 provisional limits were 1,024 frame slots and 128 MiB total queued bytes;
+the per-frame ceiling remains 8 MiB. This is finite burst headroom, not a claim
+that sustained producer/consumer imbalance is fixed. No workers, timeouts,
+retries, readiness, hydration, ranking, checkpoint, T/Q, or suppression
+semantics changed. No provider request was made or is authorized by this
+offline correction.
+
+Focused production reproducer/guard/history/latch and terminal/persistence/
+renderer proofs pass, followed by repository short, affected-package short
+race, vet, and diff checks. The first complete-short attempt exposed a
+diagnostic lock-order deadlock; the corrected two-phase cause reservation
+removes nested owner locks and passes both the complete suite and race detector.
+The same `gpt-5.6-sol` medium reviewer returned **CLEAN** after focused
+re-review. It confirmed exact active-delivery linearization, atomic no-overwrite
+publication, scheduler-only history, monotonic active-age proof, and no
+remaining lock inversion, race, unauthorized tuning, or P1/P2 finding. The
+formerly flaky byte-capacity proof passed 100/100 locally and 50/50 in review
+after it boundedly waits for the queue-owned rejection before starting the
+consumer.
+The detailed incident record, initial review corrections, residual uncertainty,
+and exact verification are in
+[`live-ingress-first-cause-diagnostic.md`](live-ingress-first-cause-diagnostic.md#14-d2-decisive-capacity-diagnostic-and-provisional-headroom).
+
+### Gate F D2 authorized live result — 2026-08-12
+
+The single authorized run from 13:24:10 to 13:39:16 EDT used checkpoint mode
+off, two workers, 1,024 slots, 128 MiB total bytes, and the unchanged 8 MiB
+frame limit. It was stopped once at the 15-minute bound and not retried.
+
+Capacity was not the terminal boundary: no incident JSON or suppression was
+produced. Queue high-water was 813 frames but only 424,594 bytes, selecting
+slot pressure in this run and showing that the provisional slot headroom
+absorbed its finite burst. It cannot retroactively supply the prior generic
+incident's missing operands. This does not prove sustained capacity or justify
+either another increase or an immediate decrease.
+
+The new blocking invariant is engine-owned complete population. Fresh
+hydration finished 5,409 value plus 102 successful-empty requests with zero
+failure/cancel/fence, and the aggregate fence reconciled through frame 106,689.
+Nevertheless 487 states remained unresolved: 486 bootstrap-origin plus one
+local invalid. Ranking stayed unavailable/incomplete_population and readiness
+stayed ranking_noncurrent; committed time remained 13:32:10 EDT while the
+fence advanced to 13:38:51 and engine sequence reached 275,317. Accounting
+remained valid, so this is not an accounting-guard failure.
+
+The smallest next correction is a deterministic diagnosis of the fresh-
+bootstrap hydration/fence-to-canonical-population transition. Do not weaken
+readiness, fabricate marks, or request another provider run before that
+boundary is locally distinguished. Exact measurements, remaining uncertainty,
+artifact paths/digests, and shutdown verification are recorded in
+[`live-ingress-first-cause-diagnostic.md`](live-ingress-first-cause-diagnostic.md#15-separately-authorized-d2-live-observation--2026-08-12).
+
+### Gate F D1 diagnostic result — 2026-08-12
+
+The exact incident record and candidate-by-candidate invariant evidence are in
+[`live-ingress-first-cause-diagnostic.md`](live-ingress-first-cause-diagnostic.md#12-d1-incident-result--2026-08-12).
+The accepted claim invalidated by the live evidence is diagnostic sufficiency:
+although C5 latched the adapter's first terminal source/reason, C5/C8 delivery
+and the operator capture collapsed it into generic engine `ingress_integrity`.
+The D1 change carries that existing immutable fact, adds no lifecycle decision,
+and retains at most one fixed-cardinality redacted incident.
+
+The last live-coherent state is still 5,511 planned, 5,176 value, 334 empty,
+one open, zero failed/canceled/fenced, acknowledged aggregate connection, fence
+pending, live tail active, no T/Q subscriptions, and the earlier valid 24/512
+queue sample. The first invalid live transition is unknowable from retained
+evidence. The remaining candidates are `frame_capacity`, `status_ambiguous`,
+`ingress_ambiguity`, and a genuine named runtime local-accounting mismatch.
+Receipt regression is excluded by its distinct `clock_regression/restart_required`
+lifecycle. Frame oversize is also excluded: the unchanged real connector
+rejects 8 MiB+1 as `reader/read_failed` before queue admission and does not
+produce the observed ingress-integrity transition.
+
+Verification passed the D1 focused commands, the bounded non-short production-
+composition reproducer, repository short suite, affected short race packages,
+vet, and diff checking. One accidentally broad non-short Massive command ran
+the unrelated C7 current-host restart proof and failed only its benchmark
+comparison (checkpoint median 4.002s versus fresh 1.169s); it was not rerun and
+does not invalidate the subsequent narrow D1 Massive proof. The required
+focused review initially found one P1 behavioral drift and three P2 proof gaps:
+oversize had been reclassified into suppression, incident counters were sampled
+after cleanup, controls changed production limits, and the healthy guard proof
+was synthetic. The oversize drift was reverted; cause-time owner accounting,
+owner-maintained high-water, pre/post engine publications, fixed-limit matched
+controls, and real concurrent guard exercise correct those findings. The same
+reviewer re-reviewed that boundary as recorded below. D1 remains stopped because
+no behavioral correction or live rerun is authorized.
+
+The same `gpt-5.6-sol` medium read-only reviewer returned **CLEAN** after the
+corrections: no remaining P1/P2 finding. It confirmed unchanged oversize
+recovery behavior, cause-time production-limit capacity accounting at 512
+queued/high-water plus one reject, matched controls, repeated guard sampling
+during real `RunLive` delivery, fixed-cardinality redaction, and explicit
+owner-coherent cause snapshots plus pre/post engine views. The remaining
+limitations are offline provider chronology and the deliberate absence of a
+globally atomic multi-owner snapshot; no evaluated identity crosses owners.
+
+### Gate F authorized first-cause observation — 2026-08-12
+
+The separately authorized single run used trading date 2026-08-12, the existing
+Keychain credential, checkpoint mode off, two hydration workers, production
+queue limits, and a 15-minute maximum. It ran once from 09:35:17 to 09:42:52
+PDT and exited on the first terminal; it was not retried.
+
+The first failure was `adapter_terminal/protocol/frame_capacity` at epoch 1,
+after frame 42,220. Immediately beforehand hydration had reconciled all 5,511
+requests as 5,395 value plus 116 successful-empty, with no failed, canceled, or
+fenced work. The acknowledged live tail remained active, the ingress fence was
+pending, and the scanner briefly published live/watermark_stale. The rejected
+admission then produced `suppressed/ingress_integrity/`
+`same_binding_recovery_allowed`.
+
+This selects the bounded live-frame queue/admission boundary and eliminates
+status ambiguity, ingress ambiguity, and runtime accounting as the first cause
+in this observation. It does not yet select the exact capacity conjunct:
+`frame_capacity` combines the 512-slot ceiling and remaining 64-MiB byte
+budget, while the terminal renderer failed to print the already-retained
+cause-time queue operands. The incident record therefore proposes no tuning or
+behavioral fix. Exact evidence and the bounded log path are recorded in
+[`live-ingress-first-cause-diagnostic.md`](live-ingress-first-cause-diagnostic.md#13-separately-authorized-live-selection--2026-08-12).
 
 ### S1 acceptance evidence — 2026-08-11
 

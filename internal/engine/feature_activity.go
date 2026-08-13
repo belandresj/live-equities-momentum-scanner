@@ -331,11 +331,17 @@ func (sum activityExactSum) float64() (float64, bool) {
 	return result, finiteFeature(result)
 }
 
-func recomputeMutableActivityBlock(state *symbolAggregateState, binding *installedBinding, blockEnd time.Time) {
+func recomputeMutableActivityBlock(state *symbolAggregateState, binding *installedBinding, blockEnd, now time.Time) {
 	activity := ensureActivityState(state)
 	if activity.boundExceeded {
 		return
 	}
+	// The 16-minute inclusive correction horizon legitimately spans 33 aligned
+	// 30-second blocks. Rotate blocks that are already strictly beyond that
+	// horizon before allocating the incoming block; otherwise a steady-state
+	// symbol transiently reaches 34 blocks and permanently trips the local bound
+	// even though its oldest block is already immutable.
+	finalizeActivityMutable(activity, now)
 	key := blockEnd.Unix()
 	if _, immutable := activity.references[key]; immutable {
 		// A deep historical insert was already combined synchronously while
@@ -560,7 +566,14 @@ func finishActivityResult(result activityFeatureResult) activityFeatureResult {
 
 func applyActivityResult(state *symbolAggregateState, binding *installedBinding, result activityFeatureResult) {
 	activity := ensureActivityState(state)
-	advanceActivityReferenceLookup(activity, state, binding, result.at)
+	// State-bound failure is terminal for this binding and failActivityBound
+	// has already discarded the lookup's semantic source collections. Rebuilding
+	// derived acceleration cannot change the invalid result and, on a mature
+	// retained tail, repeats session-length exact-coverage work every apply.
+	historyIncomplete := result.activity.status == featureUnavailable && result.activity.reason == featureReasonHistoryIncomplete
+	if !activity.boundExceeded && !historyIncomplete {
+		advanceActivityReferenceLookup(activity, state, binding, result.at)
+	}
 	activity.result = result
 	pruneFoldedActivityTargets(activity, result.at.Add(-activityBlockDuration))
 }
@@ -606,6 +619,9 @@ func activityReferenceValue(state *symbolAggregateState, binding *installedBindi
 }
 
 func rebuildActivityReferenceLookup(activity *activityFeatureState, state *symbolAggregateState, binding *installedBinding, at time.Time) bool {
+	if activity == nil || activity.boundExceeded {
+		return false
+	}
 	lookup := activityReferenceLookup{at: at, transactions: make([]float64, 0, maximumActivityReferences), expansions: make([]float64, 0, maximumActivityReferences)}
 	upper := at.Add(-activityBlockDuration)
 	for start := firstAlignedActivityStart(binding, binding.sessionStart); !start.Add(activityBlockDuration).After(upper); start = start.Add(activityBlockDuration) {
@@ -631,6 +647,9 @@ func rebuildActivityReferenceLookup(activity *activityFeatureState, state *symbo
 }
 
 func advanceActivityReferenceLookup(activity *activityFeatureState, state *symbolAggregateState, binding *installedBinding, at time.Time) {
+	if activity == nil || activity.boundExceeded {
+		return
+	}
 	if !activity.referenceLookup.valid || at.Before(activity.referenceLookup.at) {
 		rebuildActivityReferenceLookup(activity, state, binding, at)
 		return

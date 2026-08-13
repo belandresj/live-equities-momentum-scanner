@@ -116,16 +116,20 @@ The private ranking mode is one of:
 | --- | --- |
 | `qualified_current` | Current binding, aggregate transport/watermark and ingress fence; reconciled population with `unknown_due_failure_or_fence=0`; qualification evaluated completely through `T`. Rows use `C3-RANK-01`; zero passers is an exact empty table. |
 | `degraded_bootstrap` | Current binding, transport/watermark and fence; exact population counters; at least one trusted rankable mark; every unresolved population/qualification cause is `bootstrap_origin`. Rows are raw known-rankable Day-%/symbol top 20 without qualification filtering. Expose every primary count, `covered_population`, `unresolved_population`, known-rankable count, and bounded origin counts; state that omitted symbols may qualify or outrank. Never promote T/Q. |
+| `degraded_current` | Live lifecycle with current binding, aggregate transport/watermark and ingress fence; at least one trusted rankable mark; remaining uncertainty is symbol-local. The uncertainty may retain `bootstrap_origin` after startup or arise as `post_bootstrap_gap`/`local_invalid`; origin does not extend the startup-only mode. Rows are raw known-rankable Day-%/symbol top 20 without qualification filtering. Symbols whose current mark could be displaced by unresolved evidence are excluded; trusted-mark symbols with unresolved qualification may appear but are never called qualified. Expose exact population, qualification, and origin counts. Never promote T/Q. |
 | `unavailable` | No committed `T`, zero trusted marks for degraded output, incomplete global binding/fence, or another unmet current/degraded predicate. No contracted rows. |
 | `stale` | A later Component 8 currentness fact says an otherwise coherent prior result is no longer current. Component 3 chooses no age threshold and creates no current/degraded claim. |
 | `suppressed` | Component 2 global integrity/lifecycle path controls the publication; Component 3 contributes no contracted rows. |
 
-`degraded_bootstrap` is not used after exact evidence merely because zero
+Neither partial mode is used after exact evidence merely because zero
 symbols qualify. Row fields carry `warming/current/unavailable/invalid` from
 Components 3/9 and the later Component 8 `stale` overlay independently. A
 field absence is never numeric zero. T/Q state cannot alter a mode, row, rank,
 aggregate field, `T`, or backend-readiness predicate; only
 `qualified_current` rows may later create T/Q desired membership.
+`degraded_current` is a current causal claim but an explicitly non-qualified
+ranking claim; a genuine transport, binding, clock, fence, or canonical-global
+failure remains unavailable rather than being relabeled symbol-local.
 
 Uncertainty origin is the closed enum `bootstrap_origin`,
 `post_bootstrap_gap`, or `local_invalid`. Bootstrap origin means startup
@@ -243,7 +247,7 @@ the explicitly approved corrective amendments shown:
 | Requirement | Claim and dangerous counterexample | Observable result / intentional limitation |
 | --- | --- | --- |
 | `C3-RANK-01` | Only qualified rankable symbols enter exact Day-%/symbol top 20; counters high raw-return nonpasser, rounded tie, all-passer return, or hidden secondary key. | Exact order, ranks, unique row count, and total passers for boundary populations. Does not prove trading edge or capacity latency. |
-| `C3-PROJ-01` | Every mode needs exact evidence and only bootstrap-origin uncertainty permits degraded output; counters later recovery/global uncertainty relabeled bootstrap, empty degraded, T/Q promotion, or non-Day failure suppressing Last/Day %. | Exact mode/reason/rows/origin-counts/intent eligibility for bootstrap versus post-bootstrap/local-invalid evidence. Freshness thresholds and public labels remain Components 8/10. |
+| `C3-PROJ-01` | Every mode needs exact evidence; `degraded_bootstrap` is confined to startup hydration, while live-lifecycle symbol-local uncertainty uses `degraded_current` without rewriting its closed origin. Counter global uncertainty relabeled local, empty partial, T/Q promotion, or non-Day failure suppressing Last/Day %. | Exact mode/reason/rows/origin-counts/intent eligibility across startup bootstrap, live retained-bootstrap, post-bootstrap, and local-invalid evidence. Freshness thresholds and public labels remain Components 8/10. |
 | `C3-EVAL-01` | Candidate applies iff exact identity and every predicate validate before the one apply; publication evaluation equals watermark. Counters mismatch mutating `T`, feature/qualification result, evaluator current, or publication; second publisher; mixed accounting; or watermark mismatch. | Invalid/mismatched candidate leaves applied state unchanged and production containment suppresses; normal publication rejects mismatched `evaluation.at`. Successful live/replay support production remains Components 4–6. |
 
 ## 16. Sequential implementation-slice plan

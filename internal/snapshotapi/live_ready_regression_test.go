@@ -11,10 +11,10 @@ import (
 	"github.com/belandresj/live-equities-momentum-scanner/internal/operations"
 )
 
-// TestLiveFirstReadyDegradedPublicationIsTransportable covers the production
-// boundary missed by the original C10 corpus: real engine-owned rows first
-// appear at the hydration/fence transition in a current degraded publication.
-func TestLiveFirstReadyDegradedPublicationIsTransportable(t *testing.T) {
+// TestLiveFirstReadyResolvedDiscrepancyIsTransportable covers the production
+// C10 boundary for a diagnostic-only REST/live discrepancy at the first ready
+// hydration/fence publication.
+func TestLiveFirstReadyResolvedDiscrepancyIsTransportable(t *testing.T) {
 	binding := snapshotBinding(t, "AAA", "BBB")
 	now := binding.SessionStart().Add(time.Minute)
 	config := operations.DefaultConfig()
@@ -47,8 +47,8 @@ func TestLiveFirstReadyDegradedPublicationIsTransportable(t *testing.T) {
 		return engine.AggregateValues{Open: price, High: price, Low: price, Close: price, Volume: 1000, VWAP: price, AverageTradeSize: 10, ATSProvenance: provenance}
 	}
 	// BBB's live fact intentionally precedes an unequal REST fact for the same
-	// identity. That symbol becomes unknown while AAA remains rankable, which
-	// produces the observed current degraded/incomplete-population shape.
+	// identity. Live remains canonical and exact; the API must still expose the
+	// discrepancy through bounded hydration-row accounting.
 	live := engine.AggregateInput{SchemaVersion: engine.AggregateSchemaV1, BindingIdentity: binding.Identity(), Source: engine.AggregateSourceLive,
 		Symbol: "BBB", WindowStart: requests[1].Start(), WindowEnd: requests[1].Start().Add(time.Second), Values: values(20, engine.ATSLiveProviderAverage),
 		DeliveryTime: requests[1].Start().Add(time.Second), Live: engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 2}}
@@ -106,7 +106,11 @@ func TestLiveFirstReadyDegradedPublicationIsTransportable(t *testing.T) {
 	if mapErr != nil {
 		t.Fatalf("first-ready capture rejected: %v", mapErr)
 	}
-	if !mapped.Status.BackendReady || !mapped.Status.RankingCurrent || mapped.Publication.Lifecycle != "live" || mapped.Ranking.Mode != "degraded_bootstrap" || mapped.Ranking.Reason != "incomplete_population" || len(mapped.Rows) != 1 {
+	if !mapped.Status.BackendReady || !mapped.Status.RankingCurrent || mapped.Publication.Lifecycle != "live" ||
+		mapped.Ranking.Mode != "qualified_current" || mapped.Ranking.Reason != "" || len(mapped.Rows) != 0 ||
+		mapped.Accounting.Population.TrustedRankableMark != 2 || mapped.Accounting.Population.UnknownDueFailureOrFence != 0 ||
+		mapped.Accounting.Qualification.NotYetPassed != 2 || mapped.Accounting.Qualification.Unresolved != 0 ||
+		mapped.Recovery.Rows.Consumed != "2" || mapped.Recovery.Rows.Inserted != "1" || mapped.Recovery.Rows.ConflictOrWithdrawal != "1" {
 		t.Fatalf("first-ready snapshot publication=%+v status=%+v ranking=%+v rows=%d", mapped.Publication, mapped.Status, mapped.Ranking, len(mapped.Rows))
 	}
 

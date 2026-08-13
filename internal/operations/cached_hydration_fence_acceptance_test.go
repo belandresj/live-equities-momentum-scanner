@@ -58,6 +58,7 @@ type cachedFenceRunResult struct {
 	accounting, ready, fenceReconciled                          bool
 	heapBefore, heapAtFence, heapAfter                          uint64
 	tq                                                          engine.TQView
+	fenceTiming                                                 engine.FenceTimingView
 	cycleStage, cycleApply, cyclePublication, cycleLock         [10]time.Duration
 	cycleAlloc                                                  [10]uint64
 	cyclePublicationID                                          [10]uint64
@@ -178,6 +179,12 @@ func TestCachedHydrationFenceAcceptance(t *testing.T) {
 		result.fence, result.firstReady, result.tailDrain, result.lifecycle, result.rankingMode, result.rankingRows, result.maximumQueued,
 		result.framesRejected, result.framesSent, result.framesRead, result.framesAdmitted, result.framesDispositioned,
 		result.heapBefore, result.heapAtFence, result.heapAfter, result.tq.Pressure, len(result.tq.Rows), result.accounting, result.ready)
+	t.Logf("cached_fence_attribution coverage=%s maintenance=%s stage=%s apply=%s publication=%s residual=%s total=%s engine_sequence=%d generation=%d epoch=%d through=%d marker=%d target=%s publication_id=%d valid=%t invalid_reason=%s",
+		result.fenceTiming.CoverageFinalization, result.fenceTiming.SymbolMaintenance, result.fenceTiming.EvaluationStage,
+		result.fenceTiming.EvaluationApply, result.fenceTiming.Publication, result.fenceTiming.ResidualOrderedOverhead,
+		result.fenceTiming.Total, result.fenceTiming.EngineSequence, result.fenceTiming.HydrationGeneration,
+		result.fenceTiming.ConnectionEpoch, result.fenceTiming.ThroughFrameSequence, result.fenceTiming.MarkerOrdinal,
+		result.fenceTiming.Target.Format(time.RFC3339Nano), result.fenceTiming.PublicationID, result.fenceTiming.Valid, result.fenceTiming.InvalidReason)
 }
 
 // TestCachedHydrationFenceAutomaticTimerRehearsal is the compact prerequisite
@@ -201,7 +208,7 @@ func TestCachedHydrationFenceAutomaticTimerRehearsal(t *testing.T) {
 	adapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{
 		Endpoint:   "ws" + strings.TrimPrefix(server.server.URL, "http"),
 		Credential: "cached-rehearsal-fixture",
-		Queue:      massive.LiveQueueConfig{FrameSlots: 512, MaxFrameBytes: 8 << 20, TotalFrameBytes: 64 << 20},
+		Queue:      massive.LiveQueueConfig{FrameSlots: massive.MaximumLiveFrameSlots, MaxFrameBytes: 8 << 20, TotalFrameBytes: massive.MaximumLiveQueueBytes},
 		Clock:      clock.read,
 	})
 	if err != nil {
@@ -805,9 +812,10 @@ func (s *cachedFenceServer) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 type cachedChunkState struct {
-	rows    []engine.HydrationRow
-	emitted int64
-	chunks  int
+	rows     []engine.HydrationRow
+	emitted  int64
+	chunks   int
+	terminal bool
 }
 
 func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceManifest, rate int) (result cachedFenceRunResult) {
@@ -827,7 +835,7 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 	server := newCachedFenceServer(t, selected, manifest.end, rate)
 	defer server.server.Close()
 	adapter, err := massive.NewLiveAdapter(manifest.binding, massive.LiveAdapterConfig{Endpoint: "ws" + strings.TrimPrefix(server.server.URL, "http"), Credential: "cached-fixture",
-		Queue: massive.LiveQueueConfig{FrameSlots: 512, MaxFrameBytes: 8 << 20, TotalFrameBytes: 64 << 20}, Clock: clock.read})
+		Queue: massive.LiveQueueConfig{FrameSlots: massive.MaximumLiveFrameSlots, MaxFrameBytes: 8 << 20, TotalFrameBytes: massive.MaximumLiveQueueBytes}, Clock: clock.read})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -910,9 +918,30 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 		states[token.Symbol()] = &cachedChunkState{rows: make([]engine.HydrationRow, 0, cachedFenceRowsPerChunk)}
 	}
 	historicalStarted := time.Now()
+	var fenceCommand engine.HydrationFenceCommand
 	counts := make(map[string]int64, len(manifest.rowsBySymbol))
 	for symbol := range manifest.rowsBySymbol {
 		counts[symbol] = 0
+	}
+	terminalize := func(symbol string, terminalState engine.HydrationTerminalState) error {
+		state, token := states[symbol], tokens[symbol]
+		terminal, err := engine.NewHydrationTerminalInput(token, token.ResultID(), terminalState, engine.HydrationReasonNone, 1, 1, 1, state.emitted, int64(state.chunks), state.emitted)
+		if err != nil {
+			return err
+		}
+		admission, completion := run.Engine().AdmitHydrationTerminal(ctx, terminal)
+		if admission != engine.AdmissionAdmitted || completion == nil {
+			return fmt.Errorf("hydration terminal %s not admitted", symbol)
+		}
+		got := <-completion
+		if got.Code != engine.DispositionHydrationTerminalApplied {
+			return fmt.Errorf("terminal %s=%s/%s", symbol, got.Code, got.Reason)
+		}
+		state.terminal = true
+		if got.FenceCommand.CommandToken() != 0 {
+			fenceCommand = got.FenceCommand
+		}
+		return nil
 	}
 	flush := func(symbol string) error {
 		state, token := states[symbol], tokens[symbol]
@@ -943,6 +972,9 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 		state.emitted += int64(len(state.rows))
 		state.chunks++
 		state.rows = state.rows[:0]
+		if state.emitted == total {
+			return terminalize(symbol, engine.HydrationCompletedValue)
+		}
 		return nil
 	}
 	progressRows := int64(0)
@@ -979,27 +1011,17 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 	}
 
 	terminalStarted := time.Now()
-	var fenceCommand engine.HydrationFenceCommand
 	for _, token := range requests {
 		state := states[token.Symbol()]
+		if state.terminal {
+			continue
+		}
 		terminalState := engine.HydrationCompletedValue
 		if state.emitted == 0 {
 			terminalState = engine.HydrationCompletedEmpty
 		}
-		terminal, err := engine.NewHydrationTerminalInput(token, token.ResultID(), terminalState, engine.HydrationReasonNone, 1, 1, 1, state.emitted, int64(state.chunks), state.emitted)
-		if err != nil {
+		if err := terminalize(token.Symbol(), terminalState); err != nil {
 			t.Fatal(err)
-		}
-		admission, completion := run.Engine().AdmitHydrationTerminal(ctx, terminal)
-		if admission != engine.AdmissionAdmitted || completion == nil {
-			t.Fatal("hydration terminal not admitted")
-		}
-		got := <-completion
-		if got.Code != engine.DispositionHydrationTerminalApplied {
-			t.Fatalf("terminal %s=%s/%s", token.Symbol(), got.Code, got.Reason)
-		}
-		if got.FenceCommand.CommandToken() != 0 {
-			fenceCommand = got.FenceCommand
 		}
 	}
 	result.terminals = time.Since(terminalStarted)
@@ -1023,6 +1045,7 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 		}
 	}
 	result.fence = time.Since(fenceStarted)
+	result.fenceTiming = run.Engine().ObserveFenceTiming()
 	readyStarted := time.Now()
 	for {
 		status := run.Status()
@@ -1126,8 +1149,13 @@ func assertCachedFence(t *testing.T, manifest cachedFenceManifest, result cached
 	if !result.fenceReconciled || !result.ready || result.lifecycle != "live" || result.rankingMode != "qualified_current" || result.rankingRows < 0 || result.rankingRows > 20 {
 		problems = append(problems, fmt.Sprintf("lifecycle=%s ranking=%s rows=%d fence=%t ready=%t", result.lifecycle, result.rankingMode, result.rankingRows, result.fenceReconciled, result.ready))
 	}
-	if !result.accounting || result.maximumQueued >= 512 {
+	if !result.accounting || result.maximumQueued >= massive.MaximumLiveFrameSlots {
 		problems = append(problems, fmt.Sprintf("accounting=%t queue_high=%d", result.accounting, result.maximumQueued))
+	}
+	timing := result.fenceTiming
+	parts := timing.CoverageFinalization + timing.SymbolMaintenance + timing.EvaluationStage + timing.EvaluationApply + timing.Publication + timing.ResidualOrderedOverhead
+	if !timing.Valid || timing.Total != parts || timing.Total >= 2*time.Second || timing.PublicationID == 0 {
+		problems = append(problems, fmt.Sprintf("fence timing=%+v parts=%s", timing, parts))
 	}
 	for cycle := range result.cycleLock {
 		if result.cycleLock[cycle] >= 2*time.Second || result.cyclePublicationID[cycle] == 0 || cycle > 0 && result.cyclePublicationID[cycle] <= result.cyclePublicationID[cycle-1] {

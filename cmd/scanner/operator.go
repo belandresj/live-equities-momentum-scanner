@@ -6,13 +6,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/belandresj/live-equities-momentum-scanner/internal/engine"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/operations"
 )
 
 type liveOperatorSample struct {
-	Status  operations.Status
-	Metrics operations.Metrics
-	Ranked  int
+	Status          operations.Status
+	Metrics         operations.Metrics
+	IngressIncident *operations.IngressIncident
+	Evaluation      engine.ReplayEvaluationView
+	Ranked          int
 }
 
 type operatorRenderer struct {
@@ -41,6 +44,24 @@ func (r *operatorRenderer) Render(sample liveOperatorSample, force bool) error {
 	if warming {
 		interval = 5 * time.Second
 	}
+	if incident := sample.IngressIncident; incident != nil && !r.warnedFailure && (force || status.Lifecycle == "suppressed") {
+		r.warnedFailure = true
+		if _, err := fmt.Fprintf(r.stderr, "Ingress first cause · %s · %s/%s · epoch %d position %s · invariant %s · lifecycle %s/%s\n",
+			incident.Owner, incident.Source, incident.Reason, incident.Epoch, ingressPosition(incident),
+			firstFailedIdentityName(incident), incident.Lifecycle, incident.LifecycleReason); err != nil {
+			return err
+		}
+		if incident.Reason == "frame_slot_capacity" || incident.Reason == "frame_byte_capacity" {
+			readRate, dispositionRate := ingressRates(incident)
+			if _, err := fmt.Fprintf(r.stderr, "Capacity evidence · queued %d/%d · classifying %d · bytes %d/%d · remaining %d · incoming %d · high %d frames/%d bytes · oldest %s · active %s since %s for %s · read %s · disposition %s\n",
+				incident.Queue.FramesQueued, incident.Queue.CapacityFrames, incident.Queue.FramesClassifying,
+				incident.Queue.QueuedBytes, incident.Queue.CapacityBytes, capacityRemainingBytes(incident), incident.IncomingFrameBytes,
+				incident.Queue.HighFramesQueued, incident.Queue.HighQueuedBytes, incident.Queue.OldestFrameAge,
+				capacityActiveKind(incident), capacityActiveStartedAt(incident), incident.ActiveDeliveryAgeAtCause, ingressRate(readRate), ingressRate(dispositionRate)); err != nil {
+				return err
+			}
+		}
+	}
 	if status.Lifecycle == "suppressed" {
 		if !r.warnedFailure {
 			r.warnedFailure = true
@@ -57,6 +78,13 @@ func (r *operatorRenderer) Render(sample liveOperatorSample, force bool) error {
 			}
 		}
 		_, err := fmt.Fprintf(r.stdout, "Suppressed · %s · %s\n", owner.LifecycleReason, owner.Suppression)
+		if err == nil {
+			evaluation := sample.Evaluation
+			if sample.IngressIncident != nil && sample.IngressIncident.LastCoherentProjection != nil {
+				evaluation = sample.IngressIncident.LastCoherentProjection.Evaluation
+			}
+			err = renderPopulationTransitionDiagnostic(r.stdout, evaluation)
+		}
 		if err == nil {
 			r.remember(signature, status.SampledAt)
 		}
@@ -114,9 +142,99 @@ func (r *operatorRenderer) Render(sample liveOperatorSample, force bool) error {
 	}
 	_, err := fmt.Fprintf(r.stdout, "Scanner %s · %s\n", status.Lifecycle, status.Reason)
 	if err == nil {
+		err = renderPopulationTransitionDiagnostic(r.stdout, sample.Evaluation)
+	}
+	if err == nil {
 		r.remember(signature, status.SampledAt)
 	}
 	return err
+}
+
+func ingressRate(value float64) string {
+	if value < 0 {
+		return "unavailable"
+	}
+	return fmt.Sprintf("%.1f/s", value)
+}
+
+func renderPopulationTransitionDiagnostic(output io.Writer, evaluation engine.ReplayEvaluationView) error {
+	d, p := evaluation.PopulationTransition, evaluation.Population
+	if d.BootstrapUnknown == 0 && p.UnresolvedPopulation == 0 {
+		return nil
+	}
+	_, err := fmt.Fprintf(output, "Population transition · bootstrap unknown %s · trusted later live %s · no later mark %s · mark not live %s · no older conflict %s · conflict at/after mark %s · invalid at/after mark %s · incomplete post-mark coverage %s · unresolved population %s · local invalid %s\n",
+		comma(d.BootstrapUnknown), comma(d.TrustedByLaterLiveMark), comma(d.NoLaterEligibleMark), comma(d.LatestMarkNotLiveAuthority),
+		comma(d.NoStrictlyOlderLocalizedConflict), comma(d.ConflictAtOrAfterMark), comma(d.InvalidAtOrAfterMark),
+		comma(d.IncompletePostMarkCoverage), comma(p.UnresolvedPopulation), comma(evaluation.Uncertainty.LocalInvalid))
+	return err
+}
+
+func capacityRemainingBytes(incident *operations.IngressIncident) int {
+	if incident == nil || incident.Queue.CapacityBytes <= incident.Queue.QueuedBytes {
+		return 0
+	}
+	return incident.Queue.CapacityBytes - incident.Queue.QueuedBytes
+}
+
+func ingressRates(incident *operations.IngressIncident) (float64, float64) {
+	if incident == nil || incident.HistoryCount < 2 {
+		return -1, -1
+	}
+	for lastIndex := incident.HistoryCount - 1; lastIndex > 0; lastIndex-- {
+		last := incident.History[lastIndex]
+		for firstIndex := lastIndex - 1; firstIndex >= 0; firstIndex-- {
+			first := incident.History[firstIndex]
+			if !incident.CapturedAt.IsZero() && (first.CapturedAt.After(incident.CapturedAt) || last.CapturedAt.After(incident.CapturedAt)) {
+				continue
+			}
+			seconds := last.CapturedAt.Sub(first.CapturedAt).Seconds()
+			if seconds <= 0 || last.FramesRead < first.FramesRead || last.FramesDispositioned < first.FramesDispositioned {
+				continue
+			}
+			readDelta, dispositionDelta := last.FramesRead-first.FramesRead, last.FramesDispositioned-first.FramesDispositioned
+			if readDelta == 0 && dispositionDelta == 0 {
+				continue
+			}
+			return float64(readDelta) / seconds, float64(dispositionDelta) / seconds
+		}
+	}
+	return -1, -1
+}
+
+func capacityActiveKind(incident *operations.IngressIncident) string {
+	if incident == nil || incident.ActiveDeliveryKind == "" {
+		return "none"
+	}
+	return string(incident.ActiveDeliveryKind)
+}
+
+func capacityActiveStartedAt(incident *operations.IngressIncident) string {
+	if incident == nil || incident.ActiveDeliveryStartedAt.IsZero() {
+		return "not_applicable"
+	}
+	return incident.ActiveDeliveryStartedAt.UTC().Format(time.RFC3339Nano)
+}
+
+func ingressPosition(incident *operations.IngressIncident) string {
+	if incident == nil || !incident.PositionApplicable {
+		return "not_applicable"
+	}
+	if !incident.ArrayIndexApplicable {
+		return fmt.Sprintf("(%d,%d,not_applicable)", incident.Position.ConnectionEpoch, incident.Position.FrameSequence)
+	}
+	return fmt.Sprintf("(%d,%d,%d)", incident.Position.ConnectionEpoch, incident.Position.FrameSequence, incident.Position.ArrayIndex)
+}
+
+func firstFailedIdentityName(incident *operations.IngressIncident) string {
+	if incident == nil {
+		return "not_applicable"
+	}
+	for index := 0; index < incident.IdentityCount; index++ {
+		if !incident.Identities[index].Reconciled {
+			return incident.Identities[index].Name
+		}
+	}
+	return "not_applicable"
 }
 
 func (r *operatorRenderer) warnHydrationFailure(sample liveOperatorSample) error {

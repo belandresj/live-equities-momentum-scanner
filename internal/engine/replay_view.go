@@ -89,6 +89,13 @@ type ReplayUncertaintyView struct {
 	BootstrapOrigin, PostBootstrapGap, LocalInvalid uint64
 }
 
+type ReplayPopulationTransitionDiagnosticView struct {
+	BootstrapUnknown, TrustedByLaterLiveMark, NoLaterEligibleMark uint64
+	LatestMarkNotLiveAuthority, NoStrictlyOlderLocalizedConflict  uint64
+	ConflictAtOrAfterMark, InvalidAtOrAfterMark                   uint64
+	IncompletePostMarkCoverage                                    uint64
+}
+
 type ReplayRankingRowView struct {
 	Rank                                      uint32
 	Symbol                                    string
@@ -106,6 +113,7 @@ type ReplayEvaluationView struct {
 	Qualification                           ReplayQualificationAccountingView
 	Features                                ReplayAllFeatureAccountingView
 	Uncertainty                             ReplayUncertaintyView
+	PopulationTransition                    ReplayPopulationTransitionDiagnosticView
 	TotalPassers, KnownRankableCount        uint64
 	DayInvalidRankable, QualifiedDayInvalid uint64
 	TQIntentAvailable                       bool
@@ -128,6 +136,53 @@ type ReplayPublicationView struct {
 	GeneratedAt         time.Time
 	CurrentMarketClaim  bool
 	AggregateEvaluation ReplayEvaluationView
+}
+
+// ValidateReplayEvaluationAccounting validates only the fixed-cardinality
+// accounting projection. Ranking rows are intentionally excluded so incident
+// diagnostics can retain coherent market accounting without retaining symbol
+// identities.
+func ValidateReplayEvaluationAccounting(r ReplayEvaluationView) bool {
+	p := r.Population
+	if p.UniverseTotal != p.ValidPriorClose+p.InvalidOrMissingPriorClose ||
+		p.ValidPriorClose != p.TrustedRankableMark+p.TrustedBelowPriceMark+p.NoPrintThroughT+p.InvalidMark+p.UnknownDueFailureOrFence ||
+		p.CoveredPopulation != p.UniverseTotal-p.UnknownDueFailureOrFence || p.UnresolvedPopulation != p.UnknownDueFailureOrFence {
+		return false
+	}
+	d := r.PopulationTransition
+	if d.BootstrapUnknown != d.TrustedByLaterLiveMark+d.NoLaterEligibleMark+d.LatestMarkNotLiveAuthority+d.NoStrictlyOlderLocalizedConflict+d.ConflictAtOrAfterMark+d.InvalidAtOrAfterMark+d.IncompletePostMarkCoverage ||
+		d.TrustedByLaterLiveMark > p.TrustedRankableMark+p.TrustedBelowPriceMark || d.BootstrapUnknown-d.TrustedByLaterLiveMark > p.UnknownDueFailureOrFence {
+		return false
+	}
+	q := r.Qualification
+	if q.NotYetPassed+q.Provisional+q.Finalized+q.Unresolved != p.TrustedRankableMark ||
+		r.TotalPassers+r.QualifiedDayInvalid != q.Provisional+q.Finalized ||
+		r.KnownRankableCount+r.DayInvalidRankable != p.TrustedRankableMark || r.QualifiedDayInvalid > r.DayInvalidRankable {
+		return false
+	}
+	if r.Uncertainty.BootstrapOrigin+r.Uncertainty.PostBootstrapGap+r.Uncertainty.LocalInvalid != p.UnknownDueFailureOrFence+q.Unresolved {
+		return false
+	}
+	for _, dimension := range []ReplayFeatureAccountingView{r.Features.DayPercent, r.Features.From4AMPercent, r.Features.HODDrawdown, r.Features.SessionRange, r.Features.Rolling30, r.Features.Rolling60, r.Features.Activity} {
+		var statuses, reasons, pairs uint64
+		var pairStatuses [4]uint64
+		var pairReasons [featureReasonBucketCount]uint64
+		for status := range dimension.Statuses {
+			statuses += dimension.Statuses[status]
+			for reason := range dimension.Reasons {
+				pairStatuses[status] += dimension.Pairs[status][reason]
+				pairReasons[reason] += dimension.Pairs[status][reason]
+				pairs += dimension.Pairs[status][reason]
+			}
+		}
+		for _, count := range dimension.Reasons {
+			reasons += count
+		}
+		if statuses != p.UniverseTotal || reasons != p.UniverseTotal || pairs != p.UniverseTotal || pairStatuses != dimension.Statuses || pairReasons != dimension.Reasons {
+			return false
+		}
+	}
+	return true
 }
 
 func (e *Engine) replayDeterministicViewLocked() ReplayDeterministicView {
@@ -254,7 +309,13 @@ func replayEvaluationView(value aggregateEvaluationResult) ReplayEvaluationView 
 			Rolling30: replayFeatureAccountingView(value.features.rolling30), Rolling60: replayFeatureAccountingView(value.features.rolling60),
 			Activity: replayFeatureAccountingView(value.features.activity),
 		},
-		Uncertainty:  ReplayUncertaintyView{BootstrapOrigin: value.uncertainty.bootstrapOrigin, PostBootstrapGap: value.uncertainty.postBootstrapGap, LocalInvalid: value.uncertainty.localInvalid},
+		Uncertainty: ReplayUncertaintyView{BootstrapOrigin: value.uncertainty.bootstrapOrigin, PostBootstrapGap: value.uncertainty.postBootstrapGap, LocalInvalid: value.uncertainty.localInvalid},
+		PopulationTransition: ReplayPopulationTransitionDiagnosticView{
+			BootstrapUnknown: value.populationTransition.bootstrapUnknown, TrustedByLaterLiveMark: value.populationTransition.trustedByLaterLiveMark,
+			NoLaterEligibleMark: value.populationTransition.noLaterEligibleMark, LatestMarkNotLiveAuthority: value.populationTransition.latestMarkNotLiveAuthority,
+			NoStrictlyOlderLocalizedConflict: value.populationTransition.noStrictlyOlderLocalizedConflict, ConflictAtOrAfterMark: value.populationTransition.conflictAtOrAfterMark,
+			InvalidAtOrAfterMark: value.populationTransition.invalidAtOrAfterMark, IncompletePostMarkCoverage: value.populationTransition.incompletePostMarkCoverage,
+		},
 		TotalPassers: value.totalPassers, KnownRankableCount: value.knownRankableCount,
 		DayInvalidRankable: value.dayInvalidRankable, QualifiedDayInvalid: value.qualifiedDayInvalid,
 		TQIntentAvailable: value.tqIntentAvailable,

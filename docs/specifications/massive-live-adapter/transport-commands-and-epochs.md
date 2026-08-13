@@ -210,9 +210,9 @@ classification. It uses explicit configured values with these contract
 ceilings derived from v2:
 
 ```text
-1 <= frame_slots <= 512
+1 <= frame_slots <= 32,768
 1 <= max_frame_bytes <= 8 MiB
-max_frame_bytes <= total_frame_bytes <= 64 MiB
+max_frame_bytes <= total_frame_bytes <= 128 MiB
 ```
 
 The adapter has no production default: Component 8 must select deployed values
@@ -356,8 +356,8 @@ string is a metric label or retained log field.
   membership map, evaluator, or publisher.
 - One private connection interface isolates the one approved WebSocket library
   for fake tests. It is not a generic transport framework.
-- Raw retained data is at most configured `total_frame_bytes <= 64 MiB`, plus
-  512 bounded frame descriptors and one bounded pending command. No frame,
+- Raw retained data is at most configured `total_frame_bytes <= 128 MiB`, plus
+  32,768 bounded frame descriptors and one bounded pending command. No frame,
   command, result, reason, or diagnostic history is retained after terminal
   disposition beyond fixed latest/counters owned by the engine/operations
   projection.

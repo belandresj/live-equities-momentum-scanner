@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -406,6 +407,46 @@ func TestPC5TransportOneAttemptHandshakeHeartbeatAndContainment(t *testing.T) {
 	})
 }
 
+func TestCapacityTerminalReasonsAndOperandsFollowReaderAdmissionPath(t *testing.T) {
+	socket := newFakeLiveSocket()
+	enqueueHandshake(socket)
+	binding := component4TestBinding(t, []string{"AAA"})
+	adapter, err := NewLiveAdapter(binding, LiveAdapterConfig{Endpoint: "wss://offline.invalid/stocks", Credential: "fixture",
+		Queue: LiveQueueConfig{FrameSlots: 8, MaxFrameBytes: 4096, TotalFrameBytes: 4096}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.connector = &fakeLiveConnector{sockets: []*fakeLiveSocket{socket}}
+	attempt, _, err := adapter.Start(context.Background(), OpenAggregateEpoch{BindingIdentity: binding.Identity(), CommandToken: 1,
+		Durations: OperationalDurations{Dial: time.Second, HandshakeStep: time.Second, HandshakeTotal: 4 * time.Second, HeartbeatInterval: time.Hour, HeartbeatDeadline: time.Second, Write: time.Second, Close: 20 * time.Millisecond}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := attempt.Handshake(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	socket.send(socketMessageText, "["+strings.Repeat(" ", 2998)+"]")
+	socket.send(socketMessageText, "["+strings.Repeat(" ", 1998)+"]")
+	// Do not start the consumer until the reader has attempted both admissions.
+	// Otherwise it can drain the first frame before the second reaches the byte
+	// check, making this reader-boundary proof scheduler-dependent.
+	rejectionDeadline := time.Now().Add(time.Second)
+	for attempt.QueueAccounting().FramesRejectedByteCapacity != 1 {
+		if time.Now().After(rejectionDeadline) {
+			t.Fatalf("reader did not reach byte-capacity rejection: %+v", attempt.QueueAccounting())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	terminalCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	delivery, ok := attempt.nextForProof(terminalCtx)
+	if !ok || delivery.Kind != DeliveryTerminal || delivery.Terminal.Reason != TerminalFrameByteCapacity || delivery.Terminal.IncomingFrameBytes != 2000 ||
+		delivery.Terminal.QueueAtCause.FramesQueued != 1 || delivery.Terminal.QueueAtCause.QueuedBytes != 3000 || delivery.Terminal.QueueAtCause.CapacityBytes != 4096 ||
+		delivery.Terminal.QueueAtCause.FramesRejectedByteCapacity != 1 || delivery.Terminal.QueueAtCause.FramesRejectedSlotCapacity != 0 {
+		t.Fatalf("byte capacity terminal=%+v ok=%t", delivery, ok)
+	}
+}
+
 func TestPC5CommandWriteAcknowledgementLinearization(t *testing.T) {
 	socket := newFakeLiveSocket()
 	enqueueHandshake(socket)
@@ -590,8 +631,13 @@ func TestPC5CommandWriteAcknowledgementLinearization(t *testing.T) {
 			}
 			time.Sleep(time.Millisecond)
 		}
-		raceAttempt.triggerTerminal(TerminalReader, TerminalReadFailed, 0, false)
+		terminalTriggered := make(chan struct{})
+		go func() {
+			raceAttempt.triggerTerminal(TerminalReader, TerminalReadFailed, 0, false)
+			close(terminalTriggered)
+		}()
 		raceAdapter.mu.Unlock()
+		<-terminalTriggered
 		ackResult := <-ackDone
 		ack, ok := ackResult.delivery, ackResult.ok
 		if !ok || ack.Control.Outcome != engine.ControlSucceeded {
@@ -675,7 +721,7 @@ func TestPC5CommandDeadlineWakesBlockedDequeue(t *testing.T) {
 }
 
 func TestPC5BoundRawFIFOAccountingAndDrain(t *testing.T) {
-	if validateLiveQueueConfig(LiveQueueConfig{}) || validateLiveQueueConfig(LiveQueueConfig{FrameSlots: 513, MaxFrameBytes: 1, TotalFrameBytes: 1}) ||
+	if validateLiveQueueConfig(LiveQueueConfig{}) || validateLiveQueueConfig(LiveQueueConfig{FrameSlots: MaximumLiveFrameSlots + 1, MaxFrameBytes: 1, TotalFrameBytes: 1}) ||
 		validateLiveQueueConfig(LiveQueueConfig{FrameSlots: 1, MaxFrameBytes: MaximumLiveFrameBytes + 1, TotalFrameBytes: MaximumLiveQueueBytes}) ||
 		validateLiveQueueConfig(LiveQueueConfig{FrameSlots: 1, MaxFrameBytes: 2, TotalFrameBytes: 1}) ||
 		validateLiveQueueConfig(LiveQueueConfig{FrameSlots: 1, MaxFrameBytes: 1, TotalFrameBytes: MaximumLiveQueueBytes + 1}) ||
@@ -685,29 +731,29 @@ func TestPC5BoundRawFIFOAccountingAndDrain(t *testing.T) {
 	queue := newLiveFrameQueue(LiveQueueConfig{FrameSlots: 2, MaxFrameBytes: 4, TotalFrameBytes: 6})
 	at := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
 	source := []byte("abc")
-	first, reason := queue.tryEnqueue(9, socketMessageText, at, source)
+	first, reason, _ := queue.tryEnqueue(9, socketMessageText, at, source)
 	if reason != FrameAdmitted {
 		t.Fatal(reason)
 	}
 	source[0] = 'z'
-	second, reason := queue.tryEnqueue(9, socketMessageBinary, at, []byte("def"))
+	second, reason, _ := queue.tryEnqueue(9, socketMessageBinary, at, []byte("def"))
 	if reason != FrameAdmitted || second.sequence != first.sequence+1 {
 		t.Fatalf("second = %+v %s", second, reason)
 	}
-	if _, reason = queue.tryEnqueue(9, socketMessageText, at, []byte("x")); reason != FrameRejectedCapacity {
+	if _, reason, _ = queue.tryEnqueue(9, socketMessageText, at, []byte("x")); reason != FrameRejectedSlotCapacity {
 		t.Fatalf("count capacity = %s", reason)
 	}
 	if string(queue.frames[0].data) != "abc" {
 		t.Fatalf("copy-on-admission = %q", queue.frames[0].data)
 	}
-	if _, reason = queue.tryEnqueue(9, socketMessageText, at.Add(-time.Nanosecond), []byte("x")); reason != FrameRejectedReceipt {
+	if _, reason, _ = queue.tryEnqueue(9, socketMessageText, at.Add(-time.Nanosecond), []byte("x")); reason != FrameRejectedReceipt {
 		t.Fatalf("receipt regression = %s", reason)
 	}
-	if _, reason = queue.tryEnqueue(9, socketMessageText, at, []byte("12345")); reason != FrameRejectedOversize {
+	if _, reason, _ = queue.tryEnqueue(9, socketMessageText, at, []byte("12345")); reason != FrameRejectedOversize {
 		t.Fatalf("oversize = %s", reason)
 	}
 	queue.closeGate()
-	if _, reason = queue.tryEnqueue(9, socketMessageText, at, []byte("x")); reason != FrameRejectedGate {
+	if _, reason, _ = queue.tryEnqueue(9, socketMessageText, at, []byte("x")); reason != FrameRejectedGate {
 		t.Fatalf("gate = %s", reason)
 	}
 	type markerResult struct {
@@ -739,11 +785,12 @@ func TestPC5BoundRawFIFOAccountingAndDrain(t *testing.T) {
 	}
 	queue.complete(marker, false)
 	accounting := queue.snapshot()
-	if !accounting.Reconciles() || accounting.FramesRead != 6 || accounting.FramesAdmitted != 2 || accounting.FramesDispositioned != 1 || accounting.FramesFenced != 1 || accounting.QueuedBytes != 0 {
+	if !accounting.Reconciles() || accounting.FramesRead != 6 || accounting.FramesAdmitted != 2 || accounting.FramesRejectedSlotCapacity != 1 ||
+		accounting.FramesDispositioned != 1 || accounting.FramesFenced != 1 || accounting.QueuedBytes != 0 {
 		t.Fatalf("accounting = %+v", accounting)
 	}
 	canceledQueue := newLiveFrameQueue(LiveQueueConfig{FrameSlots: 1, MaxFrameBytes: 4, TotalFrameBytes: 4})
-	_, _ = canceledQueue.tryEnqueue(1, socketMessageText, at, []byte("x"))
+	_, _, _ = canceledQueue.tryEnqueue(1, socketMessageText, at, []byte("x"))
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, ok := canceledQueue.enqueueTerminal(canceledCtx, 1, at); ok || !canceledQueue.snapshot().Reconciles() {
@@ -752,16 +799,47 @@ func TestPC5BoundRawFIFOAccountingAndDrain(t *testing.T) {
 
 	t.Run("byte-only saturation is atomic before slot saturation", func(t *testing.T) {
 		byteQueue := newLiveFrameQueue(LiveQueueConfig{FrameSlots: 3, MaxFrameBytes: 4, TotalFrameBytes: 5})
-		if _, reason := byteQueue.tryEnqueue(1, socketMessageText, at, []byte("abc")); reason != FrameAdmitted {
+		if _, reason, _ := byteQueue.tryEnqueue(1, socketMessageText, at, []byte("abc")); reason != FrameAdmitted {
 			t.Fatal(reason)
 		}
 		before := byteQueue.snapshot()
-		if _, reason := byteQueue.tryEnqueue(1, socketMessageText, at, []byte("def")); reason != FrameRejectedCapacity {
+		if _, reason, _ := byteQueue.tryEnqueue(1, socketMessageText, at, []byte("def")); reason != FrameRejectedByteCapacity {
 			t.Fatalf("byte saturation = %s", reason)
 		}
 		after := byteQueue.snapshot()
-		if after.FramesQueued != before.FramesQueued || after.QueuedBytes != before.QueuedBytes || !after.Reconciles() {
+		if after.FramesQueued != before.FramesQueued || after.QueuedBytes != before.QueuedBytes || after.FramesRejectedByteCapacity != 1 || !after.Reconciles() {
 			t.Fatalf("byte rejection mutated queue: before=%+v after=%+v", before, after)
+		}
+	})
+
+	t.Run("capacity terminal captures exact operands and active engine delivery", func(t *testing.T) {
+		binding := component4TestBinding(t, []string{"AAA"})
+		adapter := &LiveAdapter{binding: binding, clock: func() time.Time { return at }, accounting: AdapterAccounting{ConnectionAttempts: 1, AttemptsConnected: 1}}
+		attemptCtx, cancelAttempt := context.WithCancel(context.Background())
+		activeStartedAt := time.Now().Add(-2 * time.Second)
+		socket := newFakeLiveSocket()
+		attempt := &LiveAttempt{adapter: adapter, binding: binding, epoch: 1, ctx: attemptCtx, cancel: cancelAttempt, started: true,
+			queue: newLiveFrameQueue(LiveQueueConfig{FrameSlots: 1, MaxFrameBytes: 4, TotalFrameBytes: 4}), connection: socket, cleanupDone: make(chan struct{}),
+			durations:          OperationalDurations{HeartbeatInterval: time.Hour, HeartbeatDeadline: time.Second, Close: 10 * time.Millisecond},
+			activeDeliveryKind: DeliveryAggregateIngressFence, activeDeliveryStartedAt: activeStartedAt}
+		adapter.active = attempt
+		socket.send(socketMessageText, "abc")
+		socket.send(socketMessageText, "def")
+		attempt.startWorkers()
+		waitCtx, stop := context.WithTimeout(context.Background(), time.Second)
+		defer stop()
+		if err := attempt.Wait(waitCtx); err != nil {
+			t.Fatal(err)
+		}
+		attempt.mu.Lock()
+		terminal := attempt.terminalDelivery.Terminal
+		attempt.mu.Unlock()
+		if terminal.Reason != TerminalFrameSlotCapacity || terminal.IncomingFrameBytes != 3 || terminal.QueueAtCause.FramesQueued != 1 ||
+			terminal.QueueAtCause.CapacityFrames != 1 || terminal.QueueAtCause.QueuedBytes != 3 || terminal.QueueAtCause.CapacityBytes != 4 ||
+			terminal.CausalPosition != (engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 1}) || !terminal.PositionApplicable ||
+			terminal.ActiveDeliveryKind != DeliveryAggregateIngressFence || terminal.ActiveDeliveryStartedAt != activeStartedAt ||
+			terminal.ActiveDeliveryAgeAtCause < 2*time.Second || terminal.ActiveDeliveryAgeAtCause > 3*time.Second {
+			t.Fatalf("capacity terminal=%+v", terminal)
 		}
 	})
 
@@ -783,7 +861,7 @@ func TestPC5BoundRawFIFOAccountingAndDrain(t *testing.T) {
 		queue := newLiveFrameQueue(LiveQueueConfig{FrameSlots: 4, MaxFrameBytes: 32, TotalFrameBytes: 128})
 		at := time.Date(2026, 8, 8, 15, 0, 0, 0, time.UTC)
 		queue.now = func() time.Time { return at.Add(300 * time.Millisecond) }
-		if _, reason := queue.tryEnqueue(1, socketMessageText, at, []byte("[]")); reason != FrameAdmitted {
+		if _, reason, _ := queue.tryEnqueue(1, socketMessageText, at, []byte("[]")); reason != FrameAdmitted {
 			t.Fatal(reason)
 		}
 		view := queue.snapshot()
@@ -801,6 +879,218 @@ func TestPC5BoundRawFIFOAccountingAndDrain(t *testing.T) {
 	})
 }
 
+func TestMaximumLiveQueueSlotCeilingAdmitsThenFailsClosed(t *testing.T) {
+	queue := newLiveFrameQueue(LiveQueueConfig{
+		FrameSlots: MaximumLiveFrameSlots, MaxFrameBytes: MaximumLiveFrameBytes, TotalFrameBytes: MaximumLiveQueueBytes,
+	})
+	at := time.Date(2026, 8, 12, 21, 0, 0, 0, time.UTC)
+	for index := 0; index < MaximumLiveFrameSlots; index++ {
+		frame, reason, _ := queue.tryEnqueue(1, socketMessageText, at, []byte("x"))
+		if reason != FrameAdmitted || frame.sequence != uint64(index+1) {
+			t.Fatalf("admission index=%d sequence=%d reason=%s", index, frame.sequence, reason)
+		}
+	}
+	if _, reason, snapshot := queue.tryEnqueue(1, socketMessageText, at, []byte("x")); reason != FrameRejectedSlotCapacity ||
+		snapshot.FramesQueued != MaximumLiveFrameSlots || snapshot.HighFramesQueued != MaximumLiveFrameSlots ||
+		snapshot.FramesRejectedSlotCapacity != 1 || snapshot.QueuedBytes != MaximumLiveFrameSlots {
+		t.Fatalf("ceiling reason=%s snapshot=%+v", reason, snapshot)
+	}
+	half := uint64(MaximumLiveFrameSlots / 2)
+	for sequence := uint64(1); sequence <= half; sequence++ {
+		frame, ok := queue.pop(context.Background())
+		if !ok || frame.sequence != sequence {
+			t.Fatalf("initial drain sequence=%d frame=%+v ok=%t", sequence, frame, ok)
+		}
+		queue.complete(frame, false)
+	}
+	for index := uint64(0); index < half; index++ {
+		frame, reason, _ := queue.tryEnqueue(1, socketMessageText, at, []byte("x"))
+		if reason != FrameAdmitted || frame.sequence != uint64(MaximumLiveFrameSlots)+index+1 {
+			t.Fatalf("wrap admission index=%d sequence=%d reason=%s", index, frame.sequence, reason)
+		}
+	}
+	for sequence := half + 1; sequence <= uint64(MaximumLiveFrameSlots)+half; sequence++ {
+		frame, ok := queue.pop(context.Background())
+		if !ok || frame.sequence != sequence {
+			t.Fatalf("wrapped drain sequence=%d frame=%+v ok=%t", sequence, frame, ok)
+		}
+		queue.complete(frame, false)
+	}
+	if accounting := queue.snapshot(); !accounting.Reconciles() || accounting.FramesQueued != 0 || accounting.QueuedBytes != 0 ||
+		accounting.FramesDispositioned != uint64(MaximumLiveFrameSlots)+half {
+		t.Fatalf("final accounting=%+v", accounting)
+	}
+}
+
+func TestFenceBurstEnvelopeFIFOAndIndependentCapacityFailures(t *testing.T) {
+	const envelope = 7_774
+	queue := newLiveFrameQueue(LiveQueueConfig{FrameSlots: MaximumLiveFrameSlots, MaxFrameBytes: MaximumLiveFrameBytes, TotalFrameBytes: MaximumLiveQueueBytes})
+	at := time.Date(2026, 8, 12, 18, 44, 40, 0, time.UTC)
+	for index := 0; index < envelope; index++ {
+		frame, reason, _ := queue.tryEnqueue(11, socketMessageText, at.Add(time.Duration(index)*time.Microsecond), []byte("[]"))
+		if reason != FrameAdmitted || frame.sequence != uint64(index+1) {
+			t.Fatalf("envelope admission index=%d sequence=%d reason=%s", index, frame.sequence, reason)
+		}
+	}
+	fact, admitted := queue.enqueueIngressFence(context.Background(), AggregateIngressFenceFact{})
+	if !admitted || fact.ThroughFrameSequence != envelope || fact.MarkerOrdinal != 1 {
+		t.Fatalf("fence=%+v admitted=%t", fact, admitted)
+	}
+	for sequence := uint64(1); sequence <= envelope; sequence++ {
+		frame, ok := queue.pop(context.Background())
+		if !ok || frame.kind != queuedLiveRaw || frame.sequence != sequence {
+			t.Fatalf("fifo sequence=%d frame=%+v ok=%t", sequence, frame, ok)
+		}
+		queue.complete(frame, false)
+	}
+	marker, ok := queue.pop(context.Background())
+	if !ok || marker.kind != queuedLiveIngressFence || marker.ingressFence.ThroughFrameSequence != envelope {
+		t.Fatalf("marker=%+v ok=%t", marker, ok)
+	}
+	queue.complete(marker, false)
+	accounting := queue.snapshot()
+	if !accounting.Reconciles() || accounting.FramesRead != envelope || accounting.FramesDispositioned != envelope || accounting.FramesQueued != 0 || accounting.QueuedBytes != 0 || accounting.HighFramesQueued != envelope {
+		t.Fatalf("burst accounting=%+v", accounting)
+	}
+
+	slot := newLiveFrameQueue(LiveQueueConfig{FrameSlots: 2, MaxFrameBytes: 16, TotalFrameBytes: 32})
+	_, _, _ = slot.tryEnqueue(1, socketMessageText, at, []byte("a"))
+	_, _, _ = slot.tryEnqueue(1, socketMessageText, at, []byte("b"))
+	if _, reason, snapshot := slot.tryEnqueue(1, socketMessageText, at, []byte("c")); reason != FrameRejectedSlotCapacity || snapshot.FramesRejectedSlotCapacity != 1 || snapshot.FramesRejectedByteCapacity != 0 {
+		t.Fatalf("slot control reason=%s accounting=%+v", reason, snapshot)
+	}
+	bytes := newLiveFrameQueue(LiveQueueConfig{FrameSlots: 4, MaxFrameBytes: 16, TotalFrameBytes: 16})
+	_, _, _ = bytes.tryEnqueue(1, socketMessageText, at, []byte("123456789"))
+	if _, reason, snapshot := bytes.tryEnqueue(1, socketMessageText, at, []byte("12345678")); reason != FrameRejectedByteCapacity || snapshot.FramesRejectedByteCapacity != 1 || snapshot.FramesRejectedSlotCapacity != 0 {
+		t.Fatalf("byte control reason=%s accounting=%+v", reason, snapshot)
+	}
+}
+
+func TestFenceBurstBehindActiveRealFencePreservesPrefixAndDrains(t *testing.T) {
+	const envelope = 7_774
+	baselineGoroutines := runtime.NumGoroutine()
+	var memoryBefore, memoryHeld runtime.MemStats
+	runtime.ReadMemStats(&memoryBefore)
+	binding := component4TestBinding(t, []string{"AAA"})
+	now := binding.SessionStart().Add(30 * time.Second)
+	delay := time.Duration(0)
+	state, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 8, EvaluationDelay: &delay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		state.Close()
+		wait, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = state.Wait(wait)
+	}()
+	installed, completion := state.AdmitBinding(context.Background(), engine.BindingInstall{SchemaVersion: engine.BindingInstallSchemaV1, BindingIdentity: binding.Identity(), Binding: binding})
+	if installed != engine.AdmissionAdmitted || (<-completion).Code != engine.DispositionBindingInstalled {
+		t.Fatal("binding install")
+	}
+
+	socket := newFakeLiveSocket()
+	enqueueHandshake(socket)
+	adapter, err := NewLiveAdapter(binding, LiveAdapterConfig{Endpoint: "wss://offline.invalid/stocks", Credential: "fixture",
+		Queue: LiveQueueConfig{FrameSlots: MaximumLiveFrameSlots, MaxFrameBytes: MaximumLiveFrameBytes, TotalFrameBytes: MaximumLiveQueueBytes}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.connector = &fakeLiveConnector{sockets: []*fakeLiveSocket{socket}}
+	open := OpenAggregateEpoch{BindingIdentity: binding.Identity(), CommandToken: 1, Durations: OperationalDurations{Dial: time.Second, HandshakeStep: time.Second, HandshakeTotal: 4 * time.Second, HeartbeatInterval: time.Hour, HeartbeatDeadline: time.Second, Write: time.Second, Close: 20 * time.Millisecond}}
+	attempt, started, handshake := startHandshake(t, adapter, open)
+	if result, err := DeliverToEngine(context.Background(), state, started); err != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
+		t.Fatalf("start=%+v err=%v", result, err)
+	}
+	for _, delivery := range handshake {
+		result, err := DeliverToEngine(context.Background(), state, delivery)
+		if err != nil || (result.ControlDisposition.Code != engine.DispositionConnectionControlApplied && result.ControlDisposition.Code != engine.DispositionConnectionControlDeferred) {
+			t.Fatalf("handshake=%+v err=%v", result, err)
+		}
+	}
+	planAdmission, planCompletion := state.AdmitHydrationPlan(context.Background(), engine.HydrationPlanInput{SchemaVersion: engine.HydrationPlanSchemaV1, BindingIdentity: binding.Identity(), Purpose: engine.HydrationFreshBootstrap, ConnectionEpoch: attempt.Epoch(), Budgets: engine.HydrationPlanBudgets{Workers: 1, RowsPerChunk: 1, MaximumResponseBytes: 1 << 20, MaximumNormalizedRecords: 57_600, MaximumResidentRecords: 57_600}})
+	if planAdmission != engine.AdmissionAdmitted {
+		t.Fatal(planAdmission)
+	}
+	plan := <-planCompletion
+	token := plan.Plan.Requests()[0]
+	terminal, _ := engine.NewHydrationTerminalInput(token, token.ResultID(), engine.HydrationCompletedEmpty, engine.HydrationReasonNone, 1, 1, 1, 0, 0, 0)
+	_, terminalCompletion := state.AdmitHydrationTerminal(context.Background(), terminal)
+	terminalResult := <-terminalCompletion
+	command, err := CaptureAggregateIngressFenceCommandFromEngine(terminalResult.FenceCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := attempt.CaptureAggregateIngressFence(context.Background(), state, command); err != nil {
+		t.Fatal(err)
+	}
+	now = time.Now().UTC().Add(time.Second)
+
+	release := make(chan struct{})
+	attempt.beforeEngineDelivery = func(delivery AdapterDelivery) {
+		if delivery.Kind == DeliveryAggregateIngressFence {
+			<-release
+		}
+	}
+	fenceDone := make(chan EngineDeliveryResult, 1)
+	go func() { result, _, _ := attempt.DeliverNextToEngine(context.Background(), state); fenceDone <- result }()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && attempt.ActiveDeliveryDiagnostic().Kind != DeliveryAggregateIngressFence {
+		time.Sleep(time.Millisecond)
+	}
+	if attempt.ActiveDeliveryDiagnostic().Kind != DeliveryAggregateIngressFence {
+		t.Fatal("real fence did not become active")
+	}
+	receivedAt := now.Add(time.Second)
+	payload := []byte("[" + aggregateLiveJSON("AAA", binding.SessionStart().Add(10*time.Second), `"dv":"1000.5"`) + "]")
+	for index := 0; index < envelope; index++ {
+		_, reason, _ := attempt.queue.tryEnqueue(attempt.Epoch(), socketMessageText, receivedAt.Add(time.Duration(index)*time.Microsecond), payload)
+		if reason != FrameAdmitted {
+			t.Fatalf("later frame %d=%s", index, reason)
+		}
+	}
+	if accounting := attempt.QueueAccounting(); accounting.FramesQueued != envelope || accounting.FramesRejectedCapacity != 0 {
+		t.Fatalf("held burst=%+v", accounting)
+	}
+	runtime.ReadMemStats(&memoryHeld)
+	if memoryHeld.TotalAlloc-memoryBefore.TotalAlloc > 64<<20 {
+		t.Fatalf("burst allocation exceeded descriptor/payload bound: before=%d held=%d", memoryBefore.TotalAlloc, memoryHeld.TotalAlloc)
+	}
+	close(release)
+	if result := <-fenceDone; result.HydrationDisposition.Code != engine.DispositionAggregateIngressFenceApplied {
+		t.Fatalf("fence=%+v", result)
+	}
+	publication := state.ObserveSnapshot().Publication
+	if publication.Watermark == nil || publication.LastDisposition != engine.DispositionAggregateIngressFenceApplied || publication.LastEngineSequence == 0 {
+		t.Fatalf("fence publication=%+v", publication)
+	}
+	for index := 0; index < envelope; index++ {
+		result, ok, err := attempt.DeliverNextToEngine(context.Background(), state)
+		if err != nil || !ok || result.AggregateDisposition.Code == "" || result.AggregateDisposition.EngineSequence <= publication.LastEngineSequence {
+			t.Fatalf("later delivery %d=%+v ok=%t err=%v", index, result, ok, err)
+		}
+	}
+	if after := state.ObserveSnapshot().Publication; after.PublicationID != publication.PublicationID || after.LastEngineSequence != publication.LastEngineSequence || after.Watermark == nil || !after.Watermark.Equal(*publication.Watermark) {
+		t.Fatalf("post-marker frames changed fence publication before next evaluator boundary: before=%+v after=%+v", publication, after)
+	}
+	accounting := attempt.QueueAccounting()
+	if !accounting.Reconciles() || accounting.FramesQueued != 0 || accounting.QueuedBytes != 0 || accounting.FramesDispositioned < envelope || accounting.HighFramesQueued != envelope {
+		t.Fatalf("drain=%+v", accounting)
+	}
+	if err := attempt.Close(CloseEpochCommand{BindingIdentity: binding.Identity(), ConnectionEpoch: attempt.Epoch(), CommandToken: 2, Cause: CloseControlledStop}); err != nil {
+		t.Fatal(err)
+	}
+	terminalDelivery, ok := attempt.nextForProof(context.Background())
+	if !ok || terminalDelivery.Kind != DeliveryTerminal {
+		t.Fatalf("joined terminal=%+v ok=%t", terminalDelivery, ok)
+	}
+	wait, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := attempt.Wait(wait); err != nil || runtime.NumGoroutine() > baselineGoroutines+2 {
+		t.Fatalf("attempt did not join: err=%v goroutines=%d baseline=%d", err, runtime.NumGoroutine(), baselineGoroutines)
+	}
+}
+
 // TestC6FENCE01RawFrameMarkerEngineFIFOLinearization is P-C6-FENCE. It proves
 // the zero-payload marker is ordered after every prior raw frame without
 // consuming a raw sequence, and survives terminal cleanup as canceled evidence
@@ -808,7 +1098,7 @@ func TestPC5BoundRawFIFOAccountingAndDrain(t *testing.T) {
 func TestC6FENCE01RawFrameMarkerEngineFIFOLinearization(t *testing.T) {
 	queue := newLiveFrameQueue(LiveQueueConfig{FrameSlots: 1, MaxFrameBytes: 32, TotalFrameBytes: 32})
 	at := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
-	first, reason := queue.tryEnqueue(7, socketMessageText, at, []byte("[]"))
+	first, reason, _ := queue.tryEnqueue(7, socketMessageText, at, []byte("[]"))
 	if reason != FrameAdmitted {
 		t.Fatal(reason)
 	}
@@ -922,7 +1212,7 @@ func TestC6FENCE01RawFrameMarkerEngineFIFOLinearization(t *testing.T) {
 		}
 		attempt := &LiveAttempt{binding: binding, epoch: 1, started: true, handshaken: true,
 			queue: newLiveFrameQueue(LiveQueueConfig{FrameSlots: 1, MaxFrameBytes: 32, TotalFrameBytes: 32})}
-		_, _ = attempt.queue.tryEnqueue(1, socketMessageText, now, []byte("[]"))
+		_, _, _ = attempt.queue.tryEnqueue(1, socketMessageText, now, []byte("[]"))
 		captureCtx, cancelCapture := context.WithCancel(context.Background())
 		cancelCapture()
 		if err := attempt.CaptureAggregateIngressFence(captureCtx, state, command); !errors.Is(err, context.Canceled) {

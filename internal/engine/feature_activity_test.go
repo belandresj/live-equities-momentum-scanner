@@ -302,6 +302,33 @@ func TestC3ACT02CorrectionLongPathDifferentialTrace(t *testing.T) {
 		closeAndWait(t, e)
 	})
 
+	t.Run("expired mutable block rotates before next aggregate allocation", func(t *testing.T) {
+		e := aggregateEngine(t, binding, RunModeLive, immutableTime(start))
+		e.mu.Lock()
+		installed := e.state.binding
+		state := ensureAggregateState(&installed.symbols[installed.index["AAA"]])
+		activity := ensureActivityState(state)
+		for block := 1; block <= maximumMutableActivityBlockIDs; block++ {
+			end := start.Add(time.Duration(block) * activityBlockDuration).Unix()
+			summary := addActivityAggregate(activityBlockSummary{end: end, low: math.Inf(1)}, activityValues(100, 0))
+			activity.mutable[end] = activityMutableBlock{folded: summary, current: summary}
+		}
+		now := start.Add(correctionHorizon + activityBlockDuration + time.Second)
+		windowStart := now.Add(-time.Second)
+		blockEnd := activityBlockEnd(installed, windowStart)
+		record := &canonicalAggregate{windowStart: windowStart, windowEnd: now, values: activityValues(100, 0)}
+		state.tail = map[int64]*canonicalAggregate{windowStart.Unix(): record}
+		recomputeMutableActivityBlock(state, installed, blockEnd, now)
+		_, oldestStillMutable := activity.mutable[start.Add(activityBlockDuration).Unix()]
+		_, nextAllocated := activity.mutable[blockEnd.Unix()]
+		mutableCount, referenceCount, exceeded := len(activity.mutable), len(activity.references), activity.boundExceeded
+		e.mu.Unlock()
+		if exceeded || oldestStillMutable || !nextAllocated || mutableCount != maximumMutableActivityBlockIDs || referenceCount != 1 {
+			t.Fatalf("mutable rotation exceeded=%v oldest=%v next=%v mutable=%d references=%d", exceeded, oldestStillMutable, nextAllocated, mutableCount, referenceCount)
+		}
+		closeAndWait(t, e)
+	})
+
 	t.Run("long path and delivery permutation", func(t *testing.T) {
 		at := start.Add(70 * time.Minute)
 		keys := make([]int64, 0, 420)
@@ -694,7 +721,7 @@ func TestMutableActivityRecomputeDefersOnlyProjection(t *testing.T) {
 			windowStart: at, windowEnd: at.Add(time.Second), values: values}
 		want = addActivityAggregate(want, values)
 	}
-	recomputeMutableActivityBlock(state, binding, blockEnd)
+	recomputeMutableActivityBlock(state, binding, blockEnd, blockEnd)
 	got := state.activity.mutable[blockEnd.Unix()].current
 	if got.transactions != 0 || got.expansionBPS != 0 {
 		t.Fatalf("mutable recompute projected early: %+v", got)

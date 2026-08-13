@@ -29,13 +29,15 @@ subrecords use their dependency-defined canonical order, making equal semantic
 images byte-identical except for explicitly variable header fields such as
 sequence and creation time.
 
-The decoder reads through an `io.LimitedReader`, rejects duplicate object keys
-at every depth, disallows unknown fields, validates declared lengths before
-allocating, checks every dependency cardinality and aggregate numeric bound,
-requires exactly one complete JSON value plus trailing whitespace, and verifies
-the payload digest and manifest size/digest. It incrementally builds a detached
-candidate; it never retains both an unbounded byte buffer and a fully decoded
-object graph.
+The decoder reads the exact payload into one configured byte-bounded buffer,
+verifies the digest/envelope, rejects duplicate object keys and over-bound or
+nonexact arrays in one streaming token pass, then performs strict unknown-field
+decode plus complete semantic validation. It requires exactly one JSON value
+plus trailing whitespace and verifies manifest size/digest. The bounded payload
+and decoded graph may coexist transiently; the payload can never exceed the
+configured artifact limit or 4-GiB hard ceiling. This 2026-08-12 correction
+removes the redundant temporary-file spool and separate duplicate-key pass
+without weakening preallocation bounds or invalid-artifact containment.
 
 There is no in-place schema migration. Unknown schema or manifest versions are
 `incompatible`, not corrupt, and selection proceeds to the previous candidate
@@ -144,7 +146,7 @@ semantic completeness.
 | --- | --- | --- |
 | `C7-CODEC-01` | Encode and incrementally decode the complete semantic image with deterministic ordering, strict fixed schema, exact structural bounds, checksum, cancellation, and no partial candidate on any syntax/integrity/semantic-preflight failure. | `ARCH-FLOW-01`–`04`, `DTE-REJECT-01`; V2 strict JSON/digest/limited-reader and maximum-shape behavior adapted to the new complete schema |
 | `C7-STORE-01` | Select only manifest-authorized latest/previous local immutable generations and publish a new generation through the exact temporary-file/validation/rename/sync protocol while retaining the previous complete candidate under every injected write step. | `PG-OPS-01`, `ARCH-OWN-02`, `DTE-CHECKPOINT-03`, `LIFE-INIT-05`; V2 store and exact-step fault tests adapted |
-| `C7-CADENCE-01` | In live operation, when committed/evaluated `T` reaches the next session-aligned 30-second checkpoint boundary, project and submit without blocking ordinary evaluation. Bound external views to one writing plus one replaceable pending; every request gets one terminal result. | `ARCH-FLOW-01`–`04`, `LIFE-LIVE-04`, `LIFE-END-02`; V2 30-second cadence and one coalescing slot |
+| `C7-CADENCE-01` | In live operation, when committed/evaluated `T` reaches the next session-aligned 30-second checkpoint boundary, seal one projection and advance it through bounded sole-consumer continuations placed at the FIFO tail. A pre-`T0` canonical mutation after sealing rejects the image; an exact duplicate does not. Isolate each projected symbol once into package-private request storage, submit the completed request by consuming ownership, and retain only request identity in the engine. Bound external views to one writing plus one replaceable pending; every request gets one terminal result. | `ARCH-FLOW-01`–`04`, `LIFE-LIVE-04`, `LIFE-END-02`; V2 30-second cadence and one coalescing slot; 2026-08-12 hot-path correction |
 | `C7-OBJECTIVE-01` | On the recorded local host, a validated 6,000-symbol, checkpoint-age-30-seconds fixture must restart through real discovery/decode/semantic validation/install, C5 acknowledgement, C6 `[T0,R)` work/fence, and ordinary evaluation within the current 60-second setting on every measured trial. Its median must be at least 20% faster than equivalent fresh recovery for the same binding, `R`, provider fixture, worker limits, and trial conditions. Local load/install is segmented diagnostic evidence, not an independent five-second release gate. These program-selected settings are revisable only from recorded measured evidence; any replacement must remain materially faster than equivalent fresh recovery and below the product's rejected approximately 130-second precedent. | `PG-OPS-01`; the product rejects approximately 130-second normal fresh reconstruction; current S3 evidence completes restart in 22.53 seconds while the inherited five-second load premise fails; owner V1 correction requires meaningful same-host improvement |
 
 The objective is a component release target, not a live-provider SLA or
@@ -189,9 +191,12 @@ projection is created for a given `(binding,T)`. A same-`T` correction after a
 request may be captured only by a later cadence boundary; it does not mutate an
 already detached view.
 
-Projection/submit failures and pending replacement are observable but do not
-delay commit/evaluation. A writer success records availability only; it cannot
-make a scanner current.
+Projection uses one internal continuation per symbol at the FIFO tail, so
+already-admitted market work interleaves between bounded slices. A pre-`T0`
+correction, binding/lifecycle change, or structural failure rejects the whole
+image. Projection/submit failures and pending replacement are observable but
+do not delay commit/evaluation. A writer success records availability only; it
+cannot make a scanner current.
 
 C7 version 1 does not force a new synchronous final checkpoint on controlled
 stop. An already submitted cadence request may finish only within the later

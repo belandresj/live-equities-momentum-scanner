@@ -19,6 +19,7 @@ type Metrics struct {
 	LiveQueue                   massive.LiveQueueAccounting
 	TQNormalization             massive.TQNormalizationAccounting
 	Checkpoint                  checkpoint.WriterAccounting
+	CheckpointEngine            engine.CheckpointOperations
 	QueueCurrentFrames          uint64
 	QueueHighFrames             uint64
 	QueueCurrentBytes           int
@@ -55,6 +56,18 @@ func (r *Runtime) observeDelivery(started time.Time, result massive.EngineDelive
 	if result.ConsumerDeferred {
 		r.consumerDeferred.Add(1)
 	}
+	r.recordAdapterTerminal(result)
+	if result.Terminal != nil {
+		r.metricsMu.Lock()
+		attempt := r.attempt
+		r.metricsMu.Unlock()
+		if attempt != nil {
+			attempt.AcknowledgeTerminalObservation()
+		}
+	}
+	if result.Terminal == nil {
+		r.recordEngineTransitionIncident(result)
+	}
 }
 
 func (r *Runtime) setLiveSources(attempt *massive.LiveAttempt, adapter *massive.LiveAdapter) {
@@ -86,8 +99,14 @@ func (r *Runtime) metricsFromPublication(sampledAt time.Time, processLive bool, 
 	if currentFrames > r.queueHighFrames {
 		r.queueHighFrames = currentFrames
 	}
+	if result.LiveQueue.HighFramesQueued > r.queueHighFrames {
+		r.queueHighFrames = result.LiveQueue.HighFramesQueued
+	}
 	if result.LiveQueue.QueuedBytes > r.queueHighBytes {
 		r.queueHighBytes = result.LiveQueue.QueuedBytes
+	}
+	if result.LiveQueue.HighQueuedBytes > r.queueHighBytes {
+		r.queueHighBytes = result.LiveQueue.HighQueuedBytes
 	}
 	result.QueueCurrentFrames, result.QueueHighFrames = currentFrames, r.queueHighFrames
 	result.QueueCurrentBytes, result.QueueHighBytes = result.LiveQueue.QueuedBytes, r.queueHighBytes
@@ -95,6 +114,7 @@ func (r *Runtime) metricsFromPublication(sampledAt time.Time, processLive bool, 
 	if r.writer != nil {
 		result.Checkpoint = r.writer.Accounting()
 	}
+	result.CheckpointEngine = r.engine.CheckpointOperations()
 	result.Deliveries = r.deliveryCount.Load()
 	result.ConsumerDeferred = r.consumerDeferred.Load()
 	if result.Deliveries != 0 {
@@ -111,6 +131,6 @@ func (r *Runtime) metricsFromPublication(sampledAt time.Time, processLive bool, 
 	runtime.ReadMemStats(&memory)
 	result.HeapAllocBytes, result.HeapInUseBytes = memory.HeapAlloc, memory.HeapInuse
 	result.Goroutines = runtime.NumGoroutine()
-	result.AccountingValid = operationalAccountingValid(result.Engine) && result.LiveQueue.Reconciles() && result.Adapter.Reconciles() && result.TQNormalization.Reconciles() && (r.writer == nil || result.Checkpoint.Reconciles())
+	result.AccountingValid = operationalAccountingValid(result.Engine) && result.LiveQueue.Reconciles() && result.Adapter.Reconciles() && result.TQNormalization.Reconciles() && result.CheckpointEngine.Reconciles() && (r.writer == nil || result.Checkpoint.Reconciles())
 	return result
 }

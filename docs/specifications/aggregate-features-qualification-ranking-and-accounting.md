@@ -334,7 +334,8 @@ displace a lower-return passer, ties and fewer-than-20 populations are
 deterministic, and unavailable historical context is not displayed as zero or
 allowed to suppress an otherwise trustworthy Last/Day-% row. The operator can
 distinguish exact qualified ranking, the explicitly partial
-`degraded_bootstrap` projection, unavailable/suppressed ranking, and the exact
+`degraded_bootstrap` and `degraded_current` projections,
+unavailable/suppressed ranking, and the exact
 population categories supporting those claims.
 
 This component establishes scanner measurement correctness only. It does not
@@ -421,7 +422,7 @@ interface decision rather than adding another path.
 | `PG-RANK-02` | Require a trusted accepted same-session mark at committed `T`, finite price at least USD 0.25, trustworthy context, and nonnegative age; never synthesize or cross-session-fill a mark. | Ranking, availability, and delivery |
 | `PG-RANK-03` | Evaluate the exact 60-second/5-second gate before ranking, treat missing seconds as inactivity, make ATS-dependent sums unavailable on any nonpositive/nonfinite contributor, and maintain the correction-aware session latch. | Qualification |
 | `PG-RANK-04` | Order passers by Day return descending then exact symbol ascending, publish at most 20, preserve fewer-than-20 output, and use no secondary feature key. | Ranking |
-| `PG-RANK-05` | Keep exact qualified, partial `degraded_bootstrap`, and unavailable/suppressed projections distinct; degraded ranking uses only known rankable marks, exposes covered/unresolved population, and cannot promote T/Q. | Ranking, availability, and delivery |
+| `PG-RANK-05` | Keep exact qualified, startup-partial `degraded_bootstrap`, symbol-local-partial `degraded_current`, and unavailable/suppressed projections distinct; partial ranking uses only known rankable marks, exposes covered/unresolved population and qualification uncertainty, and cannot promote T/Q. | Ranking, availability, and delivery |
 | `PG-FEATURE-01` | Implement the exact Day, From 4AM, HOD drawdown, and session/30m/60m range formulas at `T`; invalid, incomplete, missing, or zero-width inputs are unavailable. | Aggregate feature mathematics |
 | `PG-FEATURE-02` | Implement 30-second transactions/expansion Activity against independently eligible completed 30-second blocks since the 04:00 session boundary, with no RTH/after-hours reset, at least 10 blocks, inclusive empirical percentiles, geometric combination, and `[0,100]` bound. | Aggregate feature mathematics |
 | `PG-FEATURE-05` | Make every dependent aggregate feature and mutable qualification proof exactly correction-aware within the approved horizon; T/Q gap behavior remains Component 9. | Parent cross-cutting correction invariant; exact feature and qualification applications are separately routed |
@@ -444,7 +445,7 @@ interface decision rather than adding another path.
 | `DTE-AGG-03` | Depend on Component 2 structural acceptance without treating structural validity as proof of coverage, rankability, or feature availability. | Parent cross-cutting trust invariant |
 | `DTE-AGG-04` | Preserve the approved live/REST ATS provenance distinction and do not require their numerical equality. | Parent cross-cutting source-provenance invariant |
 | `DTE-MERGE-02` | Recompute every still-mutable dependent feature and qualification proof after an accepted revision. | Parent cross-cutting correction invariant |
-| `DTE-MERGE-04` | Localize REST/live conflict uncertainty to dependent historical coverage/fields while preserving an independently trusted live mark where supportable. | Parent cross-cutting containment invariant |
+| `DTE-MERGE-04` | Treat a REST/live discrepancy as diagnostic-only when valid live precedence establishes the canonical identity; localize uncertainty to dependent coverage/fields only when correctness cannot otherwise be established. | Parent cross-cutting containment invariant |
 | `DTE-MERGE-05` | Permit a correction or availability change to replace publication at unchanged `T` with a distinct publication identity. | Ranking, availability, and delivery |
 | `DTE-RECOVERY-04` | Consume, but do not produce, exact `no_print_through(T)` evidence; a later real aggregate moves the symbol into ordinary evaluation immediately. | Population accounting |
 | `DTE-RECOVERY-05` | Keep symbol/history gaps local where possible and invoke the same canonical evaluator after recovery. | Ranking, availability, and delivery |
@@ -511,8 +512,10 @@ interface decision rather than adding another path.
 7. Every bound symbol participates in exactly one primary accounting category;
    qualification, feature availability, and later T/Q coverage remain separate
    overlapping dimensions.
-8. `degraded_bootstrap` is an explicitly partial projection with no T/Q
-   promotion, not a weakened qualified table or separate evaluator.
+8. `degraded_bootstrap` and `degraded_current` are explicitly partial raw-Day-%
+   projections with no T/Q promotion, not weakened qualified tables or separate
+   evaluators. The latter requires current system-level evidence and contains
+   only symbol-local uncertainty.
 9. Live, hydration, recovery, and replay use the same Component 3 path; later
    components supply evidence and scheduling but not another evaluator.
 10. Component 3 defines no provider mapping, public API schema, checkpoint

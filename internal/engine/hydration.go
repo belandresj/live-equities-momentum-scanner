@@ -146,15 +146,27 @@ type AggregateIngressFenceInput struct {
 	state                               AggregateIngressFenceState
 	throughFrameSequence, markerOrdinal uint64
 	capturedAt                          time.Time
+	deliveryStartedAt                   time.Time
 }
 
 func NewAggregateIngressFenceInput(command HydrationFenceCommand, state AggregateIngressFenceState, throughFrameSequence, markerOrdinal uint64, capturedAt time.Time) (AggregateIngressFenceInput, error) {
+	return newAggregateIngressFenceInput(command, state, throughFrameSequence, markerOrdinal, capturedAt, time.Time{})
+}
+
+func NewAggregateIngressFenceInputAtDelivery(command HydrationFenceCommand, state AggregateIngressFenceState, throughFrameSequence, markerOrdinal uint64, capturedAt, deliveryStartedAt time.Time) (AggregateIngressFenceInput, error) {
+	if deliveryStartedAt.IsZero() {
+		return AggregateIngressFenceInput{}, errors.New("invalid aggregate ingress fence delivery start")
+	}
+	return newAggregateIngressFenceInput(command, state, throughFrameSequence, markerOrdinal, capturedAt, deliveryStartedAt)
+}
+
+func newAggregateIngressFenceInput(command HydrationFenceCommand, state AggregateIngressFenceState, throughFrameSequence, markerOrdinal uint64, capturedAt, deliveryStartedAt time.Time) (AggregateIngressFenceInput, error) {
 	if !validHydrationFenceCommand(command) || (state != AggregateIngressFenceComplete && state != AggregateIngressFenceFailed && state != AggregateIngressFenceCanceled) ||
 		markerOrdinal == 0 || capturedAt.IsZero() || capturedAt != capturedAt.UTC() {
 		return AggregateIngressFenceInput{}, errors.New("invalid aggregate ingress fence")
 	}
 	return AggregateIngressFenceInput{schemaVersion: AggregateIngressFenceSchemaV1, command: command, state: state,
-		throughFrameSequence: throughFrameSequence, markerOrdinal: markerOrdinal, capturedAt: capturedAt}, nil
+		throughFrameSequence: throughFrameSequence, markerOrdinal: markerOrdinal, capturedAt: capturedAt, deliveryStartedAt: deliveryStartedAt}, nil
 }
 
 func (f AggregateIngressFenceInput) Command() HydrationFenceCommand    { return f.command }
@@ -783,12 +795,18 @@ func (e *Engine) applyHydrationChunkLocked(node *queueNode) (DispositionCode, Di
 			e.state.exposedRevision++
 			entry.coverage = hydrationCoverageUnknown
 		case DispositionAggregateRejected:
-			if rowReason == ReasonHistoricalLiveConflict || rowReason == ReasonHistoricalHistoricalConflict {
+			if rowReason == ReasonHistoricalLiveConflict {
+				// Valid live authority deterministically resolves this identity. Keep
+				// the discrepancy in bounded row diagnostics without poisoning the
+				// request's otherwise exact historical coverage.
 				delta.ConflictOrWithdrawal++
+			} else if rowReason == ReasonHistoricalHistoricalConflict {
+				delta.ConflictOrWithdrawal++
+				entry.coverage = hydrationCoverageUnknown
 			} else {
 				delta.Rejected++
+				entry.coverage = hydrationCoverageUnknown
 			}
-			entry.coverage = hydrationCoverageUnknown
 		case DispositionAggregateFenced:
 			delta.Fenced++
 			entry.coverage = hydrationCoverageUnknown
@@ -809,6 +827,11 @@ func (e *Engine) applyHydrationChunkLocked(node *queueNode) (DispositionCode, Di
 				state := e.state.binding.symbols[symbolIndex].aggregates
 				if state != nil {
 					e.compactAggregateLocked(state, e.state.binding, state.tail[row.windowStart.Unix()], node.admissionTime)
+					// Hydration compacts one just-installed row at a time rather
+					// than through compactSymbolLocked. Refresh the bounded derived
+					// view after that direct canonical-tail mutation so an evaluation
+					// between chunks cannot observe stale negative coverage.
+					rebuildTailCoverage(state, e.state.binding)
 				}
 			}
 		}
@@ -995,6 +1018,7 @@ func (e *Engine) applyAggregateIngressFenceLocked(node *queueNode) (DispositionC
 		return DispositionAggregateIngressFenceFenced, ReasonAggregateIngressFence
 	}
 	target := timerTarget(input.capturedAt, e.delay, e.state.binding.sessionStart, e.state.binding.sessionEnd)
+	e.state.fenceTiming.Target = target
 	if target.Before(generation.end) {
 		return DispositionAggregateIngressFenceRejected, ReasonAggregateIngressFence
 	}

@@ -92,7 +92,7 @@ func (e *Engine) ObserveOperational() OperationalView {
 		Lifecycle: string(p.lifecycle), LifecycleReason: string(p.lifecycleReason), Suppression: p.suppressionDisposition,
 		Watermark: immutableTimePointer(p.watermark), GeneratedAt: p.generatedAt,
 		RankingMode: string(p.aggregateEvaluation.mode), RankingReason: string(p.aggregateEvaluation.reason), CurrentMarketClaim: p.currentMarketClaim,
-		QueueCapacity: e.capacity, RequiredReserve: e.reserve, QueueOccupancy: len(e.queue),
+		QueueCapacity: e.capacity, RequiredReserve: e.reserve, QueueOccupancy: e.externalQueueOccupancyLocked(),
 		Admissions:  OperationalAdmissions{counters.started, counters.inProgress, counters.resultsCommitted, counters.admittedExternal, counters.notAdmittedInvalid, counters.notAdmittedCanceled, counters.notAdmittedClosed, counters.pressureShedOptional, counters.sequenceBudgetExhausted, counters.ownerInProgress, counters.completedExternal},
 		Transitions: OperationalTransitions{transitions.completedExternal, transitions.completedInternal, transitions.appliedMarket, transitions.appliedNonmarket, transitions.exactDuplicate, transitions.rejected, transitions.fenced, transitions.terminalWorkFact, transitions.integrityFailure},
 		Aggregates:  OperationalAggregates{state.aggregates.consumed, state.aggregates.inserted, state.aggregates.revised, state.aggregates.withdrawnConflict, state.aggregates.exactDuplicate, state.aggregates.rejected, state.aggregates.fenced, state.aggregates.integrity},

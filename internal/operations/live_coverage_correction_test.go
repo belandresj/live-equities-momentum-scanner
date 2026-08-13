@@ -76,8 +76,8 @@ func TestSlice1RuntimeRunLiveInstallsOrdinaryLiveCoverage(t *testing.T) {
 		writer.Header().Set("Content-Type", "application/json")
 		if symbol == "OVERLAP" {
 			// This deliberately disagrees with the already accepted live identity.
-			// The live value must remain canonical and the historical conflict must
-			// remain unresolved across later ordinary no-print coverage.
+			// The live value must remain canonical while the discrepancy stays a
+			// diagnostic across later ordinary no-print coverage.
 			_, _ = fmt.Fprintf(writer, `{"status":"OK","ticker":"OVERLAP","adjusted":false,"count":1,"results":[{"t":%d,"o":19,"h":21,"l":18,"c":19,"v":100,"vw":19,"n":10}]}`,
 				handoff.Add(-2*time.Second).UnixMilli())
 			return
@@ -141,8 +141,8 @@ func TestSlice1RuntimeRunLiveInstallsOrdinaryLiveCoverage(t *testing.T) {
 	startup := run.Engine().ObserveReplayDeterministic()
 	startupStatus := run.Status()
 	assertSlice1PopulationAndQualification(t, startup.Evaluation)
-	if !startupStatus.BackendReady || !startupStatus.RankingCurrent || startup.Evaluation.Mode != "degraded_bootstrap" {
-		t.Fatalf("startup projection was not current degraded bootstrap: status=%+v evaluation=%+v", startupStatus, startup.Evaluation)
+	if !startupStatus.BackendReady || !startupStatus.RankingCurrent || startup.Evaluation.Mode != "qualified_current" {
+		t.Fatalf("startup projection was not current after resolved overlap: status=%+v evaluation=%+v", startupStatus, startup.Evaluation)
 	}
 	startupAAA := slice1CanonicalSymbol(t, startup, "AAA")
 	startupOverlap := slice1CanonicalSymbol(t, startup, "OVERLAP")
@@ -152,7 +152,7 @@ func TestSlice1RuntimeRunLiveInstallsOrdinaryLiveCoverage(t *testing.T) {
 	}
 	if len(startupOverlap.Records) != 1 || startupOverlap.Records[0].AuthoritySource != engine.AggregateSourceLive || startupOverlap.Records[0].Values.Close != 20 ||
 		run.Engine().ObserveOperational().Aggregates.Rejected == 0 {
-		t.Fatalf("startup overlap did not retain live authority plus conflict: symbol=%+v aggregates=%+v", startupOverlap, run.Engine().ObserveOperational().Aggregates)
+		t.Fatalf("startup overlap did not retain live authority plus discrepancy accounting: symbol=%+v aggregates=%+v", startupOverlap, run.Engine().ObserveOperational().Aggregates)
 	}
 	startupRejected := run.Engine().ObserveOperational().Aggregates.Rejected
 	startupFences := run.Metrics().LiveQueue.IngressFencesDispositioned
@@ -187,7 +187,7 @@ func TestSlice1RuntimeRunLiveInstallsOrdinaryLiveCoverage(t *testing.T) {
 	}
 	if len(finalOverlap.Records) != 1 || finalOverlap.Records[0] != startupOverlap.Records[0] || finalOverlap.ProvenAbsentSlots != startupOverlap.ProvenAbsentSlots+2 ||
 		run.Engine().ObserveOperational().Aggregates.Rejected != startupRejected {
-		t.Fatalf("ordinary coverage overwrote the accepted overlap/conflict: startup=%+v final=%+v aggregates=%+v", startupOverlap, finalOverlap, run.Engine().ObserveOperational().Aggregates)
+		t.Fatalf("ordinary coverage overwrote the accepted overlap/discrepancy: startup=%+v final=%+v aggregates=%+v", startupOverlap, finalOverlap, run.Engine().ObserveOperational().Aggregates)
 	}
 	metrics := run.Metrics()
 	if metrics.LiveQueue.IngressFencesDispositioned < startupFences+2 || !metrics.AccountingValid || !metrics.LiveQueue.Reconciles() || !metrics.Adapter.Reconciles() {
@@ -243,19 +243,19 @@ func assertSlice1PopulationAndQualification(t *testing.T, evaluation engine.Repl
 	population := evaluation.Population
 	qualification := evaluation.Qualification
 	if population.UniverseTotal != 3 || population.ValidPriorClose != 3 || population.InvalidOrMissingPriorClose != 0 ||
-		population.TrustedRankableMark != 1 || population.TrustedBelowPriceMark != 0 || population.NoPrintThroughT != 1 ||
-		population.InvalidMark != 0 || population.UnknownDueFailureOrFence != 1 || population.CoveredPopulation != 2 || population.UnresolvedPopulation != 1 {
+		population.TrustedRankableMark != 2 || population.TrustedBelowPriceMark != 0 || population.NoPrintThroughT != 1 ||
+		population.InvalidMark != 0 || population.UnknownDueFailureOrFence != 0 || population.CoveredPopulation != 3 || population.UnresolvedPopulation != 0 {
 		t.Fatalf("population accounting=%+v", population)
 	}
 	if population.UniverseTotal != population.ValidPriorClose+population.InvalidOrMissingPriorClose ||
 		population.ValidPriorClose != population.TrustedRankableMark+population.TrustedBelowPriceMark+population.NoPrintThroughT+population.InvalidMark+population.UnknownDueFailureOrFence {
 		t.Fatalf("population identities do not reconcile: %+v", population)
 	}
-	if qualification.NotYetPassed != 1 || qualification.Provisional != 0 || qualification.Finalized != 0 || qualification.Unresolved != 0 ||
+	if qualification.NotYetPassed != 2 || qualification.Provisional != 0 || qualification.Finalized != 0 || qualification.Unresolved != 0 ||
 		qualification.NotYetPassed+qualification.Provisional+qualification.Finalized+qualification.Unresolved != population.TrustedRankableMark {
 		t.Fatalf("qualification accounting=%+v population=%+v", qualification, population)
 	}
-	if evaluation.Uncertainty.BootstrapOrigin != 1 || evaluation.Uncertainty.PostBootstrapGap != 0 || evaluation.Uncertainty.LocalInvalid != 0 ||
+	if evaluation.Uncertainty.BootstrapOrigin != 0 || evaluation.Uncertainty.PostBootstrapGap != 0 || evaluation.Uncertainty.LocalInvalid != 0 ||
 		evaluation.Uncertainty.BootstrapOrigin+evaluation.Uncertainty.PostBootstrapGap+evaluation.Uncertainty.LocalInvalid != population.UnknownDueFailureOrFence+qualification.Unresolved {
 		t.Fatalf("uncertainty-origin accounting=%+v population=%+v qualification=%+v", evaluation.Uncertainty, population, qualification)
 	}

@@ -297,7 +297,9 @@ func TestC3R1AtomicCandidateAndPublicationIdentity(t *testing.T) {
 // TestC3R1IndependentFeatureAccountingAndOrigins amends C3-POP-02 and
 // C3-PROJ-01: invalid prior close affects Day/rankability only, every feature
 // status/reason pair reconciles, unresolved is explicit, and only bootstrap
-// uncertainty can produce degraded output.
+// uncertainty remains distinguished by origin. Slice 2 of the live partial-
+// ranking correction permits post-bootstrap uncertainty to produce only the
+// live-only degraded_current projection.
 func TestC3R1IndependentFeatureAccountingAndOrigins(t *testing.T) {
 	at := time.Date(2026, 7, 29, 15, 0, 0, 0, time.UTC)
 	invalidPrior := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseInvalid, 0, 12, qualificationNotYetPassed}}).stageAggregateEvaluationLocked(at)
@@ -314,12 +316,14 @@ func TestC3R1IndependentFeatureAccountingAndOrigins(t *testing.T) {
 	}
 
 	bootstrap := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationNotYetPassed}, {"BBB", reference.PriorCloseValid, 10, 0, qualificationUnresolved}})
+	bootstrap.state.lifecycle = lifecycleHydrating
 	if got := bootstrap.stageAggregateEvaluationLocked(at); got.mode != rankingDegradedBootstrap || got.uncertainty.bootstrapOrigin == 0 {
 		t.Fatalf("bootstrap-origin degradation = %+v", got)
 	}
 	bootstrap.state.aggregateEvaluator.coverage[1] = coverageUnknownPostBootstrap
-	if got := bootstrap.stageAggregateEvaluationLocked(at); got.mode == rankingDegradedBootstrap || got.reason != rankingReasonIncompletePopulation || got.uncertainty.postBootstrapGap == 0 {
-		t.Fatalf("post-bootstrap uncertainty was relabeled degraded: %+v", got)
+	bootstrap.mode = RunModeLive
+	if got := bootstrap.stageAggregateEvaluationLocked(at); got.mode != rankingDegradedCurrent || got.reason != rankingReasonIncompletePopulation || got.uncertainty.postBootstrapGap == 0 {
+		t.Fatalf("post-bootstrap uncertainty did not enter the live partial projection: %+v", got)
 	}
 
 	unresolved := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationUnresolved}}).stageAggregateEvaluationLocked(at)

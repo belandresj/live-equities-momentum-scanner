@@ -15,6 +15,8 @@ import (
 	"github.com/belandresj/live-equities-momentum-scanner/internal/replayartifact/playback"
 )
 
+var diagnosticMonotonicClock = time.Now
+
 // RunMode fixes the evidence model for an engine's lifetime.
 type RunMode string
 
@@ -34,7 +36,7 @@ type Config struct {
 	Capacity            int
 	RequiredReserve     int
 	EvaluationDelay     *time.Duration
-	CheckpointSubmitter *checkpoint.Writer
+	CheckpointSubmitter checkpoint.Submitter
 }
 
 // AdmissionResult is the exhaustive result of one admission call.
@@ -112,6 +114,27 @@ type TimerDisposition struct {
 type EvaluationTimingView struct {
 	EngineSequence            uint64
 	Stage, Apply, Publication time.Duration
+}
+
+// FenceTimingView partitions the most recent aggregate-ingress fence handled
+// by the sole engine owner. Durations are diagnostic only and never influence
+// ordering, lifecycle, coverage, evaluation, or publication.
+type FenceTimingView struct {
+	EngineSequence                        uint64
+	HydrationGeneration                   uint64
+	ConnectionEpoch, ThroughFrameSequence uint64
+	MarkerOrdinal, CommandToken           uint64
+	Target                                time.Time
+	PublicationID                         uint64
+	CoverageFinalization                  time.Duration
+	SymbolMaintenance                     time.Duration
+	EvaluationStage                       time.Duration
+	EvaluationApply                       time.Duration
+	Publication                           time.Duration
+	ResidualOrderedOverhead               time.Duration
+	Total                                 time.Duration
+	Valid                                 bool
+	InvalidReason                         string
 }
 
 const BindingInstallSchemaV1 = "engine-binding-install-v1"
@@ -245,6 +268,7 @@ const (
 	inputTQPressureResult
 	inputTQPressureTick
 	inputOperationalIngressIntegrity
+	inputCheckpointProjectionContinue
 )
 
 func inputKindName(kind inputKind) string {
@@ -343,10 +367,18 @@ type engineState struct {
 	checkpointLastSubmitted    *time.Time
 	checkpointLastAttempted    *time.Time
 	checkpointRequestSequence  uint64
-	checkpointOutstanding      map[uint64]checkpoint.Request
+	checkpointOutstanding      map[uint64]checkpointRequestIdentity
 	checkpointOperations       CheckpointOperations
+	checkpointProjectionActive bool
+	checkpointProjectionDirty  bool
+	checkpointProjectionT0     time.Time
+	checkpointProjectionQueued bool
+	checkpointProjection       *checkpointProjectionWork
 	tq                         tqState
 	evaluationTiming           EvaluationTimingView
+	fenceTiming                FenceTimingView
+	fenceTimingStarted         time.Time
+	lastCoherentPublication    *privatePublication
 }
 
 func (e *Engine) ObserveEvaluationTiming() EvaluationTimingView {
@@ -356,6 +388,24 @@ func (e *Engine) ObserveEvaluationTiming() EvaluationTimingView {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.state.evaluationTiming
+}
+
+func (e *Engine) ObserveFenceTiming() FenceTimingView {
+	if e == nil {
+		return FenceTimingView{}
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.state.fenceTiming
+}
+
+func (e *Engine) ObserveLastCoherentPublication() ReplayPublicationView {
+	if e == nil {
+		return ReplayPublicationView{}
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return replayPublicationView(e.state.lastCoherentPublication)
 }
 
 type admissionCounters struct {
@@ -410,11 +460,14 @@ type Engine struct {
 	reserve  int
 	delay    time.Duration
 
-	queue     []*queueNode
-	changed   chan struct{}
-	done      chan struct{}
-	sealed    bool
-	exhausted bool
+	queue []*queueNode
+	// internalQueued is the exact number of engine-owned continuation nodes in
+	// queue. It keeps external admission accounting O(1) at full capacity.
+	internalQueued int
+	changed        chan struct{}
+	done           chan struct{}
+	sealed         bool
+	exhausted      bool
 
 	lastReserved uint64
 	nextSequence uint64
@@ -437,7 +490,7 @@ type Engine struct {
 	publicationFault      publicationFault
 	evaluationFault       bool
 	evaluationTimingClock func() time.Time
-	checkpointSubmitter   *checkpoint.Writer
+	checkpointSubmitter   checkpoint.Submitter
 	tqLimits              tqRetentionLimits
 	tqPressurePolicy      tqPressurePolicy
 }
@@ -452,17 +505,24 @@ func (e *Engine) ArmEvaluationTimingForTest(clock func() time.Time) {
 }
 
 func (e *Engine) evaluationTimingStart() time.Time {
-	if e.evaluationTimingClock == nil {
-		return time.Time{}
+	if e.evaluationTimingClock != nil {
+		return e.evaluationTimingClock()
 	}
-	return e.evaluationTimingClock()
+	return diagnosticMonotonicClock()
 }
 
 func (e *Engine) evaluationTimingElapsed(start time.Time) time.Duration {
-	if start.IsZero() || e.evaluationTimingClock == nil {
+	if start.IsZero() {
 		return 0
 	}
-	return e.evaluationTimingClock().Sub(start)
+	now := diagnosticMonotonicClock()
+	if e.evaluationTimingClock != nil {
+		now = e.evaluationTimingClock()
+	}
+	if now.Before(start) {
+		return -1
+	}
+	return now.Sub(start)
 }
 
 // New constructs an unbound engine shell and starts its sole consumer.
@@ -681,6 +741,9 @@ func (e *Engine) Close() {
 	e.mu.Lock()
 	if !e.sealed {
 		e.sealed = true
+		if e.state.checkpointProjectionActive {
+			e.rejectCheckpointProjectionLocked(e.state.checkpointProjection, "shutdown")
+		}
 		e.broadcastLocked()
 	}
 	e.mu.Unlock()
@@ -729,6 +792,15 @@ func (e *Engine) consume() {
 		copy(e.queue, e.queue[1:])
 		e.queue[len(e.queue)-1] = nil
 		e.queue = e.queue[:len(e.queue)-1]
+		if node.kind == inputCheckpointProjectionContinue {
+			e.internalQueued--
+			e.state.checkpointProjectionQueued = false
+			e.continueCheckpointProjectionLocked()
+			e.enqueueCheckpointProjectionLocked()
+			e.broadcastLocked()
+			e.mu.Unlock()
+			continue
+		}
 		node.engineSequence = e.nextSequence
 		e.nextSequence++
 		e.counters.ownerInProgress++
@@ -986,7 +1058,19 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		stagedHydrationAccounting = nodeResult
 	} else if node.kind == inputAggregateIngressFence {
 		e.mu.Lock()
+		input := node.aggregateIngressFence.AggregateIngressFenceInput
+		e.state.fenceTimingStarted = input.deliveryStartedAt
+		if e.state.fenceTimingStarted.IsZero() {
+			e.state.fenceTimingStarted = e.evaluationTimingStart()
+		}
+		e.state.fenceTiming = FenceTimingView{
+			EngineSequence: node.engineSequence, HydrationGeneration: input.command.generation,
+			ConnectionEpoch: input.command.epoch, ThroughFrameSequence: input.throughFrameSequence,
+			MarkerOrdinal: input.markerOrdinal, CommandToken: input.command.commandToken, Valid: true,
+		}
+		coverageStarted := e.evaluationTimingStart()
 		code, reason = e.applyAggregateIngressFenceLocked(node)
+		e.state.fenceTiming.CoverageFinalization = e.evaluationTimingElapsed(coverageStarted)
 		nodeResult := e.state.hydration.generation.accounting
 		e.mu.Unlock()
 		stagedHydrationAccounting = nodeResult
@@ -1135,4 +1219,11 @@ func (e *Engine) applyExhaustionLocked() {
 func (e *Engine) broadcastLocked() {
 	close(e.changed)
 	e.changed = make(chan struct{})
+}
+
+// externalQueueOccupancyLocked excludes the single engine-owned checkpoint
+// continuation from ingress accounting. The continuation still occupies and
+// orders within the physical FIFO, but it is not an admitted external fact.
+func (e *Engine) externalQueueOccupancyLocked() int {
+	return len(e.queue) - e.internalQueued
 }

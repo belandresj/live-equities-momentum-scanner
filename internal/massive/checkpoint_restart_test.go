@@ -150,7 +150,7 @@ func TestC7OBJECTIVE01CurrentHostRestart(t *testing.T) {
 	}
 	const checkpointRecords, freshRecords = int64(population / 2), int64(population/2) * 60
 	t.Logf("preflight host=%s/%s go=%s cpus=%d workers=%d population=%d gap=%s schema=%s artifact_bytes=%d payload_sha256=%s corrections=%d counts=%+v checkpoint_requests=%d checkpoint_records=%d fresh_requests=%d fresh_records=%d",
-		runtime.GOOS, runtime.GOARCH, runtime.Version(), runtime.NumCPU(), min(32, max(2, runtime.NumCPU())), population, r.Sub(t0), image.SchemaVersion, preflightBytes, preflightChecksum, image.Counts.TailRecords, image.Counts, population, checkpointRecords, population, freshRecords)
+		runtime.GOOS, runtime.GOARCH, runtime.Version(), runtime.NumCPU(), 2, population, r.Sub(t0), image.SchemaVersion, preflightBytes, preflightChecksum, image.Counts.TailRecords, image.Counts, population, checkpointRecords, population, freshRecords)
 	server := objectiveHydrationServer(t)
 	defer server.Close()
 
@@ -159,7 +159,10 @@ func TestC7OBJECTIVE01CurrentHostRestart(t *testing.T) {
 		artifactBytes                                                                int64
 	}
 	runs, fresh := make([]segments, trials), make([]time.Duration, trials)
-	workers := min(32, max(2, runtime.NumCPU()))
+	// The supported private launcher owns exactly two hydration workers. Keep
+	// the restart and fresh controls on that production configuration instead
+	// of scaling the fake server by host CPU count.
+	workers := 2
 	for run := range runs {
 		checkpointContext, cancelCheckpoint := context.WithTimeout(context.Background(), trialTimeout)
 		sourceNow := t0

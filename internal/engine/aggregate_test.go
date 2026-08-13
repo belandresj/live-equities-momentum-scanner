@@ -301,10 +301,12 @@ func TestENGAGG01ValidationMergeRetentionMatrix(t *testing.T) {
 		if got := aggregateRecord(t, e, "BAD", live.WindowStart); got.values != live.Values || got.authority.source != AggregateSourceLive {
 			t.Fatalf("historical overwrote live = %+v", got)
 		}
-		if exactAggregateCoverage(aggregateState(t, e, "BAD"), e.state.binding, live.WindowStart, live.WindowEnd) {
-			t.Fatal("historical/live conflict did not localize coverage unknown")
+		badState := aggregateState(t, e, "BAD")
+		if !exactAggregateCoverage(badState, e.state.binding, live.WindowStart, live.WindowEnd) ||
+			badState.historicalConflict != nil && badState.historicalConflict.has(sessionSlot(e.state.binding, live.WindowStart)) {
+			t.Fatal("resolved historical/live discrepancy poisoned exact live coverage")
 		}
-		conflictEvidence := aggregateState(t, e, "BAD").lastConflict
+		conflictEvidence := badState.lastConflict
 		if conflictEvidence == nil || conflictEvidence.current.source != AggregateSourceLive || conflictEvidence.incoming.source != AggregateSourceHistorical {
 			t.Fatalf("historical/live conflict provenance = %+v", conflictEvidence)
 		}
@@ -327,6 +329,9 @@ func TestENGAGG01ValidationMergeRetentionMatrix(t *testing.T) {
 		interleavedState := aggregateState(t, interleaved, "AAA")
 		if interleavedState.presence == nil || !interleavedState.presence.has(sessionSlot(interleaved.state.binding, row.WindowStart)) {
 			t.Fatal("same-result historical conflict cleared compacted live presence")
+		}
+		if interleavedState.historicalConflict != nil && interleavedState.historicalConflict.has(sessionSlot(interleaved.state.binding, row.WindowStart)) {
+			t.Fatal("resolved historical/live discrepancy installed a conflict bit over compacted live authority")
 		}
 		closeAndWait(t, interleaved)
 	})

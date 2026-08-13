@@ -12,7 +12,97 @@ type Request struct {
 	RequestID        uint64
 	ArtifactSequence uint64
 	T0               time.Time
-	Image            Image
+	image            Image
+}
+
+// ProjectionBuilder isolates each supplied symbol into package-private
+// storage. Callers can retain or mutate their source values after AddSymbol;
+// neither the completed Request nor writer-observed bytes can alias them.
+type ProjectionBuilder struct {
+	image Image
+	next  int
+}
+
+func NewProjectionBuilder(schemaVersion, producerMode string, binding Binding, t0, createdAt time.Time, sequence, population uint64) (*ProjectionBuilder, bool) {
+	if schemaVersion == "" || producerMode == "" || binding.Identity == "" || t0.IsZero() || createdAt.Before(t0) || sequence == 0 || population == 0 || population > MaximumSymbols {
+		return nil, false
+	}
+	return &ProjectionBuilder{image: Image{SchemaVersion: schemaVersion, ProducerMode: producerMode, Binding: binding, T0: t0, CreatedAt: createdAt,
+		Sequence: sequence, Population: int(population), Symbols: make([]Symbol, int(population))}}, true
+}
+
+func (b *ProjectionBuilder) AddSymbol(index int, symbol Symbol) bool {
+	if b == nil || index != b.next || index < 0 || index >= len(b.image.Symbols) {
+		return false
+	}
+	b.image.Symbols[index] = cloneSymbol(symbol)
+	b.next++
+	return true
+}
+
+func (b *ProjectionBuilder) Finish(bindingIdentity string, requestID uint64) (Request, bool) {
+	if b == nil || b.next != len(b.image.Symbols) || bindingIdentity != b.image.Binding.Identity || requestID == 0 {
+		return Request{}, false
+	}
+	b.image.Counts = structureCounts(b.image.Symbols)
+	if b.image.Counts.RecordsWithState+b.image.Counts.EmptyStateRecords != b.image.Population {
+		return Request{}, false
+	}
+	request := Request{BindingIdentity: bindingIdentity, RequestID: requestID, ArtifactSequence: b.image.Sequence, T0: b.image.T0, image: b.image}
+	b.image = Image{}
+	b.next = 0
+	return request, true
+}
+
+func structureCounts(symbols []Symbol) StructureCounts {
+	var c StructureCounts
+	for _, s := range symbols {
+		if s.HasState {
+			c.RecordsWithState++
+		} else {
+			c.EmptyStateRecords++
+		}
+		c.TailRecords += len(s.Tail)
+		c.PresenceWords += len(s.Presence)
+		c.ProvenAbsentWords += len(s.ProvenAbsent)
+		c.ConflictWords += len(s.HistoricalConflict)
+		if s.PriceRange != nil {
+			c.PriceExtremaPoints += len(s.PriceRange.Highs) + len(s.PriceRange.Lows) + len(s.PriceRange.SessionHighs) + len(s.PriceRange.SessionLows)
+		}
+		if s.Activity != nil {
+			c.ActivityReferences += len(s.Activity.References)
+			c.ActivityMutable += len(s.Activity.Mutable)
+			c.ActivityTargetBlocks += len(s.Activity.FoldedTargets)
+			c.ActivityTargetContributions += s.Activity.FoldedTargetContributions
+		}
+		if s.Qualification != nil {
+			c.QualificationGateBars += len(s.Qualification.FinalizedGateBars)
+			c.QualificationProofs += len(s.Qualification.Proofs)
+			c.QualificationDirty += len(s.Qualification.Dirty)
+		}
+		if s.InvalidMarkStart != nil {
+			c.InvalidMarks++
+		}
+		if s.Coverage != nil {
+			c.CoverageConsequences++
+		}
+	}
+	return c
+}
+
+// NewRequest is the defensive external/test constructor. It isolates the
+// writer from every shallow alias a caller may have retained before transfer.
+// Production projection uses ProjectionBuilder to spread this same isolation
+// across bounded FIFO continuations rather than cloning one complete image.
+func NewRequest(bindingIdentity string, requestID uint64, image *Image) (Request, bool) {
+	if image == nil || bindingIdentity == "" || requestID == 0 || image.Sequence == 0 || image.T0.IsZero() ||
+		image.Binding.Identity != bindingIdentity {
+		return Request{}, false
+	}
+	owned := image.Clone()
+	request := Request{BindingIdentity: bindingIdentity, RequestID: requestID, ArtifactSequence: owned.Sequence, T0: owned.T0, image: owned}
+	*image = Image{}
+	return request, true
 }
 
 type TerminalDisposition string
@@ -48,8 +138,12 @@ type SubmitResult struct {
 type Submitter interface{ Submit(Request) SubmitResult }
 
 type WriterAccounting struct {
-	Submitted, InProgress, Pending          uint64
-	Completed, Failed, Canceled, Superseded uint64
+	Submitted, InProgress, Pending                                      uint64
+	Completed, Failed, Canceled, Superseded                             uint64
+	LastSubmittedT0, LastSuccessfulT0                                   time.Time
+	LastArtifactBytes                                                   int64
+	LastWriteDuration, LastEncodeDuration, LastReopenValidationDuration time.Duration
+	LastFailureStep                                                     WriteStep
 }
 
 func (a WriterAccounting) Reconciles() bool {
@@ -85,10 +179,12 @@ func NewWriter(parent context.Context, store *Store) (*Writer, error) {
 }
 
 func (w *Writer) Submit(request Request) SubmitResult {
-	if request.BindingIdentity == "" || request.BindingIdentity != w.store.binding || request.RequestID == 0 || request.ArtifactSequence == 0 || request.T0.IsZero() || request.Image.Binding.Identity != request.BindingIdentity || request.Image.Sequence != request.ArtifactSequence || request.Image.T0 != request.T0 {
+	if w == nil {
 		return SubmitResult{Disposition: SubmitRejected}
 	}
-	request.Image = request.Image.Clone()
+	if request.BindingIdentity == "" || request.BindingIdentity != w.store.binding || request.RequestID == 0 || request.ArtifactSequence == 0 || request.T0.IsZero() || request.image.Binding.Identity != request.BindingIdentity || request.image.Sequence != request.ArtifactSequence || request.image.T0 != request.T0 {
+		return SubmitResult{Disposition: SubmitRejected}
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {
@@ -98,6 +194,7 @@ func (w *Writer) Submit(request Request) SubmitResult {
 		return SubmitResult{Disposition: SubmitRejected}
 	}
 	w.accounting.Submitted++
+	w.accounting.LastSubmittedT0 = request.T0
 	w.deliveryBudget++
 	var result SubmitResult
 	result.Disposition = SubmitAccepted
@@ -185,7 +282,7 @@ func (w *Writer) run() {
 				if !ok {
 					break
 				}
-				write := w.store.Write(w.ctx, request.Image)
+				write := w.store.Write(w.ctx, request.image)
 				disposition, reason := TerminalCompleted, ""
 				switch write.Disposition {
 				case WriteCompleted, WriteCleanupDeferred:
@@ -199,7 +296,7 @@ func (w *Writer) run() {
 					disposition, reason = TerminalFailed, "write_failed"
 				}
 				terminal := terminalFor(request, disposition, write.Step, reason)
-				w.finish(disposition)
+				w.finish(disposition, write, request.T0)
 				w.publishTerminal(terminal)
 			}
 		}
@@ -220,18 +317,26 @@ func (w *Writer) take() (Request, bool) {
 	return request, true
 }
 
-func (w *Writer) finish(disposition TerminalDisposition) {
+func (w *Writer) finish(disposition TerminalDisposition, write WriteResult, t0 time.Time) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.inProgress = nil
 	w.accounting.InProgress = 0
+	w.accounting.LastArtifactBytes = write.Entry.FileBytes
+	w.accounting.LastWriteDuration = write.TotalDuration
+	w.accounting.LastEncodeDuration = write.EncodeDuration
+	w.accounting.LastReopenValidationDuration = write.ReopenValidationDuration
+	w.accounting.LastFailureStep = ""
 	switch disposition {
 	case TerminalCompleted:
 		w.accounting.Completed++
+		w.accounting.LastSuccessfulT0 = t0
 	case TerminalFailed:
 		w.accounting.Failed++
+		w.accounting.LastFailureStep = write.Step
 	case TerminalCanceled:
 		w.accounting.Canceled++
+		w.accounting.LastFailureStep = write.Step
 	}
 }
 

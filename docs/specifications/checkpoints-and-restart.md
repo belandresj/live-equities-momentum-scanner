@@ -94,8 +94,9 @@ dependency material.
 
 **Contract-wide coverage and acceptance:** Sections 1–7 retain the fixed Phase
 1 boundary. All eight requirements and primary proofs pass after the
-2026-08-09 `P-C7-LIVE` fake-provider ordering correction. The corrected S3
-objective and focused final reviews are clean, so Component 7 is reaccepted.
+2026-08-09 `P-C7-LIVE` fake-provider ordering correction. The 2026-08-12
+checkpoint hot-path correction reopened only projection/cadence/decoder
+mechanics; its proofs and final focused re-review pass, so C7 is reaccepted.
 This remains accepted evidence rather than a frozen design and may be reopened
 by later V1 integration evidence.
 
@@ -107,6 +108,7 @@ by later V1 integration evidence.
 | `C7-S1` | `accepted_reopenable` | `P-C7-STATE` and `P-C7-INSTALL` pass; S3 preserved their semantic/ownership evidence | 2026-08-07 | Complete |
 | `C7-S2` | `accepted_reopenable` | `P-C7-CODEC`, `P-C7-STORE`, and `P-C7-CADENCE` pass. S3 added bounded lazy latest/previous selection without changing durability semantics; the isolated 100,000-symbol maximum-shape proof passes. | 2026-08-07 | Complete |
 | `C7-S3` | `accepted_reopenable` | `P-C7-REPLAY` and `P-C7-OBJECTIVE` evidence remains valid. Corrected `P-C7-LIVE` passed 500 consecutive focused runs; the explicit descending-response counterexample passed 20 runs and preserved exact provider-failed terminal handling. | 2026-08-09 | Complete |
+| Checkpoint hot-path correction | `finally_accepted` | Production scratch restore/evaluation is removed; alias-isolated one-symbol FIFO-tail continuations bound dense mature owner hold to 20.870ms, aggregate delivery to 66.874ms, and observation to 55.523ms with stable post-GC heap; strict bounded decode and the exact two-worker control pass at 524.029ms median versus 1.381s fresh. Focused re-review is clean. See [`live-checkpoint-hot-path-correction.md`](../live-checkpoint-hot-path-correction.md). | 2026-08-12 | Preserve for V1 integration |
 | Final component review | `accepted` | `gpt-5.6-sol` medium found no implementation or proof defect. It confirmed the failure signature comes from unordered fake-provider rows, equivalence assertions are unchanged, descending input still fails closed, and fixed checkpoint/C6 meanings are preserved. Its documentation-state finding was corrected and focused re-review was clean. | 2026-08-09 | Complete |
 
 ### 2026-08-09 `C7-LIVE-01` reopening record

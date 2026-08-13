@@ -30,6 +30,7 @@ boundary, schema/trust rules, proofs, slices, and sole delivery ledger.
 | `C10-S1` immutable schema mapping | `accepted_corrected` | C11 contract work exposed that engine feature values are percentage points while the V1 wire schema is ratios; the mapper now divides every aggregate percentage field by 100 and the boundary proof distinguishes zero, extrema, and values above 100 percentage points; focused ordinary and race verification plus independent re-review are clean | Complete |
 | `C10-S2` HTTP/CORS/runtime composition | `accepted` | `P-C10-HTTP`; ordinary and affected race clean; focused final correction re-review clean | Complete |
 | 2026-08-11 first-ready/API diagnostic correction | `accepted_after_correction_review` | [`live-engine-api-first-ready-correction.md`](../live-engine-api-first-ready-correction.md) records the missing failed-capture limitation, real loopback first-ready proof, retained 5,691-symbol first-ready/post-fence proof, closed mapper invariant diagnostics, unchanged generic HTTP errors, clean ordinary/focused race verification, and two focused re-reviews with no remaining P1/P2. | Complete locally; live-provider confirmation is not claimed |
+| 2026-08-12 D3 population-transition diagnostic | `accepted_additive_diagnostic` | The immutable engine publication and `scanner.snapshot.v1` accounting expose one fixed-cardinality, mutually exclusive reason ledger for valid-prior symbols carrying the exact bootstrap-origin population consequence. Mapper validation rejects a broken ledger identity; the operator renders the same counters while non-ready. This changes no population, qualification, uncertainty, ranking, or readiness result. | Complete locally; live-provider confirmation is not claimed |
 | Final component review | `accepted` | Mandatory read-only review found one P2 proof-matrix gap; focused correction re-review clean | Complete |
 
 ## Sections 1-4 — outcome, scope, ownership, and settled boundary
@@ -140,23 +141,24 @@ emitted, and every array is present even when empty.
 | `rate` | `status:string T/Q-status`; `reason:string T/Q-reason`; `trades_per_second:f?`, nonnull only for `current`; genuine covered zero is `0` |
 | `rows[].spread` | `status:string T/Q-status`; `reason:string T/Q-reason`; `quote_coverage:bool`; `cents:f?`; `basis_points:f?`; `valid_duration_ms:u`; `quality:string enum`. Both values are nonnull only for `current`; genuine locked spread is numeric zero. |
 | `rows[].tq_membership` | `desired:bool`; `provider_present:bool`; `provider_membership_unknown:bool` |
-| `accounting` | `population:object`; `qualification:object`; `uncertainty:object` |
+| `accounting` | `population:object`; `qualification:object`; `uncertainty:object`; `population_transition_diagnostic:object` |
 | `accounting.population` | `universe_total:u`; `valid_prior_close:u`; `invalid_or_missing_prior_close:u`; `trusted_rankable_mark:u`; `trusted_below_price_mark:u`; `no_print_through_t:u`; `invalid_mark:u`; `unknown_due_failure_or_fence:u`; `covered_population:u`; `unresolved_population:u` |
 | `accounting.qualification` | `not_yet_passed:u`; `provisional:u`; `finalized:u`; `unresolved:u` |
 | `accounting.uncertainty` | `bootstrap_origin:u`; `post_bootstrap_gap:u`; `local_invalid:u` |
+| `accounting.population_transition_diagnostic` | `bootstrap_unknown:u`; `trusted_by_later_live_mark:u`; `no_later_eligible_mark:u`; `latest_mark_not_live_authority:u`; `no_strictly_older_localized_conflict:u`; `conflict_at_or_after_mark:u`; `invalid_at_or_after_mark:u`; `incomplete_post_mark_coverage:u`. The first property is the denominator; the remaining seven properties are mutually exclusive reason bins. |
 | `recovery` | `purpose:string enum or ""`; `generation:d`; `start:t?`; `end:t?`; `supported_through:t?`; `fence_reconciled:bool`; `policy_waiting:bool`; `work:object`; `rows:object` |
 | `recovery.work` | `planned:d`; `open:d`; `completed_value:d`; `completed_empty:d`; `failed:d`; `canceled:d`; `fenced:d` |
 | `recovery.rows` | `consumed:d`; `inserted:d`; `duplicate:d`; `conflict_or_withdrawal:d`; `rejected:d`; `fenced:d`; `integrity:d` |
 | `tq` | `desired_symbols:array<string>` (0..20, rank order); `pressure_mode:string enum`; `aggregate_only:bool`; `shed:bool`; `retained_bound_hit:bool`; `pressure_misses:u`; `pressure_transitions:d`; `pressure_fenced:d`; `known_present:u`; `known_absent:u`; `unknown:u`; `retained_trades:u`; `retained_quotes:u`; `retained_fingerprints:u`; `facts:object`; `commands:object` |
 | `tq.facts` | `consumed:d`; `applied:d`; `duplicate:d`; `rejected:d`; `fenced:d`; `pressure_shed:d`; `integrity:d` |
 | `tq.commands` | `issued:d`; `pending:d`; `acknowledged:d`; `failed:d`; `fenced:d`; `result_fenced:d` |
-| `checkpoint` | `installed:bool`; `submitted:d`; `in_progress:d`; `pending:d`; `completed:d`; `failed:d`; `canceled:d`; `superseded:d` |
+| `checkpoint` | `installed:bool`; projection eligibility/defer/start, bounded `projection_in_progress:d` (`0|1`), project/reject and submit-reject counters; `submitted/outstanding/in_progress/pending/completed/failed/canceled/superseded`; last attempted/projected/submitted/successful `T0`; usable age; projection total/max-owner-hold; artifact bytes; write/encode/reopen duration; fixed last failure step. Exact projection identity is `projection_started = projection_in_progress + projected + projection_rejected`. |
 | `operations` | `sample_accounting_valid:bool`; `queue_capacity_frames:u`; `queue_current_frames:u`; `queue_high_frames:u`; `queue_current_bytes:u`; `queue_high_bytes:u`; `deliveries:d`; `consumer_deferred:d`; `mean_processing_delay_ms:u`; `max_processing_delay_ms:u`; `max_processing_delay_one_second_ms:u`; `heap_alloc_bytes:d`; `heap_in_use_bytes:d`; `goroutines:u`; `connection_recovery_attempts:d` |
 
 The current producer enum domains are exact: run mode `live|replay`; lifecycle
 `initializing|awaiting_session|awaiting_aggregate_ack|hydrating|live|recovering|
 replaying|suppressed|ended`; ranking mode
-`unavailable|qualified_current|degraded_bootstrap|stale|suppressed`; ranking
+`unavailable|qualified_current|degraded_bootstrap|degraded_current|stale|suppressed`; ranking
 reason `""|no_committed_watermark|no_trusted_marks|incomplete_population|
 qualification_incomplete|global_suppression`; readiness reason
 `""|runtime_unavailable|binding_mismatch|not_live_mode|lifecycle_not_ready|
@@ -195,7 +197,15 @@ recovery.rows.consumed = inserted + duplicate + conflict_or_withdrawal
                        + rejected + fenced + integrity
 tq.facts.consumed = applied + duplicate + rejected + fenced + pressure_shed + integrity
 tq.commands.issued = pending + acknowledged + failed + fenced
-checkpoint.submitted = in_progress + pending + completed + failed + canceled + superseded
+checkpoint.submitted = outstanding + completed + failed + canceled + superseded
+checkpoint.eligible = pressure_deferred + projection_started
+checkpoint.projection_started = projection_in_progress + projected + projection_rejected
+checkpoint.projected = submitted + submit_rejected
+population_transition_diagnostic.bootstrap_unknown
+  = trusted_by_later_live_mark + no_later_eligible_mark
+  + latest_mark_not_live_authority + no_strictly_older_localized_conflict
+  + conflict_at_or_after_mark + invalid_at_or_after_mark
+  + incomplete_post_mark_coverage
 ```
 
 Within major V1, additive optional fields are compatible. A new reason value is
@@ -239,8 +249,10 @@ while encoding or writing.
 qualified-current, exact-empty, degraded, pressure-shed, stale, suppressed,
 and ended publications. It asserts every normative name/nesting/type/null/unit
 and enum, genuine zero versus null, row order/cardinality, every displayed
-field, all seven exact identities above, decimal precision above `2^53`, and
-mutation isolation during concurrent replacement. A T/Q-only transition at
+field, all eight exact identities above, decimal precision above `2^53`, and
+mutation isolation during concurrent replacement. The D3 extension separately
+distinguishes all seven population-transition outcomes and rejects a broken
+diagnostic identity. A T/Q-only transition at
 unchanged `T` must replace publication ID and appear in the captured immutable
 projection. Separate samples at an unchanged publication exercise readiness
 expiry and process termination: engine fields remain byte-identical while

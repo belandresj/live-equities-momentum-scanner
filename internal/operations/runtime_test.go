@@ -16,6 +16,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/belandresj/live-equities-momentum-scanner/internal/checkpoint"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/engine"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/massive"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/reference"
@@ -81,6 +82,110 @@ func TestC8RUNTIME01LifecycleReadinessShutdown(t *testing.T) {
 	}
 	if got := runtime.Status(); got.ProcessLive || got.BackendReady || got.Reason != ReasonRuntimeUnavailable {
 		t.Fatalf("joined runtime reported live: %+v", got)
+	}
+}
+
+func TestSlice2DegradedCurrentIsReadyWithoutTQPromotion(t *testing.T) {
+	binding := operationsBinding(t)
+	config := DefaultConfig()
+	now := binding.SessionStart().Add(2 * time.Minute)
+	target := now.Add(-config.EvaluationDelay).Truncate(time.Second)
+	view := engine.OperationalView{
+		PublicationID: 9, BindingIdentity: binding.Identity(), RunMode: engine.RunModeLive,
+		Lifecycle: "live", RankingMode: "degraded_current", CurrentMarketClaim: true, Watermark: &target,
+		Connection: engine.OperationalConnection{Epoch: 1, Active: true, Acknowledged: true},
+		Hydration:  engine.OperationalHydration{FenceReconciled: true},
+	}
+	status := deriveStatus(true, binding, config, now, view)
+	if !status.BackendReady || !status.RankingCurrent || status.Reason != ReasonNone || status.RankingMode != "degraded_current" || status.TQAvailable {
+		t.Fatalf("degraded-current readiness = %+v", status)
+	}
+
+	view.CurrentMarketClaim = false
+	status = deriveStatus(true, binding, config, now, view)
+	if status.BackendReady || status.RankingCurrent || status.Reason != ReasonRankingNoncurrent {
+		t.Fatalf("mode string bypassed owner currentness = %+v", status)
+	}
+}
+
+func TestCKHOTUsableCompletionReturnsToEngine(t *testing.T) {
+	binding := operationsBinding(t)
+	now := binding.SessionStart().Add(30 * time.Second)
+	store, err := checkpoint.NewStore(checkpoint.StoreConfig{Directory: filepath.Join(t.TempDir(), "checkpoints"), BindingIdentity: binding.Identity(), ArtifactByteLimit: 8 << 20, OperationDeadline: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := checkpoint.NewWriter(context.Background(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := DefaultConfig()
+	config.SampleCadence = 10 * time.Minute
+	config.EvaluationDelay = 0
+	run, err := NewWithCheckpoint(context.Background(), binding, config, func() time.Time { return now }, writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ackAt := now.Add(-config.EvaluationDelay)
+	applyControl(t, run.Engine(), binding, engine.ConnectionAttempt, 1, 1, engine.LivePosition{}, ackAt)
+	applyControl(t, run.Engine(), binding, engine.AggregateCommandWriteResult, 1, 2, engine.LivePosition{}, ackAt)
+	applyControl(t, run.Engine(), binding, engine.AggregateSubscriptionResult, 1, 2, engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 1}, ackAt)
+	var captureCount atomic.Uint64
+	var captureMaxNanos atomic.Int64
+	captureStop, captureDone := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(captureDone)
+		for {
+			select {
+			case <-captureStop:
+				return
+			default:
+			}
+			started := time.Now()
+			capture, err := run.CaptureSnapshot()
+			elapsed := time.Since(started).Nanoseconds()
+			for elapsed > captureMaxNanos.Load() && !captureMaxNanos.CompareAndSwap(captureMaxNanos.Load(), elapsed) {
+			}
+			if err == nil {
+				if _, ok := InspectSnapshotCapture(capture); ok {
+					captureCount.Add(1)
+				}
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	completeHydration(t, run.Engine(), binding, engine.HydrationFreshBootstrap, 1, now)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		writerAccounting, engineAccounting := writer.Accounting(), run.Engine().CheckpointOperations()
+		if writerAccounting.Completed == 1 && engineAccounting.Completed == 1 && engineAccounting.Outstanding == 0 {
+			if writerAccounting.LastSuccessfulT0 != now || engineAccounting.LastSuccessfulT0 != now || writerAccounting.LastArtifactBytes <= 0 ||
+				writerAccounting.LastEncodeDuration <= 0 || writerAccounting.LastReopenValidationDuration <= 0 {
+				t.Fatalf("incomplete usable diagnostics writer=%+v engine=%+v", writerAccounting, engineAccounting)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("usable completion not reconciled writer=%+v engine=%+v", writerAccounting, engineAccounting)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(captureStop)
+	<-captureDone
+	finalCapture, err := run.CaptureSnapshot()
+	finalView, ok := InspectSnapshotCapture(finalCapture)
+	if err != nil || !ok || captureCount.Load() == 0 || time.Duration(captureMaxNanos.Load()) > time.Second || !finalView.Status.BackendReady ||
+		finalView.Status.Watermark == nil || !finalView.Status.Watermark.Equal(now) || !finalView.Metrics.AccountingValid {
+		t.Fatalf("checkpoint API responsiveness captures=%d max=%s err=%v ok=%t status=%+v metrics=%+v", captureCount.Load(), time.Duration(captureMaxNanos.Load()), err, ok, finalView.Status, finalView.Metrics)
+	}
+	if loaded := store.Load(context.Background()); loaded.Disposition != checkpoint.LoadedLatest || loaded.Candidate.Image.T0 != now {
+		t.Fatalf("completed artifact not discoverable: %+v", loaded)
+	}
+	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := run.Shutdown(shutdown); err != nil {
+		t.Fatal(err)
 	}
 }
 

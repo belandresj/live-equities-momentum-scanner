@@ -70,6 +70,16 @@ type priceRangeFeatureState struct {
 	result                    priceRangeFeatureResult
 }
 
+type priceRangeTailView struct {
+	firstStart                                               int64
+	firstOpen                                                float64
+	hasFirst                                                 bool
+	sessionLow, sessionHigh                                  float64
+	hasSession                                               bool
+	rolling30Low, rolling30High, rolling60Low, rolling60High float64
+	hasRolling30, hasRolling60                               bool
+}
+
 func ensurePriceRangeState(state *symbolAggregateState) *priceRangeFeatureState {
 	if state.priceRange == nil {
 		state.priceRange = &priceRangeFeatureState{result: unavailablePriceRangeResult(time.Time{})}
@@ -114,6 +124,34 @@ func foldPriceRangeAggregate(state *symbolAggregateState, binding *installedBind
 	if len(features.sessionHighs) > sessionSeconds || len(features.sessionLows) > sessionSeconds {
 		features.boundExceeded = true
 	}
+}
+
+// retainMutablePriceRangeEvidence maintains the existing checkpointed high/low
+// evidence for canonical tail records. Insert-at-identity replaces a revision
+// exactly. When a record folds, compactAggregateLocked removes this mutable
+// entry after foldPriceRangeAggregate installs the session evidence. Canonical
+// aggregate values remain owned only by tail.
+func retainMutablePriceRangeEvidence(features *priceRangeFeatureState, record canonicalAggregate) {
+	start := record.windowStart.Unix()
+	features.highs = insertExtremaEvidence(features.highs, extremaPoint{start, record.values.High})
+	features.lows = insertExtremaEvidence(features.lows, extremaPoint{start, record.values.Low})
+}
+
+func removeMutablePriceRangeEvidence(features *priceRangeFeatureState, start int64) {
+	if features == nil {
+		return
+	}
+	features.highs = removeExtremaEvidence(features.highs, start)
+	features.lows = removeExtremaEvidence(features.lows, start)
+}
+
+func removeExtremaEvidence(points []extremaPoint, start int64) []extremaPoint {
+	index := sort.Search(len(points), func(i int) bool { return points[i].windowStart >= start })
+	if index == len(points) || points[index].windowStart != start {
+		return points
+	}
+	copy(points[index:], points[index+1:])
+	return points[:len(points)-1]
 }
 
 func insertExtremaEvidence(points []extremaPoint, point extremaPoint) []extremaPoint {
@@ -172,7 +210,8 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 		return nil
 	}
 	if ((node.kind == inputTimer || node.kind == inputReplayGroup) && code == DispositionTimerApplied) ||
-		(node.kind == inputAggregateIngressFence && code == DispositionAggregateIngressFenceApplied) {
+		(node.kind == inputAggregateIngressFence && code == DispositionAggregateIngressFenceApplied) ||
+		(node.kind == inputLiveCoverageFence && code == DispositionLiveCoverageFenceApplied) {
 		target, evaluate := e.aggregateEvaluationTargetLocked(node)
 		if !evaluate {
 			return nil
@@ -183,6 +222,7 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 			// must not evict the retained state for the current committed T.
 			maintenanceAt = *e.state.committedT
 		}
+		maintenanceStarted := e.evaluationTimingStart()
 		for index := range e.state.binding.symbols {
 			symbol := &e.state.binding.symbols[index]
 			if state := symbol.aggregates; state != nil {
@@ -190,16 +230,22 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 				maintainActivityState(state, e.state.binding, node.admissionTime, maintenanceAt)
 			}
 		}
+		maintenanceElapsed := e.evaluationTimingElapsed(maintenanceStarted)
 		started := e.evaluationTimingStart()
 		staged := e.stageAggregateEvaluationAtLocked(target, node.admissionTime)
-		e.state.evaluationTiming = EvaluationTimingView{EngineSequence: node.engineSequence, Stage: e.evaluationTimingElapsed(started)}
+		stageElapsed := e.evaluationTimingElapsed(started)
+		e.state.evaluationTiming = EvaluationTimingView{EngineSequence: node.engineSequence, Stage: stageElapsed}
+		if node.kind == inputAggregateIngressFence {
+			e.state.fenceTiming.Target = target
+			e.state.fenceTiming.SymbolMaintenance = maintenanceElapsed
+			e.state.fenceTiming.EvaluationStage = stageElapsed
+		}
 		return &staged
 	}
 	if node.kind != inputAggregate {
 		return nil
 	}
-	changed := code == DispositionAggregateInserted || code == DispositionAggregateRevised || code == DispositionAggregateWithdrawn ||
-		(code == DispositionAggregateRejected && reason == ReasonHistoricalLiveConflict)
+	changed := code == DispositionAggregateInserted || code == DispositionAggregateRevised || code == DispositionAggregateWithdrawn
 	if !changed {
 		return nil
 	}
@@ -217,7 +263,7 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 		removeFoldedActivityTarget(activity, e.state.binding, node.aggregate.WindowStart)
 	}
 	blockEnd := activityBlockEnd(e.state.binding, node.aggregate.WindowStart)
-	recomputeMutableActivityBlock(state, e.state.binding, blockEnd)
+	recomputeMutableActivityBlock(state, e.state.binding, blockEnd, node.admissionTime)
 	boundary := node.admissionTime
 	if e.state.committedT != nil {
 		boundary = *e.state.committedT
@@ -238,8 +284,21 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 		markQualificationProofsDirty(qualification, first, last)
 		if e.mode == RunModeLive {
 			evaluateQualificationThrough(state, e.state.binding, *e.state.committedT, node.admissionTime)
-			ensurePriceRangeState(state).result = evaluatePriceRangeFeatures(e.state.binding, &e.state.binding.symbols[index], *e.state.committedT)
-			applyActivityResult(state, e.state.binding, evaluateActivityFeatures(e.state.binding, state, *e.state.committedT))
+			evaluationState := *state
+			if state.tailCoverageBuilt {
+				if state.tailCoverageUsable {
+					evaluationState.evaluationTailPresence = &state.tailCoverage
+				}
+			} else {
+				var tailPresence evaluationTailWindow
+				if buildEvaluationTailPresence(state, e.state.binding, &tailPresence) {
+					evaluationState.evaluationTailPresence = &tailPresence
+				}
+			}
+			evaluationSymbol := e.state.binding.symbols[index]
+			evaluationSymbol.aggregates = &evaluationState
+			ensurePriceRangeState(state).result = evaluatePriceRangeFeatures(e.state.binding, &evaluationSymbol, *e.state.committedT)
+			applyActivityResult(state, e.state.binding, evaluateActivityFeatures(e.state.binding, &evaluationState, *e.state.committedT))
 			return nil
 		}
 		started := e.evaluationTimingStart()
@@ -261,7 +320,7 @@ func (e *Engine) aggregateEvaluationTargetLocked(node *queueNode) (time.Time, bo
 		}
 		return *e.state.latestTarget, true
 	}
-	if e.mode != RunModeLive || (node.kind != inputTimer && node.kind != inputAggregateIngressFence) {
+	if e.mode != RunModeLive || (node.kind != inputTimer && node.kind != inputAggregateIngressFence && node.kind != inputLiveCoverageFence) {
 		return time.Time{}, false
 	}
 	if e.state.latestTarget != nil && e.candidateTargetSupportedLocked(*e.state.latestTarget) {
@@ -296,26 +355,19 @@ func evaluatePriceRangeFeatures(binding *installedBinding, symbol *coreSymbol, a
 		result.sessionRange, result.rolling30, result.rolling60 = invalid, invalid, invalid
 		return result
 	}
+	tail := priceRangeTailViewAt(state, features, binding, at)
 	firstStart, firstOpen, hasFirst := features.firstStart, features.firstOpen, features.hasFirst
+	if tail.hasFirst && (!hasFirst || tail.firstStart < firstStart) {
+		firstStart, firstOpen, hasFirst = tail.firstStart, tail.firstOpen, true
+	}
 	sessionLow, sessionHigh, hasSession := 0.0, 0.0, false
 	if features.hasSessionExtrema && features.finalizedThrough <= at.Unix() {
 		sessionLow, sessionHigh, hasSession = features.sessionLow, features.sessionHigh, true
 	} else {
 		sessionLow, sessionHigh, hasSession = extremaEvidenceWithin(features.sessionLows, features.sessionHighs, binding.sessionStart.Unix(), at.Unix())
 	}
-	for _, record := range state.tail {
-		if !record.windowStart.Before(at) {
-			continue
-		}
-		start := record.windowStart.Unix()
-		if !hasFirst || start < firstStart {
-			firstStart, firstOpen, hasFirst = start, record.values.Open, true
-		}
-		if !hasSession {
-			sessionLow, sessionHigh, hasSession = record.values.Low, record.values.High, true
-		} else {
-			sessionLow, sessionHigh = min(sessionLow, record.values.Low), max(sessionHigh, record.values.High)
-		}
+	if tail.hasSession {
+		sessionLow, sessionHigh, hasSession = mergeRangeEvidence(sessionLow, sessionHigh, hasSession, tail.sessionLow, tail.sessionHigh)
 	}
 
 	if hasFirst {
@@ -335,8 +387,8 @@ func evaluatePriceRangeFeatures(binding *installedBinding, symbol *coreSymbol, a
 			result.hodDrawdown, result.sessionRange = trust, trust
 		}
 	}
-	result.rolling30 = evaluateRollingRange(state, binding, mark.values.Close, at, 30*time.Minute)
-	result.rolling60 = evaluateRollingRange(state, binding, mark.values.Close, at, 60*time.Minute)
+	result.rolling30 = evaluateRollingRange(state, binding, mark.values.Close, at, 30*time.Minute, tail.rolling30Low, tail.rolling30High, tail.hasRolling30)
+	result.rolling60 = evaluateRollingRange(state, binding, mark.values.Close, at, 60*time.Minute, tail.rolling60Low, tail.rolling60High, tail.hasRolling60)
 	return result
 }
 
@@ -349,6 +401,20 @@ func unavailablePriceRangeResult(at time.Time) priceRangeFeatureResult {
 }
 
 func latestMarkBefore(state *symbolAggregateState, at time.Time) (canonicalAggregate, bool) {
+	// latest is maintained across the folded prefix and canonical tail. When it
+	// is already strictly before the as-of boundary, no other record can be a
+	// later eligible mark and the session tail need not be scanned. Equality is
+	// deliberately excluded because [start, at) does not include the at bar.
+	if state.latest != nil && state.latest.record.windowStart.Before(at) {
+		if record := state.tail[state.latest.record.identity.start]; record != nil &&
+			record.identity == state.latest.record.identity && record.windowStart.Equal(state.latest.record.windowStart) {
+			// Tail is canonical; latest is a maintained projection. Selecting the
+			// map value also contains a malformed/direct test mutation without a
+			// full scan and prevents a stale copied value from reaching ranking.
+			return *record, true
+		}
+		return state.latest.record, true
+	}
 	var result canonicalAggregate
 	found := false
 	if state.committedLatest != nil && state.committedLatest.windowStart.Before(at) {
@@ -372,7 +438,7 @@ func latestMarkBefore(state *symbolAggregateState, at time.Time) (canonicalAggre
 	return result, found
 }
 
-func evaluateRollingRange(state *symbolAggregateState, binding *installedBinding, last float64, at time.Time, width time.Duration) aggregateFeatureField {
+func evaluateRollingRange(state *symbolAggregateState, binding *installedBinding, last float64, at time.Time, width time.Duration, tailLow, tailHigh float64, tailFound bool) aggregateFeatureField {
 	start := at.Add(-width)
 	if start.Before(binding.sessionStart) {
 		start = binding.sessionStart
@@ -383,20 +449,64 @@ func evaluateRollingRange(state *symbolAggregateState, binding *installedBinding
 	}
 	features := ensurePriceRangeState(state)
 	low, high, found := extremaEvidenceWithin(features.sessionLows, features.sessionHighs, start.Unix(), at.Unix())
-	for _, record := range state.tail {
-		if record.windowStart.Before(start) || !record.windowStart.Before(at) {
-			continue
-		}
-		if !found {
-			low, high, found = record.values.Low, record.values.High, true
-		} else {
-			low, high = min(low, record.values.Low), max(high, record.values.High)
-		}
+	if tailFound {
+		low, high, found = mergeRangeEvidence(low, high, found, tailLow, tailHigh)
 	}
 	if !found {
 		return aggregateFeatureField{status: featureUnavailable, reason: featureReasonBeforeFirstPrint}
 	}
 	return rangePosition(last, low, high)
+}
+
+func priceRangeTailViewAt(state *symbolAggregateState, features *priceRangeFeatureState, binding *installedBinding, at time.Time) priceRangeTailView {
+	result := priceRangeTailView{}
+	rolling30Start := at.Add(-30 * time.Minute)
+	if rolling30Start.Before(binding.sessionStart) {
+		rolling30Start = binding.sessionStart
+	}
+	rolling60Start := at.Add(-60 * time.Minute)
+	if rolling60Start.Before(binding.sessionStart) {
+		rolling60Start = binding.sessionStart
+	}
+	indexed := len(features.highs) == len(state.tail) && len(features.lows) == len(state.tail)
+	if indexed {
+		if len(features.highs) != 0 && features.highs[0].windowStart < at.Unix() {
+			if record := state.tail[features.highs[0].windowStart]; record != nil {
+				result.firstStart, result.firstOpen, result.hasFirst = record.windowStart.Unix(), record.values.Open, true
+			}
+		}
+		result.sessionLow, result.sessionHigh, result.hasSession = extremaEvidenceWithin(features.lows, features.highs, binding.sessionStart.Unix(), at.Unix())
+		result.rolling30Low, result.rolling30High, result.hasRolling30 = extremaEvidenceWithin(features.lows, features.highs, rolling30Start.Unix(), at.Unix())
+		result.rolling60Low, result.rolling60High, result.hasRolling60 = extremaEvidenceWithin(features.lows, features.highs, rolling60Start.Unix(), at.Unix())
+		return result
+	}
+	// Compatibility/containment fallback for a pre-correction or malformed
+	// in-memory fixture. Production mutation and checkpoint restoration maintain
+	// one high/low point per canonical tail identity.
+	for _, record := range state.tail {
+		if record == nil || !record.windowStart.Before(at) {
+			continue
+		}
+		start := record.windowStart.Unix()
+		if !result.hasFirst || result.firstStart > start {
+			result.firstStart, result.firstOpen, result.hasFirst = start, record.values.Open, true
+		}
+		result.sessionLow, result.sessionHigh, result.hasSession = mergeRangeEvidence(result.sessionLow, result.sessionHigh, result.hasSession, record.values.Low, record.values.High)
+		if !record.windowStart.Before(rolling60Start) {
+			result.rolling60Low, result.rolling60High, result.hasRolling60 = mergeRangeEvidence(result.rolling60Low, result.rolling60High, result.hasRolling60, record.values.Low, record.values.High)
+			if !record.windowStart.Before(rolling30Start) {
+				result.rolling30Low, result.rolling30High, result.hasRolling30 = mergeRangeEvidence(result.rolling30Low, result.rolling30High, result.hasRolling30, record.values.Low, record.values.High)
+			}
+		}
+	}
+	return result
+}
+
+func mergeRangeEvidence(low, high float64, found bool, candidateLow, candidateHigh float64) (float64, float64, bool) {
+	if !found {
+		return candidateLow, candidateHigh, true
+	}
+	return min(low, candidateLow), max(high, candidateHigh), true
 }
 
 func extremaWithin(lows, highs []extremaPoint, floor int64) (float64, float64, bool) {

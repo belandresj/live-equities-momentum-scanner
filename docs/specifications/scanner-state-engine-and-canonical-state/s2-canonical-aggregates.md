@@ -83,8 +83,12 @@ The ordered algorithm is normative:
 7. Historical input requires the exact current generation, request token,
    symbol, and containing interval. Equal historical/live is duplicate.
    Historical can fill only when no live authority exists. Unequal historical
-   against live retains live, records bounded conflict provenance, and makes
-   only dependent historical coverage/fields unknown.
+   against valid live authority retains live and records bounded discrepancy
+   provenance without installing historical-conflict state or making coverage
+   unknown; deterministic live precedence establishes the identity's
+   correctness. This includes unequal OHLCV/VWAP/ATS and source-specific ATS
+   provenance. A conflict makes dependent coverage/fields unknown only when
+   correctness cannot otherwise be established.
 8. Against an immutable bounded result context, two unequal historical rows claiming one identity in the same result have
    no arrival-order winner. Mark the identity historical-conflicted, withdraw
    any historical-only value installed from that result, recompute latest mark
