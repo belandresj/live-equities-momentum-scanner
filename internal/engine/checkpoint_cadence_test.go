@@ -238,6 +238,42 @@ func TestCKHOTSameT0CorrectionRejectsDetachedProjection(t *testing.T) {
 	closeAndWait(t, e)
 }
 
+func TestCKHOTInvalidSealedT0MarkerHasPreciseReason(t *testing.T) {
+	binding := testBinding(t)
+	t0 := binding.SessionStart().Add(30 * time.Second)
+	now := t0
+	e := aggregateEngine(t, binding, RunModeLive, &now)
+	input := liveAggregate(binding, "AAA", t0.Add(-time.Second), 1, 1)
+	applyAggregate(t, e, input, DispositionAggregateInserted, ReasonNone)
+	proveAggregateCoverage(t, e, "AAA", binding.SessionStart(), t0)
+
+	e.mu.Lock()
+	e.checkpointSubmitter = &checkpointDiscardSubmitter{}
+	e.state.lifecycle = lifecycleLive
+	e.state.liveEpoch, e.state.liveEpochActive, e.state.aggregateAcknowledged = 1, true, true
+	e.applyAggregateCandidateLocked(t0, t0)
+	e.state.aggregateEvaluator.current = e.stageAggregateEvaluationAtLocked(t0, t0)
+	e.maybeSubmitCheckpointLocked(now)
+	e.queue = nil
+	e.internalQueued = 0
+	e.state.checkpointProjectionQueued = false
+	work := e.state.checkpointProjection
+	if work == nil || !work.committedMarkers[0].present {
+		e.mu.Unlock()
+		t.Fatal("sealed committed marker missing from test precondition")
+	}
+	// Model the smallest invalid sealed evidence without changing live state.
+	work.committedMarkers[0].mark.start = t0.Unix()
+	work.committedMarkers[0].mark.windowStart = t0
+	e.continueCheckpointProjectionLocked()
+	operations := e.state.checkpointOperations
+	e.mu.Unlock()
+	if operations.ProjectionRejected != 1 || operations.LastProjectionFailure != "sealed_t0_marker_invalid" || !operations.Reconciles() {
+		t.Fatalf("invalid sealed marker diagnostics=%+v", operations)
+	}
+	closeAndWait(t, e)
+}
+
 func TestCKHOTIncrementalProjectionResolvesMaintainedCommittedMark(t *testing.T) {
 	binding := testBinding(t)
 	start := binding.SessionStart()
@@ -337,6 +373,132 @@ func TestCKHOTIncrementalProjectionResolvesMaintainedCommittedMark(t *testing.T)
 	if operations := e.CheckpointOperations(); operations.ProjectionRejected != 0 || operations.Projected != 1 || operations.Submitted != 1 || operations.Completed != 1 || !operations.Reconciles() {
 		t.Fatalf("projection operations=%+v", operations)
 	}
+	writer.Close()
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer waitCancel()
+	if err := writer.Wait(waitCtx); err != nil {
+		t.Fatal(err)
+	}
+	closeAndWait(t, target)
+	closeAndWait(t, e)
+}
+
+// TestCKHOTIncrementalProjectionRetainsT0MarkerAcrossTimerAdvance is the
+// temporal regression for the live failure observed after f74fe4d. It starts a
+// real incremental projection at T0, copies only AAA, advances the ordinary
+// timer/evaluator (including symbol compaction) while BAD remains unprojected,
+// and requires the original T0 image to survive persistence and atomic install.
+func TestCKHOTIncrementalProjectionRetainsT0MarkerAcrossTimerAdvance(t *testing.T) {
+	binding := testBinding(t)
+	start := binding.SessionStart()
+	t0 := start.Add(30 * time.Second)
+	t1 := t0.Add(2 * time.Second)
+	now := t1
+	e := aggregateEngine(t, binding, RunModeLive, &now)
+
+	frame := uint64(1)
+	for _, symbol := range []string{"AAA", "BAD"} {
+		pre := liveAggregate(binding, symbol, t0.Add(-time.Second), 1, frame)
+		frame++
+		pre.Values.Open, pre.Values.High, pre.Values.Low, pre.Values.Close, pre.Values.VWAP = 10, 11, 9, 10, 10
+		applyAggregate(t, e, pre, DispositionAggregateInserted, ReasonNone)
+		proveAggregateCoverage(t, e, symbol, start, t1)
+		post := liveAggregate(binding, symbol, t0.Add(time.Second), 1, frame)
+		frame++
+		post.Values.Open, post.Values.High, post.Values.Low, post.Values.Close, post.Values.VWAP = 20, 21, 19, 20, 20
+		applyAggregate(t, e, post, DispositionAggregateInserted, ReasonNone)
+	}
+
+	store, err := checkpoint.NewStore(checkpoint.StoreConfig{Directory: filepath.Join(t.TempDir(), "checkpoints"), BindingIdentity: binding.Identity(), ArtifactByteLimit: 8 << 20, OperationDeadline: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := checkpoint.NewWriter(context.Background(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e.mu.Lock()
+	e.checkpointSubmitter = writer
+	e.state.lifecycle = lifecycleLive
+	e.state.liveEpoch, e.state.liveEpochActive, e.state.aggregateAcknowledged = 1, true, true
+	e.state.aggregateAckPosition = LivePosition{ConnectionEpoch: 1, FrameSequence: 1}
+	e.state.hydration.fenceReconciled, e.state.hydration.fenceEpoch, e.state.hydration.fenceThrough = true, 1, 1
+	e.state.hydration.fenceMarkerOrdinal = 1
+	e.state.hydration.supportedThrough = immutableTime(t1)
+	e.applyAggregateCandidateLocked(t0, t0)
+	e.state.aggregateEvaluator.current = e.stageAggregateEvaluationAtLocked(t0, t0)
+	wantEvaluation := cloneAggregateEvaluation(e.state.aggregateEvaluator.current)
+	e.maybeSubmitCheckpointLocked(t0)
+	// Take deterministic ownership of the internal continuation: copy exactly
+	// the first sorted symbol and leave BAD for after the timer transition.
+	e.queue = nil
+	e.internalQueued = 0
+	e.state.checkpointProjectionQueued = false
+	e.continueCheckpointProjectionLocked()
+	if work := e.state.checkpointProjection; work == nil || work.nextSymbol != 1 || e.state.binding.symbols[1].symbol != "BAD" {
+		e.mu.Unlock()
+		t.Fatalf("partial projection did not stop before BAD: work=%+v", work)
+	}
+	e.mu.Unlock()
+
+	now = t1
+	timerAdmission, timerCompletion := e.AdmitTimer(context.Background())
+	timerDisposition := awaitTimerDisposition(t, timerCompletion)
+	if timerAdmission != AdmissionAdmitted || timerDisposition.Code != DispositionTimerApplied {
+		t.Fatalf("timer advance admission=%s disposition=%+v", timerAdmission, timerDisposition)
+	}
+	e.mu.Lock()
+	committed := e.state.committedT
+	badState := e.state.binding.symbols[e.state.binding.index["BAD"]].aggregates
+	if committed == nil || *committed != t1 || badState == nil || badState.committedLatest == nil || badState.committedLatest.windowStart != t0.Add(time.Second) {
+		e.mu.Unlock()
+		t.Fatalf("ordinary evaluator did not overwrite live BAD marker at T1: committed=%v BAD=%+v", committed, badState)
+	}
+	e.mu.Unlock()
+
+	resultCtx, resultCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	result, err := writer.NextResult(resultCtx)
+	resultCancel()
+	if err != nil || result.Disposition != checkpoint.TerminalCompleted || result.T0 != t0 {
+		t.Fatalf("T0 writer result=%+v err=%v operations=%+v", result, err, e.CheckpointOperations())
+	}
+	terminalAdmission, terminalCompletion := e.AdmitCheckpointTerminal(context.Background(), result)
+	if terminalAdmission != AdmissionAdmitted || awaitDisposition(t, terminalCompletion).Code != DispositionCheckpointTerminalApplied {
+		t.Fatalf("terminal admission=%s result=%+v", terminalAdmission, result)
+	}
+	loaded := store.Load(context.Background())
+	if loaded.Disposition != checkpoint.LoadedLatest || loaded.Candidate.Image.T0 != t0 {
+		t.Fatalf("T0 artifact not discoverable/decodable: %+v", loaded)
+	}
+	projectedBAD := loaded.Candidate.Image.Symbols[e.state.binding.index["BAD"]]
+	if projectedBAD.CommittedMark == nil || projectedBAD.CommittedMark.WindowStart != t0.Add(-time.Second) || projectedBAD.CommittedMark.Values.Close != 10 {
+		t.Fatalf("BAD did not retain sealed T0 mark: %+v", projectedBAD.CommittedMark)
+	}
+
+	installNow := t1
+	target := freshBoundEngine(t, binding, &installNow)
+	installAdmission, installCompletion := target.AdmitCheckpointInstall(context.Background(), loaded.Candidate)
+	if installAdmission != AdmissionAdmitted {
+		t.Fatalf("loaded candidate install admission=%s", installAdmission)
+	}
+	install := <-installCompletion
+	if install.Disposition != CheckpointInstalled || install.Fact.T0 != t0 {
+		t.Fatalf("loaded candidate install=%+v", install)
+	}
+	target.mu.Lock()
+	installedT0 := target.state.committedT
+	target.state.lifecycle = lifecycleLive
+	installedEvaluation := cloneAggregateEvaluation(target.stageAggregateEvaluationAtLocked(t0, t0))
+	target.state.lifecycle = lifecycleAwaitingAggregateAck
+	target.mu.Unlock()
+	if installedT0 == nil || *installedT0 != t0 || !aggregateEvaluationEqual(installedEvaluation, wantEvaluation) {
+		t.Fatalf("installed T0 equivalence T0=%v evaluation_equal=%t", installedT0, aggregateEvaluationEqual(installedEvaluation, wantEvaluation))
+	}
+	if operations := e.CheckpointOperations(); operations.ProjectionRejected != 0 || operations.Projected != 1 || operations.Submitted != 1 || operations.Completed != 1 || !operations.Reconciles() {
+		t.Fatalf("projection operations=%+v", operations)
+	}
+
 	writer.Close()
 	waitCtx, waitCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer waitCancel()

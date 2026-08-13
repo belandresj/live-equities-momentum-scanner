@@ -145,7 +145,7 @@ func (e *Engine) projectCheckpointLocked(created time.Time) CheckpointProjection
 		Sequence: e.state.checkpointSequence + 1, Population: len(e.state.binding.symbols), Symbols: make([]checkpoint.Symbol, len(e.state.binding.symbols)),
 	}
 	for index := range e.state.binding.symbols {
-		projected, err := projectCheckpointSymbol(e.state.binding, &e.state.binding.symbols[index], e.state.aggregateEvaluator, index, t0)
+		projected, err := projectCheckpointSymbol(e.state.binding, &e.state.binding.symbols[index], e.state.aggregateEvaluator, checkpointProjectionCommittedMarkerForState(e.state.binding.symbols[index].aggregates), index, t0)
 		if err != nil {
 			return CheckpointProjectionResult{Disposition: CheckpointProjectionRejected, Reason: CheckpointReasonProjectionInvariant}
 		}
@@ -171,7 +171,16 @@ func projectCheckpointBinding(b *installedBinding) checkpoint.Binding {
 	}
 }
 
-func projectCheckpointSymbol(binding *installedBinding, symbol *coreSymbol, evaluator aggregateEvaluatorState, index int, t0 time.Time) (checkpoint.Symbol, error) {
+var errCheckpointSealedCommittedMarker = errors.New("sealed T0 committed marker invalid")
+
+func checkpointProjectionCommittedMarkerForState(state *symbolAggregateState) checkpointProjectionCommittedMarker {
+	if state == nil || state.committedLatest == nil {
+		return checkpointProjectionCommittedMarker{}
+	}
+	return checkpointProjectionCommittedMarker{mark: *state.committedLatest, present: true}
+}
+
+func projectCheckpointSymbol(binding *installedBinding, symbol *coreSymbol, evaluator aggregateEvaluatorState, committed checkpointProjectionCommittedMarker, index int, t0 time.Time) (checkpoint.Symbol, error) {
 	r := checkpoint.Symbol{Symbol: symbol.symbol}
 	state := symbol.aggregates
 	if evidence, ok := evaluator.invalidMarks[index]; ok {
@@ -182,6 +191,9 @@ func projectCheckpointSymbol(binding *installedBinding, symbol *coreSymbol, eval
 		r.Coverage = &checkpoint.Coverage{Outcome: uint8(consequence.outcome), Origin: uint8(consequence.origin)}
 	}
 	if state == nil {
+		if committed.present {
+			return checkpoint.Symbol{}, errCheckpointSealedCommittedMarker
+		}
 		return r, nil
 	}
 	r.HasState = true
@@ -200,23 +212,23 @@ func projectCheckpointSymbol(binding *installedBinding, symbol *coreSymbol, eval
 		v := projectAggregate(*state.olderLatest)
 		r.OlderMark = &v
 	}
-	if state.committedLatest != nil {
+	if committed.present {
 		var full *canonicalAggregate
 		retainedAsCanonical := false
-		if record := state.tail[state.committedLatest.start]; record != nil {
+		if record := state.tail[committed.mark.start]; record != nil {
 			full = record
 			retainedAsCanonical = true
 		}
-		if full == nil && state.olderLatest != nil && state.olderLatest.identity.start == state.committedLatest.start {
+		if full == nil && state.olderLatest != nil && state.olderLatest.identity.start == committed.mark.start {
 			full = state.olderLatest
 			retainedAsCanonical = true
 		}
 		if full == nil {
-			full = &canonicalAggregate{identity: aggregateIdentity{symbol: symbol.symbol, start: state.committedLatest.start},
-				windowStart: state.committedLatest.windowStart, windowEnd: state.committedLatest.windowEnd, values: state.committedLatest.values}
+			full = &canonicalAggregate{identity: aggregateIdentity{symbol: symbol.symbol, start: committed.mark.start},
+				windowStart: committed.mark.windowStart, windowEnd: committed.mark.windowEnd, values: committed.mark.values}
 		}
 		if !full.windowStart.Before(t0) {
-			return checkpoint.Symbol{}, errors.New("committed mark lacks real aggregate")
+			return checkpoint.Symbol{}, errCheckpointSealedCommittedMarker
 		}
 		if !retainedAsCanonical {
 			// The checkpoint schema restores canonical marks from Tail or OlderMark;

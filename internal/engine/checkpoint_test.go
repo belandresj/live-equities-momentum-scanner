@@ -522,7 +522,7 @@ func checkpointSymbolsForTest(t *testing.T, e *Engine, t0 time.Time) []checkpoin
 	out := make([]checkpoint.Symbol, len(e.state.binding.symbols))
 	for i := range out {
 		var err error
-		out[i], err = projectCheckpointSymbol(e.state.binding, &e.state.binding.symbols[i], e.state.aggregateEvaluator, i, t0)
+		out[i], err = projectCheckpointSymbol(e.state.binding, &e.state.binding.symbols[i], e.state.aggregateEvaluator, checkpointProjectionCommittedMarkerForState(e.state.binding.symbols[i].aggregates), i, t0)
 		if err != nil {
 			t.Fatal(err)
 		}

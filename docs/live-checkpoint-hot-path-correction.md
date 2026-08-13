@@ -1,8 +1,8 @@
 # Live checkpoint hot-path correction
 
-**Status:** Reopened and reaccepted 2026-08-13 after preserved live evidence
-exposed repeated `projection_invariant` rejection; the narrow committed-mark
-representation correction, bounded verification, and focused re-review pass
+**Status:** Reopened and reaccepted 2026-08-13 after later live evidence showed
+that ordinary timer evaluation could overwrite an unprojected symbol's one-slot
+committed mark after incremental projection sealed `T0`
 
 **Recorded:** 2026-08-12 under the
 [`Version 1 Release Program`](v1-release-program.md) correction loop
@@ -53,6 +53,7 @@ work.
 | `CKHOT-S2` live responsiveness and restart composition | `accepted` | Three real-consumer dense boundaries held the owner for at most 20.870 ms, delivered aggregates within 66.874 ms, served observations within 55.523 ms, and retained a stable post-GC heap; final rerun restart median was 524.029 ms versus 1.381 s fresh | Preserve for V1 integration |
 | In-flight API accounting correction | `accepted 2026-08-13` | A live run showed `/readyz` and snapshot mapping failures with `checkpoint_projection_identity` during each incremental projection. The engine now exposes the bounded `projection_in_progress` gauge, and the exact identity is `projection_started = projection_in_progress + projected + projection_rejected`. All activation/success/rejection/builder-failure/shutdown paths maintain the gauge under the engine lock; fixed failure reasons align with the mapper. Focused Engine/API/UI proofs, `go test -short -timeout 2m ./...`, affected race, affected vet, `git diff --check`, and required `gpt-5.6-sol` medium final focused review pass with no remaining P1/P2. | Preserve the additive operand and keep checkpoint work outside readiness ownership |
 | Committed-mark projection invariant | `reaccepted 2026-08-13` | At least 16 live incremental projections ran for about 1.6–1.8 seconds and rejected as `projection_invariant` with zero projected/submitted/written/installed work. The pre-fix `TestCKHOTIncrementalProjectionResolvesMaintainedCommittedMark` reproduced `started=1`, `rejected=1`, and zero submission. The accepted stalled-`T0` shape had compacted forward state move `olderLatest` beyond `T0`; the compact committed marker retained only close, leaving no full normalized pre-`T0` aggregate. It now retains the original bounded `AggregateValues`; the production timer/evaluator preserves them, and projection emits that real record as the clipped `OlderMark` plus evaluator-support `CommittedMark`. The real writer completes, reopen validation and manifest discovery/decode succeed, atomic install regenerates an evaluation equal to the original at `T0`, and projection/writer accounting reconciles. Existing pre-`T0` mutation and shutdown/sequence invalidations remain unchanged. Focused tests, repository short, affected race, vet/diff, and required `gpt-5.6-sol` medium review/re-review pass. | Complete. A separately authorized fresh live restart remains required to verify the running provider composition no longer emits this failure and to measure any delivery-latency effect. |
+| Incremental `T0` committed-marker seal | `reaccepted 2026-08-13` | The post-`f74fe4d` live binary rejected at least 16/16 later projections after about 2.1–2.7 seconds: `projected=submitted=completed=0`, the checkpoint directory stayed empty, and `last_projection_failure=projection_invariant`. The invalidated premise was that each continuation could read mutable one-slot `committedLatest`. Projection now seals one exact bounded value record per symbol at `T0`; continuations use only that marker evidence while the ordinary evaluator remains free to advance. The two-symbol regression advances to `T0+2s` before BAD is copied, then completes real persistence, discovery/decode, atomic install, and equivalent `T0` regeneration. A malformed seal reports `sealed_t0_marker_invalid`; true pre-`T0` mutation still reports `pre_t0_mutation`. The revised 6,000-symbol proof and final verification pass. | Complete. Provider/live chronology and allocator behavior on another host remain unclaimed. |
 
 ## Sections 1–4 — Outcome, scope, ownership, and settled boundary
 
@@ -342,6 +343,31 @@ within its existing one-in-progress/one-replaceable-pending bound. The paused-
 writer adversary mutates a retained shallow alias after accepted submission and
 verifies that persisted bytes remain unchanged.
 
+The reopened temporal defect was lower than that accepted handoff. At seal,
+the engine copied evaluator support but did not retain the per-symbol committed
+marker used by a later continuation. Ordinary timer evaluation therefore could
+replace an unprojected symbol's `committedLatest` with a marker at or after the
+frozen `T0`; the projector correctly rejected that later marker, leaving no
+artifact. The correction adds one fixed-cardinality slice of value records.
+Each present record contains the aggregate identity/times and the original
+normalized `AggregateValues`; absence is explicit. It is neither a history nor
+an immediately-previous-marker fallback. The slice is captured under the sole
+owner at the same seal as `T0`, evaluator invalid-mark support, and coverage
+support, then becomes read-only projection work. No OHLCV/VWAP/ATS value is
+reconstructed. The initial seal duration is recorded separately and also
+participates in the existing maximum owner-hold metric.
+
+The deterministic regression uses AAA and BAD. It copies AAA, advances the
+production timer/evaluator and compaction path from `T0` to `T0+2s` so BAD's
+live one-slot marker is overwritten, then completes the original `T0`
+projection through the real writer, manifest discovery, bounded decode, and
+atomic install. Regenerated evaluation equals the source's original committed
+evaluation at `T0`; source watermark advancement is not interrupted. The
+existing compacted-forward-state regression, `pre_t0_mutation` rejection, and
+writer/builder alias adversaries remain clean. The smallest malformed sealed
+record that is not pre-`T0` now rejects as `sealed_t0_marker_invalid` rather
+than the generic `projection_invariant`.
+
 `P-CKHOT-LIVE` used the accepted dense mature fixture: 6,000 symbols, 1,589
 Activity references per symbol, 9,534,000 references total, and three successive
 30-second boundaries. Unlike the rejected first proof, the accepted run uses
@@ -361,6 +387,23 @@ accounting. Internal continuation occupancy is maintained in O(1), including a
 stale continuation after rejection; the 8,192-slot near-capacity regression
 proves it is never scanned as external ingress. This is local deterministic
 evidence, not a provider throughput claim.
+
+The revised mature proof removes the old between-projection watermark shortcut.
+At all three boundaries, two real timer admissions advance committed `T` by two
+seconds while projection remains active. The exact committed-marker value slice
+is 816,000 bytes (136 bytes × 6,000); each isolated seal allocates 1,884,968
+bytes total including the existing projection builder and evaluator-support map
+clones. Seal durations were 1.141ms, 0.191ms, and 0.761ms. Projection totals
+were 12.712s, 12.145s, and 11.719s; maximum combined initial-seal/per-symbol
+owner holds were 13.211ms, 64.449ms, and 14.374ms. Per-boundary maximum observer
+delays were 361.669ms, 399.507ms, and 216.881ms; aggregate-delivery maxima were
+369.719ms, 186.061ms, and 186.698ms. Post-GC heaps were 3,440,934,504,
+3,437,269,248, and 3,437,095,616 bytes. The proof resets latency maxima only
+after its deliberate between-boundary `runtime.GC()`, preventing the proof's
+own heap-plateau intervention from being attributed to the next checkpoint.
+This remains one-host deterministic capacity evidence; the total image still
+dominates allocation and projection duration, and no provider latency or
+another-host allocator claim is made.
 
 The first current-host `P-CKHOT-RESTART` rerun exposed a fixture/decoder
 failure rather than an acceptable result: checkpoint median was 3.927 seconds
@@ -402,6 +445,11 @@ Drift audit:
 - the 30-second cadence remains the initial setting, not an excuse for blocking;
 - no CPU or memory claim extends beyond the recorded host/fixture;
 - no provider request or credential is authorized by this contract; and
+- this value seal does not materially trigger another independent review under
+  the V1 risk cadence: it changes no goroutine handoff, persistence protocol,
+  atomic-install boundary, or state owner, and the sole-owner value copy plus
+  temporal/alias/invalid-seal primary proofs make the linearization explicit;
+  and
 - the required focused re-review closed two initial P2 findings and one
   correction-induced O(queue) accounting finding, then returned `CLEAN/PASS`;
   ordinary, focused race, capacity/restart, vet, and diff verification passed;

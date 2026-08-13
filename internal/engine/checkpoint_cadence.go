@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"math"
 	"time"
 
@@ -25,6 +26,7 @@ type CheckpointOperations struct {
 	LastAttemptedT0, LastProjectedT0, LastSubmittedT0 time.Time
 	LastSuccessfulT0                                  time.Time
 	LastProjectionTotal, LastProjectionLock           time.Duration
+	LastProjectionSeal                                time.Duration
 	LastProjectionFailure, LastSubmitFailure          string
 }
 
@@ -98,35 +100,63 @@ func (e *Engine) maybeSubmitCheckpointLocked(createdAt time.Time) {
 		e.state.checkpointOperations.LastProjectionFailure = "sequence_exhausted"
 		return
 	}
+	attemptStarted := diagnosticMonotonicClock()
 	e.state.checkpointProjectionActive = true
 	e.state.checkpointOperations.ProjectionInProgress = 1
 	e.state.checkpointProjectionDirty = false
 	e.state.checkpointProjectionT0 = t0
 	builder, ok := checkpoint.NewProjectionBuilder(checkpoint.SchemaV1, checkpoint.ProducerLive, projectCheckpointBinding(e.state.binding), t0, createdAt, e.state.checkpointSequence+1, uint64(len(e.state.binding.symbols)))
 	if !ok {
+		sealElapsed := diagnosticMonotonicClock().Sub(attemptStarted)
+		e.state.checkpointOperations.LastProjectionSeal = sealElapsed
+		e.state.checkpointOperations.LastProjectionLock = sealElapsed
 		e.state.checkpointProjectionActive = false
 		e.state.checkpointOperations.ProjectionInProgress = 0
 		e.state.checkpointOperations.ProjectionRejected++
 		e.state.checkpointOperations.LastProjectionFailure = "projection_invariant"
 		return
 	}
+	evaluator := checkpointProjectionEvaluator(e.state.aggregateEvaluator)
+	committedMarkers := checkpointProjectionCommittedMarkers(e.state.binding)
+	sealElapsed := diagnosticMonotonicClock().Sub(attemptStarted)
+	e.state.checkpointOperations.LastProjectionSeal = sealElapsed
+	e.state.checkpointOperations.LastProjectionLock = sealElapsed
 	e.state.checkpointProjection = &checkpointProjectionWork{
-		bindingIdentity: e.state.binding.identity, t0: t0, started: diagnosticMonotonicClock(),
-		evaluator: checkpointProjectionEvaluator(e.state.aggregateEvaluator),
-		builder:   builder, sequence: e.state.checkpointSequence + 1, population: len(e.state.binding.symbols),
+		bindingIdentity: e.state.binding.identity, t0: t0, started: attemptStarted,
+		evaluator: evaluator, committedMarkers: committedMarkers,
+		builder: builder, sequence: e.state.checkpointSequence + 1, population: len(e.state.binding.symbols),
+		maxLock: sealElapsed,
 	}
 	e.enqueueCheckpointProjectionLocked()
 }
 
 type checkpointProjectionWork struct {
-	bindingIdentity string
-	t0, started     time.Time
-	evaluator       aggregateEvaluatorState
-	builder         *checkpoint.ProjectionBuilder
-	sequence        uint64
-	population      int
-	nextSymbol      int
-	maxLock         time.Duration
+	bindingIdentity  string
+	t0, started      time.Time
+	evaluator        aggregateEvaluatorState
+	committedMarkers []checkpointProjectionCommittedMarker
+	builder          *checkpoint.ProjectionBuilder
+	sequence         uint64
+	population       int
+	nextSymbol       int
+	maxLock          time.Duration
+}
+
+type checkpointProjectionCommittedMarker struct {
+	mark    committedAggregateMark
+	present bool
+}
+
+func checkpointProjectionCommittedMarkers(binding *installedBinding) []checkpointProjectionCommittedMarker {
+	markers := make([]checkpointProjectionCommittedMarker, len(binding.symbols))
+	for index := range binding.symbols {
+		state := binding.symbols[index].aggregates
+		if state == nil || state.committedLatest == nil {
+			continue
+		}
+		markers[index] = checkpointProjectionCommittedMarker{mark: *state.committedLatest, present: true}
+	}
+	return markers
 }
 
 func checkpointProjectionEvaluator(source aggregateEvaluatorState) aggregateEvaluatorState {
@@ -174,17 +204,21 @@ func (e *Engine) continueCheckpointProjectionLocked() {
 		e.rejectCheckpointProjectionLocked(work, "ownership_invalidated")
 		return
 	}
-	if work.nextSymbol >= work.population {
+	if work.nextSymbol >= work.population || len(work.committedMarkers) != work.population {
 		e.rejectCheckpointProjectionLocked(work, "projection_invariant")
 		return
 	}
-	projected, err := projectCheckpointSymbol(e.state.binding, &e.state.binding.symbols[work.nextSymbol], work.evaluator, work.nextSymbol, work.t0)
+	projected, err := projectCheckpointSymbol(e.state.binding, &e.state.binding.symbols[work.nextSymbol], work.evaluator, work.committedMarkers[work.nextSymbol], work.nextSymbol, work.t0)
 	elapsed := diagnosticMonotonicClock().Sub(started)
 	if elapsed > work.maxLock {
 		work.maxLock = elapsed
 	}
 	if err != nil {
-		e.rejectCheckpointProjectionLocked(work, "projection_invariant")
+		reason := "projection_invariant"
+		if errors.Is(err, errCheckpointSealedCommittedMarker) {
+			reason = "sealed_t0_marker_invalid"
+		}
+		e.rejectCheckpointProjectionLocked(work, reason)
 		return
 	}
 	if !work.builder.AddSymbol(work.nextSymbol, projected) {

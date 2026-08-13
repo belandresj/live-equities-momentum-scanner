@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/belandresj/live-equities-momentum-scanner/internal/checkpoint"
 )
@@ -32,8 +33,9 @@ func updateDurationMaximum(target *atomic.Int64, value time.Duration) {
 // TestPCKHOTLiveMatureProjectionBound is the engine-owned portion of
 // P-CKHOT-LIVE. It runs three accepted mature 6,000-symbol Activity
 // projections through the production consumer and FIFO while live aggregate
-// facts and both snapshot views continue concurrently. Persistence, HTTP
-// mapping, and restart are proved at the checkpoint/operations/API boundaries.
+// facts, ordinary timer/evaluator watermark advancement, and both snapshot
+// views continue concurrently. Persistence, HTTP mapping, and restart are
+// proved at the checkpoint/operations/API boundaries.
 func TestPCKHOTLiveMatureProjectionBound(t *testing.T) {
 	if testing.Short() {
 		t.Skip("generated 6,000-symbol checkpoint hot-path acceptance")
@@ -94,15 +96,36 @@ func TestPCKHOTLiveMatureProjectionBound(t *testing.T) {
 	frame.Store(1)
 	for trial := 1; trial <= 3; trial++ {
 		at := target.Add(time.Duration(trial-1) * 30 * time.Second)
-		clockNanos.Store(at.Add(10 * time.Minute).UnixNano())
+		clockNanos.Store(at.UnixNano())
+		var before, sealed, after runtime.MemStats
 		e.mu.Lock()
-		e.state.committedT = immutableTime(at)
-		e.state.aggregateEvaluator.current.at = at
-		e.maybeSubmitCheckpointLocked(at.Add(time.Second))
-		e.mu.Unlock()
-
-		var before, after runtime.MemStats
-		runtime.ReadMemStats(&before)
+		e.state.hydration.supportedThrough = immutableTime(at.Add(2 * time.Second))
+		if trial == 1 {
+			runtime.ReadMemStats(&before)
+			e.maybeSubmitCheckpointLocked(at)
+			runtime.ReadMemStats(&sealed)
+			e.mu.Unlock()
+		} else {
+			// Advance to the next aligned boundary through the real evaluator,
+			// but isolate the subsequent projection seal allocation from that
+			// distinct O(N) evaluation by temporarily withholding the submitter.
+			e.checkpointSubmitter = nil
+			e.mu.Unlock()
+			admission, completion := e.AdmitTimer(context.Background())
+			if admission != AdmissionAdmitted || awaitTimerDisposition(t, completion).Code != DispositionTimerApplied {
+				t.Fatalf("trial %d boundary timer admission=%s", trial, admission)
+			}
+			e.mu.Lock()
+			e.checkpointSubmitter = submitter
+			runtime.ReadMemStats(&before)
+			e.maybeSubmitCheckpointLocked(at)
+			runtime.ReadMemStats(&sealed)
+			e.mu.Unlock()
+		}
+		if operations := e.CheckpointOperations(); operations.ProjectionInProgress != 1 || operations.LastProjectionSeal <= 0 || operations.LastProjectionLock < operations.LastProjectionSeal {
+			t.Fatalf("trial %d projection seal not active/measured: %+v", trial, operations)
+		}
+		sealedMarkerBytes := uint64(len(fixture.state.binding.symbols)) * uint64(unsafe.Sizeof(checkpointProjectionCommittedMarker{}))
 		producerStop := make(chan struct{})
 		producerDone := make(chan struct{})
 		var produced atomic.Uint64
@@ -138,6 +161,27 @@ func TestPCKHOTLiveMatureProjectionBound(t *testing.T) {
 				time.Sleep(100 * time.Millisecond)
 			}
 		}()
+
+		for second := 1; second <= 2; second++ {
+			advanceTo := at.Add(time.Duration(second) * time.Second)
+			clockNanos.Store(advanceTo.UnixNano())
+			admission, completion := e.AdmitTimer(context.Background())
+			disposition := awaitTimerDisposition(t, completion)
+			if admission != AdmissionAdmitted || disposition.Code != DispositionTimerApplied {
+				close(producerStop)
+				<-producerDone
+				t.Fatalf("trial %d active timer %d admission=%s disposition=%+v", trial, second, admission, disposition)
+			}
+			e.mu.Lock()
+			committed := e.state.committedT
+			active := e.state.checkpointProjectionActive
+			e.mu.Unlock()
+			if committed == nil || *committed != advanceTo || !active {
+				close(producerStop)
+				<-producerDone
+				t.Fatalf("trial %d timer %d did not advance during projection: committed=%v active=%t", trial, second, committed, active)
+			}
+		}
 
 		var request checkpoint.Request
 		select {
@@ -175,8 +219,8 @@ func TestPCKHOTLiveMatureProjectionBound(t *testing.T) {
 			t.Fatalf("trial %d responsiveness operations=%+v view=%+v observer=%s delivery=%s", trial, operations, view, time.Duration(maxObserverDelay.Load()), time.Duration(maxDeliveryDelay.Load()))
 		}
 		runtime.ReadMemStats(&after)
-		t.Logf("P_CKHOT_LIVE trial=%d projection_total=%s max_projection_lock=%s max_observer_delay=%s max_aggregate_delivery=%s aggregate_completions=%d snapshot_captures=%d allocation_bytes=%d",
-			trial, operations.LastProjectionTotal, operations.LastProjectionLock, time.Duration(maxObserverDelay.Load()), time.Duration(maxDeliveryDelay.Load()), produced.Load(), captures.Load(), after.TotalAlloc-before.TotalAlloc)
+		t.Logf("P_CKHOT_LIVE trial=%d projection_total=%s projection_seal=%s max_projection_lock=%s sealed_marker_value_bytes=%d seal_allocation_bytes=%d max_observer_delay=%s max_aggregate_delivery=%s aggregate_completions=%d snapshot_captures=%d allocation_bytes=%d watermark_advanced_seconds=2",
+			trial, operations.LastProjectionTotal, operations.LastProjectionSeal, operations.LastProjectionLock, sealedMarkerBytes, sealed.TotalAlloc-before.TotalAlloc, time.Duration(maxObserverDelay.Load()), time.Duration(maxDeliveryDelay.Load()), produced.Load(), captures.Load(), after.TotalAlloc-before.TotalAlloc)
 		runtime.GC()
 		runtime.ReadMemStats(&after)
 		t.Logf("P_CKHOT_LIVE trial=%d post_gc_heap_bytes=%d", trial, after.HeapAlloc)
@@ -185,6 +229,10 @@ func TestPCKHOTLiveMatureProjectionBound(t *testing.T) {
 		} else if after.HeapAlloc > plateau+plateau/5 {
 			t.Fatalf("trial %d post-GC heap grew from %d to %d", trial, plateau, after.HeapAlloc)
 		}
+		// The forced plateau GC is proof instrumentation between boundaries,
+		// not checkpoint work in the next boundary's latency population.
+		maxObserverDelay.Store(0)
+		maxDeliveryDelay.Store(0)
 	}
 	if submitter.submitted.Load() != 3 {
 		t.Fatalf("accepted ownership transfers=%d", submitter.submitted.Load())

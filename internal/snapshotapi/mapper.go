@@ -396,7 +396,7 @@ func validateSnapshot(value Snapshot) error {
 	if checkpoint.ProjectionInProgress != "0" && checkpoint.ProjectionInProgress != "1" {
 		return rejectMapping("checkpoint_projection_in_progress")
 	}
-	if !oneOf(checkpoint.LastProjectionFailure, "", "sequence_exhausted", "ownership_invalidated", "projection_invariant", "pre_t0_mutation", "sequence_changed", "shutdown") ||
+	if !oneOf(checkpoint.LastProjectionFailure, "", "sequence_exhausted", "ownership_invalidated", "projection_invariant", "sealed_t0_marker_invalid", "pre_t0_mutation", "sequence_changed", "shutdown") ||
 		!oneOf(checkpoint.LastSubmitFailure, "", "request_invalid", "writer_rejected") {
 		return rejectMapping("checkpoint_failure_reason")
 	}
