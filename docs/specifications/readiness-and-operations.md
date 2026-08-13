@@ -46,7 +46,7 @@ Sections 8-19 are completed here after its just-in-time V2 reconnaissance.
 | 2026-08-11 engine-to-API correction | `accepted_after_correction_review` | [`live-engine-api-first-ready-correction.md`](../live-engine-api-first-ready-correction.md) proves small and 5,691-symbol first-ready/post-fence publications map through the production Runtime/API boundary and fixes a reasonless timer erasing the fixed `ingress_integrity` suppression cause. The initial post-fence-publication P2 and diagnostic-wiring P2 are closed; focused re-reviews found no remaining P1/P2. No provider or credential was accessed. | Complete locally; original failed live capture and provider confirmation remain unavailable/deferred |
 | Cached hydration fence correction | `accepted_deterministically` | [`live-fence-finalization-cached-hydration-correction.md`](../live-fence-finalization-cached-hydration-correction.md) records the sealed-artifact full 1x pass, a second current-source full 1x pass, the strengthened 3,072,000-row bounded 2x burst pass, and the preserved honest sustained-2x failure. No provider or credential was accessed. | Complete; do not rerun sustained full 2x |
 | Checkpoint hot-path measurement composition | `finally_accepted` | [`live-checkpoint-hot-path-correction.md`](../live-checkpoint-hot-path-correction.md) adds fixed-cardinality projection/submit/terminal/timing/byte facts, returns writer terminals to engine accounting, and proves a real completed/discoverable artifact. Three real-consumer dense 6,000-symbol boundaries limited observation delay to 55.523ms and aggregate delivery to 66.874ms; focused re-review is clean. | Preserve for V1 integration; provider capacity remains unproved |
-| Engine-delivery latency attribution | `accepted_after_correction` | `P-C8-DELIVERY-ATTRIBUTION` proves the exact seven-family count identity, same-record duration/family maximum, deterministic ties, unknown/mixed fail-closed classification, unchanged duration scalar and a fail-closed attributed-winner fact for C9 recovery only, unchanged engine snapshot/status, and bounded coherent C10 mapping. The narrow proof, repository short suite, and affected operations/snapshot API/scanner race suite pass. | Complete; a family identifies the measured delivery, not a sampled CPU-stack cause inside earlier queued work. |
+| Engine-delivery latency attribution | `accepted_after_empty_window_correction` | The prior proof established cumulative seven-family accounting and atomic winning-delivery attribution but did not cross the production `syncTQPressure` reset into an immediate C10 mapping. It incorrectly treated cumulative deliveries as evidence that the reset current window was nonempty. The resulting `0 / unknown` window was coherent but failed mapping whenever cumulative `unknown` remained zero. The corrected production-path regression crosses record/reset/capture/map/next-record, while focused C8/C9/C10, repository short, affected race, vet, and diff gates pass. | Complete; current-window occupancy is lock-copied with the maximum pair and remains independent of lifetime family counts. |
 | `C8-S2` measurements/load | `accepted_after_correction` | `P-C8-LOAD`: 6,000-symbol bound population, 100 active aggregate symbols, 20 corrections, 20 duplicates, 20 rejects, and 60 normalized T/Q facts correctly fenced without acknowledged membership; 53.67 s end-to-end and exact accounting | Complete |
 | Final component review | `accepted_after_2026-08-10_correction` | Focused re-review confirmed the hydration-deadline/live-tail correction plus synchronized concurrent-terminal diagnostics and an explicit active-attempt shutdown join. No P1/P2 finding remains; uncached ordinary, focused race, vet, UI-model, and diff checks pass. Unchanged non-short load evidence is reused. | Complete |
 | Private daily operational finalization | `accepted_after_final_review` | `./scripts/run-private-scanner` supplies the exact two-worker/persistent-path workflow, isolates credentials, gates dashboard startup on `/livez`, reports engine `/readyz`, and contains both processes. Public-wrapper/fake-process tests, current-source capacity evidence, ordinary/race/vet/UI checks, and correction/re-review are clean. | Complete locally; exact-date provider observation remains separately authorized |
@@ -200,7 +200,7 @@ meaning.
 | `C8-READY-01` | `process_live` means the runtime has started and not joined. `backend_ready` requires live mode, lifecycle `live` or permitted exact/current `hydrating`, a current engine ranking claim, current acknowledgement, reconciled startup/recovery fence, no suppression, and watermark within two seconds of `min(floor(now)-4s,E)`. Ranking and field statuses remain separate. |
 | `C8-RECOVERY-01` | Disconnect/gap facts enter only the engine-owned stale/recovery path. Each attempt and the attempt count are bounded; exhaustion produces honest suppressed/unavailable output and cannot leave an inactive recovery loop. |
 | `C8-SHUTDOWN-01` | Cancellation closes ingress, drains/fences accepted work, stops the checkpoint writer/engine, and joins every owned goroutine within ten seconds; timeout is terminal and never reported clean. |
-| `C8-MEASURE-01` | Fixed-cardinality observations report ingress/admission/disposition throughput, processing delay, watermark lag, queue current/high-water count/bytes, memory/goroutines, aggregate/TQ reject/drop/shed counts, hydration/recovery accounting, and checkpoint status. Engine-delivery counts partition exactly into aggregate, T/Q, control, hydration/fence, checkpoint-related, timer, or unknown. The one-second maximum duration and family are one atomic winning-delivery record; equal durations use the fixed listed-family order, and absent or cross-family completion evidence is unknown. Counters reconcile and labels are closed enums. |
+| `C8-MEASURE-01` | Fixed-cardinality observations report ingress/admission/disposition throughput, processing delay, watermark lag, queue current/high-water count/bytes, memory/goroutines, aggregate/TQ reject/drop/shed counts, hydration/recovery accounting, and checkpoint status. Engine-delivery counts partition exactly into aggregate, T/Q, control, hydration/fence, checkpoint-related, timer, or unknown. Current one-second-window occupancy is represented independently from those cumulative counts. The one-second maximum duration and family are one atomic winning-delivery record; an empty window is `0 / unknown`, equal durations use the fixed listed-family order, and absent or cross-family completion evidence is unknown. Counters reconcile and labels are closed enums. |
 | `C8-CAPACITY-01` | A deterministic 6,000-symbol mixed aggregate/control/TQ-deferred load stays within configured queue/memory/work bounds, preserves exact aggregate accounting/ranking, and does not let T/Q pressure change readiness or ranking. |
 
 ## 11. Trust boundaries and false-success containment
@@ -454,3 +454,27 @@ the named input family was the sole CPU or queueing cause of its elapsed time.
 No independent review was triggered: the change adds no ownership,
 concurrency-linearization, persistence, or external-evidence authority; one
 mutex and the primary identity proof make the diagnostic boundary direct.
+
+The subsequent D6 correction invalidated only the assumption that cumulative
+deliveries proved the current one-second window was nonempty. Runtime now keeps
+one boolean occupancy fact under the existing delivery-window mutex. Every
+record sets it while updating the cumulative family and atomic maximum pair;
+an accepted `syncTQPressure` reset clears it together with the maximum only if
+the sampled window version is still current. Cumulative family counts are not
+reset and no `unknown` delivery is fabricated. C9 therefore continues to treat
+an empty `0 / unknown` winner as unattributed recovery evidence while all
+degradation, aggregate-only, and recovery thresholds remain unchanged.
+
+`TestDeliveryLatencyEmptyWindowMapsAfterPressureReset` is the distinguishing
+production-path regression. It records a known aggregate delivery, executes
+the real pressure command/result reset, immediately seals and maps the empty
+window, records a checkpoint delivery, and verifies its duration/family pair
+plus the unchanged cumulative seven-family identity. The focused C8/C9/C10
+proofs, `go test -short -timeout 2m ./... -count=1`, the affected five-package
+race command under five minutes, `go vet ./...`, and `git diff --check` pass.
+The proof is deterministic local composition evidence; it does not reproduce
+provider timing or establish live capacity. No independent review was
+triggered because this correction adds no new linearization point, owner,
+persistence/atomicity boundary, external evidence admission, or cross-component
+authority: the occupancy fact uses the already-proved maximum-pair mutex and
+the C8-to-C10 representation is exhaustively distinguished by the primary test.

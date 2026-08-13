@@ -32,7 +32,7 @@ func TestPC8DeliveryLatencyAttribution(t *testing.T) {
 	}
 
 	run.deliveryWindowMu.Lock()
-	attribution := deliveryLatencyAttribution(run.deliveryFamilyCounts, time.Duration(run.deliveryOneSecondMaxNanos), run.deliveryOneSecondMaxFamily)
+	attribution := deliveryLatencyAttribution(run.deliveryFamilyCounts, time.Duration(run.deliveryOneSecondMaxNanos), run.deliveryOneSecondMaxFamily, run.deliveryWindowNonempty)
 	deliveries := run.deliveryCount.Load()
 	run.deliveryWindowMu.Unlock()
 	if attribution.Total() != deliveries || deliveries != uint64(len(observations)) ||
@@ -87,10 +87,10 @@ func TestPC8DeliveryLatencyAttribution(t *testing.T) {
 		t.Fatal(err)
 	}
 	beforeEngine, beforeStatus := live.Engine().ObserveSnapshot(), live.Status()
-	beforePressure := defaultTQPressureSample(Metrics{Deliveries: 1, MaxProcessingDelayOneSecond: 999 * time.Millisecond, DeliveryLatencyAttribution: DeliveryLatencyAttribution{Aggregate: 1, MaximumDuration: 999 * time.Millisecond, MaximumFamily: DeliveryLatencyAggregate}})
+	beforePressure := defaultTQPressureSample(Metrics{Deliveries: 1, MaxProcessingDelayOneSecond: 999 * time.Millisecond, DeliveryLatencyAttribution: DeliveryLatencyAttribution{Aggregate: 1, MaximumDuration: 999 * time.Millisecond, MaximumFamily: DeliveryLatencyAggregate, WindowNonempty: true}})
 	live.recordDeliveryLatency(3*time.Second, DeliveryLatencyCheckpoint)
 	afterEngine, afterStatus := live.Engine().ObserveSnapshot(), live.Status()
-	afterPressure := defaultTQPressureSample(Metrics{Deliveries: 1, MaxProcessingDelayOneSecond: 999 * time.Millisecond, DeliveryLatencyAttribution: DeliveryLatencyAttribution{Unknown: 1, MaximumDuration: 999 * time.Millisecond, MaximumFamily: DeliveryLatencyUnknown}})
+	afterPressure := defaultTQPressureSample(Metrics{Deliveries: 1, MaxProcessingDelayOneSecond: 999 * time.Millisecond, DeliveryLatencyAttribution: DeliveryLatencyAttribution{Unknown: 1, MaximumDuration: 999 * time.Millisecond, MaximumFamily: DeliveryLatencyUnknown, WindowNonempty: true}})
 	if !reflect.DeepEqual(beforeEngine, afterEngine) || !reflect.DeepEqual(beforeStatus, afterStatus) {
 		t.Fatalf("diagnostic attribution mutated engine/status: before=%+v/%+v after=%+v/%+v", beforeEngine, beforeStatus, afterEngine, afterStatus)
 	}

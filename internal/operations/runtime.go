@@ -60,6 +60,7 @@ type Runtime struct {
 	deliveryWindowMu           sync.Mutex
 	deliveryOneSecondMaxNanos  uint64
 	deliveryOneSecondMaxFamily DeliveryLatencyFamily
+	deliveryWindowNonempty     bool
 	deliveryFamilyCounts       [deliveryLatencyFamilyCount]uint64
 	deliveryWindowVersion      uint64
 	consumerDeferred           atomic.Uint64
@@ -326,6 +327,7 @@ func (r *Runtime) syncTQPressure(ctx context.Context) {
 			if r.deliveryWindowVersion == metrics.deliveryWindowVersion {
 				r.deliveryOneSecondMaxNanos = 0
 				r.deliveryOneSecondMaxFamily = DeliveryLatencyUnknown
+				r.deliveryWindowNonempty = false
 			}
 			r.deliveryWindowMu.Unlock()
 		}

@@ -36,6 +36,10 @@ func mapCaptureView(capture operations.SnapshotCaptureView) (Snapshot, error) {
 		capture.Metrics.LiveQueue.CapacityFrames < 0 || capture.Metrics.QueueCurrentBytes < 0 || capture.Metrics.QueueHighBytes < 0 || capture.Metrics.Goroutines < 0 {
 		return Snapshot{}, rejectMapping("capture_coherence")
 	}
+	if capture.Metrics.DeliveryLatencyAttribution.MaximumDuration != capture.Metrics.MaxProcessingDelayOneSecond ||
+		!capture.Metrics.DeliveryLatencyAttribution.Reconciles(capture.Metrics.Deliveries) {
+		return Snapshot{}, rejectMapping("delivery_latency_attribution")
+	}
 
 	result := Snapshot{
 		SchemaVersion: SchemaVersion,
@@ -630,8 +634,8 @@ func deliveryLatencyAttributionValid(value Operations) bool {
 		attribution.MaximumMS != value.MaxProcessingDelayOneSecondMS {
 		return false
 	}
-	if value.Deliveries == "0" {
-		return attribution.MaximumMS == 0 && attribution.MaximumFamily == "unknown"
+	if attribution.MaximumMS == 0 && attribution.MaximumFamily == "unknown" {
+		return true
 	}
 	countByFamily := attribution.Unknown
 	switch attribution.MaximumFamily {

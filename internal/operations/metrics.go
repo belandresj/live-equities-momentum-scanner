@@ -55,13 +55,15 @@ const (
 )
 
 // DeliveryLatencyAttribution is fixed-cardinality cumulative accounting plus
-// the family paired with the current one-second maximum. MaximumDuration is
-// copied from the same locked record as MaximumFamily.
+// the family and occupancy state paired with the current one-second maximum.
+// WindowNonempty, MaximumDuration, and MaximumFamily are copied from the same
+// locked record; window occupancy is independent of the cumulative counts.
 type DeliveryLatencyAttribution struct {
 	Aggregate, TQ, Control, HydrationFence uint64
 	Checkpoint, Timer, Unknown             uint64
 	MaximumDuration                        time.Duration
 	MaximumFamily                          DeliveryLatencyFamily
+	WindowNonempty                         bool
 }
 
 func (a DeliveryLatencyAttribution) Total() uint64 {
@@ -72,7 +74,7 @@ func (a DeliveryLatencyAttribution) Reconciles(deliveries uint64) bool {
 	if a.Total() != deliveries || a.MaximumDuration < 0 || deliveryLatencyFamilyIndex(a.MaximumFamily) < 0 {
 		return false
 	}
-	if deliveries == 0 {
+	if !a.WindowNonempty {
 		return a.MaximumDuration == 0 && a.MaximumFamily == DeliveryLatencyUnknown
 	}
 	return a.count(a.MaximumFamily) != 0
@@ -136,6 +138,7 @@ func (r *Runtime) recordDeliveryLatency(delay time.Duration, family DeliveryLate
 	for old := r.deliveryMaxNanos.Load(); nanos > old && !r.deliveryMaxNanos.CompareAndSwap(old, nanos); old = r.deliveryMaxNanos.Load() {
 	}
 	r.deliveryFamilyCounts[deliveryLatencyFamilyIndex(family)]++
+	r.deliveryWindowNonempty = true
 	if nanos > r.deliveryOneSecondMaxNanos || nanos == r.deliveryOneSecondMaxNanos && deliveryLatencyFamilyPriority(family) < deliveryLatencyFamilyPriority(r.deliveryOneSecondMaxFamily) {
 		r.deliveryOneSecondMaxNanos, r.deliveryOneSecondMaxFamily = nanos, family
 	}
@@ -191,13 +194,14 @@ func deliveryLatencyFamilyPriority(family DeliveryLatencyFamily) int {
 	return deliveryLatencyFamilyCount
 }
 
-func deliveryLatencyAttribution(counts [deliveryLatencyFamilyCount]uint64, maximum time.Duration, family DeliveryLatencyFamily) DeliveryLatencyAttribution {
+func deliveryLatencyAttribution(counts [deliveryLatencyFamilyCount]uint64, maximum time.Duration, family DeliveryLatencyFamily, windowNonempty bool) DeliveryLatencyAttribution {
 	if deliveryLatencyFamilyIndex(family) < 0 {
 		family = DeliveryLatencyUnknown
 	}
 	return DeliveryLatencyAttribution{
 		Aggregate: counts[0], TQ: counts[1], Control: counts[2], HydrationFence: counts[3],
 		Checkpoint: counts[4], Timer: counts[5], Unknown: counts[6], MaximumDuration: maximum, MaximumFamily: family,
+		WindowNonempty: windowNonempty,
 	}
 }
 
@@ -253,7 +257,7 @@ func (r *Runtime) metricsFromPublication(sampledAt time.Time, processLive bool, 
 	}
 	result.MaxProcessingDelay = time.Duration(r.deliveryMaxNanos.Load())
 	result.MaxProcessingDelayOneSecond = time.Duration(r.deliveryOneSecondMaxNanos)
-	result.DeliveryLatencyAttribution = deliveryLatencyAttribution(r.deliveryFamilyCounts, result.MaxProcessingDelayOneSecond, r.deliveryOneSecondMaxFamily)
+	result.DeliveryLatencyAttribution = deliveryLatencyAttribution(r.deliveryFamilyCounts, result.MaxProcessingDelayOneSecond, r.deliveryOneSecondMaxFamily, r.deliveryWindowNonempty)
 	result.deliveryWindowVersion = r.deliveryWindowVersion
 	r.deliveryWindowMu.Unlock()
 	result.ConsumerDeferred = r.consumerDeferred.Load()

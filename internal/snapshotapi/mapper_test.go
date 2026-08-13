@@ -50,6 +50,11 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 		latency.MaximumMS != snapshot.Operations.MaxProcessingDelayOneSecondMS || latency.MaximumFamily != "aggregate" {
 		t.Fatalf("delivery-latency attribution mapping = %+v operations=%+v", latency, snapshot.Operations)
 	}
+	badWindowState := capture
+	badWindowState.Metrics.DeliveryLatencyAttribution.WindowNonempty = false
+	if _, err := mapCaptureView(badWindowState); mappingInvariant(err) != "delivery_latency_attribution" {
+		t.Fatalf("incoherent private latency window state = %v", err)
+	}
 	badLatencyCount := snapshot
 	badLatencyCount.Operations.DeliveryLatencyAttribution.Unknown = "2"
 	if err := validateSnapshot(badLatencyCount); err == nil {
@@ -465,7 +470,7 @@ func schemaCapture() operations.SnapshotCaptureView {
 		Deliveries: 10, ConsumerDeferred: 1, MeanProcessingDelay: 2 * time.Millisecond, MaxProcessingDelay: 3 * time.Millisecond,
 		MaxProcessingDelayOneSecond: time.Millisecond,
 		DeliveryLatencyAttribution: operations.DeliveryLatencyAttribution{Aggregate: 3, TQ: 2, Control: 1, HydrationFence: 1, Checkpoint: 1, Timer: 1, Unknown: 1,
-			MaximumDuration: time.Millisecond, MaximumFamily: operations.DeliveryLatencyAggregate},
+			MaximumDuration: time.Millisecond, MaximumFamily: operations.DeliveryLatencyAggregate, WindowNonempty: true},
 		HeapAllocBytes: 1 << 20, HeapInUseBytes: 2 << 20, Goroutines: 8, AccountingValid: true}
 	status := operations.Status{ProcessLive: true, BackendReady: true, RankingCurrent: true, Lifecycle: "live", RankingMode: "qualified_current", SampledAt: at,
 		PublicationID: operational.PublicationID, Watermark: &target, CausalTarget: &target, AccountingValid: true}

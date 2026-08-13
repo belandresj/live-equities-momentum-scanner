@@ -31,7 +31,7 @@ boundary, schema/trust rules, proofs, slices, and sole delivery ledger.
 | `C10-S2` HTTP/CORS/runtime composition | `accepted` | `P-C10-HTTP`; ordinary and affected race clean; focused final correction re-review clean | Complete |
 | 2026-08-11 first-ready/API diagnostic correction | `accepted_after_correction_review` | [`live-engine-api-first-ready-correction.md`](../live-engine-api-first-ready-correction.md) records the missing failed-capture limitation, real loopback first-ready proof, retained 5,691-symbol first-ready/post-fence proof, closed mapper invariant diagnostics, unchanged generic HTTP errors, clean ordinary/focused race verification, and two focused re-reviews with no remaining P1/P2. | Complete locally; live-provider confirmation is not claimed |
 | 2026-08-12 D3 population-transition diagnostic | `accepted_additive_diagnostic` | The immutable engine publication and `scanner.snapshot.v1` accounting expose one fixed-cardinality, mutually exclusive reason ledger for valid-prior symbols carrying the exact bootstrap-origin population consequence. Mapper validation rejects a broken ledger identity; the operator renders the same counters while non-ready. This changes no population, qualification, uncertainty, ranking, or readiness result. | Complete locally; live-provider confirmation is not claimed |
-| 2026-08-13 delivery-latency attribution | `accepted_additive_diagnostic` | C8 reopened its duration-only one-second maximum because it could not identify the winning engine-delivery family. The additive fixed-shape operations object carries seven decimal counters plus the atomically paired maximum duration/family; mapper validation rejects count, pair, family, and winner-presence inconsistencies. Golden/schema proof, repository short, and affected race verification pass without changing HTTP, readiness, ranking, or watermark; C9 now uses only whether the reconciled winning family is attributed as a recovery prerequisite. | Complete with reaccepted C8 correction. |
+| 2026-08-13 delivery-latency attribution | `accepted_after_empty_window_correction` | C8's additive fixed-shape object correctly carries cumulative seven-family counts and an atomic current-window maximum pair, but C10 incorrectly used cumulative deliveries to decide whether that current window was nonempty. A production pressure reset can coherently yield `0 / unknown` while lifetime deliveries remain nonzero and lifetime `unknown` remains zero; 915 observed route failures invalidate the prior complete mapping claim. Private current-window occupancy is now validated independently; the wire mapper accepts the exact empty pair without requiring a fabricated cumulative unknown count. The production reset/capture/next-delivery regression and all required verification pass. | Complete locally; unrelated mapper invariants and HTTP status semantics remain unchanged. |
 | Final component review | `accepted` | Mandatory read-only review found one P2 proof-matrix gap; focused correction re-review clean | Complete |
 
 ## Sections 1-4 — outcome, scope, ownership, and settled boundary
@@ -155,7 +155,7 @@ emitted, and every array is present even when empty.
 | `tq.commands` | `issued:d`; `pending:d`; `acknowledged:d`; `failed:d`; `fenced:d`; `result_fenced:d` |
 | `checkpoint` | `installed:bool`; projection eligibility/defer/start, bounded `projection_in_progress:d` (`0|1`), project/reject and submit-reject counters; `submitted/outstanding/in_progress/pending/completed/failed/canceled/superseded`; last attempted/projected/submitted/successful `T0`; usable age; projection total/max-owner-hold; artifact bytes; write/encode/reopen duration; fixed last failure step. Exact projection identity is `projection_started = projection_in_progress + projected + projection_rejected`. |
 | `operations` | `sample_accounting_valid:bool`; `queue_capacity_frames:u`; `queue_current_frames:u`; `queue_high_frames:u`; `queue_current_bytes:u`; `queue_high_bytes:u`; `deliveries:d`; `consumer_deferred:d`; `mean_processing_delay_ms:u`; `max_processing_delay_ms:u`; `max_processing_delay_one_second_ms:u`; `delivery_latency_attribution:object`; `heap_alloc_bytes:d`; `heap_in_use_bytes:d`; `goroutines:u`; `connection_recovery_attempts:d` |
-| `operations.delivery_latency_attribution` | Exact fixed-cardinality `aggregate:d`; `tq:d`; `control:d`; `hydration_fence:d`; `checkpoint:d`; `timer:d`; `unknown:d`; `maximum_ms:u`; `maximum_family:string enum`. The seven counts sum exactly to `operations.deliveries`; `maximum_ms` equals `max_processing_delay_one_second_ms`; a nonempty sample's maximum family has a nonzero matching count; an empty sample is exactly zero/`unknown`. No symbol, provider, path, payload, or dynamic label is emitted. |
+| `operations.delivery_latency_attribution` | Exact fixed-cardinality `aggregate:d`; `tq:d`; `control:d`; `hydration_fence:d`; `checkpoint:d`; `timer:d`; `unknown:d`; `maximum_ms:u`; `maximum_family:string enum`. The seven cumulative counts sum exactly to `operations.deliveries`; `maximum_ms` equals `max_processing_delay_one_second_ms`; independently represented current-window occupancy requires a nonempty window's maximum family to have a nonzero cumulative matching count, while an empty current window maps exactly as zero/`unknown` regardless of lifetime deliveries. No symbol, provider, path, payload, or dynamic label is emitted. |
 
 The current producer enum domains are exact: run mode `live|replay`; lifecycle
 `initializing|awaiting_session|awaiting_aggregate_ack|hydrating|live|recovering|
@@ -382,3 +382,18 @@ object adds no map, symbol/provider label, array, or mutable owner. Existing
 loopback/HTTP behavior is unchanged. C9 consumes the existing duration plus
 only whether the reconciled winning family is non-`unknown`; exact family and
 counts remain diagnostic and never enter a pressure threshold.
+
+The D6 correction adds no wire field. C8's sealed capture now carries private,
+lock-coherent current-window occupancy so C10 can distinguish an empty reset
+window from nonzero lifetime deliveries before serialization. The wire
+validator accepts `maximum_ms=0, maximum_family=unknown` as the empty current
+window without requiring cumulative `unknown > 0`; every nonempty winner still
+requires its closed family to have a nonzero cumulative count, the seven-family
+sum must still equal deliveries, and split maximum pairs still fail. The
+production-path regression proves the formerly failing reset capture maps and
+the next delivery establishes its own atomic pair. This changes neither
+snapshot/readiness route status rules nor any readiness, ranking, watermark,
+pressure, or provider semantic. Deterministic verification is complete; live
+provider chronology remains unproven. The existing mutex and sealed-capture
+validation make the correction straightforward, so no V1 independent-review
+trigger applies.

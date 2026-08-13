@@ -211,7 +211,8 @@ func deriveReplayStatus(processLive bool, binding reference.Binding, config Conf
 }
 
 func replayMetrics(sampledAt time.Time, view engine.OperationalView) Metrics {
-	result := Metrics{SampledAt: sampledAt, Engine: view, AccountingValid: operationalAccountingValid(view)}
+	result := Metrics{SampledAt: sampledAt, Engine: view, AccountingValid: operationalAccountingValid(view),
+		DeliveryLatencyAttribution: DeliveryLatencyAttribution{MaximumFamily: DeliveryLatencyUnknown}}
 	var memory runtime.MemStats
 	runtime.ReadMemStats(&memory)
 	result.HeapAllocBytes, result.HeapInUseBytes = memory.HeapAlloc, memory.HeapInuse
