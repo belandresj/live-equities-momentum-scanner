@@ -157,7 +157,7 @@ type latestAggregateMark struct {
 type committedAggregateMark struct {
 	start                  int64
 	windowStart, windowEnd time.Time
-	close                  float64
+	values                 AggregateValues
 }
 
 type slotBitmap [sessionSeconds / 64]uint64
@@ -838,7 +838,7 @@ func (e *Engine) compactAggregateLocked(state *symbolAggregateState, binding *in
 }
 
 func committedMark(record canonicalAggregate) *committedAggregateMark {
-	return &committedAggregateMark{start: record.identity.start, windowStart: record.windowStart, windowEnd: record.windowEnd, close: record.values.Close}
+	return &committedAggregateMark{start: record.identity.start, windowStart: record.windowStart, windowEnd: record.windowEnd, values: record.values}
 }
 
 func recomputeLatest(state *symbolAggregateState) {

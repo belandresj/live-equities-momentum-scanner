@@ -421,7 +421,7 @@ func latestMarkBefore(state *symbolAggregateState, at time.Time) (canonicalAggre
 		result = canonicalAggregate{
 			identity:    aggregateIdentity{start: state.committedLatest.start},
 			windowStart: state.committedLatest.windowStart, windowEnd: state.committedLatest.windowEnd,
-			values: AggregateValues{Close: state.committedLatest.close},
+			values: state.committedLatest.values,
 		}
 		found = true
 	}

@@ -202,14 +202,29 @@ func projectCheckpointSymbol(binding *installedBinding, symbol *coreSymbol, eval
 	}
 	if state.committedLatest != nil {
 		var full *canonicalAggregate
+		retainedAsCanonical := false
 		if record := state.tail[state.committedLatest.start]; record != nil {
 			full = record
+			retainedAsCanonical = true
 		}
 		if full == nil && state.olderLatest != nil && state.olderLatest.identity.start == state.committedLatest.start {
 			full = state.olderLatest
+			retainedAsCanonical = true
 		}
-		if full == nil || !full.windowStart.Before(t0) {
+		if full == nil {
+			full = &canonicalAggregate{identity: aggregateIdentity{symbol: symbol.symbol, start: state.committedLatest.start},
+				windowStart: state.committedLatest.windowStart, windowEnd: state.committedLatest.windowEnd, values: state.committedLatest.values}
+		}
+		if !full.windowStart.Before(t0) {
 			return checkpoint.Symbol{}, errors.New("committed mark lacks real aggregate")
+		}
+		if !retainedAsCanonical {
+			// The checkpoint schema restores canonical marks from Tail or OlderMark;
+			// CommittedMark is evaluator support, not a second canonical source.
+			// When folded forward state displaced olderLatest beyond T0, carry the
+			// retained full committed aggregate as the one clipped older mark.
+			v := projectAggregate(*full)
+			r.OlderMark = &v
 		}
 		v := projectAggregate(*full)
 		r.CommittedMark = &v

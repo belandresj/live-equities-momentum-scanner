@@ -108,7 +108,7 @@ func TestLiveAggregateEvaluationCoalescing(t *testing.T) {
 		correctedMark := e.state.binding.symbols[e.state.binding.index["AAA"]].aggregates.committedLatest
 		e.state.hydration.supportedThrough = immutableTime(t1)
 		e.mu.Unlock()
-		if correctedMark == nil || correctedMark.close != 12 {
+		if correctedMark == nil || correctedMark.values.Close != 12 {
 			t.Fatalf("same-T correction not applied: %+v", correctedMark)
 		}
 
@@ -122,7 +122,7 @@ func TestLiveAggregateEvaluationCoalescing(t *testing.T) {
 		e.mu.Lock()
 		advancedMark := e.state.binding.symbols[e.state.binding.index["AAA"]].aggregates.committedLatest
 		e.mu.Unlock()
-		if advancedMark == nil || advancedMark.close != futureClose {
+		if advancedMark == nil || advancedMark.values.Close != futureClose {
 			t.Fatalf("later target did not include future insert: %+v", advancedMark)
 		}
 	})

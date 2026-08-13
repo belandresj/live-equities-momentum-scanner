@@ -233,7 +233,7 @@ func TestC3R1CommittedBoundaryRetention(t *testing.T) {
 	_, activityMutableRetained := state.activity.mutable[activityKey]
 	activityRetained := activityReferenceRetained || activityMutableRetained
 	_, qualificationRetained := state.qualification.finalizedGateBars[postWindow.Unix()]
-	if before != after || state.committedLatest == nil || state.committedLatest.close != 10 || !laterAvailable || laterMark.values.Close != 100 ||
+	if before != after || state.committedLatest == nil || state.committedLatest.values.Close != 10 || !laterAvailable || laterMark.values.Close != 100 ||
 		!activityRetained || !qualificationRetained {
 		e.mu.Unlock()
 		t.Fatalf("stalled-T retention before=%+v after=%+v committed=%+v later=%+v activity=%v qualification=%v", before, after, state.committedLatest, laterMark, activityRetained, qualificationRetained)

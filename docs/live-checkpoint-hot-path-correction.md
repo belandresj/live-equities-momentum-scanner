@@ -1,8 +1,8 @@
 # Live checkpoint hot-path correction
 
-**Status:** Reopened and reaccepted 2026-08-13 after live API evidence exposed
-the missing in-flight projection operand; bounded projection, alias isolation,
-live responsiveness, and checkpoint persistence semantics remain unchanged
+**Status:** Reopened and reaccepted 2026-08-13 after preserved live evidence
+exposed repeated `projection_invariant` rejection; the narrow committed-mark
+representation correction, bounded verification, and focused re-review pass
 
 **Recorded:** 2026-08-12 under the
 [`Version 1 Release Program`](v1-release-program.md) correction loop
@@ -52,6 +52,7 @@ work.
 | `CKHOT-S1` projection ownership and observability | `accepted` | Existing complete semantic round trip remains clean; production projection no longer restores/evaluates a scratch engine; one explicit per-symbol defensive isolation copy prevents retained aliases, including after accepted submit to a paused writer; exact writer/engine accounting passes | Preserve while S2/final review complete |
 | `CKHOT-S2` live responsiveness and restart composition | `accepted` | Three real-consumer dense boundaries held the owner for at most 20.870 ms, delivered aggregates within 66.874 ms, served observations within 55.523 ms, and retained a stable post-GC heap; final rerun restart median was 524.029 ms versus 1.381 s fresh | Preserve for V1 integration |
 | In-flight API accounting correction | `accepted 2026-08-13` | A live run showed `/readyz` and snapshot mapping failures with `checkpoint_projection_identity` during each incremental projection. The engine now exposes the bounded `projection_in_progress` gauge, and the exact identity is `projection_started = projection_in_progress + projected + projection_rejected`. All activation/success/rejection/builder-failure/shutdown paths maintain the gauge under the engine lock; fixed failure reasons align with the mapper. Focused Engine/API/UI proofs, `go test -short -timeout 2m ./...`, affected race, affected vet, `git diff --check`, and required `gpt-5.6-sol` medium final focused review pass with no remaining P1/P2. | Preserve the additive operand and keep checkpoint work outside readiness ownership |
+| Committed-mark projection invariant | `reaccepted 2026-08-13` | At least 16 live incremental projections ran for about 1.6–1.8 seconds and rejected as `projection_invariant` with zero projected/submitted/written/installed work. The pre-fix `TestCKHOTIncrementalProjectionResolvesMaintainedCommittedMark` reproduced `started=1`, `rejected=1`, and zero submission. The accepted stalled-`T0` shape had compacted forward state move `olderLatest` beyond `T0`; the compact committed marker retained only close, leaving no full normalized pre-`T0` aggregate. It now retains the original bounded `AggregateValues`; the production timer/evaluator preserves them, and projection emits that real record as the clipped `OlderMark` plus evaluator-support `CommittedMark`. The real writer completes, reopen validation and manifest discovery/decode succeed, atomic install regenerates an evaluation equal to the original at `T0`, and projection/writer accounting reconciles. Existing pre-`T0` mutation and shutdown/sequence invalidations remain unchanged. Focused tests, repository short, affected race, vet/diff, and required `gpt-5.6-sol` medium review/re-review pass. | Complete. A separately authorized fresh live restart remains required to verify the running provider composition no longer emits this failure and to measure any delivery-latency effect. |
 
 ## Sections 1–4 — Outcome, scope, ownership, and settled boundary
 
