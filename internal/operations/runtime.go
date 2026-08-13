@@ -450,10 +450,14 @@ func defaultTQPressureSample(metrics Metrics) engine.TQPressureSample {
 	if metrics.LiveQueue.CapacityFrames > 0 {
 		capacity = uint64(metrics.LiveQueue.CapacityFrames)
 	}
+	attribution := metrics.DeliveryLatencyAttribution
+	attributed := attribution.MaximumFamily != DeliveryLatencyUnknown &&
+		attribution.MaximumDuration == metrics.MaxProcessingDelayOneSecond &&
+		attribution.Reconciles(metrics.Deliveries)
 	return engine.TQPressureSample{
 		QueueCurrentFrames:  metrics.QueueCurrentFrames,
 		QueueCapacityFrames: capacity, OldestFrameAge: metrics.LiveQueue.OldestFrameAge,
-		MaxDeliveryDelayOneSec: metrics.MaxProcessingDelayOneSecond, HeapAllocBytes: metrics.HeapAllocBytes,
+		MaxDeliveryDelayOneSec: metrics.MaxProcessingDelayOneSecond, DeliveryLatencyAttributed: attributed, HeapAllocBytes: metrics.HeapAllocBytes,
 		Goroutines: metrics.Goroutines, TQLocalAccountingHealthy: metrics.TQNormalization.Reconciles(),
 	}
 }

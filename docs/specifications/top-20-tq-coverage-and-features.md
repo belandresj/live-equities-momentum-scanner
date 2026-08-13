@@ -1,8 +1,9 @@
 # Top-20 T/Q coverage and features
 
-**Status:** Component 9 finally reaccepted 2026-08-13 after the owner-selected
-current-host heap-gate correction; membership, features, non-heap pressure
-gates, and prior evidence remain accepted
+**Status:** Component 9 finally reaccepted 2026-08-13 after the owner-directed
+attributed delivery recovery-gate correction; membership, features,
+degradation, aggregate-only, queue/heap/goroutine, dwell, and aggregate-
+independence behavior remain accepted
 
 **Boundary approval:** Approved 2026-08-07 by the owner through the Version 1
 Release Program revision
@@ -39,7 +40,8 @@ Sections 8-19 are completed here after just-in-time V2 reconnaissance.
 | `C9-S1` membership/coverage/features | `accepted_after_owner_revision` | Owner shortened Spread to a five-second weighted median with four-of-five valid-duration coverage; focused boundary/window proof, ordinary/race verification, and focused read-only review pass | Complete |
 | `C9-S2` pressure/shedding/restoration | `accepted` | `P-C9-PRESSURE`; ordinary and affected race gates; focused corrections and re-review clean | Complete |
 | `C9-S2-H` current-host heap gates | `accepted_after_correction_review` | The 2026-08-12 preserved live snapshot measured 1,785,959,440 bytes of Go heap while T/Q was `aggregate_only`; the 512-MiB degraded, 1.25-GiB aggregate-only, and 384-MiB recovery gates made normal T/Q and recovery structurally unreachable for that aggregate baseline. Owner direction on 2026-08-13 selected 2.5-GiB recovery, 3.25-GiB degraded, and 4-GiB aggregate-only heap gates for the private 8-GiB Apple M1 host. Exact boundary proof, ordinary/race verification, vet/diff, and focused final review pass. | Complete locally; current-host live behavior remains to be observed without claiming portable capacity. |
-| Final component review | `accepted_after_heap_correction` | Original reviews remain valid; the 2026-08-13 focused read-only re-review found no P1/P2 and one P3 unit mismatch, corrected before reacceptance. | Complete; reopen only through the V1 correction loop |
+| `C9-S2-L` attributed recovery delivery gate | `accepted_after_owner_revision` | Owner direction on 2026-08-13 revised only recovery from delivery `<500 ms` to an attributed delivery maximum `<1 s`. `TestPC9RecoveryDeliveryGateBoundariesAndAttribution` proves exact below/equal boundaries, all preserved policy constants, delayed-result fencing, and unknown-attribution rejection; focused, ordinary, race, vet, and diff gates pass. | Complete locally; provider behavior and a saturation frontier remain unclaimed. |
+| Final component review | `accepted_prior_review_preserved` | Original reviews and the heap-correction re-review remain valid. The recovery-only scalar threshold and fail-closed boolean add no new owner, concurrency linearization, persistence/atomicity, or external false-success authority; exact construction and primary proof made another independent review unnecessary under the V1 risk cadence. | Complete; reopen only through the V1 correction loop. |
 
 ## 1-4. Outcome, scope, ownership, and settled boundary
 
@@ -241,15 +243,24 @@ sampling.
 | `taq_degraded` | Any of queue >=50%, oldest >=250 ms, delivery >=2 s, heap >=3.25 GiB, or goroutines >=64 persists 500 ms | Close all T/Q coverage and reject T/Q elements before expensive normalization; continue classifying every mixed frame. |
 | `aggregate_only` | Queue >=80%, oldest >=1.5 s, delivery >=5 s, heap >=4 GiB, goroutines >=128, or **T/Q-local** decode/accounting failure immediately; or degraded pressure persists 2 s | Keep early T/Q rejection and request paired unsubscribe for every known provider member, lowest current rank first, down to zero known membership; ambiguous members remain explicitly unknown until cleanup or epoch replacement. |
 
-Recovery requires queue <20%, oldest <100 ms, delivery <500 ms, heap <2.5 GiB,
-goroutines <48, and coherent decoder/transport accounting continuously for 30
-seconds and at least 15 seconds since degradation. It returns to `normal`, then
-restores one current desired symbol at a time in rank order, no faster than one
-successful acknowledgement per five seconds. Every restored symbol starts new
-coverage and warm-up. The queue, age, delivery, goroutine, and accounting gates
-remain the conservative provisional V1 settings relative to C5's hard queue
-limits and the product's two-second readiness tolerance. The revised heap gates
-are a private current-host profile: they give the observed 1.786-GB
+Recovery requires queue <20%, oldest <100 ms, an attributed one-second maximum
+delivery delay strictly below 1 second, heap <2.5 GiB, goroutines <48, and
+coherent decoder/transport accounting continuously for 30 seconds and at least
+15 seconds since degradation. `Attributed` means the atomic C8 maximum pair has
+a reconciled, non-`unknown` closed work family; an absent, mixed, incoherent, or
+otherwise unknown winner resets recovery dwell. A result admitted after its
+two-second pressure-command deadline is fenced before it can affect dwell. C9
+uses attribution only as recovery evidence: the exact family and per-family
+counts cannot alter any threshold or pressure state.
+
+Recovery returns to `normal`, then restores one current desired symbol at a
+time in rank order, no faster than one successful acknowledgement per five
+seconds. Every restored symbol starts new coverage and warm-up. The queue, age,
+goroutine, accounting, two-second degraded-delivery, and five-second
+aggregate-only delivery gates remain the conservative provisional V1 settings
+relative to C5's hard queue limits and the product's two-second readiness
+tolerance. The revised heap gates are a private current-host profile: they give
+the observed 1.786-GB
 (1.663-GiB) aggregate baseline approximately 1.59 GiB before optional T/Q
 shedding, retain a further 0.75 GiB before full provider unsubscription, and
 permit recovery after T/Q state is cleared. They are not a measured saturation
@@ -320,11 +331,12 @@ maximum remains unchanged for operator reporting. The operations timer samples
 pressure once per second, and command synchronization runs after timer and
 delivery completions without a second owner.
 
-C8 may expose the same one-second maximum with a closed diagnostic work-family
-attribution and exact per-family delivery counts. C9 consumes only the duration
-scalar: family, tie order, and attribution counts are not pressure predicates
-and cannot alter any threshold, persistence dwell, recovery dwell, shedding,
-or restoration decision.
+C8 exposes the same one-second maximum with a closed diagnostic work-family
+attribution and exact per-family delivery counts. C9 consumes the duration and
+one fail-closed fact stating whether its atomic winning record has reconciled,
+non-`unknown` attribution. The exact family, tie order, and attribution counts
+are not pressure predicates and cannot alter thresholds, degradation,
+aggregate-only entry, shedding, or restoration order.
 
 A mixed-frame or required aggregate/control classification/accounting failure
 is not a C9 pressure sample: C5 emits the existing aggregate-ingress integrity
@@ -386,10 +398,13 @@ accounting failure into `aggregate_only`, while a mixed-frame accounting
 ambiguity follows the existing global ingress-integrity path. It validates all
 pressure/drop/command/accounting identities and bounds before interpreting
 results. A delayed/duplicate healthy pressure-result trace is fenced and cannot
-advance engine-time recovery dwell. Missing and more-than-two-second unhealthy
-results exercise engine-owned expiry, fresh command issuance, first-miss
-degradation, and second-miss aggregate-only containment; their later results
-cannot restore `normal`. Limitation: the proof validates policy
+advance engine-time recovery dwell. The delivery-recovery boundary separately
+proves exactly 1 second cannot recover, 1 nanosecond below can recover only
+after 30 continuous seconds, and an equally low but `unknown`/unattributed
+maximum cannot start or advance dwell. Missing and more-than-two-second
+unhealthy results exercise engine-owned expiry, fresh command issuance,
+first-miss degradation, and second-miss aggregate-only containment; their later
+results cannot restore `normal`. Limitation: the proof validates policy
 behavior at conservative
 provisional gates; it does not locate a current-host saturation frontier or
 claim provider capacity, market-hours behavior, or an SLA.
@@ -543,6 +558,40 @@ states the exact 1.663-GiB baseline and approximately 1.59-GiB normal-mode
 headroom. No provider request or credential access occurred. The revised
 profile is current-host policy, not evidence of market-hours T/Q behavior, a
 portable capacity limit, or an SLA.
+
+### C9-S2-L attributed recovery delivery-gate correction — 2026-08-13
+
+Owner direction revised only the recovery delivery predicate from below 500 ms
+to an attributed one-second maximum strictly below 1 second. Runtime derives
+one fail-closed boolean from C8's atomic maximum pair and fixed-cardinality
+identity: the maximum duration must match, all seven family counts must
+reconcile to deliveries, and the winning family must be non-`unknown`. C9 does
+not consume the exact family or counts. An unknown, absent, mixed, or incoherent
+winner therefore resets recovery dwell without changing degradation or
+aggregate-only entry.
+
+`TestPC9RecoveryDeliveryGateBoundariesAndAttribution` proves the configured
+recovery value is exactly 1 second, exactly 1 second cannot recover, and 1
+second minus 1 nanosecond recovers only after 30 continuous attributed seconds.
+It also proves 31 equally low unattributed samples cannot establish dwell and a
+known-attributed result admitted 1 nanosecond after the two-second command
+deadline is fenced with `recoverySince` still zero. The same proof asserts the
+unchanged 2-second degraded and 5-second aggregate-only delivery thresholds;
+500-ms/2-second persistence dwells; 50/80/20-percent queue gates; 250-ms/1.5-s/
+100-ms oldest-frame gates; 2.5/3.25/4-GiB heap gates; 48/64/128 goroutine gates;
+and 30-second recovery dwell. The existing primary pressure trace again proves
+aggregate evaluation and committed watermark equality across the full
+degrade/unsubscribe/recover/restore path.
+
+Focused engine/operations proof passed in 0.708/0.771 seconds. Ordinary
+`go test -short -timeout 2m ./... -count=1` passed. Affected
+`go test -race -short -timeout 5m ./internal/engine ./internal/massive
+./internal/operations ./internal/snapshotapi ./cmd/scanner -count=1` passed;
+`go vet ./...` and `git diff --check` passed. No provider request, credential,
+live observation, push, or capacity/SLA claim occurred. No independent review
+was triggered because this is a scalar recovery-policy revision with a
+fail-closed derived predicate, not a new ownership, ordering, persistence, or
+external-evidence boundary.
 
 Reopen S1 if a normalized shape cannot carry the stated identity/quality facts,
 paired acknowledgement cannot prove per-symbol/channel coverage, the weighted

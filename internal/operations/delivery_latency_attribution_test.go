@@ -75,9 +75,9 @@ func TestPC8DeliveryLatencyAttribution(t *testing.T) {
 		}
 	}
 
-	// Attribution is diagnostic-only. The pressure input remains the existing
-	// scalar duration, and recording attribution does not admit engine work or
-	// mutate ranking, watermark, or readiness.
+	// Attribution affects only whether a below-threshold delivery value may
+	// contribute to C9 recovery dwell. It does not admit engine work or mutate
+	// ranking, watermark, readiness, or the degradation thresholds.
 	binding := operationsBinding(t)
 	now := binding.SessionStart().Add(10 * time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -87,15 +87,16 @@ func TestPC8DeliveryLatencyAttribution(t *testing.T) {
 		t.Fatal(err)
 	}
 	beforeEngine, beforeStatus := live.Engine().ObserveSnapshot(), live.Status()
-	beforePressure := defaultTQPressureSample(Metrics{MaxProcessingDelayOneSecond: 3 * time.Second, DeliveryLatencyAttribution: DeliveryLatencyAttribution{MaximumDuration: 3 * time.Second, MaximumFamily: DeliveryLatencyAggregate}})
+	beforePressure := defaultTQPressureSample(Metrics{Deliveries: 1, MaxProcessingDelayOneSecond: 999 * time.Millisecond, DeliveryLatencyAttribution: DeliveryLatencyAttribution{Aggregate: 1, MaximumDuration: 999 * time.Millisecond, MaximumFamily: DeliveryLatencyAggregate}})
 	live.recordDeliveryLatency(3*time.Second, DeliveryLatencyCheckpoint)
 	afterEngine, afterStatus := live.Engine().ObserveSnapshot(), live.Status()
-	afterPressure := defaultTQPressureSample(Metrics{MaxProcessingDelayOneSecond: 3 * time.Second, DeliveryLatencyAttribution: DeliveryLatencyAttribution{MaximumDuration: 3 * time.Second, MaximumFamily: DeliveryLatencyUnknown}})
+	afterPressure := defaultTQPressureSample(Metrics{Deliveries: 1, MaxProcessingDelayOneSecond: 999 * time.Millisecond, DeliveryLatencyAttribution: DeliveryLatencyAttribution{Unknown: 1, MaximumDuration: 999 * time.Millisecond, MaximumFamily: DeliveryLatencyUnknown}})
 	if !reflect.DeepEqual(beforeEngine, afterEngine) || !reflect.DeepEqual(beforeStatus, afterStatus) {
 		t.Fatalf("diagnostic attribution mutated engine/status: before=%+v/%+v after=%+v/%+v", beforeEngine, beforeStatus, afterEngine, afterStatus)
 	}
-	if beforePressure != afterPressure || beforePressure.MaxDeliveryDelayOneSec != 3*time.Second {
-		t.Fatalf("attribution changed pressure input: before=%+v after=%+v", beforePressure, afterPressure)
+	if !beforePressure.DeliveryLatencyAttributed || afterPressure.DeliveryLatencyAttributed ||
+		beforePressure.MaxDeliveryDelayOneSec != afterPressure.MaxDeliveryDelayOneSec || beforePressure.MaxDeliveryDelayOneSec != 999*time.Millisecond {
+		t.Fatalf("attribution recovery predicate = before=%+v after=%+v", beforePressure, afterPressure)
 	}
 	if err := live.Shutdown(ctx); err != nil {
 		t.Fatal(err)

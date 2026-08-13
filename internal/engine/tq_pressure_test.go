@@ -16,7 +16,7 @@ func TestPC9PressureTransitionsExpiryAndRankedRestoration(t *testing.T) {
 	aggregateBefore := cloneAggregateEvaluation(e.state.aggregateEvaluator.current)
 	committedBefore := *e.state.committedT
 	e.mu.Unlock()
-	healthy := TQPressureSample{QueueCapacityFrames: 100, TQLocalAccountingHealthy: true, Goroutines: 1}
+	healthy := TQPressureSample{QueueCapacityFrames: 100, DeliveryLatencyAttributed: true, TQLocalAccountingHealthy: true, Goroutines: 1}
 	unhealthy := healthy
 	unhealthy.QueueCurrentFrames = 50
 
@@ -149,7 +149,7 @@ func TestPC9CurrentHostHeapGateBoundaries(t *testing.T) {
 		e.state.tq.aggregateOnly = true
 		e.state.tq.pressure.degradedAt = start.Add(-time.Minute)
 		e.mu.Unlock()
-		atGate := TQPressureSample{QueueCapacityFrames: 100, HeapAllocBytes: tqRecoveryHeapBytes, TQLocalAccountingHealthy: true, Goroutines: 1}
+		atGate := TQPressureSample{QueueCapacityFrames: 100, DeliveryLatencyAttributed: true, HeapAllocBytes: tqRecoveryHeapBytes, TQLocalAccountingHealthy: true, Goroutines: 1}
 		for second := 0; second <= 30; second++ {
 			applyPressureSample(t, e, clockNanos, start.Add(time.Duration(second)*time.Second), atGate)
 		}
@@ -167,10 +167,94 @@ func TestPC9CurrentHostHeapGateBoundaries(t *testing.T) {
 	})
 }
 
+func TestPC9RecoveryDeliveryGateBoundariesAndAttribution(t *testing.T) {
+	policy := defaultTQPressurePolicy()
+	if policy.degradedDelivery != 2*time.Second || policy.aggregateDelivery != 5*time.Second || policy.recoveryDelivery != time.Second ||
+		policy.degradedDwell != 500*time.Millisecond || policy.aggregateDwell != 2*time.Second || policy.recoveryDwell != 30*time.Second ||
+		policy.degradedQueuePercent != 50 || policy.aggregateQueuePercent != 80 || policy.recoveryQueuePercent != 20 ||
+		policy.degradedOldest != 250*time.Millisecond || policy.aggregateOldest != 1500*time.Millisecond || policy.recoveryOldest != 100*time.Millisecond ||
+		policy.degradedHeap != tqDegradedHeapBytes || policy.aggregateHeap != tqAggregateHeapBytes || policy.recoveryHeap != tqRecoveryHeapBytes ||
+		policy.degradedGoroutines != 64 || policy.aggregateGoroutines != 128 || policy.recoveryGoroutines != 48 {
+		t.Fatalf("pressure policy changed outside recovery delivery: %+v", policy)
+	}
+
+	newRecoveringEngine := func(t *testing.T) (*Engine, *atomic.Int64, time.Time) {
+		t.Helper()
+		e, _, clockNanos, start := pressureProofEngine(t)
+		e.mu.Lock()
+		e.state.tq.members, e.state.tq.desired = nil, nil
+		e.state.tq.pressure.mode = TQPressureAggregateOnly
+		e.state.tq.aggregateOnly = true
+		e.state.tq.pressure.degradedAt = start.Add(-time.Minute)
+		e.mu.Unlock()
+		return e, clockNanos, start
+	}
+	healthy := TQPressureSample{QueueCapacityFrames: 100, DeliveryLatencyAttributed: true, TQLocalAccountingHealthy: true, Goroutines: 1}
+
+	t.Run("equal one second cannot recover; one nanosecond below can", func(t *testing.T) {
+		e, clockNanos, start := newRecoveringEngine(t)
+		defer closeAndWait(t, e)
+		atGate := healthy
+		atGate.MaxDeliveryDelayOneSec = time.Second
+		for second := 0; second <= 30; second++ {
+			applyPressureSample(t, e, clockNanos, start.Add(time.Duration(second)*time.Second), atGate)
+		}
+		if got := e.ObserveTQ().Pressure; got != TQPressureAggregateOnly {
+			t.Fatalf("recovered at non-strict delivery boundary = %s", got)
+		}
+
+		belowGate := atGate
+		belowGate.MaxDeliveryDelayOneSec = time.Second - time.Nanosecond
+		for second := 31; second <= 61; second++ {
+			applyPressureSample(t, e, clockNanos, start.Add(time.Duration(second)*time.Second), belowGate)
+		}
+		if got := e.ObserveTQ().Pressure; got != TQPressureNormal {
+			t.Fatalf("did not recover below delivery boundary = %s", got)
+		}
+	})
+
+	t.Run("unattributed samples cannot establish recovery dwell", func(t *testing.T) {
+		e, clockNanos, start := newRecoveringEngine(t)
+		defer closeAndWait(t, e)
+		unattributed := healthy
+		unattributed.DeliveryLatencyAttributed = false
+		unattributed.MaxDeliveryDelayOneSec = time.Second - time.Nanosecond
+		for second := 0; second <= 30; second++ {
+			applyPressureSample(t, e, clockNanos, start.Add(time.Duration(second)*time.Second), unattributed)
+		}
+		if got := e.ObserveTQ().Pressure; got != TQPressureAggregateOnly {
+			t.Fatalf("unattributed samples manufactured recovery = %s", got)
+		}
+	})
+
+	t.Run("delayed attributed result is fenced before recovery", func(t *testing.T) {
+		e, clockNanos, start := newRecoveringEngine(t)
+		defer closeAndWait(t, e)
+		e.mu.Lock()
+		e.advanceTQPressureTimerLocked(start)
+		e.mu.Unlock()
+		command := issuePressureForTest(t, e)
+		input, err := NewTQPressureResultInput(command, healthy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		clockNanos.Store(start.Add(2*time.Second + time.Nanosecond).UnixNano())
+		if got := admitPressureForTest(t, e, input); got.Code != DispositionTQFenced {
+			t.Fatalf("delayed attributed result = %+v", got)
+		}
+		e.mu.Lock()
+		recoverySince := e.state.tq.pressure.recoverySince
+		e.mu.Unlock()
+		if got := e.ObserveTQ().Pressure; got != TQPressureAggregateOnly || !recoverySince.IsZero() {
+			t.Fatalf("delayed result advanced recovery: pressure=%s recovery_since=%s", got, recoverySince)
+		}
+	})
+}
+
 func TestPC9PressureMissingAndLateResultsCannotLeaveNormal(t *testing.T) {
 	e, _, clockNanos, start := pressureProofEngine(t)
 	defer closeAndWait(t, e)
-	healthy := TQPressureSample{QueueCapacityFrames: 100, TQLocalAccountingHealthy: true, Goroutines: 1}
+	healthy := TQPressureSample{QueueCapacityFrames: 100, DeliveryLatencyAttributed: true, TQLocalAccountingHealthy: true, Goroutines: 1}
 
 	e.mu.Lock()
 	e.advanceTQPressureTimerLocked(start)
@@ -212,7 +296,7 @@ func TestPC9PressureTQLocalAccountingFailureIsImmediate(t *testing.T) {
 func TestPC9PressureEpochReplacementPreservesMonotonicAuthority(t *testing.T) {
 	e, _, clockNanos, start := pressureProofEngine(t)
 	defer closeAndWait(t, e)
-	healthy := TQPressureSample{QueueCapacityFrames: 100, TQLocalAccountingHealthy: true, Goroutines: 1}
+	healthy := TQPressureSample{QueueCapacityFrames: 100, DeliveryLatencyAttributed: true, TQLocalAccountingHealthy: true, Goroutines: 1}
 
 	e.mu.Lock()
 	e.state.tq.consumed, e.state.tq.applied, e.state.tq.duplicate = 6, 1, 1

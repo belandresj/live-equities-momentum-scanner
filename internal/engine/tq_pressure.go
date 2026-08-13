@@ -15,13 +15,14 @@ const (
 )
 
 type TQPressureSample struct {
-	QueueCurrentFrames       uint64
-	QueueCapacityFrames      uint64
-	OldestFrameAge           time.Duration
-	MaxDeliveryDelayOneSec   time.Duration
-	HeapAllocBytes           uint64
-	Goroutines               int
-	TQLocalAccountingHealthy bool
+	QueueCurrentFrames        uint64
+	QueueCapacityFrames       uint64
+	OldestFrameAge            time.Duration
+	MaxDeliveryDelayOneSec    time.Duration
+	DeliveryLatencyAttributed bool
+	HeapAllocBytes            uint64
+	Goroutines                int
+	TQLocalAccountingHealthy  bool
 }
 
 // TQPressureCommand is an opaque, one-shot request for a fixed-cardinality
@@ -67,7 +68,7 @@ func defaultTQPressurePolicy() tqPressurePolicy {
 		recoveryDwell: 30 * time.Second, minimumDegraded: 15 * time.Second, restoreInterval: 5 * time.Second,
 		degradedQueuePercent: 50, aggregateQueuePercent: 80, recoveryQueuePercent: 20,
 		degradedOldest: 250 * time.Millisecond, aggregateOldest: 1500 * time.Millisecond, recoveryOldest: 100 * time.Millisecond,
-		degradedDelivery: 2 * time.Second, aggregateDelivery: 5 * time.Second, recoveryDelivery: 500 * time.Millisecond,
+		degradedDelivery: 2 * time.Second, aggregateDelivery: 5 * time.Second, recoveryDelivery: time.Second,
 		degradedHeap: tqDegradedHeapBytes, aggregateHeap: tqAggregateHeapBytes, recoveryHeap: tqRecoveryHeapBytes,
 		degradedGoroutines: 64, aggregateGoroutines: 128, recoveryGoroutines: 48,
 	}
@@ -217,7 +218,7 @@ func (e *Engine) applyTQPressureSampleLocked(sample TQPressureSample, now time.T
 		sample.MaxDeliveryDelayOneSec >= policy.aggregateDelivery || sample.HeapAllocBytes >= policy.aggregateHeap || sample.Goroutines >= policy.aggregateGoroutines
 	unhealthy := pressureQueueAtLeast(sample, policy.degradedQueuePercent) || sample.OldestFrameAge >= policy.degradedOldest ||
 		sample.MaxDeliveryDelayOneSec >= policy.degradedDelivery || sample.HeapAllocBytes >= policy.degradedHeap || sample.Goroutines >= policy.degradedGoroutines
-	healthy := sample.TQLocalAccountingHealthy && pressureQueueBelow(sample, policy.recoveryQueuePercent) && sample.OldestFrameAge < policy.recoveryOldest &&
+	healthy := sample.TQLocalAccountingHealthy && sample.DeliveryLatencyAttributed && pressureQueueBelow(sample, policy.recoveryQueuePercent) && sample.OldestFrameAge < policy.recoveryOldest &&
 		sample.MaxDeliveryDelayOneSec < policy.recoveryDelivery && sample.HeapAllocBytes < policy.recoveryHeap && sample.Goroutines < policy.recoveryGoroutines
 	if severe {
 		p.unhealthySince, p.recoverySince = now, time.Time{}
