@@ -222,7 +222,7 @@ func TestRetainedArtifactLiveBootstrapIntegrity(t *testing.T) {
 	if mapErr != nil {
 		t.Fatalf("retained first-ready capture rejected: %v", mapErr)
 	}
-	if !snapshot.Status.BackendReady || !snapshot.Status.RankingCurrent || snapshot.Publication.Lifecycle != "live" || snapshot.Ranking.Mode != "degraded_bootstrap" || len(snapshot.Rows) == 0 {
+	if !snapshot.Status.BackendReady || !snapshot.Status.RankingCurrent || snapshot.Publication.Lifecycle != "live" || snapshot.Ranking.Mode != "qualified_current" || len(snapshot.Rows) == 0 {
 		t.Fatalf("retained first-ready publication=%+v status=%+v ranking=%+v rows=%d", snapshot.Publication, snapshot.Status, snapshot.Ranking, len(snapshot.Rows))
 	}
 
@@ -255,7 +255,7 @@ func TestRetainedArtifactLiveBootstrapIntegrity(t *testing.T) {
 		t.Fatalf("post-fence publication identity first=%q post=%q errors=%v/%v", snapshot.Publication.ID, postSnapshot.Publication.ID, firstIDErr, postIDErr)
 	}
 	if !postSnapshot.Status.BackendReady || !postSnapshot.Status.RankingCurrent || postSnapshot.Publication.Lifecycle != "live" ||
-		postSnapshot.Publication.BindingIdentity != snapshot.Publication.BindingIdentity || postSnapshot.Ranking.Mode != "degraded_bootstrap" || len(postSnapshot.Rows) == 0 {
+		postSnapshot.Publication.BindingIdentity != snapshot.Publication.BindingIdentity || postSnapshot.Ranking.Mode != "qualified_current" || len(postSnapshot.Rows) == 0 {
 		t.Fatalf("retained post-fence publication=%+v status=%+v", postSnapshot.Publication, postSnapshot.Status)
 	}
 	t.Logf("retained bootstrap: artifact_records=%d binding_symbols=%d prefix=%s..%s prefix_records=%d live_overlay=%d conflicts=%d",

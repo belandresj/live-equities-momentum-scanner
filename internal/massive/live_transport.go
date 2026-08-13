@@ -221,11 +221,18 @@ type AdapterAccounting struct {
 }
 
 type TQNormalizationAccounting struct {
-	Classified, Normalized, Rejected uint64
+	Classified, Normalized, Rejected                     uint64
+	ClassifiedTrades, NormalizedTrades, RejectedTrades   uint64
+	ClassifiedQuotes, NormalizedQuotes, RejectedQuotes   uint64
+	PressureShed, PressureShedTrades, PressureShedQuotes uint64
 }
 
 func (a TQNormalizationAccounting) Reconciles() bool {
-	return a.Classified == a.Normalized+a.Rejected
+	classification := a.Classified == a.Normalized+a.Rejected && a.Classified == a.ClassifiedTrades+a.ClassifiedQuotes &&
+		a.Normalized == a.NormalizedTrades+a.NormalizedQuotes && a.Rejected == a.RejectedTrades+a.RejectedQuotes &&
+		a.ClassifiedTrades == a.NormalizedTrades+a.RejectedTrades && a.ClassifiedQuotes == a.NormalizedQuotes+a.RejectedQuotes
+	return classification && a.PressureShed == a.PressureShedTrades+a.PressureShedQuotes &&
+		a.PressureShedTrades <= a.RejectedTrades && a.PressureShedQuotes <= a.RejectedQuotes
 }
 
 func (a AdapterAccounting) Reconciles() bool {
@@ -338,6 +345,7 @@ func (a *LiveAdapter) Start(ctx context.Context, command OpenAggregateEpoch) (*L
 		adapter: a, binding: a.binding, epoch: a.nextEpoch, openToken: command.CommandToken,
 		durations: command.Durations, endpoint: a.endpoint, credential: a.credential,
 		connector: a.connector, queue: newLiveFrameQueue(a.queue), cleanupDone: make(chan struct{}), handshakeDone: make(chan struct{}), openCommandPending: true,
+		classificationClock: time.Now,
 	}
 	attempt.queue.now = a.now
 	attempt.ctx, attempt.cancel = context.WithCancel(ctx)
@@ -423,6 +431,7 @@ type LiveAttempt struct {
 	shedTQ                        atomic.Bool
 	tqAccountingMu                sync.Mutex
 	tqAccounting                  TQNormalizationAccounting
+	classificationClock           func() time.Time
 }
 
 func (*LiveAttempt) String() string   { return "massive.LiveAttempt{credential:redacted}" }
@@ -451,13 +460,36 @@ func (a *LiveAttempt) ActiveDeliveryDiagnostic() ActiveDeliveryDiagnostic {
 	return result
 }
 
-func (a *LiveAttempt) accountTQ(normalized bool) {
+func (a *LiveAttempt) accountTQ(family LiveFamily, normalized, pressureShed bool) {
 	a.tqAccountingMu.Lock()
 	a.tqAccounting.Classified++
+	if family == LiveFamilyTrade {
+		a.tqAccounting.ClassifiedTrades++
+	} else {
+		a.tqAccounting.ClassifiedQuotes++
+	}
 	if normalized {
 		a.tqAccounting.Normalized++
+		if family == LiveFamilyTrade {
+			a.tqAccounting.NormalizedTrades++
+		} else {
+			a.tqAccounting.NormalizedQuotes++
+		}
 	} else {
 		a.tqAccounting.Rejected++
+		if family == LiveFamilyTrade {
+			a.tqAccounting.RejectedTrades++
+		} else {
+			a.tqAccounting.RejectedQuotes++
+		}
+		if pressureShed {
+			a.tqAccounting.PressureShed++
+			if family == LiveFamilyTrade {
+				a.tqAccounting.PressureShedTrades++
+			} else {
+				a.tqAccounting.PressureShedQuotes++
+			}
+		}
 	}
 	a.tqAccountingMu.Unlock()
 }
@@ -1010,7 +1042,7 @@ func (a *LiveAttempt) next(ctx context.Context) (AdapterDelivery, bool) {
 		}
 		a.mu.Unlock()
 		a.currentFrame = &frame
-		a.currentCursor = newLiveFrameCursor(LiveFrame{Binding: a.binding, ConnectionEpoch: a.epoch, FrameSequence: frame.sequence, ReceivedAt: frame.receivedAt, Data: frame.data}, statusContext, LiveNormalizationOptions{ShedTradesQuotes: a.shedTQ.Load()})
+		a.currentCursor = newLiveFrameCursor(LiveFrame{Binding: a.binding, ConnectionEpoch: a.epoch, FrameSequence: frame.sequence, ReceivedAt: frame.receivedAt, Data: frame.data}, statusContext, LiveNormalizationOptions{ShedTradesQuotes: a.shedTQ.Load(), ClassificationClock: a.classificationClock, FrameTQBudget: FrameLocalTQBudget})
 		a.currentFrameCompleted = false
 	}
 }
@@ -1085,14 +1117,14 @@ func (a *LiveAttempt) mapResult(result LiveResult, frame queuedLiveFrame) (Adapt
 	case LiveResultAggregate:
 		return AdapterDelivery{Kind: DeliveryAggregate, Position: result.Position, Aggregate: result.Aggregate}, true
 	case LiveResultTrade:
-		a.accountTQ(true)
+		a.accountTQ(LiveFamilyTrade, true, false)
 		return AdapterDelivery{Kind: DeliveryTrade, Position: result.Position, Trade: result.Trade}, true
 	case LiveResultQuote:
-		a.accountTQ(true)
+		a.accountTQ(LiveFamilyQuote, true, false)
 		return AdapterDelivery{Kind: DeliveryQuote, Position: result.Position, Quote: result.Quote}, true
 	case LiveResultRejected:
 		if result.Rejection.Family == LiveFamilyTrade || result.Rejection.Family == LiveFamilyQuote {
-			a.accountTQ(false)
+			a.accountTQ(result.Rejection.Family, false, result.Rejection.Reason == LiveRejectOptionalShed)
 		}
 		return AdapterDelivery{Kind: DeliveryNormalizationDrop, Position: result.Position, Rejection: result.Rejection}, true
 	case LiveResultAmbiguous:

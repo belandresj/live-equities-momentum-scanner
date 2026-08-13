@@ -225,8 +225,11 @@ feature availability, or recovery completion.
 The shared socket must continue to be read under T/Q pressure. A complete frame
 cannot be discarded merely because it contains T/Q: the same frame may contain
 aggregates or control acknowledgements. Pressure degradation may reject T/Q
-after classification and before expensive feature work; sustained pressure may
-cause the engine to request T/Q unsubscription.
+after classification and before expensive feature work; sustained direct queue
+occupancy or oldest-unread-frame age, or actual loss/bound evidence, may cause
+the engine to request T/Q unsubscription. Heap, goroutine, generic delivery-
+latency, attribution, and quiet-window measurements remain diagnostics and do
+not control T/Q state.
 
 ### 5.4 Historical aggregate hydrator
 

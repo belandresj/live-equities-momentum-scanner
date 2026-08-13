@@ -155,9 +155,10 @@ Display conversion is presentation only:
   exposes trade coverage, participant/SIP/mixed timestamp basis, lifecycle-record observation,
   and the exact status/reason so a current number cannot imply fully corrected
   consolidated tape;
-- Spread shows basis points and cents on one slash-separated line.
-  Keyboard/focus detail always exposes quote coverage, valid duration, quality,
-  and exact status/reason;
+- Spread shows basis points and cents on one slash-separated line for both
+  current and stale retained valid quotes. A secondary label shows quote age
+  and marks stale quotes; keyboard/focus detail always exposes quote coverage,
+  age, quality, and exact status/reason;
 - UTC timestamps are rendered in the browser locale only after valid parsing;
   durations/counters retain the API units and decimal strings are never coerced
   through an unsafe JavaScript integer.

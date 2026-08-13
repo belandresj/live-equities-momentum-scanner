@@ -125,8 +125,12 @@ workflow documented in the
 Start it at approximately 03:55 America/New_York. It builds and supervises the
 existing scanner and dashboard, uses persistent reference/checkpoint
 directories, and reports authoritative liveness and readiness without moving
-market-state ownership into the launcher. The manual commands below remain
-useful for development and independent-process inspection.
+market-state ownership into the launcher. Checkpoint discovery and cadence are
+off by default and require an explicit `--checkpoint-mode on` scanner launch.
+Hydration defaults to eight workers;
+`--hydration-workers 1|2|4|8` selects a lower supported concurrency when
+needed. The manual commands below remain useful for development and
+independent-process inspection.
 
 The dashboard is an independent loopback process. Start the scanner API with
 the dashboard origin explicitly allowed, then start the static UI server from

@@ -11,6 +11,7 @@ const CURRENT_LIFECYCLE = new Set(["live", "hydrating"]);
 const BACKEND_READY_RANKING_MODE = new Set(["qualified_current", "degraded_bootstrap", "degraded_current"]);
 const TIMESTAMP_BASIS = new Set(["", "none", "participant", "sip_fallback", "mixed"]);
 const SPREAD_QUALITY = new Set(["", "reviewed_ordinary", "known_special", "unclassified"]);
+const PRESSURE_CAUSE = new Set(["", "queue_occupancy", "oldest_unread_frame", "capacity_drop", "tq_retention_bound", "transport_accounting_loss"]);
 const EVALUATOR_INTEGRITY_CATEGORY = new Set(["candidate_target_mismatch", "support_contradiction", "population_accounting", "qualification_accounting", "uncertainty_accounting", "feature_accounting", "ranking_projection", "ranking_row", "tq_intent", "unknown_evaluator_integrity"]);
 
 function fail(message) { throw new Error(message); }
@@ -46,7 +47,7 @@ const QUALIFICATION_FIELDS = ["not_yet_passed", "provisional", "finalized", "unr
 const UNCERTAINTY_FIELDS = ["bootstrap_origin", "post_bootstrap_gap", "local_invalid"];
 const WORK_FIELDS = ["planned", "open", "completed_value", "completed_empty", "failed", "canceled", "fenced"];
 const RECOVERY_ROW_FIELDS = ["consumed", "inserted", "duplicate", "conflict_or_withdrawal", "rejected", "fenced", "integrity"];
-const FACT_FIELDS = ["consumed", "applied", "duplicate", "rejected", "fenced", "pressure_shed", "integrity"];
+const FACT_FIELDS = ["consumed", "applied", "duplicate", "rejected", "fenced", "pressure_shed", "integrity", "normalized_trades", "normalized_quotes", "applied_trades", "applied_quotes", "pressure_shed_trades", "pressure_shed_quotes"];
 const COMMAND_FIELDS = ["issued", "pending", "acknowledged", "failed", "fenced", "result_fenced"];
 const CHECKPOINT_FIELDS = ["installed", "submitted", "in_progress", "pending", "completed", "failed", "canceled", "superseded"];
 const OPERATION_UINT_FIELDS = ["queue_capacity_frames", "queue_current_frames", "queue_high_frames", "queue_current_bytes", "queue_high_bytes", "mean_processing_delay_ms", "max_processing_delay_ms", "max_processing_delay_one_second_ms", "goroutines"];
@@ -93,26 +94,25 @@ function validateTape(value, name, replay) {
 }
 
 function validateSpread(value, name, replay) {
-  fields(value, ["status", "reason", "quote_coverage", "cents", "basis_points", "valid_duration_ms", "quality"], name);
-  string(value.status, `${name}.status`); string(value.reason, `${name}.reason`); bool(value.quote_coverage, `${name}.quote_coverage`); uint(value.valid_duration_ms, `${name}.valid_duration_ms`); string(value.quality, `${name}.quality`);
-  if (value.valid_duration_ms > 5000) fail(`${name} trust tuple conflict: duration exceeds five-second window`);
+  fields(value, ["status", "reason", "quote_coverage", "cents", "basis_points", "quote_age_ms", "quality"], name);
+  string(value.status, `${name}.status`); string(value.reason, `${name}.reason`); bool(value.quote_coverage, `${name}.quote_coverage`); uint(value.quote_age_ms, `${name}.quote_age_ms`); string(value.quality, `${name}.quality`);
   if (!SPREAD_QUALITY.has(value.quality)) fail(`${name} unknown quality`);
   if ((value.cents === null) !== (value.basis_points === null)) fail(`${name} value pair conflict`);
   if (value.cents !== null) {
     finite(value.cents, `${name}.cents`); finite(value.basis_points, `${name}.basis_points`);
     if (value.cents < 0 || value.basis_points < 0) fail(`${name} status/value conflict: negative spread`);
   }
-  if ((value.status === "current") !== (value.cents !== null)) fail(`${name} status/value conflict`);
+  if ((value.status === "current" || value.status === "stale") !== (value.cents !== null)) fail(`${name} status/value conflict`);
   if (!KNOWN_TQ_STATUS.has(value.status) || !KNOWN_TQ_REASON.has(value.reason)) return;
   let legal = false;
   switch (value.status) {
-    case "unselected": legal = !value.quote_coverage && value.reason === "" && value.valid_duration_ms === 0 && value.quality === ""; break;
-    case "warming": legal = value.quote_coverage && value.reason === "coverage_warming" && value.valid_duration_ms < 4000; break;
-    case "current": legal = value.quote_coverage && value.reason === "" && value.valid_duration_ms >= 4000 && value.quality !== ""; break;
-    case "stale": legal = value.quote_coverage && value.reason === "stale_quote"; break;
+    case "unselected": legal = !value.quote_coverage && value.reason === "" && value.quote_age_ms === 0 && value.quality === ""; break;
+    case "warming": legal = value.quote_coverage && value.reason === "coverage_warming" && value.quote_age_ms === 0; break;
+    case "current": legal = value.quote_coverage && value.reason === "" && value.quote_age_ms <= 2000 && value.quality !== ""; break;
+    case "stale": legal = value.quote_coverage && value.reason === "stale_quote" && value.quote_age_ms > 2000 && value.quality !== ""; break;
     case "invalid": legal = value.quote_coverage && value.reason === "crossed_quote"; break;
-    case "unavailable": legal = !value.quote_coverage && value.valid_duration_ms === 0 && value.quality === "" && (value.reason === "coverage" && !replay || value.reason === "replay_unavailable" && replay) || value.quote_coverage && new Set(["one_sided_quote", "insufficient_coverage"]).has(value.reason); break;
-    case "pressure_shed": legal = value.reason === "pressure" && value.valid_duration_ms === 0 && value.quality === ""; break;
+    case "unavailable": legal = !value.quote_coverage && value.quote_age_ms === 0 && value.quality === "" && (value.reason === "coverage" && !replay || value.reason === "replay_unavailable" && replay) || value.quote_coverage && new Set(["one_sided_quote", "insufficient_coverage"]).has(value.reason); break;
+    case "pressure_shed": legal = value.reason === "pressure" && value.quote_age_ms === 0 && value.quality === ""; break;
   }
   if (!legal) fail(`${name} trust tuple conflict`);
 }
@@ -188,24 +188,25 @@ export function validateSnapshot(snapshot) {
   if (!sumDecimal(recovery.rows.consumed, recovery.rows.inserted, recovery.rows.duplicate, recovery.rows.conflict_or_withdrawal, recovery.rows.rejected, recovery.rows.fenced, recovery.rows.integrity)) fail("recovery row conflict");
 
   const tq = snapshot.tq;
-  fields(tq, ["desired_symbols", "pressure_mode", "aggregate_only", "shed", "retained_bound_hit", "pressure_misses", "pressure_transitions", "pressure_fenced", "known_present", "known_absent", "unknown", "retained_trades", "retained_quotes", "retained_fingerprints", "facts", "commands"], "tq");
+  fields(tq, ["desired_symbols", "pressure_mode", "pressure_cause", "aggregate_only", "shed", "retained_bound_hit", "pressure_misses", "pressure_transitions", "pressure_fenced", "known_present", "known_absent", "unknown", "retained_trades", "retained_quotes", "retained_fingerprints", "facts", "commands"], "tq");
   if (!Array.isArray(tq.desired_symbols) || tq.desired_symbols.length > 20) fail("invalid desired symbols");
   const desired = new Set(); for (const symbol of tq.desired_symbols) { string(symbol, "tq.desired_symbols[]"); if (symbol === "" || desired.has(symbol)) fail("invalid desired symbol"); desired.add(symbol); }
-  string(tq.pressure_mode, "tq.pressure_mode"); for (const name of ["aggregate_only", "shed", "retained_bound_hit"]) bool(tq[name], `tq.${name}`);
+  string(tq.pressure_mode, "tq.pressure_mode"); string(tq.pressure_cause, "tq.pressure_cause"); for (const name of ["aggregate_only", "shed", "retained_bound_hit"]) bool(tq[name], `tq.${name}`);
   for (const name of ["pressure_misses", "known_present", "known_absent", "unknown", "retained_trades", "retained_quotes", "retained_fingerprints"]) uint(tq[name], `tq.${name}`);
   decimal(tq.pressure_transitions, "tq.pressure_transitions"); decimal(tq.pressure_fenced, "tq.pressure_fenced");
   fields(tq.facts, FACT_FIELDS, "tq.facts"); FACT_FIELDS.forEach(name => decimal(tq.facts[name], `tq.facts.${name}`));
   if (!sumDecimal(tq.facts.consumed, tq.facts.applied, tq.facts.duplicate, tq.facts.rejected, tq.facts.fenced, tq.facts.pressure_shed, tq.facts.integrity)) fail("TQ fact conflict");
+  if (BigInt(tq.facts.applied_trades) + BigInt(tq.facts.applied_quotes) > BigInt(tq.facts.applied) || BigInt(tq.facts.pressure_shed_trades) + BigInt(tq.facts.pressure_shed_quotes) !== BigInt(tq.facts.pressure_shed)) fail("TQ family fact conflict");
   fields(tq.commands, COMMAND_FIELDS, "tq.commands"); COMMAND_FIELDS.forEach(name => decimal(tq.commands[name], `tq.commands.${name}`));
   if (!sumDecimal(tq.commands.issued, tq.commands.pending, tq.commands.acknowledged, tq.commands.failed, tq.commands.fenced)) fail("TQ command conflict");
-  if (!new Set(["normal", "taq_degraded", "aggregate_only"]).has(tq.pressure_mode) || status.tq_pressure_mode !== tq.pressure_mode || status.tq_shed !== tq.shed || tq.aggregate_only !== (tq.pressure_mode === "aggregate_only") || tq.shed !== (tq.pressure_mode !== "normal")) fail("TQ pressure conflict");
+  if (!new Set(["normal", "taq_degraded", "aggregate_only"]).has(tq.pressure_mode) || !PRESSURE_CAUSE.has(tq.pressure_cause) || (tq.pressure_mode === "normal") !== (tq.pressure_cause === "") || status.tq_pressure_mode !== tq.pressure_mode || status.tq_shed !== tq.shed || tq.aggregate_only !== (tq.pressure_mode === "aggregate_only") || tq.shed !== (tq.pressure_mode !== "normal")) fail("TQ pressure conflict");
   if (ranking.mode === "degraded_bootstrap" || ranking.mode === "degraded_current") {
     if (tq.desired_symbols.length !== 0) fail("partial ranking promoted TQ membership");
     for (const row of snapshot.rows) {
       const membership = row.tq_membership, tape = row.tape_rate, spread = row.spread;
       if (membership.desired || membership.provider_present || membership.provider_membership_unknown ||
           tape.status !== "unselected" || tape.reason !== "" || tape.trade_coverage || tape.one_second.status !== "unselected" || tape.one_second.reason !== "" || tape.one_second.trades_per_second !== null || tape.five_second.status !== "unselected" || tape.five_second.reason !== "" || tape.five_second.trades_per_second !== null || tape.timestamp_basis !== "" || tape.lifecycle_records_observed ||
-          spread.status !== "unselected" || spread.reason !== "" || spread.quote_coverage || spread.cents !== null || spread.basis_points !== null || spread.valid_duration_ms !== 0 || spread.quality !== "") fail("partial ranking exposed TQ state");
+          spread.status !== "unselected" || spread.reason !== "" || spread.quote_coverage || spread.cents !== null || spread.basis_points !== null || spread.quote_age_ms !== 0 || spread.quality !== "") fail("partial ranking exposed TQ state");
     }
   }
 
@@ -266,13 +267,13 @@ export function buildViewModel(input, transport = "connected") {
   const rows = snapshot.rows.map(row => {
     const tapeCurrent = knownCurrentTQ(row.tape_rate.status, row.tape_rate.reason);
     const fiveSecondCurrent = tapeCurrent && knownCurrentTQ(row.tape_rate.five_second.status, row.tape_rate.five_second.reason);
-    const spreadCurrent = knownCurrentTQ(row.spread.status, row.spread.reason);
+    const spreadCurrent = knownCurrentTQ(row.spread.status, row.spread.reason) || row.spread.status === "stale" && row.spread.reason === "stale_quote";
     const fiveSecondRate = rateView(row.tape_rate.five_second, tapeCurrent);
     return {
     rank: row.rank, symbol: row.symbol, last: formatUSD(row.last_usd), day: formatPercent(row.day_change_ratio), dayBand: 0, markAgeMS: row.mark_age_ms,
     from4am: fieldView(row.from_4am_change), hod: fieldView(row.hod_drawdown), dayRange: rangeFieldView(row.day_range_position), range60: rangeFieldView(row.range_60m_position), range30: rangeFieldView(row.range_30m_position), activity: activityFieldView(row.activity),
     tape: { state: tqState(row.tape_rate.status, row.tape_rate.reason), position: fiveSecondCurrent ? row.tape_rate.five_second.trades_per_second / 30 * 100 : null, primary: tapeCurrent ? fiveSecondRate : "—", secondary: "", detail: `five-second ${fiveSecondRate}; status ${row.tape_rate.status}; reason ${row.tape_rate.reason || "none"}; coverage ${row.tape_rate.trade_coverage ? "yes" : "no"}; timestamp ${row.tape_rate.timestamp_basis || "none"}; lifecycle records ${row.tape_rate.lifecycle_records_observed ? "observed" : "not observed"}; membership desired ${row.tq_membership.desired ? "yes" : "no"}, provider ${row.tq_membership.provider_present ? "present" : "absent"}, unknown ${row.tq_membership.provider_membership_unknown ? "yes" : "no"}` },
-    spread: { state: tqState(row.spread.status, row.spread.reason), band: spreadCurrent ? band(row.spread.basis_points, [0, 5, 10, 25, 50]) : 0, primary: spreadCurrent ? `${row.spread.basis_points.toFixed(1)} bps / ${row.spread.cents.toFixed(2)}¢` : "—", secondary: "", detail: `status ${row.spread.status}; reason ${row.spread.reason || "none"}; coverage ${row.spread.quote_coverage ? "yes" : "no"}; duration ${row.spread.valid_duration_ms} ms; quality ${row.spread.quality || "none"}; membership desired ${row.tq_membership.desired ? "yes" : "no"}, provider ${row.tq_membership.provider_present ? "present" : "absent"}, unknown ${row.tq_membership.provider_membership_unknown ? "yes" : "no"}` },
+    spread: { state: tqState(row.spread.status, row.spread.reason), band: spreadCurrent ? band(row.spread.basis_points, [0, 5, 10, 25, 50]) : 0, primary: spreadCurrent ? `${row.spread.basis_points.toFixed(1)} bps / ${row.spread.cents.toFixed(2)}¢` : "—", secondary: spreadCurrent ? `${(row.spread.quote_age_ms / 1000).toFixed(1)}s old${row.spread.status === "stale" ? " · stale" : ""}` : "", detail: `status ${row.spread.status}; reason ${row.spread.reason || "none"}; coverage ${row.spread.quote_coverage ? "yes" : "no"}; quote age ${row.spread.quote_age_ms} ms; quality ${row.spread.quality || "none"}; membership desired ${row.tq_membership.desired ? "yes" : "no"}, provider ${row.tq_membership.provider_present ? "present" : "absent"}, unknown ${row.tq_membership.provider_membership_unknown ? "yes" : "no"}` },
   }; });
   const hydration = hydrationView(snapshot.recovery);
   const warming = !replay && snapshot.status.process_live && !snapshot.status.backend_ready && snapshot.publication.lifecycle === "hydrating" && !snapshot.recovery.fence_reconciled;

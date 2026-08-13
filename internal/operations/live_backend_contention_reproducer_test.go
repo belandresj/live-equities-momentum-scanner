@@ -282,9 +282,9 @@ func runLiveContentionVariant(t *testing.T, binding reference.Binding, fixture l
 		}
 		queue := attempt.QueueAccounting()
 		result.boundaries = append(result.boundaries, liveContentionBoundary{elapsed: time.Since(plannedStart), framesRead: queue.FramesRead - queueBaseline.FramesRead,
-			dispositioned: queue.FramesDispositioned - queueBaseline.FramesDispositioned, queued: queue.FramesQueued, oldest: queue.OldestFrameAge})
+			dispositioned: queue.FramesDispositioned - queueBaseline.FramesDispositioned, queued: queue.FramesQueued, oldest: queue.OldestWaitingFrameAge})
 		result.maximumQueued = max(result.maximumQueued, queue.FramesQueued)
-		result.maximumOldest = max(result.maximumOldest, queue.OldestFrameAge)
+		result.maximumOldest = max(result.maximumOldest, queue.OldestWaitingFrameAge)
 		if liveContentionFrameRejections(queue, queueBaseline) > 0 || queue.FramesQueued >= liveContentionQueueStop {
 			result.saturated, result.stopReason = true, "boundary_safety_stop"
 			break
@@ -359,7 +359,7 @@ func runLiveContentionVariant(t *testing.T, binding reference.Binding, fixture l
 	result.aggregatesRevised = timedEngine.Aggregates.Revised - engineBaseline.Aggregates.Revised
 	result.aggregatesFenced = timedEngine.Aggregates.Fenced - engineBaseline.Aggregates.Fenced
 	result.maximumQueued = max(result.maximumQueued, reconciledMetrics.QueueHighFrames)
-	result.maximumOldest = max(result.maximumOldest, timedQueue.OldestFrameAge)
+	result.maximumOldest = max(result.maximumOldest, timedQueue.OldestWaitingFrameAge)
 	result.deliveries = timedDeliveries
 	if result.deliveries > 0 {
 		result.meanDelay = time.Duration(timedDeliveryNanos / result.deliveries)

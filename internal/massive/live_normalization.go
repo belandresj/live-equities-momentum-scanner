@@ -22,6 +22,7 @@ const (
 	maximumMetadataValues = 16
 	maximumCommandBytes   = 256
 	providerFutureSkew    = 250 * time.Millisecond
+	FrameLocalTQBudget    = 500 * time.Millisecond
 )
 
 type LiveResultKind string
@@ -134,7 +135,9 @@ type StatusContext struct {
 }
 
 type LiveNormalizationOptions struct {
-	ShedTradesQuotes bool
+	ShedTradesQuotes    bool
+	ClassificationClock func() time.Time
+	FrameTQBudget       time.Duration
 }
 
 type OptionalInt64 struct {
@@ -236,6 +239,8 @@ type LiveFrameAccounting struct {
 	NormalizedQuotes      int
 	NormalizedControls    int
 	AttributableRejected  int
+	PressureShedTrades    int
+	PressureShedQuotes    int
 	IngressAmbiguity      int
 	FencedRemainder       int
 	FrameIngressAmbiguity int
@@ -245,7 +250,7 @@ func (a LiveFrameAccounting) Reconciles() bool {
 	classified := a.ArrayElementsExamined == a.NormalizedAggregates+a.NormalizedTrades+
 		a.NormalizedQuotes+a.NormalizedControls+a.AttributableRejected+a.IngressAmbiguity &&
 		a.FrameIngressAmbiguity >= 0 && a.FrameIngressAmbiguity <= 1
-	if !classified {
+	if !classified || a.PressureShedTrades < 0 || a.PressureShedQuotes < 0 || a.PressureShedTrades+a.PressureShedQuotes > a.AttributableRejected {
 		return false
 	}
 	if a.ArrayCardinalityKnown {
@@ -274,27 +279,31 @@ type liveFrameAnalysis struct {
 	arrayKnown, statusExact  bool
 	declared, ambiguityIndex int
 	statusCount              int
+	budgetShed               bool
+	budgetShedFrom           int
 	ambiguityReason          LiveRejectionReason
 	frameAmbiguity           bool
 	frameAmbiguityReason     LiveRejectionReason
 }
 
 type liveFrameCursor struct {
-	frame      LiveFrame
-	status     *StatusContext
-	options    LiveNormalizationOptions
-	decoder    *json.Decoder
-	analysis   liveFrameAnalysis
-	accounting LiveFrameAccounting
-	index      int
-	statusSeen int
-	done       bool
+	frame                 LiveFrame
+	status                *StatusContext
+	options               LiveNormalizationOptions
+	decoder               *json.Decoder
+	analysis              liveFrameAnalysis
+	accounting            LiveFrameAccounting
+	index                 int
+	statusSeen            int
+	classificationStarted time.Time
+	done                  bool
 }
 
 // newLiveFrameCursor performs a bounded first pass for exact array/status
 // cardinality, then exposes one immutable result at a time. It never retains a
 // result slice or a second decoded tree.
 func newLiveFrameCursor(frame LiveFrame, statusContext *StatusContext, options LiveNormalizationOptions) *liveFrameCursor {
+	started := classificationNow(options)
 	if !validFrameContext(frame) {
 		return &liveFrameCursor{frame: frame, status: statusContext, options: options, analysis: liveFrameAnalysis{frameAmbiguity: true, frameAmbiguityReason: LiveRejectFrameBounds}}
 	}
@@ -302,7 +311,7 @@ func newLiveFrameCursor(frame LiveFrame, statusContext *StatusContext, options L
 	if !utf8.Valid(data) || len(bytes.TrimSpace(data)) == 0 {
 		return &liveFrameCursor{frame: frame, status: statusContext, options: options, analysis: liveFrameAnalysis{frameAmbiguity: true, frameAmbiguityReason: LiveRejectFrameSyntax}}
 	}
-	analysis := analyzeLiveFrame(frame, statusContext, options)
+	analysis := analyzeLiveFrame(frame, statusContext, options, started)
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	opening, err := decoder.Token()
@@ -314,17 +323,17 @@ func newLiveFrameCursor(frame LiveFrame, statusContext *StatusContext, options L
 	if analysis.arrayKnown {
 		accounting.DeclaredArrayElements = analysis.declared
 	}
-	return &liveFrameCursor{frame: frame, status: statusContext, options: options, decoder: decoder, analysis: analysis, accounting: accounting}
+	return &liveFrameCursor{frame: frame, status: statusContext, options: options, decoder: decoder, analysis: analysis, accounting: accounting, classificationStarted: started}
 }
 
-func analyzeLiveFrame(frame LiveFrame, statusContext *StatusContext, options LiveNormalizationOptions) liveFrameAnalysis {
+func analyzeLiveFrame(frame LiveFrame, statusContext *StatusContext, options LiveNormalizationOptions, started time.Time) liveFrameAnalysis {
 	decoder := json.NewDecoder(bytes.NewReader(frame.Data))
 	decoder.UseNumber()
 	opening, err := decoder.Token()
 	if err != nil || opening != json.Delim('[') {
 		return liveFrameAnalysis{frameAmbiguity: true, frameAmbiguityReason: LiveRejectFrameSyntax}
 	}
-	analysis := liveFrameAnalysis{ambiguityIndex: -1, statusExact: true}
+	analysis := liveFrameAnalysis{ambiguityIndex: -1, statusExact: true, budgetShedFrom: -1}
 	for index := 0; decoder.More(); index++ {
 		var raw json.RawMessage
 		if err := decoder.Decode(&raw); err != nil {
@@ -336,7 +345,14 @@ func analyzeLiveFrame(frame LiveFrame, statusContext *StatusContext, options Liv
 			continue
 		}
 		position := engine.LivePosition{ConnectionEpoch: frame.ConnectionEpoch, FrameSequence: frame.FrameSequence, ArrayIndex: uint32(index)}
-		result, ambiguous := normalizeElement(frame, position, raw, statusContext, options)
+		if !analysis.budgetShed && classificationBudgetExceeded(options, started) {
+			analysis.budgetShed, analysis.budgetShedFrom = true, index
+		}
+		elementOptions := options
+		if analysis.budgetShed && index >= analysis.budgetShedFrom {
+			elementOptions.ShedTradesQuotes = true
+		}
+		result, ambiguous := normalizeElement(frame, position, raw, statusContext, elementOptions)
 		if result.Kind == LiveResultStatus {
 			analysis.statusCount++
 		}
@@ -363,6 +379,20 @@ func validFrameContext(frame LiveFrame) bool {
 		len(frame.Data) <= MaximumLiveFrameBytes && frame.Binding.Identity() != "" &&
 		frame.Binding.TradingDate() != "" && !frame.Binding.SessionStart().IsZero() &&
 		frame.Binding.SessionStart().Before(frame.Binding.SessionEnd())
+}
+
+func classificationNow(options LiveNormalizationOptions) time.Time {
+	if options.ClassificationClock == nil {
+		return time.Time{}
+	}
+	return options.ClassificationClock()
+}
+
+func classificationBudgetExceeded(options LiveNormalizationOptions, started time.Time) bool {
+	if options.ShedTradesQuotes || options.ClassificationClock == nil || options.FrameTQBudget <= 0 || started.IsZero() {
+		return false
+	}
+	return options.ClassificationClock().Sub(started) >= options.FrameTQBudget
 }
 
 func (c *liveFrameCursor) Next() (LiveResult, bool) {
@@ -392,7 +422,14 @@ func (c *liveFrameCursor) Next() (LiveResult, bool) {
 			c.accounting.IngressAmbiguity++
 			return ambiguity(position, LiveRejectFrameSyntax), true
 		}
-		result, ambiguous := normalizeElement(c.frame, position, raw, c.status, c.options)
+		if !c.analysis.budgetShed && classificationBudgetExceeded(c.options, c.classificationStarted) {
+			c.analysis.budgetShed, c.analysis.budgetShedFrom = true, c.index
+		}
+		elementOptions := c.options
+		if c.analysis.budgetShed && c.index >= c.analysis.budgetShedFrom {
+			elementOptions.ShedTradesQuotes = true
+		}
+		result, ambiguous := normalizeElement(c.frame, position, raw, c.status, elementOptions)
 		c.index++
 		c.accounting.ArrayElementsExamined++
 		switch result.Kind {
@@ -414,6 +451,13 @@ func (c *liveFrameCursor) Next() (LiveResult, bool) {
 			}
 		case LiveResultRejected:
 			c.accounting.AttributableRejected++
+			if result.Rejection.Reason == LiveRejectOptionalShed {
+				if result.Rejection.Family == LiveFamilyTrade {
+					c.accounting.PressureShedTrades++
+				} else if result.Rejection.Family == LiveFamilyQuote {
+					c.accounting.PressureShedQuotes++
+				}
+			}
 		case LiveResultAmbiguous:
 			c.accounting.IngressAmbiguity++
 		}
@@ -489,12 +533,12 @@ func normalizeElement(frame LiveFrame, position engine.LivePosition, raw json.Ra
 		return normalizeAggregate(frame, position, members)
 	case string(LiveFamilyTrade):
 		if options.ShedTradesQuotes {
-			return rejection(frame, LiveFamilyTrade, "", position, LiveRejectOptionalShed), false
+			return rejection(frame, LiveFamilyTrade, pressureShedSymbol(members), position, LiveRejectOptionalShed), false
 		}
 		return normalizeTrade(frame, position, members)
 	case string(LiveFamilyQuote):
 		if options.ShedTradesQuotes {
-			return rejection(frame, LiveFamilyQuote, "", position, LiveRejectOptionalShed), false
+			return rejection(frame, LiveFamilyQuote, pressureShedSymbol(members), position, LiveRejectOptionalShed), false
 		}
 		return normalizeQuote(frame, position, members)
 	case string(LiveFamilyStatus):
@@ -502,6 +546,17 @@ func normalizeElement(frame LiveFrame, position engine.LivePosition, raw json.Ra
 	default:
 		return ambiguity(position, LiveRejectEventFamily), true
 	}
+}
+
+func pressureShedSymbol(members objectMembers) string {
+	if members.counts["sym"] != 1 {
+		return ""
+	}
+	symbol, ok := rawString(members.values["sym"])
+	if !ok || len(symbol) > 64 {
+		return ""
+	}
+	return symbol
 }
 
 func ambiguity(position engine.LivePosition, reason LiveRejectionReason) LiveResult {

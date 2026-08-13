@@ -43,7 +43,7 @@ type LiveQueueAccounting struct {
 	IngressFencesStarted                                                            uint64
 	IngressFencesQueued, IngressFencesClassifying, IngressFencesDispositioned       uint64
 	CapacityFrames, CapacityBytes                                                   int
-	OldestFrameAge                                                                  time.Duration
+	OldestWaitingFrameAge, ActiveFrameAge                                           time.Duration
 }
 
 func (a LiveQueueAccounting) Reconciles() bool {
@@ -193,23 +193,23 @@ func (q *liveFrameQueue) tryEnqueue(epoch uint64, messageType socketMessageType,
 func (q *liveFrameQueue) admissionSnapshotLocked() LiveQueueAccounting {
 	result := q.accounting
 	result.CapacityFrames, result.CapacityBytes = q.config.FrameSlots, q.config.TotalFrameBytes
-	oldest := q.classifyingAt
 	for offset := 0; offset < q.count; offset++ {
 		frame := q.frameLocked(offset)
 		if frame.kind == queuedLiveRaw {
 			// Raw receipts are monotonic and the queue is FIFO. The first raw
 			// frame is therefore the oldest; only bounded fence markers can
 			// precede it. Do not turn a pressure snapshot into an O(queue) lock.
-			if oldest.IsZero() || frame.receivedAt.Before(oldest) {
-				oldest = frame.receivedAt
+			result.OldestWaitingFrameAge = q.now().Sub(frame.receivedAt)
+			if result.OldestWaitingFrameAge < 0 {
+				result.OldestWaitingFrameAge = 0
 			}
 			break
 		}
 	}
-	if !oldest.IsZero() {
-		result.OldestFrameAge = q.now().Sub(oldest)
-		if result.OldestFrameAge < 0 {
-			result.OldestFrameAge = 0
+	if !q.classifyingAt.IsZero() {
+		result.ActiveFrameAge = q.now().Sub(q.classifyingAt)
+		if result.ActiveFrameAge < 0 {
+			result.ActiveFrameAge = 0
 		}
 	}
 	return result

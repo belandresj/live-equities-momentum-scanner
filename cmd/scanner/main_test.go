@@ -33,6 +33,12 @@ func TestProductionLiveQueueUsesOwnerSelectedRetryHeadroom(t *testing.T) {
 	}
 }
 
+func TestLiveCheckpointModeDefaultsOff(t *testing.T) {
+	if defaultCheckpointMode != "off" {
+		t.Fatalf("default checkpoint mode=%q", defaultCheckpointMode)
+	}
+}
+
 func TestC10ScannerCompositionJoinsAPIAndRuntime(t *testing.T) {
 	binding := scannerTestBinding(t)
 	now := binding.SessionStart().Add(time.Minute)

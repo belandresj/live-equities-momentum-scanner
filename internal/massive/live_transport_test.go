@@ -865,15 +865,15 @@ func TestPC5BoundRawFIFOAccountingAndDrain(t *testing.T) {
 			t.Fatal(reason)
 		}
 		view := queue.snapshot()
-		if view.CapacityFrames != 4 || view.CapacityBytes != 128 || view.OldestFrameAge != 300*time.Millisecond {
+		if view.CapacityFrames != 4 || view.CapacityBytes != 128 || view.OldestWaitingFrameAge != 300*time.Millisecond {
 			t.Fatalf("queued pressure view = %+v", view)
 		}
 		frame, ok := queue.pop(context.Background())
-		if !ok || queue.snapshot().OldestFrameAge != 300*time.Millisecond {
-			t.Fatal("classifying frame disappeared from oldest-age sample")
+		if active := queue.snapshot(); !ok || active.OldestWaitingFrameAge != 0 || active.ActiveFrameAge != 300*time.Millisecond {
+			t.Fatalf("waiting/active ages were not separated: %+v", active)
 		}
 		queue.complete(frame, false)
-		if view = queue.snapshot(); view.OldestFrameAge != 0 || !view.Reconciles() {
+		if view = queue.snapshot(); view.OldestWaitingFrameAge != 0 || view.ActiveFrameAge != 0 || !view.Reconciles() {
 			t.Fatalf("completed pressure view = %+v", view)
 		}
 	})

@@ -32,6 +32,7 @@ boundary, schema/trust rules, proofs, slices, and sole delivery ledger.
 | 2026-08-11 first-ready/API diagnostic correction | `accepted_after_correction_review` | [`live-engine-api-first-ready-correction.md`](../live-engine-api-first-ready-correction.md) records the missing failed-capture limitation, real loopback first-ready proof, retained 5,691-symbol first-ready/post-fence proof, closed mapper invariant diagnostics, unchanged generic HTTP errors, clean ordinary/focused race verification, and two focused re-reviews with no remaining P1/P2. | Complete locally; live-provider confirmation is not claimed |
 | 2026-08-12 D3 population-transition diagnostic | `accepted_additive_diagnostic` | The immutable engine publication and `scanner.snapshot.v1` accounting expose one fixed-cardinality, mutually exclusive reason ledger for valid-prior symbols carrying the exact bootstrap-origin population consequence. Mapper validation rejects a broken ledger identity; the operator renders the same counters while non-ready. This changes no population, qualification, uncertainty, ranking, or readiness result. | Complete locally; live-provider confirmation is not claimed |
 | 2026-08-13 delivery-latency attribution | `accepted_after_empty_window_correction` | C8's additive fixed-shape object correctly carries cumulative seven-family counts and an atomic current-window maximum pair, but C10 incorrectly used cumulative deliveries to decide whether that current window was nonempty. A production pressure reset can coherently yield `0 / unknown` while lifetime deliveries remain nonzero and lifetime `unknown` remains zero; 915 observed route failures invalidate the prior complete mapping claim. Private current-window occupancy is now validated independently; the wire mapper accepts the exact empty pair without requiring a fabricated cumulative unknown count. The production reset/capture/next-delivery regression and all required verification pass. | Complete locally; unrelated mapper invariants and HTTP status semantics remain unchanged. |
+| 2026-08-13 retained stale Spread mapping | `reaccepted_after_live_correction` | Live publications 80152 and 80153 were engine-ready `qualified_current` snapshots with 20 rows but failed C10 as `product_row`. C9 and the normative C10 schema correctly supplied numeric cents/basis points for a retained stale quote; the final row validator still required a numeric pair iff status was only `current`. The validator now requires the pair for `current` or `stale`, and the focused boundary proof preserves a 45-minute-old finite spread plus exact age while rejecting an incomplete pair. Focused ordinary/race, repository short, UI, vet, and diff verification pass. | Complete locally; no C9 meaning, wire field, readiness predicate, ranking behavior, or HTTP status mapping changed. |
 | Final component review | `accepted` | Mandatory read-only review found one P2 proof-matrix gap; focused correction re-review clean | Complete |
 
 ## Sections 1-4 — outcome, scope, ownership, and settled boundary
@@ -140,7 +141,7 @@ emitted, and every array is present even when empty.
 | `ratio` | `status:string field-status`; `reason:string field-reason`; `value_ratio:f?`. Value is nonnull only for `current`; genuine zero is `0`. Ratio `0.125` means 12.5%, including range positions and Activity's dimensionless score. The mapper converts the engine's owner-authoritative percentage-point representation exactly once by dividing by 100; it never exposes percentage points under a ratio property. |
 | `rows[].tape_rate` | `status:string T/Q-status`; `reason:string T/Q-reason`; `trade_coverage:bool`; `one_second:rate`; `five_second:rate`; `timestamp_basis:string enum`; `lifecycle_records_observed:bool` |
 | `rate` | `status:string T/Q-status`; `reason:string T/Q-reason`; `trades_per_second:f?`, nonnull only for `current`; genuine covered zero is `0` |
-| `rows[].spread` | `status:string T/Q-status`; `reason:string T/Q-reason`; `quote_coverage:bool`; `cents:f?`; `basis_points:f?`; `valid_duration_ms:u`; `quality:string enum`. Both values are nonnull only for `current`; genuine locked spread is numeric zero. |
+| `rows[].spread` | `status:string T/Q-status`; `reason:string T/Q-reason`; `quote_coverage:bool`; `cents:f?`; `basis_points:f?`; `quote_age_ms:u`; `quality:string enum`. Both values are nonnull for `current` and retained numeric `stale`; genuine locked spread is numeric zero. |
 | `rows[].tq_membership` | `desired:bool`; `provider_present:bool`; `provider_membership_unknown:bool` |
 | `accounting` | `population:object`; `qualification:object`; `uncertainty:object`; `population_transition_diagnostic:object` |
 | `accounting.population` | `universe_total:u`; `valid_prior_close:u`; `invalid_or_missing_prior_close:u`; `trusted_rankable_mark:u`; `trusted_below_price_mark:u`; `no_print_through_t:u`; `invalid_mark:u`; `unknown_due_failure_or_fence:u`; `covered_population:u`; `unresolved_population:u` |
@@ -150,8 +151,8 @@ emitted, and every array is present even when empty.
 | `recovery` | `purpose:string enum or ""`; `generation:d`; `start:t?`; `end:t?`; `supported_through:t?`; `fence_reconciled:bool`; `policy_waiting:bool`; `work:object`; `rows:object` |
 | `recovery.work` | `planned:d`; `open:d`; `completed_value:d`; `completed_empty:d`; `failed:d`; `canceled:d`; `fenced:d` |
 | `recovery.rows` | `consumed:d`; `inserted:d`; `duplicate:d`; `conflict_or_withdrawal:d`; `rejected:d`; `fenced:d`; `integrity:d` |
-| `tq` | `desired_symbols:array<string>` (0..20, rank order); `pressure_mode:string enum`; `aggregate_only:bool`; `shed:bool`; `retained_bound_hit:bool`; `pressure_misses:u`; `pressure_transitions:d`; `pressure_fenced:d`; `known_present:u`; `known_absent:u`; `unknown:u`; `retained_trades:u`; `retained_quotes:u`; `retained_fingerprints:u`; `facts:object`; `commands:object` |
-| `tq.facts` | `consumed:d`; `applied:d`; `duplicate:d`; `rejected:d`; `fenced:d`; `pressure_shed:d`; `integrity:d` |
+| `tq` | `desired_symbols:array<string>` (0..20, rank order); `pressure_mode:string enum`; `pressure_cause:string enum or ""`; `aggregate_only:bool`; `shed:bool`; `retained_bound_hit:bool`; `pressure_misses:u`; `pressure_transitions:d`; `pressure_fenced:d`; `known_present:u`; `known_absent:u`; `unknown:u`; `retained_trades:u`; `retained_quotes:u`; `retained_fingerprints:u`; `facts:object`; `commands:object` |
+| `tq.facts` | `consumed:d`; `applied:d`; `duplicate:d`; `rejected:d`; `fenced:d`; `pressure_shed:d`; `integrity:d`; separate `normalized_trades:d`; `normalized_quotes:d`; `applied_trades:d`; `applied_quotes:d`; `pressure_shed_trades:d`; `pressure_shed_quotes:d` diagnostics |
 | `tq.commands` | `issued:d`; `pending:d`; `acknowledged:d`; `failed:d`; `fenced:d`; `result_fenced:d` |
 | `checkpoint` | `installed:bool`; projection eligibility/defer/start, bounded `projection_in_progress:d` (`0|1`), project/reject and submit-reject counters; `submitted/outstanding/in_progress/pending/completed/failed/canceled/superseded`; last attempted/projected/submitted/successful `T0`; usable age; projection total/max-owner-hold; artifact bytes; write/encode/reopen duration; fixed last failure step. Exact projection identity is `projection_started = projection_in_progress + projected + projection_rejected`. |
 | `operations` | `sample_accounting_valid:bool`; `queue_capacity_frames:u`; `queue_current_frames:u`; `queue_high_frames:u`; `queue_current_bytes:u`; `queue_high_bytes:u`; `deliveries:d`; `consumer_deferred:d`; `mean_processing_delay_ms:u`; `max_processing_delay_ms:u`; `max_processing_delay_one_second_ms:u`; `delivery_latency_attribution:object`; `heap_alloc_bytes:d`; `heap_in_use_bytes:d`; `goroutines:u`; `connection_recovery_attempts:d` |
@@ -397,3 +398,16 @@ pressure, or provider semantic. Deterministic verification is complete; live
 provider chronology remains unproven. The existing mutex and sealed-capture
 validation make the correction straightforward, so no V1 independent-review
 trigger applies.
+
+The retained stale Spread correction likewise adds no wire field or market
+rule. Live evidence reopened only C10-S1's final row-validation predicate: the
+mapper already emitted both numeric values for `current` and `stale`, exactly
+as the schema and accepted C9 view require, but validation accepted the pair
+only for `current`. The corrected predicate makes those two declarations
+identical. A 45-minute quote-age regression distinguishes ordinary after-hours
+silence from missing or fabricated data, while the incomplete-pair mutation
+still rejects the product row. Engine quote selection, `stale_quote` status,
+aggregate readiness/ranking independence, and C10 HTTP behavior are unchanged.
+This is a local representation correction made straightforward by the existing
+immutable view and fail-closed validator, so no V1 independent-review trigger
+applies.

@@ -117,7 +117,7 @@ func TestLiveIngressRuntimeAccountingGuardCoherentMismatchAndHealthyConcurrency(
 	})
 	t.Run("mismatch", func(t *testing.T) {
 		run := newIngressAccountingRuntime(t)
-		mismatch := Metrics{SampledAt: run.clock().UTC(), LiveQueue: massive.LiveQueueAccounting{FramesRead: 2, FramesAdmitted: 1, FramesDispositioned: 1}, Adapter: massive.AdapterAccounting{ConnectionAttempts: 1, AttemptsActive: 1}}
+		mismatch := Metrics{SampledAt: run.clock().UTC(), LiveQueue: massive.LiveQueueAccounting{FramesRead: 2, FramesAdmitted: 1, FramesDispositioned: 1, CapacityFrames: 100, CapacityBytes: 100}, Adapter: massive.AdapterAccounting{ConnectionAttempts: 1, AttemptsActive: 1}}
 		run.metricsSnapshot = func() Metrics { return mismatch }
 		pressureTick(t, run)
 		run.syncTQPressure(context.Background())
@@ -134,6 +134,9 @@ func TestLiveIngressRuntimeAccountingGuardCoherentMismatchAndHealthyConcurrency(
 		}
 		if !found {
 			t.Fatalf("exact failed operands absent: %+v", incident.Identities)
+		}
+		if view := run.Engine().ObserveTQ(); view.Pressure != engine.TQPressureAggregateOnly || !view.AggregateOnly {
+			t.Fatalf("runtime accounting loss did not shed/unsubscribe T/Q: %+v", view)
 		}
 	})
 }

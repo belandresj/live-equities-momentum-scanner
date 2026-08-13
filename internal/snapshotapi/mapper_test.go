@@ -34,7 +34,7 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 		t.Fatal(err)
 	}
 	hash := sha256.Sum256(body)
-	const goldenSHA256 = "c8bb99dc29fdbd17ace3a8390d27c7d23bc26d6bfc3a8a21b789c9619ce128d6"
+	const goldenSHA256 = "fe91d17daaacd05eadd1f8af6ccf3db4cfa4b6e49eea2580574beaec36077862"
 	if got := hex.EncodeToString(hash[:]); got != goldenSHA256 {
 		t.Fatalf("snapshot golden SHA-256 = %s", got)
 	}
@@ -121,6 +121,7 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 		{"hydration rows fenced", func(v *operations.SnapshotCaptureView) { v.Engine.Operational.Hydration.Rows.Fenced++ }},
 		{"hydration rows integrity", func(v *operations.SnapshotCaptureView) { v.Engine.Operational.Hydration.Rows.Integrity++ }},
 		{"TQ facts", func(v *operations.SnapshotCaptureView) { v.Engine.TQ.Accounting.Rejected++ }},
+		{"TQ family facts", func(v *operations.SnapshotCaptureView) { v.Engine.TQ.Accounting.AppliedTrades = 2 }},
 		{"TQ commands", func(v *operations.SnapshotCaptureView) { v.Engine.TQ.Commands.Failed++ }},
 		{"checkpoint", func(v *operations.SnapshotCaptureView) { v.Metrics.CheckpointEngine.Failed++ }},
 		{"checkpoint projection gauge", func(v *operations.SnapshotCaptureView) {
@@ -136,6 +137,11 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 				t.Fatal("incoherent accounting serialized")
 			}
 		})
+	}
+	badPressureCause := schemaCapture()
+	badPressureCause.Engine.TQ.PressureCause = engine.TQPressureCauseWaitingFrames
+	if _, err := mapCaptureView(badPressureCause); mappingInvariant(err) != "tq_pressure_cause" {
+		t.Fatalf("normal pressure accepted nonempty cause: %v", err)
 	}
 
 	changedFence := schemaCapture()
@@ -277,6 +283,7 @@ func TestPC10SchemaPublicationStateCorpus(t *testing.T) {
 		}, "degraded_current", 1},
 		{"pressure shed", func(v *operations.SnapshotCaptureView) {
 			v.Engine.TQ.Pressure = engine.TQPressureDegraded
+			v.Engine.TQ.PressureCause = engine.TQPressureCauseWaitingFrames
 			v.Engine.TQ.ShedTradesQuotes = true
 			v.Engine.TQ.Rows[0].Tape = engine.TapeRateView{Status: engine.TQPressureShed, OneSecondStatus: engine.TQPressureShed, FiveSecondStatus: engine.TQPressureShed}
 			v.Engine.TQ.Rows[0].Spread = engine.SpreadView{Status: engine.TQPressureShed}
@@ -437,6 +444,31 @@ func TestMappingDiagnosticsIdentifyInvariantAndRemainBounded(t *testing.T) {
 	}
 }
 
+func TestStaleSpreadRetainsNumericValuesAcrossSnapshotBoundary(t *testing.T) {
+	capture := schemaCapture()
+	const cents, basisPoints = 1.5, 15.0
+	const quoteAge = 45 * time.Minute
+	capture.Engine.TQ.Rows[0].Spread = engine.SpreadView{
+		Status: engine.TQStale, Reason: "stale_quote", Cents: cents, BasisPoints: basisPoints,
+		QuoteAge: quoteAge, Quality: "reviewed_ordinary",
+	}
+
+	snapshot, err := mapCaptureView(capture)
+	if err != nil {
+		t.Fatalf("retained stale spread rejected: %v", err)
+	}
+	spread := snapshot.Rows[0].Spread
+	if spread.Status != "stale" || spread.Reason != "stale_quote" || spread.Cents == nil || spread.BasisPoints == nil ||
+		*spread.Cents != cents || *spread.BasisPoints != basisPoints || spread.QuoteAgeMS != uint64(quoteAge.Milliseconds()) {
+		t.Fatalf("retained stale spread = %+v", spread)
+	}
+
+	snapshot.Rows[0].Spread.Cents = nil
+	if err := validateSnapshot(snapshot); mappingInvariant(err) != "product_row" {
+		t.Fatalf("stale spread with incomplete numeric pair = %v", err)
+	}
+}
+
 func schemaCapture() operations.SnapshotCaptureView {
 	at := time.Date(2026, 8, 8, 16, 0, 0, 0, time.UTC)
 	target := at.Add(-4 * time.Second)
@@ -458,7 +490,7 @@ func schemaCapture() operations.SnapshotCaptureView {
 	tq := engine.TQView{PublicationID: operational.PublicationID, Desired: []string{"AAA"}, Rows: []engine.TQSymbolView{{Symbol: "AAA", Desired: true, ProviderPresent: true, TradeCoverage: true, QuoteCoverage: true,
 		Tape: engine.TapeRateView{Status: engine.TQCurrent, Reason: "qualifying_original_prints", OneSecondStatus: engine.TQCurrent, OneSecondReason: "qualifying_original_prints",
 			FiveSecondStatus: engine.TQCurrent, FiveSecondReason: "qualifying_original_prints", TimestampBasis: "none"},
-		Spread: engine.SpreadView{Status: engine.TQCurrent, ValidDuration: 5 * time.Second, Quality: "reviewed_ordinary"}}}, Pressure: engine.TQPressureNormal,
+		Spread: engine.SpreadView{Status: engine.TQCurrent, QuoteAge: time.Second, Quality: "reviewed_ordinary"}}}, Pressure: engine.TQPressureNormal,
 		Accounting: engine.TQAccountingView{Consumed: 2, Applied: 1, Duplicate: 1, KnownPresent: 1}, Commands: engine.TQCommandAccountingView{Issued: 1, Acknowledged: 1}}
 	publication := engine.ReplayPublicationView{SchemaVersion: "engine-private-publication-v1", PublicationID: operational.PublicationID, BindingIdentity: operational.BindingIdentity,
 		TradingDate: operational.TradingDate, RunMode: engine.RunModeLive, Lifecycle: "live", LastEngineSequence: operational.LastEngineSequence,

@@ -125,6 +125,32 @@ func TestPC5ClassStrictMixedFrameClassification(t *testing.T) {
 		}
 	})
 
+	t.Run("frame-local budget sheds only later TQ and preserves aggregate control order", func(t *testing.T) {
+		calls := 0
+		clockStart := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+		clock := func() time.Time {
+			at := clockStart.Add(time.Duration(calls) * 100 * time.Millisecond)
+			calls++
+			return at
+		}
+		frame := "[" + trade + "," + quote + "," + aggregate + "," + status + "," + trade + "," + quote + "," + aggregate + "]"
+		got, counts := NormalizeLiveFrame(liveFrame(binding, 7, 15, received, frame), context, LiveNormalizationOptions{
+			ClassificationClock: clock, FrameTQBudget: FrameLocalTQBudget,
+		})
+		want := []LiveResultKind{LiveResultTrade, LiveResultQuote, LiveResultAggregate, LiveResultStatus, LiveResultRejected, LiveResultRejected, LiveResultAggregate}
+		if len(got) != len(want) || !counts.Reconciles() || counts.NormalizedTrades != 1 || counts.NormalizedQuotes != 1 || counts.NormalizedAggregates != 2 || counts.NormalizedControls != 1 || counts.AttributableRejected != 2 || counts.PressureShedTrades != 1 || counts.PressureShedQuotes != 1 {
+			t.Fatalf("frame-local accounting = %#v %+v", got, counts)
+		}
+		for index := range want {
+			if got[index].Kind != want[index] || got[index].Position.ArrayIndex != uint32(index) {
+				t.Fatalf("result %d = %+v", index, got[index])
+			}
+		}
+		if got[4].Rejection.Reason != LiveRejectOptionalShed || got[4].Rejection.Symbol != "AAA" || got[5].Rejection.Reason != LiveRejectOptionalShed || got[5].Rejection.Symbol != "AAA" {
+			t.Fatalf("frame-local sheds = %+v %+v", got[4], got[5])
+		}
+	})
+
 	t.Run("attributable rejection preserves neighbors", func(t *testing.T) {
 		bad := fmt.Sprintf(`{"ev":"A","sym":"AAA","s":%d,"e":%d,"o":0,"h":1,"l":1,"c":1,"v":1,"vw":1,"z":1}`, start.UnixMilli(), start.Add(time.Second).UnixMilli())
 		got, counts := NormalizeLiveFrame(liveFrame(binding, 7, 15, received, "["+aggregate+","+bad+","+aggregate+"]"), nil, LiveNormalizationOptions{})

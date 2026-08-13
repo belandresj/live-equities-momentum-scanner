@@ -13,7 +13,7 @@ status sample was recorded at `12:11:56.891Z`; the failed HTTP request was at
 error were not retained, so the exact live rejection predicate is unknowable
 from that run.
 
-Scale and the first degraded publication are not sufficient causes. A
+Scale and the first ready publication are not sufficient causes. A
 deterministic production-runtime proof selected a prefix containing at least
 167,046 source records and applied exactly 166,984 registered hydration rows
 for a 5,691-symbol binding, with 58 REST/live conflicts at the hydration fence.
@@ -97,12 +97,14 @@ The public bodies remain `snapshot_unavailable` and
   sealed 2026-08-07 artifact and exact cached reference directory. It validates
   7,671,171 artifact records and a 5,691-symbol binding, selects at least
   167,046 source records, applies exactly 166,984 registered rows through the
-  production hydration ledger with 58 conflicts, and maps the first degraded
-  ready publication. It then admits the first post-fence live aggregate and an
+  production hydration ledger with 58 conflicts, and maps the first reconciled
+  `qualified_current` publication. It then admits the first post-fence live aggregate and an
   evaluator timer, requires a newer publication ID, and maps the subsequent
   bound current publication. No provider request or credential is used.
 
-The fresh retained-scale rerun passed in 164.02 seconds. Focused race checks for
+The original retained-scale rerun passed in 164.02 seconds. After the 2026-08-13
+live-scanner corrections, a fresh rerun passed in 89.66 seconds and correctly
+reported the fully reconciled population as `qualified_current`. Focused race checks for
 the affected engine/API/scanner paths, `go vet ./...`, `git diff --check`, and
 the final serial `go test -count=1 -short -timeout 2m ./...` pass.
 

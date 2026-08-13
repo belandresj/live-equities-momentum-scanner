@@ -15,20 +15,17 @@ const (
 	maximumTQSymbols          = 20
 	maximumTradesPerSymbol    = 50_000
 	maximumTradeFingerprints  = 100_000
-	maximumQuotesPerSymbol    = 20_000
 	maximumTradesGlobal       = 500_000
 	maximumFingerprintsGlobal = 1_000_000
-	maximumQuotesGlobal       = 400_000
-	spreadWindow              = 5 * time.Second
-	minimumSpreadCoverage     = 4 * time.Second
+	spreadStaleAge            = 2 * time.Second
 )
 
 type tqRetentionLimits struct {
-	tradesPerSymbol, tradesGlobal, fingerprintsPerSymbol, fingerprintsGlobal, quotesPerSymbol, quotesGlobal int
+	tradesPerSymbol, tradesGlobal, fingerprintsPerSymbol, fingerprintsGlobal int
 }
 
 func defaultTQRetentionLimits() tqRetentionLimits {
-	return tqRetentionLimits{maximumTradesPerSymbol, maximumTradesGlobal, maximumTradeFingerprints, maximumFingerprintsGlobal, maximumQuotesPerSymbol, maximumQuotesGlobal}
+	return tqRetentionLimits{maximumTradesPerSymbol, maximumTradesGlobal, maximumTradeFingerprints, maximumFingerprintsGlobal}
 }
 
 type TQAction string
@@ -140,7 +137,7 @@ type tqSymbolState struct {
 	resetRequired                      bool
 	tradeCoverage, quoteCoverage       tqCoverage
 	trades                             []tqTrade
-	quotes                             []tqQuote
+	latestQuote, latestValidQuote      *tqQuote
 	fingerprints                       map[string]tqFingerprint
 	unequalRepeat, lifecycleObserved   bool
 }
@@ -156,14 +153,13 @@ type tqState struct {
 	consumed, applied                                                                          uint64
 	duplicate, rejected                                                                        uint64
 	fenced, pressureShed                                                                       uint64
+	tradeApplied, quoteApplied, tradePressureShed, quotePressureShed                           uint64
 	integrity                                                                                  uint64
 	tradeCount, quoteCount                                                                     int
 	fingerprintCount                                                                           int
 	globalBound                                                                                bool
 	aggregateOnly                                                                              bool
 	pressure                                                                                   tqPressureState
-	restoring                                                                                  bool
-	restoreNotBefore                                                                           time.Time
 	commandsIssued, commandsAcknowledged, commandsFailed, commandsFenced, commandResultsFenced uint64
 }
 
@@ -193,7 +189,7 @@ type SpreadView struct {
 	Status             TQFieldStatus
 	Reason             string
 	Cents, BasisPoints float64
-	ValidDuration      time.Duration
+	QuoteAge           time.Duration
 	Quality            string
 }
 
@@ -208,6 +204,7 @@ type TQSymbolView struct {
 
 type TQAccountingView struct {
 	Consumed, Applied, Duplicate, Rejected, Fenced, PressureShed, Integrity uint64
+	AppliedTrades, AppliedQuotes, PressureShedTrades, PressureShedQuotes    uint64
 	KnownPresent, KnownAbsent, Unknown                                      int
 	RetainedTrades, RetainedQuotes, RetainedFingerprints                    int
 }
@@ -226,6 +223,7 @@ type TQView struct {
 	Bounds                              bool
 	AggregateOnly                       bool
 	Pressure                            TQPressureMode
+	PressureCause                       TQPressureCause
 	ShedTradesQuotes                    bool
 	PressureMisses                      uint32
 	PressureTransitions, PressureFenced uint64
@@ -307,11 +305,14 @@ func (e *Engine) reconcileTQLocked(now time.Time) {
 		}
 		pressure := previous.pressure
 		pressure.pending, pressure.dispatched = nil, false
+		pressure.capacityObserved, pressure.lastSlotDrops, pressure.lastByteDrops = false, 0, 0
 		pressure.nextSequence = maxUint64(1, pressure.nextSequence)
 		*s = tqState{
 			epoch: e.state.liveEpoch, revision: previous.revision, nextToken: maxUint64(e.state.aggregateWriteToken+1, maxUint64(1, previous.nextToken)), members: make(map[string]*tqSymbolState),
 			consumed: previous.consumed, applied: previous.applied, duplicate: previous.duplicate, rejected: previous.rejected, fenced: previous.fenced,
-			pressureShed: previous.pressureShed, integrity: previous.integrity, globalBound: previous.globalBound, aggregateOnly: previous.aggregateOnly,
+			pressureShed: previous.pressureShed, integrity: previous.integrity, tradeApplied: previous.tradeApplied, quoteApplied: previous.quoteApplied,
+			tradePressureShed: previous.tradePressureShed, quotePressureShed: previous.quotePressureShed,
+			globalBound: previous.globalBound, aggregateOnly: previous.aggregateOnly,
 			commandsIssued: previous.commandsIssued, commandsAcknowledged: previous.commandsAcknowledged, commandsFailed: previous.commandsFailed,
 			commandsFenced: commandFenced, commandResultsFenced: previous.commandResultsFenced,
 			pressure: pressure,
@@ -344,7 +345,7 @@ func (e *Engine) reconcileTQLocked(now time.Time) {
 			member.tradeCoverage.active, member.quoteCoverage.active = false, false
 			if !member.present && !member.unknown {
 				member.bound = false
-				if len(member.trades) == 0 && len(member.quotes) == 0 && len(member.fingerprints) == 0 {
+				if len(member.trades) == 0 && member.latestQuote == nil && member.latestValidQuote == nil && len(member.fingerprints) == 0 {
 					delete(s.members, symbol)
 				}
 			}
@@ -399,9 +400,6 @@ func (e *Engine) reconcileTQLocked(now time.Time) {
 			if wireMembers >= maximumTQSymbols {
 				return
 			}
-			if s.restoring && now.Before(s.restoreNotBefore) {
-				return
-			}
 			e.issueTQCommandLocked(TQSubscribe, symbol)
 			return
 		}
@@ -420,14 +418,14 @@ func (s *tqState) member(symbol string) *tqSymbolState {
 
 func (s *tqState) releaseMember(m *tqSymbolState) {
 	s.tradeCount -= len(m.trades)
-	s.quoteCount -= len(m.quotes)
+	s.quoteCount -= retainedQuoteCount(m)
 	s.fingerprintCount -= len(m.fingerprints)
-	m.trades, m.quotes = nil, nil
+	m.trades, m.latestQuote, m.latestValidQuote = nil, nil, nil
 	m.fingerprints = make(map[string]tqFingerprint)
 }
 
 func (s *tqState) prune(target, engineTime time.Time) {
-	tradeCutoff, quoteCutoff, fingerprintCutoff := target.Add(-6*time.Second), target.Add(-12*time.Second), engineTime.Add(-16*time.Minute)
+	tradeCutoff, fingerprintCutoff := target.Add(-6*time.Second), engineTime.Add(-16*time.Minute)
 	for _, m := range s.members {
 		trades := m.trades[:0]
 		for _, item := range m.trades {
@@ -438,15 +436,6 @@ func (s *tqState) prune(target, engineTime time.Time) {
 			trades = append(trades, item)
 		}
 		m.trades = trades
-		quotes := m.quotes[:0]
-		for _, item := range m.quotes {
-			if item.at.Before(quoteCutoff) {
-				s.quoteCount--
-				continue
-			}
-			quotes = append(quotes, item)
-		}
-		m.quotes = quotes
 		for key, item := range m.fingerprints {
 			if item.at.Before(fingerprintCutoff) {
 				delete(m.fingerprints, key)
@@ -487,6 +476,7 @@ func (e *Engine) IssueTQCommand() (TQCommand, error) {
 
 func (e *Engine) enterTQGlobalBoundLocked() {
 	e.state.tq.globalBound = true
+	e.state.tq.pressure.cause = TQPressureCauseRetentionBound
 	e.enterTQAggregateOnlyLocked()
 }
 
@@ -573,20 +563,6 @@ func (e *Engine) applyTQCommandResultLocked(node *queueNode) (DispositionCode, D
 		m.quoteCoverage = m.tradeCoverage
 		s.releaseMember(m)
 		m.unequalRepeat, m.lifecycleObserved = false, false
-		if s.restoring {
-			s.restoreNotBefore = node.admissionTime.Add(e.tqPressurePolicy.restoreInterval)
-			allPresent := true
-			for _, symbol := range s.desired {
-				member := s.member(symbol)
-				if !member.present || member.resetRequired {
-					allPresent = false
-					break
-				}
-			}
-			if allPresent {
-				s.restoring = false
-			}
-		}
 	}
 	s.applied++
 	return DispositionTQApplied, ReasonNone
@@ -599,11 +575,56 @@ func (e *Engine) applyTQDropLocked(node *queueNode) (DispositionCode, Dispositio
 		s.fenced++
 		return DispositionTQFenced, ReasonHistoricalContext
 	}
-	if v.Symbol == "" {
-		if v.DropReason == "optional_tq_shed" && s.pressure.mode != TQPressureNormal {
-			s.pressureShed++
+	if v.DropReason == "optional_tq_shed" {
+		s.pressureShed++
+		if v.Family == "T" {
+			s.tradePressureShed++
+		} else {
+			s.quotePressureShed++
+		}
+		if v.Symbol == "" {
+			for _, member := range s.members {
+				if v.Family == "T" {
+					member.tradeCoverage.active = false
+				} else {
+					member.quoteCoverage.active = false
+				}
+				if member.present {
+					member.resetRequired = true
+				}
+			}
 			return DispositionTQRejected, ReasonPressure
 		}
+		m, ok := s.members[v.Symbol]
+		if !ok || !m.present {
+			s.fenced++
+			s.pressureShed--
+			if v.Family == "T" {
+				s.tradePressureShed--
+			} else {
+				s.quotePressureShed--
+			}
+			return DispositionTQFenced, ReasonHistoricalContext
+		}
+		coverage := &m.tradeCoverage
+		if v.Family == "Q" {
+			coverage = &m.quoteCoverage
+		}
+		if !coverage.active || compareLive(v.Live, coverage.greatest) <= 0 {
+			s.fenced++
+			s.pressureShed--
+			if v.Family == "T" {
+				s.tradePressureShed--
+			} else {
+				s.quotePressureShed--
+			}
+			return DispositionTQFenced, ReasonHistoricalContext
+		}
+		coverage.greatest = v.Live
+		m.tradeCoverage.active, m.quoteCoverage.active, m.resetRequired = false, false, true
+		return DispositionTQRejected, ReasonPressure
+	}
+	if v.Symbol == "" {
 		var greatest LivePosition
 		for _, member := range s.members {
 			coverage := member.tradeCoverage
@@ -618,6 +639,7 @@ func (e *Engine) applyTQDropLocked(node *queueNode) (DispositionCode, Dispositio
 			s.fenced++
 			return DispositionTQFenced, ReasonHistoricalContext
 		}
+		s.pressure.cause = TQPressureCauseTransportAccounting
 		e.enterTQAggregateOnlyLocked()
 		s.integrity++
 		return DispositionTQRejected, ReasonStructural
@@ -690,6 +712,7 @@ func (e *Engine) applyTradeLocked(node *queueNode) (DispositionCode, Disposition
 	s.tradeCount++
 	s.fingerprintCount++
 	s.applied++
+	s.tradeApplied++
 	return DispositionTQApplied, ReasonNone
 }
 
@@ -703,36 +726,20 @@ func (e *Engine) applyQuoteLocked(node *queueNode) (DispositionCode, Disposition
 		return DispositionTQFenced, ReasonHistoricalContext
 	}
 	m.quoteCoverage.greatest = v.Live
-	cutoff := node.admissionTime.Add(-10 * time.Second)
-	if e.state.committedT != nil {
-		cutoff = e.state.committedT.Add(-10 * time.Second)
-	}
-	if v.SIPTime.Before(cutoff) {
+	if v.SIPTime.Before(e.state.binding.sessionStart) || v.SIPTime.After(e.state.binding.sessionEnd) {
 		s.rejected++
 		return DispositionTQRejected, ReasonHistoricalContext
 	}
-	limits := e.tqLimits
-	if len(m.quotes) >= limits.quotesPerSymbol {
-		m.bound = true
-		m.tradeCoverage.active, m.quoteCoverage.active = false, false
-		s.integrity++
-		return DispositionTQRejected, ReasonAccounting
-	}
-	if s.quoteCount >= limits.quotesGlobal {
-		e.enterTQGlobalBoundLocked()
-		s.integrity++
-		return DispositionTQRejected, ReasonAccounting
-	}
 	quality := quoteQuality(v.ConditionsClassified, v.IndicatorsClassified, v.Conditions, v.Indicators)
-	m.quotes = append(m.quotes, tqQuote{at: v.SIPTime, receipt: v.ReceiptTime, position: v.Live, bid: v.BidPrice, ask: v.AskPrice, bidPresent: v.BidPresent, askPresent: v.AskPresent, quality: quality})
-	sort.SliceStable(m.quotes, func(i, j int) bool {
-		if m.quotes[i].at.Equal(m.quotes[j].at) {
-			return compareLive(m.quotes[i].position, m.quotes[j].position) < 0
-		}
-		return m.quotes[i].at.Before(m.quotes[j].at)
-	})
-	s.quoteCount++
+	quote := &tqQuote{at: v.SIPTime, receipt: v.ReceiptTime, position: v.Live, bid: v.BidPrice, ask: v.AskPrice, bidPresent: v.BidPresent, askPresent: v.AskPresent, quality: quality}
+	before := retainedQuoteCount(m)
+	m.latestQuote = quote
+	if quote.bidPresent && quote.askPresent && quote.ask >= quote.bid {
+		m.latestValidQuote = quote
+	}
+	s.quoteCount += retainedQuoteCount(m) - before
 	s.applied++
+	s.quoteApplied++
 	return DispositionTQApplied, ReasonNone
 }
 
@@ -774,7 +781,7 @@ func (e *Engine) tqViewLocked() TQView {
 	}
 	shedding := s.aggregateOnly || pressureMode != TQPressureNormal
 	result := TQView{Desired: append([]string(nil), s.desired...), Bounds: s.globalBound, AggregateOnly: s.aggregateOnly,
-		Pressure: pressureMode, ShedTradesQuotes: shedding, PressureMisses: s.pressure.consecutiveMisses,
+		Pressure: pressureMode, PressureCause: s.pressure.cause, ShedTradesQuotes: shedding, PressureMisses: s.pressure.consecutiveMisses,
 		PressureTransitions: s.pressure.transitions, PressureFenced: s.pressure.fenced}
 	if s.pending != nil {
 		result.CommandPending, result.PendingAction, result.PendingSymbol = true, s.pending.action, s.pending.symbol
@@ -809,6 +816,7 @@ func (e *Engine) tqViewLocked() TQView {
 		}
 	}
 	result.Accounting = TQAccountingView{Consumed: s.consumed, Applied: s.applied, Duplicate: s.duplicate, Rejected: s.rejected, Fenced: s.fenced, PressureShed: s.pressureShed, Integrity: s.integrity,
+		AppliedTrades: s.tradeApplied, AppliedQuotes: s.quoteApplied, PressureShedTrades: s.tradePressureShed, PressureShedQuotes: s.quotePressureShed,
 		KnownPresent: knownPresent, KnownAbsent: len(s.members) - knownPresent - unknown, Unknown: unknown, RetainedTrades: s.tradeCount, RetainedQuotes: s.quoteCount, RetainedFingerprints: s.fingerprintCount}
 	pending := uint64(0)
 	if s.pending != nil {
@@ -837,11 +845,16 @@ func validTQPublication(value TQView, publicationID uint64, evaluation aggregate
 	if value.Pressure != TQPressureNormal && value.Pressure != TQPressureDegraded && value.Pressure != TQPressureAggregateOnly {
 		return false
 	}
+	if value.Pressure == TQPressureNormal && value.PressureCause != TQPressureCauseNone || value.Pressure != TQPressureNormal && !validTQPressureCause(value.PressureCause) ||
+		value.Accounting.AppliedTrades+value.Accounting.AppliedQuotes > value.Accounting.Applied ||
+		value.Accounting.PressureShedTrades+value.Accounting.PressureShedQuotes != value.Accounting.PressureShed {
+		return false
+	}
 	if value.AggregateOnly != (value.Pressure == TQPressureAggregateOnly) || value.ShedTradesQuotes != (value.Pressure != TQPressureNormal) {
 		return false
 	}
 	if value.Accounting.KnownPresent+value.Accounting.KnownAbsent+value.Accounting.Unknown > 2*maximumTQSymbols ||
-		value.Accounting.RetainedTrades > maximumTradesGlobal || value.Accounting.RetainedQuotes > maximumQuotesGlobal || value.Accounting.RetainedFingerprints > maximumFingerprintsGlobal {
+		value.Accounting.RetainedTrades > maximumTradesGlobal || value.Accounting.RetainedQuotes > 2*maximumTQSymbols || value.Accounting.RetainedFingerprints > maximumFingerprintsGlobal {
 		return false
 	}
 	wantDesired := evaluation.mode == rankingQualifiedCurrent
@@ -860,7 +873,7 @@ func validTQPublication(value TQView, publicationID uint64, evaluation aggregate
 		row := value.Rows[index]
 		if !validTQFieldStatus(row.Tape.Status) || !validTQFieldStatus(row.Tape.OneSecondStatus) || !validTQFieldStatus(row.Tape.FiveSecondStatus) ||
 			!validTQFieldStatus(row.Spread.Status) || !finiteTQ(row.Tape.OneSecond) || !finiteTQ(row.Tape.FiveSecond) ||
-			!finiteTQ(row.Spread.Cents) || !finiteTQ(row.Spread.BasisPoints) || row.Spread.ValidDuration < 0 {
+			!finiteTQ(row.Spread.Cents) || !finiteTQ(row.Spread.BasisPoints) || row.Spread.QuoteAge < 0 {
 			return false
 		}
 	}
@@ -870,6 +883,16 @@ func validTQPublication(value TQView, publicationID uint64, evaluation aggregate
 func validTQFieldStatus(value TQFieldStatus) bool {
 	switch value {
 	case TQUnselected, TQWarming, TQCurrent, TQStale, TQUnavailable, TQInvalid, TQPressureShed:
+		return true
+	default:
+		return false
+	}
+}
+
+func validTQPressureCause(value TQPressureCause) bool {
+	switch value {
+	case TQPressureCauseNone, TQPressureCauseWaitingFrames, TQPressureCauseWaitingBytes, TQPressureCauseOldestWaitingFrame,
+		TQPressureCauseWatermarkLag, TQPressureCauseCapacityDrop, TQPressureCauseRetentionBound, TQPressureCauseTransportAccounting:
 		return true
 	default:
 		return false
@@ -939,54 +962,14 @@ func tapeView(m *tqSymbolState, target *time.Time) TapeRateView {
 	return v
 }
 
-type weightedSpread struct {
-	cents, bps float64
-	duration   time.Duration
-}
-
 func spreadView(m *tqSymbolState, target *time.Time) SpreadView {
 	v := SpreadView{Status: TQUnavailable, Reason: "coverage"}
 	if !m.quoteCoverage.active || target == nil {
 		return v
 	}
-	if target.Sub(m.quoteCoverage.start) < minimumSpreadCoverage {
-		v.Status, v.Reason = TQWarming, "coverage_warming"
-	}
-	windowStart := target.Add(-spreadWindow)
-	segments := make([]weightedSpread, 0, len(m.quotes))
-	var latest *tqQuote
-	for i := range m.quotes {
-		q := m.quotes[i]
-		if !q.at.Before(*target) {
-			continue
-		}
-		if latest == nil || q.at.After(latest.at) || (q.at.Equal(latest.at) && compareLive(q.position, latest.position) > 0) {
-			copy := q
-			latest = &copy
-		}
-		start := q.at
-		if start.Before(windowStart) {
-			start = windowStart
-		}
-		if start.Before(m.quoteCoverage.start) {
-			start = m.quoteCoverage.start
-		}
-		end := q.at.Add(2 * time.Second)
-		if i+1 < len(m.quotes) && m.quotes[i+1].at.Before(end) {
-			end = m.quotes[i+1].at
-		}
-		if end.After(*target) {
-			end = *target
-		}
-		if !start.Before(end) || !q.bidPresent || !q.askPresent || q.ask < q.bid {
-			continue
-		}
-		cents := 100 * (q.ask - q.bid)
-		bps := 10000 * (q.ask - q.bid) / ((q.ask + q.bid) / 2)
-		segments = append(segments, weightedSpread{cents: cents, bps: bps, duration: end.Sub(start)})
-		v.ValidDuration += end.Sub(start)
-	}
+	latest := m.latestQuote
 	if latest == nil {
+		v.Status, v.Reason = TQWarming, "coverage_warming"
 		return v
 	}
 	v.Quality = latest.quality
@@ -998,36 +981,32 @@ func spreadView(m *tqSymbolState, target *time.Time) SpreadView {
 		v.Status, v.Reason = TQInvalid, "crossed_quote"
 		return v
 	}
-	if target.Sub(latest.at) > 2*time.Second {
+	valid := m.latestValidQuote
+	if valid == nil || valid.position != latest.position {
+		return v
+	}
+	v.QuoteAge = target.Sub(valid.at)
+	if v.QuoteAge < 0 {
+		v.QuoteAge = 0
+	}
+	v.Cents = 100 * (valid.ask - valid.bid)
+	v.BasisPoints = 10000 * (valid.ask - valid.bid) / ((valid.ask + valid.bid) / 2)
+	if v.QuoteAge > spreadStaleAge {
 		v.Status, v.Reason = TQStale, "stale_quote"
 		return v
 	}
-	if v.ValidDuration < minimumSpreadCoverage {
-		if target.Sub(m.quoteCoverage.start) >= minimumSpreadCoverage {
-			v.Status, v.Reason = TQUnavailable, "insufficient_coverage"
-		}
-		return v
-	}
 	v.Status, v.Reason = TQCurrent, ""
-	sort.Slice(segments, func(i, j int) bool { return segments[i].cents < segments[j].cents })
-	half, accumulated := v.ValidDuration/2, time.Duration(0)
-	for _, segment := range segments {
-		accumulated += segment.duration
-		if accumulated >= half {
-			v.Cents = segment.cents
-			break
-		}
-	}
-	sort.Slice(segments, func(i, j int) bool { return segments[i].bps < segments[j].bps })
-	accumulated = 0
-	for _, segment := range segments {
-		accumulated += segment.duration
-		if accumulated >= half {
-			v.BasisPoints = segment.bps
-			break
-		}
-	}
 	return v
+}
+
+func retainedQuoteCount(m *tqSymbolState) int {
+	if m == nil || m.latestQuote == nil {
+		return 0
+	}
+	if m.latestValidQuote == nil || m.latestValidQuote.position == m.latestQuote.position {
+		return 1
+	}
+	return 2
 }
 
 func maxUint64(a, b uint64) uint64 {

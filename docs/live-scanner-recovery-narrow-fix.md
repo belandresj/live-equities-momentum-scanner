@@ -16,8 +16,10 @@ The D5 correction now applies deterministic valid-live precedence at the
 REST/live identity itself: unequal historical overlap remains diagnostic but
 does not poison coverage, features, qualification, or ranking. The routed
 checkpoint hot-path correction is finally accepted after bounded projection
-and decoder corrections and a clean focused final re-review. No provider
-request is authorized here.
+and decoder corrections and a clean focused final re-review. D8 corrects C9
+pressure to measure waiting backlog rather than an ordinary active provider
+batch and adds bounded frame-local T/Q protection; deterministic verification
+is clean. No provider request is authorized here.
 
 **Boundary and completed-contract authority:** Direct owner request on
 2026-08-11 to use the read-only recovery review and specify the narrow fix.
@@ -71,6 +73,9 @@ This is the sole ledger; prior corrections are evidence.
 | Checkpoint hot-path correction | `finally_accepted` | Monolithic no-scratch projection still held the owner for 14.493/26.963s and was abandoned. Three real-consumer dense 6,000-symbol FIFO-continuation boundaries limited maximum owner hold to 20.870ms, aggregate delivery to 66.874ms, and observation to 55.523ms with stable 3.435-GB post-GC heap; alias-isolated handoff prevents retained writer aliases; real completion returns to engine/API accounting. Bounded decode plus the exact two-worker control yielded 524.029ms median restart versus 1.381s fresh (62.1% faster). Focused re-review is clean. | Preserve for V1 integration; provider validation remains separately authorized. |
 | Checkpoint committed-mark projection correction | `reaccepted 2026-08-13` | Preserved live evidence recorded at least 16 incremental attempts ending `projection_invariant` after about 1.6–1.8s with zero submitted work. The pre-fix deterministic production-cadence regression reproduced the exact rejection. Forward compaction had moved `olderLatest` beyond `T0` while the compact committed marker retained only close, so projection had no full normalized committed aggregate and correctly rejected. The marker now retains the original bounded normalized values; a real timer/evaluator/cadence trace persists, reopens, discovers, decodes, and atomically installs the coherent checkpoint at `T0`, with identical regenerated evaluation and reconciled projection/writer accounting. Existing invalidation proofs, repository short, affected race, vet/diff, and required `gpt-5.6-sol` medium review/re-review pass. | Complete for deterministic correction. A later separately authorized fresh live restart must confirm provider composition and any latency effect. |
 | Gate F D6 empty delivery-latency window/API mapping | `accepted_local_correction` | Terminal diagnostics recorded 915 `delivery_latency_attribution` mapper failures: 553 on `/api/v1/snapshot` and 362 on `/readyz`. Many captures remained `live`/`qualified_current` with aggregate epoch 1 acknowledged and zero aggregate recovery attempts. The invalidated C8/C10 claim inferred whether the current one-second latency window was nonempty from cumulative deliveries and family counts. After `syncTQPressure` reset the current maximum to `0 / unknown`, lifetime deliveries remained nonzero while lifetime `unknown` could remain zero, so C10 rejected a coherent capture. `TestDeliveryLatencyEmptyWindowMapsAfterPressureReset` first reproduced that exact mapper rejection, then passed after the runtime added lock-protected current-window occupancy independent of cumulative counts. It proves known-family delivery, production pressure sampling/reset, immediate sealed capture/C10 mapping as `0 / unknown`, the next atomic checkpoint winner, and the unchanged seven-family sum. Focused C8/C9/C10 proofs, repository short, affected race, vet, and diff checks pass. | Complete locally. No provider request, credential access, live restart, route-semantic change, or live-timing claim occurred. |
+| Gate F D7 retained stale Spread/API mapping | `accepted_local_correction` | The authorized 2026-08-13 run was engine-ready with `qualified_current`, 20 ranked rows, an advancing one-second watermark, and aggregate epoch 1 connected, but C10 rejected publications 80152 and 80153 as `product_row`. C9 correctly retained numeric cents/basis points after quote age crossed two seconds; C10 mapped those values and then contradicted its own schema by allowing a numeric pair only for `current`. The corrected predicate requires the pair for both `current` and `stale`. `TestStaleSpreadRetainsNumericValuesAcrossSnapshotBoundary` proves a 45-minute-old quote remains numeric with exact `quote_age_ms` and that an incomplete pair still fails closed. Focused API/scanner ordinary and race tests, repository short, 23 UI tests, vet, and diff checks pass. | Complete locally. Aggregate readiness/ranking, quote selection, the two-second informational status boundary, HTTP behavior, and schema shape are unchanged. The running pre-correction binary requires restart to load the fix. |
+| Checkpoint launch default | `owner_revised_2026-08-13` | Direct owner instruction makes checkpointing opt-in on this machine because the known checkpoint path has caused unacceptable CPU, heap, swap, and responsiveness. The scanner default and supervised private launcher now select `checkpoint-mode off`; explicit `--checkpoint-mode on` preserves C7 testing and recovery capability. | Verify focused CLI/launcher behavior and ordinary repository tests; do not infer checkpoint safety from the opt-in capability. |
+| Gate F D8 T/Q waiting-pressure and frame-local protection | `accepted_local_correction` | The checkpoint-off owner run acknowledged all 20 paired subscriptions and applied 1,109 trades plus 527 quotes while aggregate ranking stayed current, watermark lag remained 0-1s, queue high-water was only 43/32,768 frames, capacity drops and recovery attempts were zero, accounting/retention remained coherent, and host load was modest. The sole pressure cause was the active frame being counted as `oldest_unread_frame`. C5 now separates waiting frames/bytes/oldest-waiting age from diagnostic active age; C9 uses exact 10%/1s/two-sample degradation, 25%/2s/three-sample aggregate-only, >2s/two-sample watermark lag with T/Q work, immediate separate capacity/accounting/bound containment, and five exact healthy recovery samples. A monotonic 500ms active-frame budget sheds only later T/Q, preserves later aggregate/control order, records exact family accounting, and closes affected coverage without changing global mode solely for that frame. Focused engine/Massive/Runtime/snapshot proofs, repository short, affected race, vet, and diff checks pass. The owner's post-correction observation reports the checkpoint-off scanner stable with uninterrupted T/Q streaming; no duration or additional counters were supplied, so this is live confirmation rather than a new latency or saturation bound. | Complete locally. Preserve C9 membership/features, aggregate independence, checkpoint-default, launcher, hydration, stale-Spread, API, and UI corrections. Deterministic proof does not establish provider arrival distributions, live saturation, or an SLA. No predecessor, credential, provider request, process stop, or live run occurred during implementation; no risk-triggered independent review was needed because no new owner, queue, goroutine, persistence, or ambiguous ordering boundary was introduced. |
 
 ### Gate F D5 deterministic REST/live precedence correction — 2026-08-12
 
@@ -325,8 +330,9 @@ full-population evaluator and immutable publication to the next live timer or
 hydration ingress fence. It also preserves the first typed evaluator failure,
 serves installed-binding warming and suppressed captures with HTTP 200 while
 `/readyz` returns 503, stops `RunLive` before any connection attempt in a
-terminal lifecycle, and adds a default-on live checkpoint switch whose off
-path constructs no store/writer and submits no checkpoint work.
+terminal lifecycle, and adds a live checkpoint switch. Following the
+2026-08-13 owner revision, its default-off path constructs no store/writer and
+submits no checkpoint work.
 
 Gate A passed in fast-to-long order:
 
@@ -1243,7 +1249,7 @@ for both. Do not port C12/replay changes.
 Add a live-only checkpoint switch. With checkpoint mode off, do not construct a
 store/writer, discover/install a checkpoint, or submit cadence projections.
 Report checkpoint status honestly as not installed with zero work. Default
-behavior remains checkpoint mode on.
+behavior is available only through explicit checkpoint mode on.
 
 Primary proof `P-NARROW-LIVE` combines:
 

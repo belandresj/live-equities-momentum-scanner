@@ -48,7 +48,8 @@ func SampleAndResetDeliveryLatencyWindowForTest(t *testing.T, ctx context.Contex
 	run.pressureSampler = func(metrics Metrics) engine.TQPressureSample {
 		attribution := metrics.DeliveryLatencyAttribution
 		return engine.TQPressureSample{
-			QueueCapacityFrames:       100,
+			FrameCapacity:             100,
+			ByteCapacity:              100,
 			MaxDeliveryDelayOneSec:    metrics.MaxProcessingDelayOneSecond,
 			DeliveryLatencyAttributed: attribution.MaximumFamily != DeliveryLatencyUnknown && attribution.Reconciles(metrics.Deliveries),
 			TQLocalAccountingHealthy:  true,

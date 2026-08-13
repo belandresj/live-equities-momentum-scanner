@@ -338,7 +338,7 @@ func monitorLiveRESTProgression(ctx context.Context, cancel context.CancelFunc, 
 		view := run.Engine().ObserveOperational()
 		queued := queue.FramesQueued
 		monitor.maximumQueued = max(monitor.maximumQueued, queued)
-		monitor.maximumOldest = max(monitor.maximumOldest, uint64(queue.OldestFrameAge))
+		monitor.maximumOldest = max(monitor.maximumOldest, uint64(queue.OldestWaitingFrameAge))
 		terminal := view.Hydration.Accounting.CompletedValue + view.Hydration.Accounting.CompletedEmpty
 		if queue.FramesDispositioned > queueBaseline.FramesDispositioned && terminal > 0 && view.Hydration.Accounting.Open > 0 {
 			monitor.progressDuringLive = true
@@ -350,7 +350,7 @@ func monitorLiveRESTProgression(ctx context.Context, cancel context.CancelFunc, 
 			monitor.stopReason = "integrity_terminal"
 		case queue.FramesQueued >= liveContentionQueueStop:
 			monitor.stopReason = "queue_threshold"
-		case queue.OldestFrameAge >= 2*time.Second:
+		case queue.OldestWaitingFrameAge >= 2*time.Second:
 			monitor.stopReason = "oldest_frame_threshold"
 		case !queue.Reconciles() || !operationalAccountingValid(view):
 			monitor.stopReason = "accounting_divergence"

@@ -167,16 +167,15 @@ translation layer that obscures the real interface.
 The required interface is:
 
 ```text
-./scripts/run-private-scanner
-./scripts/run-private-scanner --trading-date YYYY-MM-DD
-./scripts/run-private-scanner --open
-./scripts/run-private-scanner --trading-date YYYY-MM-DD --open
+./scripts/run-private-scanner [--trading-date YYYY-MM-DD] [--hydration-workers 1|2|4|8] [--open]
 ```
 
 No argument is required for ordinary daily use. Unknown arguments, repeated
-single-value arguments, invalid dates, or positional arguments fail before any
-child starts. `--help` prints the supported interface without reading a
-credential or starting a process.
+single-value arguments, invalid dates, unsupported worker counts, or positional
+arguments fail before any child starts. Hydration defaults to eight workers;
+the explicit override changes only the scanner's existing bounded C6 worker
+setting. `--help` prints the supported interface without reading a credential
+or starting a process.
 
 The launcher must resolve the repository root from its own location rather than
 from the current directory. The short relative command above is the ordinary
@@ -403,7 +402,9 @@ The focused launcher suite must prove:
 
 1. no-argument invocation derives the New York date and supplies every fixed
    scanner/dashboard setting exactly once;
-2. `--trading-date` overrides only the date and rejects malformed input;
+2. `--trading-date` overrides only the date, and `--hydration-workers` accepts
+   exactly 1, 2, 4, or 8 with default 8; malformed/repeated values fail before
+   preflight;
 3. the post-04:00 warning appears before child startup and accurately states
    the capacity limitation;
 4. help and preflight failures do not read credentials or start children;
@@ -472,8 +473,9 @@ The reviewer must focus on:
 - whether credentials can reach output, disk, arguments, or the dashboard;
 - whether the launcher duplicates readiness, checkpoint, schedule, or state
   ownership;
-- whether the daily defaults actually invoke the proved two-worker path and
-  persistent checkpoint location;
+- whether the daily default invokes eight workers, every explicit supported
+  worker value is passed exactly once, invalid values fail before credential
+  access, and the persistent checkpoint location remains fixed;
 - whether the late-start wording overstates the 1x and 2x evidence;
 - whether unrelated dirty-worktree changes were altered; and
 - whether final documentation matches executable behavior.
@@ -514,14 +516,16 @@ The accepted daily workflow is now:
 ```
 
 The absolute script path works from another directory. `--trading-date
-YYYY-MM-DD`, `--open`, and their combination are the only startup variants;
-help and invalid arguments return before any build, credential lookup,
-directory mutation, or child start. The shell bootstrap privately builds the
-Go supervisor under `var/run-private-scanner/bin`, forwards INT/TERM to a build
-in progress, and waits/reaps it before executing the supervisor.
+YYYY-MM-DD`, `--hydration-workers 1|2|4|8`, and `--open` may be combined in any
+order; help and invalid arguments return before any build, credential lookup,
+directory mutation, or child start. Hydration defaults to eight workers. The
+shell bootstrap privately builds the Go supervisor under
+`var/run-private-scanner/bin`, forwards INT/TERM to a build in progress, and
+waits/reaps it before executing the supervisor.
 
 The scanner receives exactly `--run-mode live`, the derived or overridden New
-York `--trading-date`, `--hydration-workers 2`, persistent absolute
+York `--trading-date`, `--hydration-workers 8` by default or the exact explicit
+supported override, persistent absolute
 `--reference-dir` and `--checkpoint-dir` paths, `--api-address
 127.0.0.1:8080`, and `--allow-origin http://127.0.0.1:4173`. The dashboard
 receives exactly `--address 127.0.0.1:4173`, `--api-origin
@@ -603,7 +607,7 @@ would not establish ownership of those pre-existing changes.
 
 No real Keychain credential was read and no provider request was made. The only
 remaining market-hours item is one separately owner-authorized, exact-date
-launch with the two-worker path that observes provider binding, complete
+launch with the selected worker count that observes provider binding, complete
 hydration, ingress-fence reconciliation, ready/current API/UI output, queue
 high-water, post-fence heap, and independent T/Q status. It is external
 validation, not a prerequisite for this accepted private/local 1x workflow.

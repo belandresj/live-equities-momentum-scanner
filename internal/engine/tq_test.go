@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"math"
+	"strconv"
 	"testing"
 	"time"
 
@@ -70,6 +71,11 @@ func TestPC9TAQ(t *testing.T) {
 	if got := admitTQResultForTest(t, e, ack); got.Code != DispositionTQApplied {
 		t.Fatalf("ack = %+v", got)
 	}
+	quiet := e.ObserveTQ()
+	if quiet.Pressure != TQPressureNormal || quiet.CommandPending || quiet.Rows[0].Tape.OneSecondStatus != TQCurrent || quiet.Rows[0].Tape.FiveSecondStatus != TQCurrent ||
+		quiet.Rows[0].Tape.OneSecond != 0 || quiet.Rows[0].Tape.FiveSecond != 0 || !quiet.Rows[0].TradeCoverage {
+		t.Fatalf("quiet acknowledged tape coverage = %+v", quiet)
+	}
 
 	trade := baseTrade(binding, now.Add(-500*time.Millisecond), LivePosition{ConnectionEpoch: 1, FrameSequence: 11, ArrayIndex: 1})
 	if got := admitTradeForTest(t, e, trade); got.Code != DispositionTQApplied {
@@ -93,11 +99,6 @@ func TestPC9TAQ(t *testing.T) {
 
 	for i, offset := range []time.Duration{-9 * time.Second, -7 * time.Second, -5 * time.Second, -3 * time.Second, -time.Second} {
 		ask := 10.02
-		if offset < -spreadWindow {
-			// These wide quotes would change the old ten-second median but must
-			// not contribute to the five-second Spread window.
-			ask = 10.10
-		}
 		quote := QuoteInput{SchemaVersion: TQSchemaV1, BindingIdentity: binding.Identity(), TradingDate: binding.TradingDate(), Symbol: "AAA",
 			SIPTime: now.Add(offset), ReceiptTime: now.Add(offset), BidPrice: 10, AskPrice: ask,
 			BidPresent: true, AskPresent: true, ConditionsClassified: true, IndicatorsClassified: true,
@@ -105,6 +106,13 @@ func TestPC9TAQ(t *testing.T) {
 		if got := admitQuoteForTest(t, e, quote); got.Code != DispositionTQApplied {
 			t.Fatalf("quote %d = %+v", i, got)
 		}
+	}
+	applyTQTimer(t, e)
+	view = e.ObserveTQ()
+	if len(view.Rows) != 1 || !view.Rows[0].TradeCoverage || !view.Rows[0].QuoteCoverage || view.Rows[0].Tape.OneSecond != 1 ||
+		view.Rows[0].Tape.FiveSecond != .2 || view.Rows[0].Tape.OneSecondStatus != TQCurrent || view.Rows[0].Tape.FiveSecondStatus != TQCurrent ||
+		view.Rows[0].Spread.Status != TQCurrent || math.Abs(view.Rows[0].Spread.Cents-2) > 1e-9 || view.Rows[0].Spread.QuoteAge != time.Second || view.Rows[0].Spread.Quality != "reviewed_ordinary" {
+		t.Fatalf("feature view = %+v", view.Rows)
 	}
 	late := QuoteInput{SchemaVersion: TQSchemaV1, BindingIdentity: binding.Identity(), TradingDate: binding.TradingDate(), Symbol: "AAA", SIPTime: now.Add(-4 * time.Second), ReceiptTime: now,
 		BidPrice: 10, AskPrice: 10.04, BidPresent: true, AskPresent: true, ConditionsClassified: true, IndicatorsClassified: true, Live: LivePosition{ConnectionEpoch: 1, FrameSequence: 25}}
@@ -117,12 +125,9 @@ func TestPC9TAQ(t *testing.T) {
 		t.Fatalf("duplicate quote causal position = %+v", got)
 	}
 
-	applyTQTimer(t, e)
 	view = e.ObserveTQ()
-	if len(view.Rows) != 1 || !view.Rows[0].TradeCoverage || !view.Rows[0].QuoteCoverage || view.Rows[0].Tape.OneSecond != 1 ||
-		view.Rows[0].Tape.FiveSecond != .2 || view.Rows[0].Tape.OneSecondStatus != TQCurrent || view.Rows[0].Tape.FiveSecondStatus != TQCurrent ||
-		view.Rows[0].Spread.Status != TQCurrent || math.Abs(view.Rows[0].Spread.Cents-2) > 1e-9 || view.Rows[0].Spread.ValidDuration != 5*time.Second || view.Rows[0].Spread.Quality != "reviewed_ordinary" {
-		t.Fatalf("feature view = %+v", view.Rows)
+	if view.Rows[0].Spread.Status != TQStale || view.Rows[0].Spread.Reason != "stale_quote" || math.Abs(view.Rows[0].Spread.Cents-4) > 1e-9 || view.Rows[0].Spread.QuoteAge != 4*time.Second {
+		t.Fatalf("retained stale spread = %+v", view.Rows[0].Spread)
 	}
 	if view.Accounting.Consumed != view.Accounting.Applied+view.Accounting.Duplicate+view.Accounting.Rejected+view.Accounting.Fenced+view.Accounting.PressureShed+view.Accounting.Integrity {
 		t.Fatalf("accounting = %+v", view.Accounting)
@@ -150,6 +155,14 @@ func TestPC9TAQ(t *testing.T) {
 	}
 	if got := e.ObserveTQ().Rows[0].Spread; got.Status != TQUnavailable || got.Reason != "one_sided_quote" {
 		t.Fatalf("one-sided spread = %+v", got)
+	}
+	crossed := oneSided
+	crossed.Live.FrameSequence, crossed.SIPTime, crossed.BidPresent, crossed.AskPresent, crossed.BidPrice, crossed.AskPrice = 28, now.Add(-250*time.Millisecond), true, true, 10.03, 10.02
+	if got := admitQuoteForTest(t, e, crossed); got.Code != DispositionTQApplied {
+		t.Fatalf("crossed quote = %+v", got)
+	}
+	if got := e.ObserveTQ().Rows[0].Spread; got.Status != TQInvalid || got.Reason != "crossed_quote" || got.Cents != 0 || got.BasisPoints != 0 {
+		t.Fatalf("crossed quote fabricated spread = %+v", got)
 	}
 
 	before := e.ObserveTQ()
@@ -263,35 +276,36 @@ concurrencyComplete:
 	closeAndWait(t, e)
 }
 
-func TestSpreadViewFiveSecondCoverageBoundary(t *testing.T) {
-	target := testBinding(t).SessionStart().Add(time.Hour)
-	quote := func(offset time.Duration, sequence uint64) tqQuote {
-		return tqQuote{at: target.Add(offset), receipt: target.Add(offset), position: LivePosition{ConnectionEpoch: 1, FrameSequence: sequence},
-			bid: 10, ask: 10.02, bidPresent: true, askPresent: true, quality: "reviewed_ordinary"}
+func TestC9DefaultDesiredMembershipUsesAllDisplayedRowsUpToTwenty(t *testing.T) {
+	e, _, _, now := pressureProofEngine(t)
+	defer closeAndWait(t, e)
+	e.mu.Lock()
+	e.state.tq.members = make(map[string]*tqSymbolState)
+	rows := make([]aggregateRankingRow, maximumTQSymbols)
+	for index := range rows {
+		rows[index] = aggregateRankingRow{rank: uint32(index + 1), symbol: "S" + strconv.Itoa(index+1), tqIntentEligible: true}
 	}
-	for _, test := range []struct {
-		name   string
-		quotes []tqQuote
-		status TQFieldStatus
-		reason string
-		valid  time.Duration
-	}{
-		{"four of five seconds is current", []tqQuote{quote(-4*time.Second, 1), quote(-2*time.Second, 2)}, TQCurrent, "", 4 * time.Second},
-		{"three of five seconds is unavailable", []tqQuote{quote(-3*time.Second, 1), quote(-time.Second, 2)}, TQUnavailable, "insufficient_coverage", 3 * time.Second},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			state := &tqSymbolState{quoteCoverage: tqCoverage{active: true, start: target.Add(-spreadWindow)}, quotes: test.quotes}
-			got := spreadView(state, &target)
-			if got.Status != test.status || got.Reason != test.reason || got.ValidDuration != test.valid {
-				t.Fatalf("spread = %+v", got)
-			}
-		})
+	e.state.aggregateEvaluator.current.rows = rows
+	e.reconcileTQLocked(now)
+	e.mu.Unlock()
+	view := e.ObserveTQ()
+	if len(view.Desired) != maximumTQSymbols || view.Desired[0] != "S1" || view.Desired[maximumTQSymbols-1] != "S20" || !view.CommandPending || view.PendingSymbol != "S1" {
+		t.Fatalf("default desired membership = %+v", view)
+	}
+}
+
+func TestSpreadViewRetainsLatestValidQuoteWithAge(t *testing.T) {
+	target := testBinding(t).SessionStart().Add(time.Hour)
+	valid := &tqQuote{at: target.Add(-10 * time.Second), position: LivePosition{ConnectionEpoch: 1, FrameSequence: 1}, bid: 10, ask: 10.02, bidPresent: true, askPresent: true, quality: "reviewed_ordinary"}
+	state := &tqSymbolState{quoteCoverage: tqCoverage{active: true, start: target.Add(-time.Minute)}, latestQuote: valid, latestValidQuote: valid}
+	if got := spreadView(state, &target); got.Status != TQStale || got.Reason != "stale_quote" || got.QuoteAge != 10*time.Second || math.Abs(got.Cents-2) > 1e-9 {
+		t.Fatalf("stale retained spread = %+v", got)
 	}
 }
 
 func TestPC9TAQScaledGlobalBoundContainment(t *testing.T) {
 	if maximumTradesPerSymbol != 50_000 || maximumTradesGlobal != 500_000 || maximumTradeFingerprints != 100_000 || maximumFingerprintsGlobal != 1_000_000 ||
-		maximumQuotesPerSymbol != 20_000 || maximumQuotesGlobal != 400_000 {
+		spreadStaleAge != 2*time.Second {
 		t.Fatal("production T/Q bounds changed")
 	}
 	now := time.Date(2026, 7, 29, 15, 0, 0, 0, time.UTC)
@@ -302,7 +316,7 @@ func TestPC9TAQScaledGlobalBoundContainment(t *testing.T) {
 		"AAA": {present: true, tradeCoverage: tqCoverage{active: true, epoch: 1, start: now.Add(-time.Minute), ack: LivePosition{ConnectionEpoch: 1, FrameSequence: 1}, greatest: LivePosition{ConnectionEpoch: 1, FrameSequence: 1}}, quoteCoverage: tqCoverage{active: true}},
 		"BBB": {present: true, tradeCoverage: tqCoverage{active: true}, quoteCoverage: tqCoverage{active: true}},
 	}, tradeCount: 1}
-	e.tqLimits = tqRetentionLimits{tradesPerSymbol: 2, tradesGlobal: 1, fingerprintsPerSymbol: 2, fingerprintsGlobal: 2, quotesPerSymbol: 2, quotesGlobal: 2}
+	e.tqLimits = tqRetentionLimits{tradesPerSymbol: 2, tradesGlobal: 1, fingerprintsPerSymbol: 2, fingerprintsGlobal: 2}
 	input := baseTrade(testTQBinding{"proof-binding", "2026-07-29"}, now.Add(-time.Second), LivePosition{ConnectionEpoch: 1, FrameSequence: 2})
 	node := &queueNode{trade: frozenTradeInput{input}, admissionTime: now}
 	if code, reason := e.applyTradeLocked(node); code != DispositionTQRejected || reason != ReasonAccounting {
@@ -392,6 +406,25 @@ func TestPC9TAQAggregateOnlyRetiresPendingAdditions(t *testing.T) {
 	})
 }
 
+func TestPC9FrameLocalShedClosesCoverageWithoutChangingPressureMode(t *testing.T) {
+	e, binding, _, _ := pressureProofEngine(t)
+	defer closeAndWait(t, e)
+	input := TQDropInput{SchemaVersion: TQSchemaV1, BindingIdentity: binding.Identity(), TradingDate: binding.TradingDate(), Family: "T", Symbol: "AAA",
+		DropReason: "optional_tq_shed", Live: LivePosition{ConnectionEpoch: 1, FrameSequence: 11}}
+	admission, completion := e.AdmitTQDrop(context.Background(), input)
+	if admission != AdmissionAdmitted || completion == nil {
+		t.Fatalf("frame-local drop admission = %s", admission)
+	}
+	if got := awaitDisposition(t, completion); got.Code != DispositionTQRejected || got.Reason != ReasonPressure {
+		t.Fatalf("frame-local drop = %+v", got)
+	}
+	view := e.ObserveTQ()
+	if view.Pressure != TQPressureNormal || view.AggregateOnly || view.ShedTradesQuotes || view.Rows[0].TradeCoverage || view.Rows[0].QuoteCoverage ||
+		view.Rows[0].Tape.Status == TQCurrent || view.Rows[0].Spread.Status == TQCurrent || view.Accounting.PressureShed != 1 || view.Accounting.PressureShedTrades != 1 {
+		t.Fatalf("frame-local continuity/pressure = %+v", view)
+	}
+}
+
 func pressureQualifiedEvaluation(at time.Time) aggregateEvaluationResult {
 	counts := featureDimensionAccounting{}
 	counts.statuses[1], counts.statuses[2] = 2, 1
@@ -419,7 +452,7 @@ func TestPC9TAQScaledSymbolBoundUnsubscribes(t *testing.T) {
 	e.state.tq = tqState{epoch: 1, nextToken: 1, desired: []string{"AAA"}, members: map[string]*tqSymbolState{
 		"AAA": {present: true, tradeCoverage: tqCoverage{active: true, epoch: 1, start: now.Add(-time.Minute), ack: position, greatest: position}, quoteCoverage: tqCoverage{active: true, epoch: 1, ack: position, greatest: position}},
 	}}
-	e.tqLimits = tqRetentionLimits{tradesPerSymbol: 0, tradesGlobal: 10, fingerprintsPerSymbol: 10, fingerprintsGlobal: 10, quotesPerSymbol: 10, quotesGlobal: 10}
+	e.tqLimits = tqRetentionLimits{tradesPerSymbol: 0, tradesGlobal: 10, fingerprintsPerSymbol: 10, fingerprintsGlobal: 10}
 	input := baseTrade(testTQBinding{"proof-binding", "2026-07-29"}, now.Add(-time.Second), LivePosition{ConnectionEpoch: 1, FrameSequence: 2})
 	if code, reason := e.applyTradeLocked(&queueNode{trade: frozenTradeInput{input}, admissionTime: now}); code != DispositionTQRejected || reason != ReasonAccounting {
 		t.Fatalf("symbol overflow = %s/%s", code, reason)

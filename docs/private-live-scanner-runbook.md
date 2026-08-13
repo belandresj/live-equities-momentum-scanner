@@ -37,29 +37,29 @@ build environments. It reaches only the scanner child environment.
 
 ## Commands and fixed daily configuration
 
-The public commands are:
+The public command shape is:
 
 ```text
-./scripts/run-private-scanner
-./scripts/run-private-scanner --trading-date YYYY-MM-DD
-./scripts/run-private-scanner --open
-./scripts/run-private-scanner --trading-date YYYY-MM-DD --open
+./scripts/run-private-scanner [--trading-date YYYY-MM-DD] [--hydration-workers 1|2|4|8] [--open]
 ```
 
 `--open` asks macOS to open the dashboard after both listeners are healthy. A
 browser-open failure is nonfatal. `--trading-date` is for an explicit date
 correction; it does not authorize historical replay through the live provider
 path. The scanner remains the trading-calendar authority and rejects weekends,
-holidays, and unsupported dates.
+holidays, and unsupported dates. Hydration defaults to eight workers. The
+worker override changes only bounded REST hydration concurrency; it does not
+change the universe, interval, merge rules, ranking, readiness, or T/Q path.
 
 The launcher invokes the scanner with these exact settings:
 
 ```text
 --run-mode live
 --trading-date <current America/New_York date or explicit override>
---hydration-workers 2
+--hydration-workers <8 by default; explicit 1, 2, 4, or 8>
 --reference-dir <repo>/var/reference
 --checkpoint-dir <repo>/var/checkpoints
+--checkpoint-mode off
 --diagnostic-dir <repo>/var/diagnostics (scanner default)
 --api-address 127.0.0.1:8080
 --allow-origin http://127.0.0.1:4173
@@ -68,8 +68,8 @@ The launcher invokes the scanner with these exact settings:
 For the 2026-08-12 owner-run retry, the scanner's internal bounded delivery
 settings are 32,768 raw-frame slots, 128 MiB total queued payload, 8 MiB per
 frame, a 4-GiB cumulative (not resident) hydration-transfer allowance, and five
-finite connection/recovery attempts. The launcher remains at two hydration
-workers. These settings add containment headroom only; exact readiness,
+finite connection/recovery attempts. These settings add containment headroom
+only; exact readiness,
 coverage, accounting, page/request limits, and fail-closed terminal behavior
 are unchanged.
 
@@ -128,12 +128,12 @@ incrementally. This avoids a large elapsed-session REST backlog; it does not
 skip any symbol, use top-N hydration, or alter qualification/ranking.
 
 From 04:00 through 20:00 New York time, the launcher prints a warning and still
-starts normally. A same-day restart first asks the existing runtime to install
-the latest valid compatible checkpoint. If that candidate is corrupt or
-incompatible, the runtime can fall back to the previous valid checkpoint. It
-then hydrates `[checkpoint T0, live handoff R)` (or the full elapsed session
-when no checkpoint is usable), consumes the buffered live tail, applies the
-exact ingress fence, and only then reports ready.
+starts normally. The private launcher defaults checkpoint mode off, so an
+ordinary same-day restart hydrates the full elapsed session, consumes the
+buffered live tail, applies the exact ingress fence, and only then reports
+ready. An explicit scanner launch with `--checkpoint-mode on` may instead
+install the latest valid compatible checkpoint, fall back to the previous
+valid candidate, and hydrate `[checkpoint T0, live handoff R)`.
 
 There is no promised late-start completion time. A compatible recent
 checkpoint can make recovery fast; a checkpoint-less cold start must process

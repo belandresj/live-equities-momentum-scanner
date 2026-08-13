@@ -209,7 +209,7 @@ measurement and provider-mapping details but cannot change these meanings.
 | 60-minute range position | Where is Last inside the trailing 60-minute low/high range? | Display only. |
 | Activity | How unusual are recent aggregate-estimated transactions and price expansion relative to the stock's own current-session reference periods? | Display only. |
 | Tape Rate | How quickly are accepted qualifying trades printing now? | Display only. |
-| Spread | What recent quoted spread is shown for the selected leader? | Display only. |
+| Spread | What is the latest valid quoted spread for the displayed leader, and how old is that quote? | Display only. |
 
 Historical and T/Q-derived fields are not prerequisites for displaying an
 otherwise trustworthy qualified Day-% row unless a later owner-approved product
@@ -275,14 +275,16 @@ meaning.
 
 ### PG-FEATURE-04 — Spread
 
-Spread reports the five-second time-weighted median validated NBBO spread in cents
-and basis points. Locked quotes are valid zero spread. Crossed, one-sided,
-stale, warming, or insufficient-coverage states are unavailable rather than
-negative or fabricated spread.
+Spread reports the latest valid two-sided non-crossed NBBO quote spread in
+cents and basis points together with quote age. Locked quotes are valid zero
+spread. During acknowledged continuous quote coverage, quiet periods retain
+the last valid numeric spread and increasing age; an old quote is explicitly
+`stale` rather than replaced by an absent value. A latest one-sided quote is
+unavailable and a latest crossed quote is invalid, so neither can fabricate a
+valid spread.
 
-The focused feature specification must define its evidenced quote validation,
-coverage minimum, and weighting boundary without changing this measurement
-meaning.
+The focused feature specification must define its evidenced quote validation
+and stale-age boundary without changing this measurement meaning.
 
 ### PG-FEATURE-05 — corrections and coverage gaps
 
@@ -313,7 +315,10 @@ failure affects T/Q-derived fields only. It cannot suppress or reorder
 aggregate ranking or invalidate aggregate-derived fields.
 
 After dropped or unsubscribed T/Q coverage, affected measurements warm again
-from new covered events. The product must not silently bridge the gap.
+from new covered events. The product must not silently bridge the gap. Quiet
+acknowledged coverage is not a gap: Tape Rate advances to genuine numeric zero
+when its trailing windows contain no qualifying trades, while Spread retains
+the last valid quote with increasing age and stale status.
 
 ## 7. Trade and quote product behavior
 
@@ -328,8 +333,9 @@ normally disabled subsystem.
 
 ### PG-TAQ-02 — aggregate-protecting degradation
 
-If processing load threatens aggregate timeliness or correctness, the scanner
-degrades T/Q before aggregate processing:
+If direct shared-feed consumption evidence shows that processing load threatens
+aggregate timeliness or correctness, the scanner degrades T/Q before aggregate
+processing:
 
 1. It may stop expensive T/Q feature processing while continuing to read and
    classify the shared stream.
@@ -340,7 +346,11 @@ degrades T/Q before aggregate processing:
    fresh measurement warm-up.
 
 The T/Q component specification must set thresholds and restoration timing from
-capacity evidence while preserving this priority order.
+queue occupancy, oldest-unread-frame age, actual capacity loss, T/Q retention
+bounds, and transport/accounting loss evidence while preserving this priority
+order. Heap size, goroutine count, generic engine-delivery latency, delivery-
+family attribution, and quiet/no-message sampling windows are diagnostics only;
+they cannot enter, prolong, or reset T/Q pressure state.
 
 ### PG-TAQ-03 — selected-population scope
 

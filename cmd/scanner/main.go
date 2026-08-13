@@ -23,6 +23,8 @@ import (
 	"github.com/belandresj/live-equities-momentum-scanner/internal/snapshotapi"
 )
 
+const defaultCheckpointMode = "off"
+
 const liveHydrationResponseByteBudget = int64(4 << 30)
 
 func productionLiveQueueConfig() massive.LiveQueueConfig {
@@ -51,7 +53,7 @@ func run(ctx context.Context, arguments []string) error {
 	referenceDirectory := flags.String("reference-dir", filepath.Join("var", "reference"), "Component 1 cache directory")
 	checkpointDirectory := flags.String("checkpoint-dir", filepath.Join("var", "checkpoints"), "private local checkpoint directory")
 	diagnosticDirectory := flags.String("diagnostic-dir", filepath.Join("var", "diagnostics"), "private local bounded incident directory")
-	checkpointMode := flags.String("checkpoint-mode", "on", "live checkpoint mode: on or off")
+	checkpointMode := flags.String("checkpoint-mode", defaultCheckpointMode, "live checkpoint mode: on or off")
 	restOrigin := flags.String("rest-origin", "https://api.massive.com", "Massive HTTPS origin")
 	websocketEndpoint := flags.String("websocket-endpoint", "wss://socket.massive.com/stocks", "Massive stocks WebSocket endpoint")
 	replayArtifact := flags.String("replay-artifact", "", "validated complete aggregate replay artifact")

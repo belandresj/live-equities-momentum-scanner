@@ -11,7 +11,7 @@ function clearPartialTQ(snapshot) {
   for (const row of snapshot.rows) {
     row.tq_membership = { desired: false, provider_present: false, provider_membership_unknown: false };
     row.tape_rate = { status: "unselected", reason: "", trade_coverage: false, one_second: { status: "unselected", reason: "", trades_per_second: null }, five_second: { status: "unselected", reason: "", trades_per_second: null }, timestamp_basis: "", lifecycle_records_observed: false };
-    row.spread = { status: "unselected", reason: "", quote_coverage: false, cents: null, basis_points: null, valid_duration_ms: 0, quality: "" };
+    row.spread = { status: "unselected", reason: "", quote_coverage: false, cents: null, basis_points: null, quote_age_ms: 0, quality: "" };
   }
 }
 
@@ -32,13 +32,23 @@ test("P-C11-STATE preserves server order, units, zero, and TQ trust", () => {
   assert.equal(model.rows[0].tape.primary, "1.4/s");
   assert.equal(model.rows[0].spread.primary, "15.0 bps / 1.50¢");
   assert.match(model.rows[0].tape.detail, /coverage yes; timestamp mixed; lifecycle records observed/);
-  assert.match(model.rows[0].spread.detail, /coverage yes; duration 5000 ms; quality reviewed_ordinary/);
+  assert.match(model.rows[0].spread.detail, /coverage yes; quote age 500 ms; quality reviewed_ordinary/);
 	assert.doesNotMatch(model.rows[0].tape.detail, /burst|one-second/);
   assert.match(model.rows[0].tape.detail, /membership desired yes, provider present, unknown no/);
   assert.equal(model.tqKnownPresent, 20); assert.equal(model.tqUnknown, 0); assert.equal(model.tqRetainedBoundHit, false);
   assert.ok(model.diagnostics.some(([name, value]) => name === "operations.deliveries" && value === "10"));
   assert.deepEqual(model.rows.map(row => row.symbol), snapshot.rows.map(row => row.symbol));
   assert.ok(model.rows.every((row, index) => index === 0 || Number.parseFloat(model.rows[index - 1].day) >= Number.parseFloat(row.day)), "visual fixture must be plausible Day-% descending server order");
+});
+
+test("P-C11-STATE retains numeric Spread with age when stale", () => {
+  const snapshot = snapshotFixture(1);
+  snapshot.rows[0].spread.status = "stale";
+  snapshot.rows[0].spread.reason = "stale_quote";
+  snapshot.rows[0].spread.quote_age_ms = 5000;
+  const spread = buildViewModel(snapshot).rows[0].spread;
+  assert.equal(spread.primary, "15.0 bps / 1.50¢");
+  assert.equal(spread.secondary, "5.0s old · stale");
 });
 
 test("P-C11-STATE distinguishes exact empty, fewer, noncurrent, and independent TQ", () => {
@@ -101,9 +111,9 @@ test("P-C11-STATE distinguishes exact empty, fewer, noncurrent, and independent 
   const fieldModel = buildViewModel(fields); assert.equal(fieldModel.rows[0].from4am.state, "warming"); assert.equal(fieldModel.rows[0].hod.state, "unavailable"); assert.equal(fieldModel.rows[0].activity.state, "invalid");
 
   const pressure = snapshotFixture(1);
-  pressure.status.tq_pressure_mode = "aggregate_only"; pressure.status.tq_shed = true; pressure.tq.pressure_mode = "aggregate_only"; pressure.tq.aggregate_only = true; pressure.tq.shed = true;
+  pressure.status.tq_pressure_mode = "aggregate_only"; pressure.status.tq_shed = true; pressure.tq.pressure_mode = "aggregate_only"; pressure.tq.pressure_cause = "queue_occupancy"; pressure.tq.aggregate_only = true; pressure.tq.shed = true;
   pressure.rows[0].tape_rate = { ...pressure.rows[0].tape_rate, status: "pressure_shed", reason: "pressure", trade_coverage: false, timestamp_basis: "", one_second: { status: "pressure_shed", reason: "pressure", trades_per_second: null }, five_second: { status: "pressure_shed", reason: "pressure", trades_per_second: null } };
-  pressure.rows[0].spread = { ...pressure.rows[0].spread, status: "pressure_shed", reason: "pressure", quote_coverage: false, cents: null, basis_points: null, valid_duration_ms: 0, quality: "" };
+  pressure.rows[0].spread = { ...pressure.rows[0].spread, status: "pressure_shed", reason: "pressure", quote_coverage: false, cents: null, basis_points: null, quote_age_ms: 0, quality: "" };
   const pressureModel = buildViewModel(pressure);
   assert.equal(pressureModel.current, true, "TQ pressure must not change aggregate readiness");
   assert.equal(pressureModel.tqAggregateOnly, true); assert.equal(pressureModel.rows[0].tape.state, "pressure_shed"); assert.equal(pressureModel.rows[0].spread.state, "pressure_shed");
@@ -156,6 +166,8 @@ test("P-C11-STATE rejects every known contradiction and accounting break", () =>
     snapshot => { snapshot.recovery.work.failed = "1"; },
     snapshot => { snapshot.recovery.rows.rejected = "1"; },
     snapshot => { snapshot.tq.facts.rejected = "1"; },
+    snapshot => { snapshot.tq.facts.applied_trades = "3"; },
+    snapshot => { snapshot.tq.pressure_cause = "fabricated"; },
     snapshot => { snapshot.tq.commands.failed = "1"; },
     snapshot => { snapshot.checkpoint.failed = "1"; },
   ];
@@ -182,8 +194,8 @@ test("P-C11-STATE rejects contradictory known field and TQ trust tuples", () => 
     snapshot => { snapshot.rows[0].tape_rate.five_second.reason = "pressure"; },
     snapshot => { snapshot.rows[0].spread.quote_coverage = false; },
     snapshot => { snapshot.rows[0].spread.quality = "fabricated"; },
-    snapshot => { snapshot.rows[0].spread.valid_duration_ms = 3999; },
-    snapshot => { snapshot.rows[0].spread.valid_duration_ms = 5001; },
+    snapshot => { snapshot.rows[0].spread.quote_age_ms = 3999; },
+    snapshot => { snapshot.rows[0].spread.quote_age_ms = 5001; },
     snapshot => { snapshot.rows[0].spread.cents = -0.01; },
     snapshot => { snapshot.rows[0].spread.basis_points = -0.01; },
     snapshot => { snapshot.rows[0].tape_rate.one_second.trades_per_second = -1; },

@@ -137,13 +137,13 @@ type TapeRate struct {
 }
 
 type Spread struct {
-	Status          string   `json:"status"`
-	Reason          string   `json:"reason"`
-	QuoteCoverage   bool     `json:"quote_coverage"`
-	Cents           *float64 `json:"cents"`
-	BasisPoints     *float64 `json:"basis_points"`
-	ValidDurationMS uint64   `json:"valid_duration_ms"`
-	Quality         string   `json:"quality"`
+	Status        string   `json:"status"`
+	Reason        string   `json:"reason"`
+	QuoteCoverage bool     `json:"quote_coverage"`
+	Cents         *float64 `json:"cents"`
+	BasisPoints   *float64 `json:"basis_points"`
+	QuoteAgeMS    uint64   `json:"quote_age_ms"`
+	Quality       string   `json:"quality"`
 }
 
 type TQMembership struct {
@@ -246,13 +246,19 @@ type Recovery struct {
 }
 
 type TQFacts struct {
-	Consumed     string `json:"consumed"`
-	Applied      string `json:"applied"`
-	Duplicate    string `json:"duplicate"`
-	Rejected     string `json:"rejected"`
-	Fenced       string `json:"fenced"`
-	PressureShed string `json:"pressure_shed"`
-	Integrity    string `json:"integrity"`
+	Consumed           string `json:"consumed"`
+	Applied            string `json:"applied"`
+	Duplicate          string `json:"duplicate"`
+	Rejected           string `json:"rejected"`
+	Fenced             string `json:"fenced"`
+	PressureShed       string `json:"pressure_shed"`
+	Integrity          string `json:"integrity"`
+	NormalizedTrades   string `json:"normalized_trades"`
+	NormalizedQuotes   string `json:"normalized_quotes"`
+	AppliedTrades      string `json:"applied_trades"`
+	AppliedQuotes      string `json:"applied_quotes"`
+	PressureShedTrades string `json:"pressure_shed_trades"`
+	PressureShedQuotes string `json:"pressure_shed_quotes"`
 }
 
 type TQCommands struct {
@@ -267,6 +273,7 @@ type TQCommands struct {
 type TQ struct {
 	DesiredSymbols       []string   `json:"desired_symbols"`
 	PressureMode         string     `json:"pressure_mode"`
+	PressureCause        string     `json:"pressure_cause"`
 	AggregateOnly        bool       `json:"aggregate_only"`
 	Shed                 bool       `json:"shed"`
 	RetainedBoundHit     bool       `json:"retained_bound_hit"`

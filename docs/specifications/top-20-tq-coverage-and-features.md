@@ -1,9 +1,8 @@
 # Top-20 T/Q coverage and features
 
-**Status:** Component 9 finally reaccepted 2026-08-13 after the owner-directed
-attributed delivery recovery-gate correction; membership, features,
-degradation, aggregate-only, queue/heap/goroutine, dwell, and aggregate-
-independence behavior remain accepted
+**Status:** Component 9 reaccepted after the 2026-08-13 owner-directed waiting-
+pressure and frame-local protection correction; deterministic, ordinary,
+affected race, vet, and diff verification pass
 
 **Boundary approval:** Approved 2026-08-07 by the owner through the Version 1
 Release Program revision
@@ -37,11 +36,12 @@ Sections 8-19 are completed here after just-in-time V2 reconnaissance.
 | --- | --- | --- | --- |
 | Boundary/reconnaissance plan | `accepted` | Direct owner V1 program revision; C8 finally accepted; recorded V2 scope inspected | Complete |
 | Completed contract | `accepted_current_plan` | Focused read-only review clean after corrections for ambiguous membership, accounting failure domains, bounds, out-of-order quote time, pressure authority/expiry, and the distinct acknowledged Q time/causal boundaries | Complete; remains revisable through the correction loop |
-| `C9-S1` membership/coverage/features | `accepted_after_owner_revision` | Owner shortened Spread to a five-second weighted median with four-of-five valid-duration coverage; focused boundary/window proof, ordinary/race verification, and focused read-only review pass | Complete |
-| `C9-S2` pressure/shedding/restoration | `accepted` | `P-C9-PRESSURE`; ordinary and affected race gates; focused corrections and re-review clean | Complete |
-| `C9-S2-H` current-host heap gates | `accepted_after_correction_review` | The 2026-08-12 preserved live snapshot measured 1,785,959,440 bytes of Go heap while T/Q was `aggregate_only`; the 512-MiB degraded, 1.25-GiB aggregate-only, and 384-MiB recovery gates made normal T/Q and recovery structurally unreachable for that aggregate baseline. Owner direction on 2026-08-13 selected 2.5-GiB recovery, 3.25-GiB degraded, and 4-GiB aggregate-only heap gates for the private 8-GiB Apple M1 host. Exact boundary proof, ordinary/race verification, vet/diff, and focused final review pass. | Complete locally; current-host live behavior remains to be observed without claiming portable capacity. |
-| `C9-S2-L` attributed recovery delivery gate | `accepted_after_owner_revision` | Owner direction on 2026-08-13 revised only recovery from delivery `<500 ms` to an attributed delivery maximum `<1 s`. `TestPC9RecoveryDeliveryGateBoundariesAndAttribution` proves exact below/equal boundaries, all preserved policy constants, delayed-result fencing, and unknown-attribution rejection; focused, ordinary, race, vet, and diff gates pass. | Complete locally; provider behavior and a saturation frontier remain unclaimed. |
-| Final component review | `accepted_prior_review_preserved` | Original reviews and the heap-correction re-review remain valid. The recovery-only scalar threshold and fail-closed boolean add no new owner, concurrency linearization, persistence/atomicity, or external false-success authority; exact construction and primary proof made another independent review unnecessary under the V1 risk cadence. | Complete; reopen only through the V1 correction loop. |
+| `C9-S1` membership/coverage/features | `reaccepted_after_owner_correction` | Latest valid two-sided non-crossed quote plus age, quiet numeric stale Spread, zero Tape Rate, O(1) quote state, invalid one-sided/crossed proof, and exact 20-row desired boundary pass | Complete locally |
+| `C9-S2` pressure/shedding/restoration | `reaccepted_after_owner_correction` | Waiting frame/byte/oldest-age pressure, diagnostic-only active-frame age, separate loss/accounting/bound containment, guarded aggregate lag, exact five-sample recovery, 500-ms frame-local protection, serialized restoration, and aggregate-independence proofs pass | Complete locally |
+| `C9-S2-H/L/P` prior host/probe gates | `superseded` | Heap, goroutine, generic delivery latency, attribution, empty-window, and top-one gates are invalidated by the latest owner direction and are retained below only as historical correction evidence | No executable code, configuration, or current proof depends on them |
+| `C9-S2-D` direct-pressure/latest-quote correction | `superseded_pressure_definition` | Owner-directed product correction and checkpoint-off evidence: acknowledged rank-1 T/Q produced Tape Rate, then false pressure shed it despite negligible queue depth | Preserved as evidence; D8/W owns current pressure semantics |
+| `C9-S2-W` waiting-pressure/frame-local correction | `accepted` | Owner evidence proved normal top-20 delivery with 43/32,768 queue high-water and the active frame as the sole false pressure cause; exact focused/ordinary/race/vet/diff proofs pass | Complete locally; live/provider capacity remains unclaimed |
+| Final correction review decision | `not_triggered` | The correction changes bounded scalar policy, projection semantics, and diagnostics but adds no mutable owner, concurrency linearization, persistence/atomicity, or external-success authority; distinguishing construction/proofs make the boundary straightforward under the V1 risk cadence | Complete; reopen only through the V1 correction loop |
 
 ## 1-4. Outcome, scope, ownership, and settled boundary
 
@@ -57,9 +57,9 @@ In scope:
   begin per-channel causal coverage only after acknowledged boundaries;
 - implement Tape Rate's five-second and one-second qualifying-original trade
   rates with evidenced conditions and explicit lifecycle limitations;
-- implement five-second time-weighted median validated NBBO spread in cents and
-  basis points, including locked-zero and unavailable crossed/one-sided/stale/
-  insufficient-coverage behavior;
+- implement latest valid two-sided non-crossed NBBO spread in cents and basis
+  points with quote age, locked-zero, retained numeric stale behavior during
+  quiet continuous coverage, and explicit crossed/one-sided states;
 - clear measurements across gaps, maintain continuous warm-up, report coverage
   and field status, and add no Tape Rate attention threshold;
 - reject expensive T/Q before aggregate/control, permit complete T/Q
@@ -168,42 +168,23 @@ states `qualifying_original_prints`, participant/SIP-fallback/mixed timestamp
 basis, and whether unapplied lifecycle records occurred; C9 does not claim an
 exact corrected tape and defines no attention threshold.
 
-`C9-SPREAD-01` — Q-channel events are provider NBBO observations. Positive
-bid/ask with `ask >= bid` is feature-valid; locked quotes are valid zero and
-crossed quotes are an invalid timeline state. Bounded condition/indicator
-metadata is retained as reviewed-ordinary, known-special, or unclassified
-quality evidence but is not guessed into a disallow rule without a reviewed
-source. Each valid quote carries from its SIP time until the earlier of the
-next quote, two seconds, or `T`. Within `[T-5s,T)`, separately compute cents
-`100*(ask-bid)` and basis points
-`10000*(ask-bid)/((ask+bid)/2)`. The weighted median is the first sorted value
-whose cumulative duration is at least half of total valid duration. Spread is
-current only when the latest timeline state at `T` is valid and no older than
-two seconds and at least four seconds of the five-second window has valid quote
-duration. Less than four seconds is `warming` before four seconds of channel
-coverage and `unavailable/insufficient_coverage` afterward. A latest crossed
-state is `invalid`; an expired valid quote is `stale`. Cents and basis points
-are absent in every non-current state.
+`C9-SPREAD-01` — Q-channel events are provider NBBO observations. The causally
+latest positive two-sided quote with `ask >= bid` is feature-valid; locked
+quotes are valid zero. Compute cents as `100*(ask-bid)` and basis points as
+`10000*(ask-bid)/((ask+bid)/2)`. Publish that numeric spread immediately with
+nonnegative age `max(0,T-SIP)` while acknowledged Q coverage remains
+continuous. Age greater than two seconds changes status to `stale` but retains
+both numeric values. A causally latest one-sided quote makes Spread unavailable;
+a causally latest crossed quote makes it invalid. Neither may fabricate or
+replace the retained valid numeric quote, and neither exposes that numeric
+value while it is the latest observed quote state.
 
-Every quote-duration segment is additionally intersected with the current
-acknowledged Q-channel coverage interval. A causally post-ack late quote whose
-SIP time precedes the acknowledgement can be retained as event-time evidence,
-but contributes no duration before `max(SIP,Q-coverage-start)` and can never
-help satisfy coverage outside that intersection. `Q-coverage-start` is the
-normalized UTC receipt time of the correlated successful acknowledgement,
-recorded atomically with its causal position and clamped to the session
-interval `[S,E]`. The causal position remains the ordering boundary for which
-items are covered; the clamped receipt time is the distinct market-time
-boundary used for quote duration and warm-up. No caller or quote timestamp may
-substitute for it.
-
-Causally ordered quote observations may arrive out of SIP event-time order.
-An observation with `SIP < T-10s` is rejected as too late for the mutable
-Spread window. Otherwise it is inserted into the retained 12-second timeline
-and may revise weighted duration on the next projection. Timeline order is
-`(SIP time, live causal position)`; at the same SIP boundary the causally later
-observation supersedes the earlier state. No observation is shifted to receipt
-time or into a later window.
+The engine retains only the latest observed quote state and latest valid quote
+per selected symbol, O(1) state independent of quote rate. The correlated
+acknowledgement causal position remains the admission boundary. A real coverage
+gap, unsubscribe, connection loss/epoch change, session end, or retained-state
+failure clears both retained states. Quiet time and an empty delivery window do
+not clear them.
 
 `C9-STATUS-01` — Membership and each channel/field independently report a
 bounded state and reason. At minimum: `unselected`, `warming`, `current`,
@@ -213,65 +194,64 @@ crossed quote, condition/identity ambiguity, incomplete lifecycle, epoch/control
 failure, state bound, and pressure. One field may be current while the other is
 unavailable. None of these states gates aggregate readiness.
 
-`C9-PRESSURE-01` — The engine consumes fixed-cardinality samples of current C5
-queue occupancy/oldest-frame age, one-second maximum engine-delivery delay,
-heap allocation, goroutine count, and decoder accounting. It owns three states:
+`C9-PRESSURE-01` — The engine consumes fixed-cardinality samples of current
+waiting raw-frame count/bytes and capacities, oldest waiting raw-frame age,
+active/classifying-frame age, separate cumulative slot/byte capacity drops,
+aggregate watermark lag, transport/T/Q accounting integrity, T/Q work
+presence, and the existing retention-bound state. Waiting measurements exclude
+the active/classifying frame; an empty waiting queue has zero oldest-waiting
+age. Active-frame age, heap, goroutine count, generic delivery latency,
+delivery-family attribution, checkpoint metrics, and checkpoint mode are not
+global pressure predicates. It owns three states:
 
 Each sample is requested by one private engine-issued command containing the
 current binding, monotonically increasing sample sequence, and engine issue
 time. Exactly one command may be outstanding. The returned scalars are
 accepted only for that command within two seconds; stale, duplicate,
 out-of-order, foreign-binding, and superseded samples are fenced without
-changing pressure. Persistence and recovery dwell use serialized engine
-admission time, never caller sample time or the count of queued samples. A
-delayed burst of healthy results therefore cannot manufacture 30 seconds of
-recovery.
+changing pressure. Entry and recovery require consecutive accepted one-second
+samples; caller time and queued-result count cannot manufacture a streak.
 
 An engine timer expires an outstanding sample command two seconds after its
-engine issue time. Expiry is an engine-owned terminal transition: it clears the
-outstanding command so the next timer can issue a fresh sequence, fences every
-later result for the expired sequence, and conservatively enters
-`taq_degraded` on the first consecutive miss. A second consecutive expiry
-enters `aggregate_only`; only a timely admitted sample resets the consecutive-
-expiry count. Missing results or results delayed by the congestion being
-measured therefore cannot leave pressure `normal` or disable subsequent
-sampling.
+engine issue time. Expiry clears the command, counts/fences the missing result,
+and permits a fresh sequence. A missing or late sample is diagnostic and cannot
+shed T/Q; it also cannot advance a consecutive entry or recovery streak. Empty
+waiting windows are healthy unless direct waiting, loss, bound, accounting, or
+watermark evidence says otherwise.
 
 | State | Entry | Consequence |
 | --- | --- | --- |
 | `normal` | Default/recovered | Selected T/Q is normalized and admitted. |
-| `taq_degraded` | Any of queue >=50%, oldest >=250 ms, delivery >=2 s, heap >=3.25 GiB, or goroutines >=64 persists 500 ms | Close all T/Q coverage and reject T/Q elements before expensive normalization; continue classifying every mixed frame. |
-| `aggregate_only` | Queue >=80%, oldest >=1.5 s, delivery >=5 s, heap >=4 GiB, goroutines >=128, or **T/Q-local** decode/accounting failure immediately; or degraded pressure persists 2 s | Keep early T/Q rejection and request paired unsubscribe for every known provider member, lowest current rank first, down to zero known membership; ambiguous members remain explicitly unknown until cleanup or epoch replacement. |
+| `taq_degraded` | Any one of oldest waiting age >=1 second, waiting frames >=10% of frame capacity, or waiting bytes >=10% of byte capacity persists for two consecutive one-second samples | Close all T/Q coverage and reject T/Q elements before expensive normalization while retaining provider membership; continue classifying every mixed frame. |
+| `aggregate_only` | Any one of oldest waiting age >=2 seconds, waiting frames >=25%, or waiting bytes >=25% persists for three consecutive one-second samples; aggregate watermark lag is >2 seconds for two consecutive samples while T/Q work/membership exists; or a new slot/byte capacity drop, queue/adapter/transport/T/Q accounting loss, or global retention bound occurs immediately | Keep early T/Q rejection and request paired unsubscribe for every known provider member, lowest current rank first, down to zero known membership; ambiguous members remain explicitly unknown until cleanup or epoch replacement. |
 
-Recovery requires queue <20%, oldest <100 ms, an attributed one-second maximum
-delivery delay strictly below 1 second, heap <2.5 GiB, goroutines <48, and
-coherent decoder/transport accounting continuously for 30 seconds and at least
-15 seconds since degradation. `Attributed` means the atomic C8 maximum pair has
-a reconciled, non-`unknown` closed work family; an absent, mixed, incoherent, or
-otherwise unknown winner resets recovery dwell. A result admitted after its
-two-second pressure-command deadline is fenced before it can affect dwell. C9
-uses attribution only as recovery evidence: the exact family and per-family
-counts cannot alter any threshold or pressure state.
+Recovery requires exactly five consecutive accepted one-second samples with
+waiting frames and bytes each below 1% capacity, oldest waiting age below 250
+ms, aggregate watermark lag <=1 second, no new capacity drops, coherent
+queue/adapter/transport/T/Q accounting, and no global retention bound.
+Active-frame age does not reset recovery. A result admitted after its two-second
+pressure-command deadline is fenced before it can affect a streak. Recovery
+returns to normal and issues at most one paired command at a time; each
+correlated acknowledgement permits the next current-ranked symbol immediately.
 
-Recovery returns to `normal`, then restores one current desired symbol at a
-time in rank order, no faster than one successful acknowledgement per five
-seconds. Every restored symbol starts new coverage and warm-up. The queue, age,
-goroutine, accounting, two-second degraded-delivery, and five-second
-aggregate-only delivery gates remain the conservative provisional V1 settings
-relative to C5's hard queue limits and the product's two-second readiness
-tolerance. The revised heap gates are a private current-host profile: they give
-the observed 1.786-GB
-(1.663-GiB) aggregate baseline approximately 1.59 GiB before optional T/Q
-shedding, retain a further 0.75 GiB before full provider unsubscription, and
-permit recovery after T/Q state is cleared. They are not a measured saturation
-frontier, portable capacity claim, or SLA; current-host live observation may
-revise them again below fixed aggregate-correctness limits.
+Independently of global mode, one active raw frame has a 500-ms monotonic
+classification budget. Once consumed, C5 continues parsing the frame but
+rejects its remaining T/Q elements before expensive normalization; later
+aggregate/control elements remain in exact array order. Each shed element is
+counted and closes affected causal T/Q continuity, but active-frame age alone
+cannot enter `taq_degraded` or `aggregate_only`. This adds no goroutine, queue,
+or mutable owner.
+
+Every restored symbol starts new coverage and warm-up. There is no restoration
+sleep beyond the serialized provider acknowledgement: after one ranked paired
+command succeeds, the engine may issue the next ranked paired command.
 
 `C9-BOUNDS-01` — Per covered symbol retain only the trailing six seconds of raw
 trade contributions/lifecycle timestamps, 16 minutes of compact trade-identity
-fingerprints, and 12 seconds of quote timeline. Hard per-symbol/global bounds
-are respectively 50,000/500,000 raw trade or lifecycle contributions,
-100,000/1,000,000 compact identities, and 20,000/400,000 quote observations.
+fingerprints, and two quote records: the latest observed state and latest valid
+state (which may be the same record). Hard per-symbol/global trade bounds are
+50,000/500,000 contributions and 100,000/1,000,000 compact identities. Quote
+state is O(1) per desired symbol and at most 40 records across 20 symbols.
 Duplicates, incomplete identities, excluded conditions, and lifecycle records
 are either counted without retention or charged to one of these bounded
 families; there is no unaccounted retained slice/map. A symbol bound closes
@@ -323,9 +303,10 @@ preserves its binding/epoch/token/action/symbol. Its normalization option is an
 atomic attempt-local boolean derived from the engine pressure view; even when
 set, cursor classification continues element by element and aggregate/control
 delivery is unchanged. Each intentional T/Q normalization rejection is
-counted. C5 adds current frame capacity, current oldest raw-frame receipt age,
-and cumulative T/Q-local normalization accounting without changing queue
-ownership. C8 adds a separate one-second maximum delivery-delay accumulator
+counted. C5 exposes waiting raw-frame count/bytes/capacities and oldest waiting
+age separately from diagnostic active-frame age, plus separate cumulative
+slot/byte drops and T/Q classified/normalized/rejected/pressure-shed accounting,
+without changing queue ownership. C8 adds a separate one-second maximum delivery-delay accumulator
 that resets only when the pressure sample is admitted; its existing lifetime
 maximum remains unchanged for operator reporting. The operations timer samples
 pressure once per second, and command synchronization runs after timer and
@@ -338,12 +319,11 @@ non-`unknown` attribution. The exact family, tie order, and attribution counts
 are not pressure predicates and cannot alter thresholds, degradation,
 aggregate-only entry, shedding, or restoration order.
 
-A mixed-frame or required aggregate/control classification/accounting failure
-is not a C9 pressure sample: C5 emits the existing aggregate-ingress integrity
-fact and the engine follows recovery/suppression. Only an identity proven to
-contain T/Q-local classifications and intentional drops may set the
-`TQLocalAccountingHealthy=false` pressure predicate. Queue and adapter
-accounting must reconcile before a sample is admitted.
+A mixed-frame or required aggregate/control classification ambiguity is not a
+scalar C9 pressure sample: C5 emits the existing aggregate-ingress integrity
+fact and the engine follows recovery/suppression. Scalar queue, adapter,
+transport, or T/Q normalization accounting incoherence immediately enters
+`aggregate_only`; it cannot fabricate aggregate corruption or readiness.
 
 Checkpoint and replay schemas remain unchanged: ephemeral membership,
 coverage, pressure, and instantaneous measurements start empty after restart,
@@ -370,14 +350,13 @@ counters.
 
 ## 13. Primary proofs
 
-`P-C9-TAQ` is one compact deterministic engine/C5 trace with two rank-ordered
-symbols. It proves desired membership, private paired command correlation,
+`P-C9-TAQ` is one compact deterministic engine/C5 trace plus the exact 20-row
+membership boundary. It proves desired membership, private paired command correlation,
 both acknowledgement elements represented by the final C5 boundary, pre-ack
 rejection, post-ack warming, exact trade identity/dedup/condition/SIP-fallback
-behavior, covered zero, locked/crossed/stale/partial/current spread, independent
-field reasons, a within-horizon out-of-order quote revision and too-late quote
-rejection, a post-ack quote with pre-coverage SIP that cannot backfill duration,
-the exact configured bound constants plus structurally identical overflow
+behavior, quiet covered numeric zero, locked/crossed/one-sided/current spread,
+retained numeric stale spread with increasing quote age, independent field
+reasons, O(1) quote retention, the exact configured bound constants plus structurally identical overflow
 containment at small private proof bounds, gap clearing, rank
 removal, connection-loss clearing, and fresh resubscription. It snapshots
 aggregate evaluation/rank/readiness before and after and requires exact
@@ -385,9 +364,12 @@ equality. Limitation: the reviewed fixture supports
 qualifying originals but not complete provider lifecycle reconstruction or
 live entitlement.
 
-`P-C9-PRESSURE` is one controlled mixed-frame/runtime trace. It crosses the
-degraded and aggregate-only thresholds, proves T/Q is rejected only after
-element classification, proves a later aggregate and control fact in the same
+`P-C9-PRESSURE` is one controlled mixed-frame/runtime trace. It crosses exact
+10%/25%, one-/two-second, two-/three-sample, byte/frame, capacity-drop,
+accounting, retention, and watermark-lag boundaries; proves the active frame is
+excluded from waiting pressure; proves T/Q is rejected only after element
+classification; proves the 500-ms frame-local budget sheds later T/Q while a
+later aggregate and control fact in the same
 raw frame still apply, reaches zero provider T/Q membership, preserves
 aggregate watermark/ranking/readiness, holds recovery during unhealthy/dwell
 samples, then restores current symbols one-by-one in rank order with new
@@ -397,17 +379,17 @@ successful cleanup and a failed cleanup that remains
 accounting failure into `aggregate_only`, while a mixed-frame accounting
 ambiguity follows the existing global ingress-integrity path. It validates all
 pressure/drop/command/accounting identities and bounds before interpreting
-results. A delayed/duplicate healthy pressure-result trace is fenced and cannot
-advance engine-time recovery dwell. The delivery-recovery boundary separately
-proves exactly 1 second cannot recover, 1 nanosecond below can recover only
-after 30 continuous seconds, and an equally low but `unknown`/unattributed
-maximum cannot start or advance dwell. Missing and more-than-two-second
-unhealthy results exercise engine-owned expiry, fresh command issuance,
-first-miss degradation, and second-miss aggregate-only containment; their later
-results cannot restore `normal`. Limitation: the proof validates policy
-behavior at conservative
-provisional gates; it does not locate a current-host saturation frontier or
-claim provider capacity, market-hours behavior, or an SLA.
+results. A delayed/duplicate pressure result is fenced and cannot advance
+engine-time recovery dwell. Missing diagnostic results are counted/fenced and
+fresh sampling continues, but silence alone cannot change pressure. Separate
+distinguishing cases prove empty
+windows advance five-sample recovery, heap/goroutine/generic-latency/attribution
+spikes cannot change pressure, a new cumulative capacity drop enters
+`aggregate_only` immediately without making the old cumulative count permanent,
+and missing diagnostic samples do not create pressure. Limitation: the proof
+validates policy behavior at conservative direct gates; it does not locate a
+current-host saturation frontier or claim provider capacity, market-hours
+behavior, or an SLA.
 
 ## 14. Verification tiers and acceptance
 
@@ -487,6 +469,11 @@ remain solely in S2; its contracted boundary remains valid.
 
 ### C9-S2 and final acceptance record
 
+This is the historical original S2 acceptance record. Later owner correction
+records below supersede its thresholds, missing-sample behavior, and restoration
+pacing while preserving its still-valid ownership and aggregate-independence
+evidence.
+
 The engine now owns one fixed one-second pressure-sampling authority with
 opaque, monotonically sequenced commands, a two-second terminal deadline, and
 bounded missing-sample progress. The first missed sample enters
@@ -532,7 +519,97 @@ safety settings, and no provider credential, market-hours, capacity, or SLA
 claim is made. Component 10 may rely on the accepted C9 view and accounting
 boundary without making ranking depend on T/Q health.
 
-### C9-S2-H current-host heap-gate correction — 2026-08-13
+### Historical C9-S2-D direct-pressure/latest-valid-quote correction — 2026-08-13
+
+Direct owner instruction replaces the prior weighted Spread product meaning
+and invalidates C9 pressure gates that did not prove shared-feed consumption
+overload. Ordinary live startup now has no T/Q profile switch: desired
+membership is exactly the `qualified_current` displayed rank prefix up to 20.
+One paired command remains in flight, and each correlated acknowledgement
+permits the next ranked addition without a restoration sleep.
+
+Tape Rate remains current through acknowledged quiet coverage and reports
+numeric `0.0` for empty trailing windows. Spread is the causally latest valid
+two-sided non-crossed quote, retained as two numeric values plus nonnegative
+age; age over two seconds marks the value stale without hiding it. A latest
+one-sided/crossed observation remains unavailable/invalid. The engine keeps at
+most the latest observed and latest valid quote record per desired symbol.
+
+Pressure now uses only direct evidence. Queue occupancy at least 50% or oldest
+unread age at least 250 ms for two continuous seconds enters `taq_degraded`.
+Occupancy at least 80% or oldest unread age at least 1.5 seconds for five
+continuous seconds enters `aggregate_only`. A new queue-capacity drop, a T/Q
+retention-bound hit, or transport/T/Q accounting loss enters `aggregate_only`
+immediately. Recovery requires five continuous seconds below 20% occupancy and
+100 ms oldest unread age with no new loss. Heap, goroutines, generic delivery
+latency, delivery-family attribution, empty delivery windows, and diagnostic-
+sample silence cannot enter pressure or reset recovery.
+
+The distinguishing proofs cover quiet zero Tape Rate without membership loss,
+numeric stale Spread and increasing age, one-sided/crossed containment, exact
+20-row desired membership, backlog degradation/unsubscription, empty-window
+recovery, immediate capacity loss, diagnostics-only spikes, ranked serialized
+restoration, separate normalized/applied/shed trade and quote counters, and
+aggregate evaluation/watermark/readiness independence. The first full ordinary
+run hit the pre-existing C8 bounded-exhaustion timing test once; its exact rerun
+passed, and the subsequent full ordinary run passed. Required affected race,
+vet, UI-model/visual, and diff gates also pass. No credential, provider request,
+or live-capacity claim was made.
+
+### C9-S2-W waiting-pressure/frame-local correction — 2026-08-13
+
+The checkpoint-off owner run invalidated only the accepted pressure-definition
+claim. All 20 paired subscriptions were acknowledged; 1,109 trades and 527
+quotes applied; Tape Rate and Spread populated; aggregate ranking stayed
+current; watermark lag was 0-1 second; queue high-water was 43/32,768 frames;
+capacity drops and recovery attempts were zero; accounting and retention were
+healthy; and process load remained 14-15 goroutines at substantially less than
+one CPU core. The sole transition cause was `oldest_unread_frame` because the
+sample treated the active/classifying frame as waiting from receipt through all
+serial element admissions. Normal provider batches could therefore exceed the
+old 250-ms threshold with no waiting backlog and could prevent the old below-
+100-ms recovery predicate indefinitely.
+
+This reopens only C9-S2 pressure/shedding/restoration. C5 now reports waiting
+raw frames, waiting bytes, capacities, and oldest waiting age independently
+from diagnostic active-frame age. The engine applies the exact owner-selected
+10%/1-second/two-sample transient degradation, 25%/2-second/three-sample
+aggregate-only escalation, immediate separate capacity-drop/accounting/bound
+containment, and >2-second/two-sample watermark-lag guard with T/Q work. Five
+exact healthy samples recover at below 1% frames/bytes, below 250-ms oldest
+waiting age, and at most one-second aggregate lag. Missing samples cannot shed
+or advance a streak. Active-frame age participates in none of those decisions.
+
+An independent 500-ms monotonic budget protects one unusually large active
+frame. The existing cursor continues parsing in array order, pressure-sheds
+only remaining T/Q before expensive normalization, admits later aggregates and
+controls, and routes each shed element through ordered engine drop accounting.
+The affected coverage is closed and must re-establish through the existing
+paired unsubscribe/resubscribe acknowledgement path; the frame alone does not
+change the global pressure mode. No extra queue, goroutine, state owner,
+top-one probe, minimum-degraded timer, or checkpoint dependency is introduced.
+
+The correction proof allocation is the exact boundary/sample tests, waiting-
+versus-active queue test, monotonic mixed-frame budget/order/accounting test,
+frame-local coverage-gap test, Runtime sampling/command trace, existing T/Q
+feature trace, and aggregate state/readiness equality checks. Deterministic
+proof cannot establish provider arrival distributions, live saturation, or an
+SLA. No credential, predecessor, provider request, process stop, live run,
+checkpoint redesign, ranking change, API redesign, or UI redesign is authorized.
+
+The allocated focused proofs pass. Repository ordinary verification passed
+`go test -short -timeout 2m ./...`; affected engine, Massive, operations, and
+snapshot API race verification passed under a five-minute command timeout;
+affected-package `go vet` and `git diff --check` pass. No independent review was
+triggered: the correction reuses the sole FIFO cursor, queue, engine owner, and
+ordered drop admission, and its concurrency/order consequence is explicit by
+construction and primary proof. D8 is accepted locally with live/provider
+behavior still unclaimed.
+
+### Historical, superseded C9-S2-H current-host heap-gate correction — 2026-08-13
+
+The latest direct owner correction invalidates these gates. This subsection is
+non-executable history; heap no longer participates in C9 pressure.
 
 The preserved 2026-08-12 live snapshot invalidated only C9's provisional heap
 profile. Its 1,785,959,440-byte aggregate baseline exceeded the old immediate
@@ -559,7 +636,11 @@ headroom. No provider request or credential access occurred. The revised
 profile is current-host policy, not evidence of market-hours T/Q behavior, a
 portable capacity limit, or an SLA.
 
-### C9-S2-L attributed recovery delivery-gate correction — 2026-08-13
+### Historical, superseded C9-S2-L attributed recovery delivery-gate correction — 2026-08-13
+
+The latest direct owner correction invalidates this gate. This subsection is
+non-executable history; generic delivery latency and attribution no longer
+participate in C9 pressure.
 
 Owner direction revised only the recovery delivery predicate from below 500 ms
 to an attributed one-second maximum strictly below 1 second. Runtime derives
@@ -593,9 +674,68 @@ was triggered because this is a scalar recovery-policy revision with a
 fail-closed derived predicate, not a new ownership, ordering, persistence, or
 external-evidence boundary.
 
+### Historical, removed C9-S2-P explicit top-one current-host probe — 2026-08-13
+
+The latest direct owner correction removes this profile and restores ordinary
+ranked desired membership up to 20. This subsection records the observation
+that motivated the correction; it defines no current flag, profile, or proof.
+
+The owner-authorized checkpoint-off live run invalidated the lower-level
+premise that the conservative normal recovery profile could provide even a
+single observable T/Q trial on the current 8-GiB host. Aggregate processing was
+materially improved without checkpoints: the ordinary watermark was usually
+one second behind, the queue was commonly 0-35 frames, the provider connection
+remained in epoch 1 with zero recovery attempts, and checkpoint work stayed
+zero. The T/Q path nevertheless acknowledged one paired subscription, consumed
+15 T/Q facts, pressure-shed 13, acknowledged cleanup, and retained no trades or
+quotes. Recovery samples alternated between approximately 1.70-2.15 GiB with
+sub-second delivery and 2.51-2.60 GiB with 1.136-1.223-second delivery, so the
+strict below-2.5-GiB/below-one-second predicates repeatedly reset the 30-second
+dwell before another subscription could be issued.
+
+The correction adds one explicit, non-default scanner startup profile named
+`top-one-probe`. It is diagnostic delivery configuration, not normal product
+coverage: normal remains every displayed row up to 20 under `PG-TAQ-01`. The
+probe derives desired membership from exactly the first current
+`qualified_current` row, preserving existing aggregate Day-%/symbol rank order;
+it cannot select by Activity, T/Q arrival, or any browser fact. It retains one
+paired command in flight, acknowledgement-defined causal coverage, fresh
+warm-up, five-second restoration pacing, mixed-frame classification, and every
+normal degradation and aggregate-only predicate. Only recovery changes to heap
+strictly below 3 GiB, attributed one-second delivery maximum strictly below 1.5
+seconds, and 10 continuous healthy seconds. Queue, oldest-frame age,
+goroutines, attribution, accounting, and minimum-degraded predicates remain
+unchanged.
+
+`TestPC9TopOneProbeProfileIsExplicitAndBounded` is the primary correction
+proof. It must prove the default profile still desires two ranked fixture rows
+and retains the complete accepted normal pressure policy; the probe desires
+only rank 1; exact 3-GiB and 1.5-second boundaries cannot recover; one byte and
+one nanosecond below recover only after 10 continuous healthy seconds; and the
+2-second degraded, 5-second aggregate-only, 3.25-GiB degraded, and 4-GiB
+aggregate-only gates are identical to normal. Scanner flag parsing must reject
+the probe in replay and reject unknown profiles. Existing `P-C9-PRESSURE`
+continues to prove aggregate evaluation and committed-watermark independence.
+
+This profile answers only whether one acknowledged rank-1 stream can remain
+covered and produce Tape Rate/Spread evidence without making aggregates stale
+on this host. It does not establish top-20 capacity, provider entitlement,
+portable thresholds, or an SLA. A live failure leaves the normal product
+contract unchanged and routes the next decision to resource fit, not another
+subscription architecture.
+
+The correction proof passed with the existing normal pressure regressions and
+scanner configuration proof. `go test -short -timeout 2m ./... -count=1`,
+affected `go test -race -short -timeout 5m ./internal/engine
+./internal/operations ./cmd/scanner -count=1`, `go vet ./...`, and
+`git diff --check` all passed. No independent review was triggered: the closed
+profile changes scalar delivery settings and a privately validated desired-rank
+prefix without changing provider acknowledgement causality, mutable ownership,
+persistence, concurrency linearization, or external-evidence acceptance.
+
 Reopen S1 if a normalized shape cannot carry the stated identity/quality facts,
-paired acknowledgement cannot prove per-symbol/channel coverage, the weighted
-window admits a boundary ambiguity, or any T/Q fact can change aggregate
+paired acknowledgement cannot prove per-symbol/channel coverage, retained quote
+age/value semantics become ambiguous, or any T/Q fact can change aggregate
 evaluation. Reopen S2 if early rejection can hide a mixed-frame aggregate or
 control item, pressure inputs are not recent/fixed-cardinality, complete
 unsubscription cannot distinguish known zero from unknown membership, or

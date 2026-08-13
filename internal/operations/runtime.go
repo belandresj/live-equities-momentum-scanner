@@ -297,19 +297,14 @@ func (r *Runtime) syncTQPressure(ctx context.Context) {
 		return
 	}
 	metrics := r.metricsSnapshot()
-	if failedIdentity, failed := firstFailedIngressIdentity(metrics); failed {
-		prior := r.engine.ObserveSnapshot()
-		admission, completion := r.engine.AdmitOperationalIngressIntegrity(ctx)
-		if admission == engine.AdmissionAdmitted && completion != nil {
-			select {
-			case <-ctx.Done():
-			case <-completion:
-				r.recordRuntimeAccountingIncident(failedIdentity, metrics, prior.Publication)
-			}
-		}
-		return
+	failedIdentity, accountingFailed := firstFailedIngressIdentity(metrics)
+	prior := engine.ReplayPublicationView{}
+	if accountingFailed {
+		prior = r.engine.ObserveSnapshot().Publication
 	}
 	sample := r.pressureSampler(metrics)
+	tq := r.engine.ObserveTQ()
+	sample.TQWorkPresent = sample.TQWorkPresent || len(tq.Desired) > 0 || tq.Accounting.KnownPresent > 0 || tq.Accounting.Unknown > 0
 	input, err := engine.NewTQPressureResultInput(command, sample)
 	if err != nil {
 		return
@@ -331,6 +326,9 @@ func (r *Runtime) syncTQPressure(ctx context.Context) {
 			}
 			r.deliveryWindowMu.Unlock()
 		}
+	}
+	if accountingFailed {
+		r.recordRuntimeAccountingIncident(failedIdentity, metrics, prior)
 	}
 	r.metricsMu.Lock()
 	attempt := r.attempt
@@ -416,7 +414,7 @@ func ingressDiagnosticSampleFromMetrics(metrics Metrics, active massive.ActiveDe
 		FramesRejectedSlot: q.FramesRejectedSlotCapacity, FramesRejectedByte: q.FramesRejectedByteCapacity,
 		QueuedFrames: q.FramesQueued, ClassifyingFrames: q.FramesClassifying, HighFrames: q.HighFramesQueued,
 		QueuedBytes: q.QueuedBytes, HighBytes: q.HighQueuedBytes, CapacityFrames: q.CapacityFrames, CapacityBytes: q.CapacityBytes,
-		OldestFrameAge: q.OldestFrameAge, ActiveDeliveryKind: active.Kind, ActiveDeliveryAge: active.Age,
+		OldestWaitingFrameAge: q.OldestWaitingFrameAge, ActiveDeliveryKind: active.Kind, ActiveDeliveryAge: active.Age,
 		MaxDeliveryDelayOneSecond: metrics.MaxProcessingDelayOneSecond, Deliveries: metrics.Deliveries,
 		Lifecycle: metrics.Engine.Lifecycle, HydrationPlanned: h.Planned, HydrationOpen: h.Open,
 	}
@@ -448,19 +446,25 @@ func (r *Runtime) FirstIngressIncident() *IngressIncident {
 }
 
 func defaultTQPressureSample(metrics Metrics) engine.TQPressureSample {
-	capacity := uint64(0)
+	frameCapacity, byteCapacity := uint64(0), uint64(0)
 	if metrics.LiveQueue.CapacityFrames > 0 {
-		capacity = uint64(metrics.LiveQueue.CapacityFrames)
+		frameCapacity = uint64(metrics.LiveQueue.CapacityFrames)
+	}
+	if metrics.LiveQueue.CapacityBytes > 0 {
+		byteCapacity = uint64(metrics.LiveQueue.CapacityBytes)
 	}
 	attribution := metrics.DeliveryLatencyAttribution
 	attributed := attribution.MaximumFamily != DeliveryLatencyUnknown &&
 		attribution.MaximumDuration == metrics.MaxProcessingDelayOneSecond &&
 		attribution.Reconciles(metrics.Deliveries)
 	return engine.TQPressureSample{
-		QueueCurrentFrames:  metrics.QueueCurrentFrames,
-		QueueCapacityFrames: capacity, OldestFrameAge: metrics.LiveQueue.OldestFrameAge,
+		WaitingFrames: uint64(metrics.LiveQueue.FramesQueued), FrameCapacity: frameCapacity,
+		WaitingBytes: uint64(metrics.LiveQueue.QueuedBytes), ByteCapacity: byteCapacity,
+		OldestWaitingFrameAge: metrics.LiveQueue.OldestWaitingFrameAge, ActiveFrameAge: metrics.LiveQueue.ActiveFrameAge,
+		SlotCapacityDrops: metrics.LiveQueue.FramesRejectedSlotCapacity, ByteCapacityDrops: metrics.LiveQueue.FramesRejectedByteCapacity,
+		AggregateWatermarkLag:  metrics.WatermarkLag,
 		MaxDeliveryDelayOneSec: metrics.MaxProcessingDelayOneSecond, DeliveryLatencyAttributed: attributed, HeapAllocBytes: metrics.HeapAllocBytes,
-		Goroutines: metrics.Goroutines, TQLocalAccountingHealthy: metrics.TQNormalization.Reconciles(),
+		Goroutines: metrics.Goroutines, TQLocalAccountingHealthy: metrics.LiveQueue.Reconciles() && metrics.Adapter.Reconciles() && metrics.TQNormalization.Reconciles(),
 	}
 }
 

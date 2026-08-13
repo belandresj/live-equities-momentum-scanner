@@ -14,10 +14,30 @@ const (
 	TQPressureAggregateOnly TQPressureMode = "aggregate_only"
 )
 
+type TQPressureCause string
+
+const (
+	TQPressureCauseNone                TQPressureCause = ""
+	TQPressureCauseWaitingFrames       TQPressureCause = "waiting_frames"
+	TQPressureCauseWaitingBytes        TQPressureCause = "waiting_bytes"
+	TQPressureCauseOldestWaitingFrame  TQPressureCause = "oldest_waiting_frame"
+	TQPressureCauseWatermarkLag        TQPressureCause = "aggregate_watermark_lag"
+	TQPressureCauseCapacityDrop        TQPressureCause = "capacity_drop"
+	TQPressureCauseRetentionBound      TQPressureCause = "tq_retention_bound"
+	TQPressureCauseTransportAccounting TQPressureCause = "transport_accounting_loss"
+)
+
 type TQPressureSample struct {
-	QueueCurrentFrames        uint64
-	QueueCapacityFrames       uint64
-	OldestFrameAge            time.Duration
+	WaitingFrames             uint64
+	FrameCapacity             uint64
+	WaitingBytes              uint64
+	ByteCapacity              uint64
+	OldestWaitingFrameAge     time.Duration
+	ActiveFrameAge            time.Duration
+	SlotCapacityDrops         uint64
+	ByteCapacityDrops         uint64
+	AggregateWatermarkLag     time.Duration
+	TQWorkPresent             bool
 	MaxDeliveryDelayOneSec    time.Duration
 	DeliveryLatencyAttributed bool
 	HeapAllocBytes            uint64
@@ -47,45 +67,41 @@ type TQPressureResultInput struct {
 type frozenTQPressureResultInput struct{ TQPressureResultInput }
 
 type tqPressurePolicy struct {
-	sampleCadence, commandTimeout, degradedDwell, aggregateDwell      time.Duration
-	recoveryDwell, minimumDegraded, restoreInterval                   time.Duration
-	degradedQueuePercent, aggregateQueuePercent, recoveryQueuePercent uint64
-	degradedOldest, aggregateOldest, recoveryOldest                   time.Duration
-	degradedDelivery, aggregateDelivery, recoveryDelivery             time.Duration
-	degradedHeap, aggregateHeap, recoveryHeap                         uint64
-	degradedGoroutines, aggregateGoroutines, recoveryGoroutines       int
+	sampleCadence, commandTimeout                                        time.Duration
+	degradedQueuePercent, aggregateQueuePercent, recoveryQueuePercent    uint64
+	degradedOldest, aggregateOldest, recoveryOldest                      time.Duration
+	degradedSamples, aggregateSamples, watermarkSamples, recoverySamples uint8
 }
-
-const (
-	tqRecoveryHeapBytes  = uint64(2560) << 20
-	tqDegradedHeapBytes  = uint64(3328) << 20
-	tqAggregateHeapBytes = uint64(4096) << 20
-)
 
 func defaultTQPressurePolicy() tqPressurePolicy {
 	return tqPressurePolicy{
-		sampleCadence: time.Second, commandTimeout: 2 * time.Second, degradedDwell: 500 * time.Millisecond, aggregateDwell: 2 * time.Second,
-		recoveryDwell: 30 * time.Second, minimumDegraded: 15 * time.Second, restoreInterval: 5 * time.Second,
-		degradedQueuePercent: 50, aggregateQueuePercent: 80, recoveryQueuePercent: 20,
-		degradedOldest: 250 * time.Millisecond, aggregateOldest: 1500 * time.Millisecond, recoveryOldest: 100 * time.Millisecond,
-		degradedDelivery: 2 * time.Second, aggregateDelivery: 5 * time.Second, recoveryDelivery: time.Second,
-		degradedHeap: tqDegradedHeapBytes, aggregateHeap: tqAggregateHeapBytes, recoveryHeap: tqRecoveryHeapBytes,
-		degradedGoroutines: 64, aggregateGoroutines: 128, recoveryGoroutines: 48,
+		sampleCadence: time.Second, commandTimeout: 2 * time.Second,
+		degradedQueuePercent: 10, aggregateQueuePercent: 25, recoveryQueuePercent: 1,
+		degradedOldest: time.Second, aggregateOldest: 2 * time.Second, recoveryOldest: 250 * time.Millisecond,
+		degradedSamples: 2, aggregateSamples: 3, watermarkSamples: 2, recoverySamples: 5,
 	}
 }
 
+type tqPressureStreaks struct {
+	degradedFrames, degradedBytes, degradedOldest    uint8
+	aggregateFrames, aggregateBytes, aggregateOldest uint8
+	watermark, healthy                               uint8
+}
+
 type tqPressureState struct {
-	mode              TQPressureMode
-	pending           *TQPressureCommand
-	dispatched        bool
-	nextSequence      uint64
-	consecutiveMisses uint32
-	unhealthySince    time.Time
-	degradedAt        time.Time
-	recoverySince     time.Time
-	transitions       uint64
-	fenced            uint64
-	lastTick          time.Time
+	mode                         TQPressureMode
+	pending                      *TQPressureCommand
+	dispatched                   bool
+	nextSequence                 uint64
+	consecutiveMisses            uint32
+	degradedAt                   time.Time
+	streaks                      tqPressureStreaks
+	transitions                  uint64
+	fenced                       uint64
+	lastTick                     time.Time
+	cause                        TQPressureCause
+	lastSlotDrops, lastByteDrops uint64
+	capacityObserved             bool
 }
 
 func (e *Engine) AdmitTQPressureTick(ctx context.Context) (AdmissionResult, <-chan Disposition) {
@@ -138,7 +154,8 @@ func validTQPressureCommand(v TQPressureCommand) bool {
 }
 
 func validTQPressureSample(v TQPressureSample) bool {
-	return v.QueueCapacityFrames > 0 && v.QueueCurrentFrames <= v.QueueCapacityFrames && v.OldestFrameAge >= 0 &&
+	return v.FrameCapacity > 0 && v.WaitingFrames <= v.FrameCapacity && v.ByteCapacity > 0 && v.WaitingBytes <= v.ByteCapacity &&
+		v.OldestWaitingFrameAge >= 0 && v.ActiveFrameAge >= 0 && v.AggregateWatermarkLag >= 0 &&
 		v.MaxDeliveryDelayOneSec >= 0 && v.Goroutines >= 0
 }
 
@@ -158,27 +175,19 @@ func (e *Engine) advanceTQPressureTimerLocked(now time.Time) {
 				missed = 2
 			}
 			p.consecutiveMisses += missed
-			p.recoverySince = time.Time{}
-			if p.consecutiveMisses >= 2 {
-				e.setTQPressureModeLocked(TQPressureAggregateOnly, now)
-			} else {
-				e.setTQPressureModeLocked(TQPressureDegraded, now)
-			}
+			p.streaks = tqPressureStreaks{}
+			// A missed diagnostic sample is not direct feed-consumption pressure.
 		} else if p.pending != nil && elapsed >= e.tqPressurePolicy.commandTimeout+e.tqPressurePolicy.sampleCadence {
 			p.consecutiveMisses++
-			p.recoverySince = time.Time{}
-			e.setTQPressureModeLocked(TQPressureDegraded, now)
+			p.streaks = tqPressureStreaks{}
+			// Keep the current pressure state; the next tick issues fresh work.
 		}
 	}
 	p.lastTick = now
 	if p.pending != nil && !now.Before(p.pending.issuedAt.Add(e.tqPressurePolicy.commandTimeout)) {
 		p.pending, p.dispatched = nil, false
 		p.consecutiveMisses++
-		if p.consecutiveMisses >= 2 {
-			e.setTQPressureModeLocked(TQPressureAggregateOnly, now)
-		} else {
-			e.setTQPressureModeLocked(TQPressureDegraded, now)
-		}
+		p.streaks = tqPressureStreaks{}
 	}
 	if p.pending == nil {
 		if p.nextSequence == 0 {
@@ -199,11 +208,6 @@ func (e *Engine) applyTQPressureResultLocked(node *queueNode) (DispositionCode, 
 	if node.admissionTime.After(v.command.issuedAt.Add(e.tqPressurePolicy.commandTimeout)) {
 		p.pending, p.dispatched = nil, false
 		p.consecutiveMisses++
-		if p.consecutiveMisses >= 2 {
-			e.setTQPressureModeLocked(TQPressureAggregateOnly, node.admissionTime)
-		} else {
-			e.setTQPressureModeLocked(TQPressureDegraded, node.admissionTime)
-		}
 		p.fenced++
 		return DispositionTQFenced, ReasonHistoricalContext
 	}
@@ -214,56 +218,92 @@ func (e *Engine) applyTQPressureResultLocked(node *queueNode) (DispositionCode, 
 
 func (e *Engine) applyTQPressureSampleLocked(sample TQPressureSample, now time.Time) {
 	p, policy := &e.state.tq.pressure, e.tqPressurePolicy
-	severe := !sample.TQLocalAccountingHealthy || pressureQueueAtLeast(sample, policy.aggregateQueuePercent) || sample.OldestFrameAge >= policy.aggregateOldest ||
-		sample.MaxDeliveryDelayOneSec >= policy.aggregateDelivery || sample.HeapAllocBytes >= policy.aggregateHeap || sample.Goroutines >= policy.aggregateGoroutines
-	unhealthy := pressureQueueAtLeast(sample, policy.degradedQueuePercent) || sample.OldestFrameAge >= policy.degradedOldest ||
-		sample.MaxDeliveryDelayOneSec >= policy.degradedDelivery || sample.HeapAllocBytes >= policy.degradedHeap || sample.Goroutines >= policy.degradedGoroutines
-	healthy := sample.TQLocalAccountingHealthy && sample.DeliveryLatencyAttributed && pressureQueueBelow(sample, policy.recoveryQueuePercent) && sample.OldestFrameAge < policy.recoveryOldest &&
-		sample.MaxDeliveryDelayOneSec < policy.recoveryDelivery && sample.HeapAllocBytes < policy.recoveryHeap && sample.Goroutines < policy.recoveryGoroutines
-	if severe {
-		p.unhealthySince, p.recoverySince = now, time.Time{}
-		e.setTQPressureModeLocked(TQPressureAggregateOnly, now)
+	capacityDrop := !p.capacityObserved && (sample.SlotCapacityDrops > 0 || sample.ByteCapacityDrops > 0) ||
+		p.capacityObserved && (sample.SlotCapacityDrops > p.lastSlotDrops || sample.ByteCapacityDrops > p.lastByteDrops)
+	if !p.capacityObserved || sample.SlotCapacityDrops >= p.lastSlotDrops && sample.ByteCapacityDrops >= p.lastByteDrops {
+		p.lastSlotDrops, p.lastByteDrops = sample.SlotCapacityDrops, sample.ByteCapacityDrops
+		p.capacityObserved = true
+	} else {
+		p.streaks = tqPressureStreaks{}
+		e.setTQPressureModeLocked(TQPressureAggregateOnly, now, TQPressureCauseTransportAccounting)
 		return
 	}
-	if unhealthy {
-		p.recoverySince = time.Time{}
-		if p.unhealthySince.IsZero() {
-			p.unhealthySince = now
-		}
-		if p.mode == TQPressureNormal && !now.Before(p.unhealthySince.Add(policy.degradedDwell)) {
-			e.setTQPressureModeLocked(TQPressureDegraded, now)
-		}
-		if p.mode == TQPressureDegraded && !now.Before(p.unhealthySince.Add(policy.aggregateDwell)) {
-			e.setTQPressureModeLocked(TQPressureAggregateOnly, now)
-		}
+	if capacityDrop {
+		p.streaks = tqPressureStreaks{}
+		e.setTQPressureModeLocked(TQPressureAggregateOnly, now, TQPressureCauseCapacityDrop)
 		return
 	}
-	p.unhealthySince = time.Time{}
+	if !sample.TQLocalAccountingHealthy {
+		p.streaks = tqPressureStreaks{}
+		e.setTQPressureModeLocked(TQPressureAggregateOnly, now, TQPressureCauseTransportAccounting)
+		return
+	}
+	s := &p.streaks
+	s.degradedFrames = nextPressureStreak(s.degradedFrames, pressureAtLeast(sample.WaitingFrames, sample.FrameCapacity, policy.degradedQueuePercent))
+	s.degradedBytes = nextPressureStreak(s.degradedBytes, pressureAtLeast(sample.WaitingBytes, sample.ByteCapacity, policy.degradedQueuePercent))
+	s.degradedOldest = nextPressureStreak(s.degradedOldest, sample.OldestWaitingFrameAge >= policy.degradedOldest)
+	s.aggregateFrames = nextPressureStreak(s.aggregateFrames, pressureAtLeast(sample.WaitingFrames, sample.FrameCapacity, policy.aggregateQueuePercent))
+	s.aggregateBytes = nextPressureStreak(s.aggregateBytes, pressureAtLeast(sample.WaitingBytes, sample.ByteCapacity, policy.aggregateQueuePercent))
+	s.aggregateOldest = nextPressureStreak(s.aggregateOldest, sample.OldestWaitingFrameAge >= policy.aggregateOldest)
+	s.watermark = nextPressureStreak(s.watermark, sample.TQWorkPresent && sample.AggregateWatermarkLag > 2*time.Second)
+	healthy := pressureBelow(sample.WaitingFrames, sample.FrameCapacity, policy.recoveryQueuePercent) &&
+		pressureBelow(sample.WaitingBytes, sample.ByteCapacity, policy.recoveryQueuePercent) &&
+		sample.OldestWaitingFrameAge < policy.recoveryOldest && sample.AggregateWatermarkLag <= time.Second
 	if p.mode == TQPressureNormal {
-		p.recoverySince = time.Time{}
+		s.healthy = 0
+	} else {
+		s.healthy = nextPressureStreak(s.healthy, healthy)
+	}
+	if s.aggregateFrames >= policy.aggregateSamples {
+		e.setTQPressureModeLocked(TQPressureAggregateOnly, now, TQPressureCauseWaitingFrames)
 		return
 	}
-	if !healthy {
-		p.recoverySince = time.Time{}
+	if s.aggregateBytes >= policy.aggregateSamples {
+		e.setTQPressureModeLocked(TQPressureAggregateOnly, now, TQPressureCauseWaitingBytes)
 		return
 	}
-	if p.recoverySince.IsZero() {
-		p.recoverySince = now
+	if s.aggregateOldest >= policy.aggregateSamples {
+		e.setTQPressureModeLocked(TQPressureAggregateOnly, now, TQPressureCauseOldestWaitingFrame)
+		return
 	}
-	if !now.Before(p.recoverySince.Add(policy.recoveryDwell)) && !now.Before(p.degradedAt.Add(policy.minimumDegraded)) {
-		e.setTQPressureModeLocked(TQPressureNormal, now)
+	if s.watermark >= policy.watermarkSamples {
+		e.setTQPressureModeLocked(TQPressureAggregateOnly, now, TQPressureCauseWatermarkLag)
+		return
+	}
+	if p.mode == TQPressureNormal {
+		if s.degradedFrames >= policy.degradedSamples {
+			e.setTQPressureModeLocked(TQPressureDegraded, now, TQPressureCauseWaitingFrames)
+		} else if s.degradedBytes >= policy.degradedSamples {
+			e.setTQPressureModeLocked(TQPressureDegraded, now, TQPressureCauseWaitingBytes)
+		} else if s.degradedOldest >= policy.degradedSamples {
+			e.setTQPressureModeLocked(TQPressureDegraded, now, TQPressureCauseOldestWaitingFrame)
+		}
+		return
+	}
+	if s.healthy >= policy.recoverySamples {
+		e.setTQPressureModeLocked(TQPressureNormal, now, TQPressureCauseNone)
 	}
 }
 
-func pressureQueueAtLeast(sample TQPressureSample, percent uint64) bool {
-	return sample.QueueCurrentFrames*100 >= sample.QueueCapacityFrames*percent
+func nextPressureStreak(current uint8, present bool) uint8 {
+	if !present {
+		return 0
+	}
+	if current < ^uint8(0) {
+		return current + 1
+	}
+	return current
 }
 
-func pressureQueueBelow(sample TQPressureSample, percent uint64) bool {
-	return sample.QueueCurrentFrames*100 < sample.QueueCapacityFrames*percent
+func pressureAtLeast(current, capacity, percent uint64) bool {
+	return current*100 >= capacity*percent
 }
 
-func (e *Engine) setTQPressureModeLocked(mode TQPressureMode, now time.Time) {
+func pressureBelow(current, capacity, percent uint64) bool {
+	return current*100 < capacity*percent
+}
+
+func (e *Engine) setTQPressureModeLocked(mode TQPressureMode, now time.Time, cause TQPressureCause) {
 	p, s := &e.state.tq.pressure, &e.state.tq
 	if mode == TQPressureNormal && s.globalBound {
 		return
@@ -275,6 +315,11 @@ func (e *Engine) setTQPressureModeLocked(mode TQPressureMode, now time.Time) {
 		return
 	}
 	p.mode, p.transitions = mode, p.transitions+1
+	if mode == TQPressureNormal {
+		p.cause = TQPressureCauseNone
+	} else if cause != TQPressureCauseNone {
+		p.cause = cause
+	}
 	switch mode {
 	case TQPressureDegraded:
 		if p.degradedAt.IsZero() {
@@ -293,9 +338,9 @@ func (e *Engine) setTQPressureModeLocked(mode TQPressureMode, now time.Time) {
 		}
 		e.enterTQAggregateOnlyLocked()
 	case TQPressureNormal:
-		p.unhealthySince, p.recoverySince, p.degradedAt = time.Time{}, time.Time{}, time.Time{}
+		p.streaks, p.degradedAt = tqPressureStreaks{}, time.Time{}
 		if !s.globalBound {
-			s.aggregateOnly, s.restoring, s.restoreNotBefore = false, true, now
+			s.aggregateOnly = false
 		}
 	}
 }

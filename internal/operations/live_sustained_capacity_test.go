@@ -117,11 +117,11 @@ func TestLiveSustainedAggregateCapacity(t *testing.T) {
 		case <-ticker.C:
 			queue := attempt.QueueAccounting()
 			highFrames = max(highFrames, queue.FramesQueued)
-			maximumOldest = max(maximumOldest, queue.OldestFrameAge)
+			maximumOldest = max(maximumOldest, queue.OldestWaitingFrameAge)
 			if midpointQueued == 0 && time.Now().After(plannedStart.Add(liveSustainedCapacityDuration/2)) {
 				midpointQueued = queue.FramesQueued
 			}
-			if liveContentionFrameRejections(queue, queueBaseline) != 0 || queue.FramesQueued > 1024 || queue.OldestFrameAge > 250*time.Millisecond {
+			if liveContentionFrameRejections(queue, queueBaseline) != 0 || queue.FramesQueued > 1024 || queue.OldestWaitingFrameAge > 250*time.Millisecond {
 				t.Fatalf("capacity safety boundary queue=%+v high=%d oldest=%s", queue, highFrames, maximumOldest)
 			}
 		case <-ctx.Done():
@@ -134,7 +134,7 @@ sent:
 	for time.Now().Before(drainDeadline) {
 		queue := attempt.QueueAccounting()
 		highFrames = max(highFrames, queue.FramesQueued)
-		maximumOldest = max(maximumOldest, queue.OldestFrameAge)
+		maximumOldest = max(maximumOldest, queue.OldestWaitingFrameAge)
 		if queue.FramesDispositioned-queueBaseline.FramesDispositioned == uint64(liveSustainedCapacityFrames) && queue.FramesQueued == 0 && queue.FramesClassifying == 0 {
 			break
 		}

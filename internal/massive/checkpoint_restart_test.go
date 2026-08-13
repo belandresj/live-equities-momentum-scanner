@@ -159,9 +159,9 @@ func TestC7OBJECTIVE01CurrentHostRestart(t *testing.T) {
 		artifactBytes                                                                int64
 	}
 	runs, fresh := make([]segments, trials), make([]time.Duration, trials)
-	// The supported private launcher owns exactly two hydration workers. Keep
-	// the restart and fresh controls on that production configuration instead
-	// of scaling the fake server by host CPU count.
+	// Preserve the accepted 2026-08-12 two-worker restart/fresh comparison
+	// instead of changing its baseline when the later daily launcher default
+	// changes or scaling the fake server by host CPU count.
 	workers := 2
 	for run := range runs {
 		checkpointContext, cancelCheckpoint := context.WithTimeout(context.Background(), trialTimeout)

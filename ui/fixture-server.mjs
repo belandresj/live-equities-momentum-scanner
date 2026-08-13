@@ -23,10 +23,10 @@ function fixture(name) {
   }
   if (name === "tq") {
     snapshot.status.tq_pressure_mode = "aggregate_only"; snapshot.status.tq_shed = true;
-    snapshot.tq.pressure_mode = "aggregate_only"; snapshot.tq.aggregate_only = true; snapshot.tq.shed = true; snapshot.tq.retained_bound_hit = true; snapshot.tq.unknown = 1; snapshot.tq.known_present = 19;
+    snapshot.tq.pressure_mode = "aggregate_only"; snapshot.tq.pressure_cause = "tq_retention_bound"; snapshot.tq.aggregate_only = true; snapshot.tq.shed = true; snapshot.tq.retained_bound_hit = true; snapshot.tq.unknown = 1; snapshot.tq.known_present = 19;
     for (const [index, row] of snapshot.rows.entries()) {
       row.tape_rate = { status: "pressure_shed", reason: "pressure", trade_coverage: false, one_second: { status: "pressure_shed", reason: "pressure", trades_per_second: null }, five_second: { status: "pressure_shed", reason: "pressure", trades_per_second: null }, timestamp_basis: "", lifecycle_records_observed: row.tape_rate.lifecycle_records_observed };
-      row.spread = { status: "pressure_shed", reason: "pressure", quote_coverage: false, cents: null, basis_points: null, valid_duration_ms: 0, quality: "" };
+      row.spread = { status: "pressure_shed", reason: "pressure", quote_coverage: false, cents: null, basis_points: null, quote_age_ms: 0, quality: "" };
       row.tq_membership.provider_present = index !== 0;
       row.tq_membership.provider_membership_unknown = index === 0;
     }

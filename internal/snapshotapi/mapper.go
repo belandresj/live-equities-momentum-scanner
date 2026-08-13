@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/belandresj/live-equities-momentum-scanner/internal/engine"
+	"github.com/belandresj/live-equities-momentum-scanner/internal/massive"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/operations"
 )
 
@@ -52,7 +53,7 @@ func mapCaptureView(capture operations.SnapshotCaptureView) (Snapshot, error) {
 		Rows:       make([]Row, len(publication.AggregateEvaluation.Rows)),
 		Accounting: mapAccounting(publication.AggregateEvaluation),
 		Recovery:   mapRecovery(operational.Hydration),
-		TQ:         mapTQ(capture.Engine.TQ),
+		TQ:         mapTQ(capture.Engine.TQ, capture.Metrics.TQNormalization),
 		Checkpoint: mapCheckpoint(operational.InstalledCheckpoint, capture.Metrics),
 		Operations: mapOperations(capture.Metrics, operational),
 	}
@@ -189,15 +190,16 @@ func mapRecovery(value engine.OperationalHydration) Recovery {
 			Rejected: decimal(rows.Rejected), Fenced: decimal(rows.Fenced), Integrity: decimal(rows.Integrity)}}
 }
 
-func mapTQ(value engine.TQView) TQ {
+func mapTQ(value engine.TQView, normalization massive.TQNormalizationAccounting) TQ {
 	a, c := value.Accounting, value.Commands
-	return TQ{DesiredSymbols: append([]string{}, value.Desired...), PressureMode: string(value.Pressure), AggregateOnly: value.AggregateOnly,
+	return TQ{DesiredSymbols: append([]string{}, value.Desired...), PressureMode: string(value.Pressure), PressureCause: string(value.PressureCause), AggregateOnly: value.AggregateOnly,
 		Shed: value.ShedTradesQuotes, RetainedBoundHit: value.Bounds, PressureMisses: uint64(value.PressureMisses),
 		PressureTransitions: decimal(value.PressureTransitions), PressureFenced: decimal(value.PressureFenced),
 		KnownPresent: uint64(a.KnownPresent), KnownAbsent: uint64(a.KnownAbsent), Unknown: uint64(a.Unknown), RetainedTrades: uint64(a.RetainedTrades),
 		RetainedQuotes: uint64(a.RetainedQuotes), RetainedFingerprints: uint64(a.RetainedFingerprints),
 		Facts: TQFacts{Consumed: decimal(a.Consumed), Applied: decimal(a.Applied), Duplicate: decimal(a.Duplicate), Rejected: decimal(a.Rejected),
-			Fenced: decimal(a.Fenced), PressureShed: decimal(a.PressureShed), Integrity: decimal(a.Integrity)},
+			Fenced: decimal(a.Fenced), PressureShed: decimal(a.PressureShed), Integrity: decimal(a.Integrity), NormalizedTrades: decimal(normalization.NormalizedTrades), NormalizedQuotes: decimal(normalization.NormalizedQuotes), AppliedTrades: decimal(a.AppliedTrades),
+			AppliedQuotes: decimal(a.AppliedQuotes), PressureShedTrades: decimal(a.PressureShedTrades), PressureShedQuotes: decimal(a.PressureShedQuotes)},
 		Commands: TQCommands{Issued: decimal(c.Issued), Pending: decimal(c.Pending), Acknowledged: decimal(c.Acknowledged), Failed: decimal(c.Failed),
 			Fenced: decimal(c.Fenced), ResultFenced: decimal(c.ResultFenced)}}
 }
@@ -266,8 +268,8 @@ func mapRow(row engine.ReplayRankingRowView, tq engine.TQSymbolView) (Row, error
 		FiveSecond:     mapRate(tq.Tape.FiveSecondStatus, tq.Tape.FiveSecondReason, tq.Tape.FiveSecond),
 		TimestampBasis: tq.Tape.TimestampBasis, LifecycleRecordsObserved: tq.Tape.LifecycleRecordsObserved}
 	result.Spread = Spread{Status: string(tq.Spread.Status), Reason: tq.Spread.Reason, QuoteCoverage: tq.QuoteCoverage,
-		ValidDurationMS: durationMilliseconds(tq.Spread.ValidDuration), Quality: tq.Spread.Quality}
-	if tq.Spread.Status == engine.TQCurrent {
+		QuoteAgeMS: durationMilliseconds(tq.Spread.QuoteAge), Quality: tq.Spread.Quality}
+	if tq.Spread.Status == engine.TQCurrent || tq.Spread.Status == engine.TQStale {
 		result.Spread.Cents, result.Spread.BasisPoints = floatPointer(tq.Spread.Cents), floatPointer(tq.Spread.BasisPoints)
 	}
 	return result, nil
@@ -345,6 +347,10 @@ func validateSnapshot(value Snapshot) error {
 		value.TQ.AggregateOnly != (value.TQ.PressureMode == "aggregate_only") || value.TQ.Shed != (value.TQ.PressureMode != "normal") {
 		return rejectMapping("tq_pressure_consistency")
 	}
+	if value.TQ.PressureMode == "normal" && value.TQ.PressureCause != "" || value.TQ.PressureMode != "normal" && !oneOf(value.TQ.PressureCause,
+		"waiting_frames", "waiting_bytes", "oldest_waiting_frame", "aggregate_watermark_lag", "capacity_drop", "tq_retention_bound", "transport_accounting_loss") {
+		return rejectMapping("tq_pressure_cause")
+	}
 	if !validOptionalTimestamp(value.Publication.CommittedT) || !validOptionalTimestamp(value.Recovery.Start) || !validOptionalTimestamp(value.Recovery.End) ||
 		!validOptionalTimestamp(value.Recovery.SupportedThrough) || !validOptionalTimestamp(value.Publication.HydrationFence.SupportedThrough) ||
 		!validOptionalTimestamp(checkpoint.LastAttemptedT0) || !validOptionalTimestamp(checkpoint.LastProjectedT0) ||
@@ -381,6 +387,9 @@ func validateSnapshot(value Snapshot) error {
 	}
 	if !sumDecimalEquals(tq.Consumed, tq.Applied, tq.Duplicate, tq.Rejected, tq.Fenced, tq.PressureShed, tq.Integrity) {
 		return rejectMapping("tq_fact_identity")
+	}
+	if !validDecimal(tq.NormalizedTrades) || !validDecimal(tq.NormalizedQuotes) || !decimalSumAtMost(tq.Applied, tq.AppliedTrades, tq.AppliedQuotes) || !sumDecimalEquals(tq.PressureShed, tq.PressureShedTrades, tq.PressureShedQuotes) {
+		return rejectMapping("tq_family_fact_identity")
 	}
 	if !sumDecimalEquals(commands.Issued, commands.Pending, commands.Acknowledged, commands.Failed, commands.Fenced) {
 		return rejectMapping("tq_command_identity")
@@ -469,7 +478,7 @@ func measurementsValid(row Row) bool {
 		return false
 	}
 	if !tqStatus(row.Spread.Status) || !tqReason(row.Spread.Reason) || !oneOf(row.Spread.Quality, "", "reviewed_ordinary", "known_special", "unclassified") ||
-		(row.Spread.Status == "current") != (row.Spread.Cents != nil && row.Spread.BasisPoints != nil) ||
+		(row.Spread.Status == "current" || row.Spread.Status == "stale") != (row.Spread.Cents != nil && row.Spread.BasisPoints != nil) ||
 		(row.Spread.Cents == nil) != (row.Spread.BasisPoints == nil) || row.Spread.Cents != nil && (!finite(*row.Spread.Cents) || !finite(*row.Spread.BasisPoints)) {
 		return false
 	}
@@ -693,6 +702,22 @@ func sumDecimalEquals(total string, terms ...string) bool {
 		sum += value
 	}
 	return sum == want
+}
+
+func decimalSumAtMost(total string, terms ...string) bool {
+	want, err := strconv.ParseUint(total, 10, 64)
+	if err != nil || decimal(want) != total {
+		return false
+	}
+	var sum uint64
+	for _, term := range terms {
+		value, err := strconv.ParseUint(term, 10, 64)
+		if err != nil || decimal(value) != term || math.MaxUint64-sum < value {
+			return false
+		}
+		sum += value
+	}
+	return sum <= want
 }
 
 func sumUint64Equals(total uint64, terms ...uint64) bool {

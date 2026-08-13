@@ -53,10 +53,10 @@ func (r *operatorRenderer) Render(sample liveOperatorSample, force bool) error {
 		}
 		if incident.Reason == "frame_slot_capacity" || incident.Reason == "frame_byte_capacity" {
 			readRate, dispositionRate := ingressRates(incident)
-			if _, err := fmt.Fprintf(r.stderr, "Capacity evidence · queued %d/%d · classifying %d · bytes %d/%d · remaining %d · incoming %d · high %d frames/%d bytes · oldest %s · active %s since %s for %s · read %s · disposition %s\n",
+			if _, err := fmt.Fprintf(r.stderr, "Capacity evidence · queued %d/%d · classifying %d · bytes %d/%d · remaining %d · incoming %d · high %d frames/%d bytes · oldest waiting %s · active %s since %s for %s · read %s · disposition %s\n",
 				incident.Queue.FramesQueued, incident.Queue.CapacityFrames, incident.Queue.FramesClassifying,
 				incident.Queue.QueuedBytes, incident.Queue.CapacityBytes, capacityRemainingBytes(incident), incident.IncomingFrameBytes,
-				incident.Queue.HighFramesQueued, incident.Queue.HighQueuedBytes, incident.Queue.OldestFrameAge,
+				incident.Queue.HighFramesQueued, incident.Queue.HighQueuedBytes, incident.Queue.OldestWaitingFrameAge,
 				capacityActiveKind(incident), capacityActiveStartedAt(incident), incident.ActiveDeliveryAgeAtCause, ingressRate(readRate), ingressRate(dispositionRate)); err != nil {
 				return err
 			}

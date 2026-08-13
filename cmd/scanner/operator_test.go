@@ -143,7 +143,7 @@ func TestLiveOperatorRendersDecisiveCapacityOperands(t *testing.T) {
 		Lifecycle: "suppressed", LifecycleReason: "ingress_integrity", IncomingFrameBytes: 16384,
 		ActiveDeliveryKind: massive.DeliveryAggregateIngressFence, ActiveDeliveryStartedAt: at.Add(-1250 * time.Millisecond), ActiveDeliveryAgeAtCause: 1250 * time.Millisecond, HistoryCount: 3, CapturedAt: at}
 	incident.Queue = massive.LiveQueueAccounting{FramesQueued: 1024, FramesClassifying: 1, QueuedBytes: 12 << 20, CapacityFrames: 1024, CapacityBytes: 128 << 20,
-		HighFramesQueued: 1024, HighQueuedBytes: 12 << 20, OldestFrameAge: 2 * time.Second}
+		HighFramesQueued: 1024, HighQueuedBytes: 12 << 20, OldestWaitingFrameAge: 2 * time.Second}
 	incident.History[0] = operations.IngressDiagnosticSample{CapturedAt: at.Add(-time.Second), FramesRead: 100, FramesDispositioned: 90}
 	incident.History[1] = operations.IngressDiagnosticSample{CapturedAt: at, FramesRead: 300, FramesDispositioned: 110}
 	incident.History[2] = operations.IngressDiagnosticSample{CapturedAt: at.Add(time.Second), FramesRead: 300, FramesDispositioned: 110}
@@ -153,7 +153,7 @@ func TestLiveOperatorRendersDecisiveCapacityOperands(t *testing.T) {
 	if err := renderer.Render(sample, true); err != nil {
 		t.Fatal(err)
 	}
-	want := "Capacity evidence · queued 1024/1024 · classifying 1 · bytes 12582912/134217728 · remaining 121634816 · incoming 16384 · high 1024 frames/12582912 bytes · oldest 2s · active aggregate_ingress_fence since " + at.Add(-1250*time.Millisecond).Format(time.RFC3339Nano) + " for 1.25s · read 200.0/s · disposition 20.0/s"
+	want := "Capacity evidence · queued 1024/1024 · classifying 1 · bytes 12582912/134217728 · remaining 121634816 · incoming 16384 · high 1024 frames/12582912 bytes · oldest waiting 2s · active aggregate_ingress_fence since " + at.Add(-1250*time.Millisecond).Format(time.RFC3339Nano) + " for 1.25s · read 200.0/s · disposition 20.0/s"
 	if !strings.Contains(stderr.String(), want) {
 		t.Fatalf("capacity output=%q", stderr.String())
 	}

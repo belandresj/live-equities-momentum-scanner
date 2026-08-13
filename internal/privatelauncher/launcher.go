@@ -64,14 +64,15 @@ func NotifyContext(parent context.Context) (context.Context, func()) {
 }
 
 type options struct {
-	tradingDate string
-	open        bool
-	help        bool
+	tradingDate      string
+	hydrationWorkers int
+	open             bool
+	help             bool
 }
 
 func parseOptions(arguments []string) (options, error) {
-	var result options
-	seenDate, seenOpen, seenHelp := false, false, false
+	result := options{hydrationWorkers: 8}
+	seenDate, seenWorkers, seenOpen, seenHelp := false, false, false, false
 	for index := 0; index < len(arguments); index++ {
 		switch arguments[index] {
 		case "--trading-date":
@@ -84,6 +85,27 @@ func parseOptions(arguments []string) (options, error) {
 			seenDate = true
 			index++
 			result.tradingDate = arguments[index]
+		case "--hydration-workers":
+			if seenWorkers {
+				return options{}, errors.New("--hydration-workers may be supplied only once")
+			}
+			if index+1 >= len(arguments) {
+				return options{}, errors.New("--hydration-workers requires 1, 2, 4, or 8")
+			}
+			seenWorkers = true
+			index++
+			switch arguments[index] {
+			case "1":
+				result.hydrationWorkers = 1
+			case "2":
+				result.hydrationWorkers = 2
+			case "4":
+				result.hydrationWorkers = 4
+			case "8":
+				result.hydrationWorkers = 8
+			default:
+				return options{}, errors.New("--hydration-workers must be one of 1, 2, 4, or 8")
+			}
 		case "--open":
 			if seenOpen {
 				return options{}, errors.New("--open may be supplied only once")
@@ -101,7 +123,7 @@ func parseOptions(arguments []string) (options, error) {
 			return options{}, fmt.Errorf("positional argument %q is not supported", arguments[index])
 		}
 	}
-	if result.help && (seenDate || seenOpen) {
+	if result.help && (seenDate || seenWorkers || seenOpen) {
 		return options{}, errors.New("--help cannot be combined with startup arguments")
 	}
 	if seenDate {
@@ -115,10 +137,7 @@ func parseOptions(arguments []string) (options, error) {
 
 func printHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "Usage:")
-	fmt.Fprintln(writer, "  ./scripts/run-private-scanner")
-	fmt.Fprintln(writer, "  ./scripts/run-private-scanner --trading-date YYYY-MM-DD")
-	fmt.Fprintln(writer, "  ./scripts/run-private-scanner --open")
-	fmt.Fprintln(writer, "  ./scripts/run-private-scanner --trading-date YYYY-MM-DD --open")
+	fmt.Fprintln(writer, "  ./scripts/run-private-scanner [--trading-date YYYY-MM-DD] [--hydration-workers 1|2|4|8] [--open]")
 }
 
 type launchPaths struct {
@@ -211,9 +230,10 @@ func run(ctx context.Context, repoRoot string, arguments []string, stdout, stder
 	scannerArguments := []string{
 		"--run-mode", "live",
 		"--trading-date", tradingDate,
-		"--hydration-workers", "2",
+		"--hydration-workers", fmt.Sprint(parsed.hydrationWorkers),
 		"--reference-dir", paths.reference,
 		"--checkpoint-dir", paths.checkpoints,
+		"--checkpoint-mode", "off",
 		"--api-address", scannerAddress,
 		"--allow-origin", dashboardOrigin,
 	}

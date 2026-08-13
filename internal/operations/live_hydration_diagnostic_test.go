@@ -672,7 +672,7 @@ func captureLiveDiagnosticSample(run *Runtime, baseline liveDiagnosticBaseline, 
 		IngressFencesStarted:       subtractCounter(queue.IngressFencesStarted, baseQueue.IngressFencesStarted),
 		IngressFencesDispositioned: subtractCounter(queue.IngressFencesDispositioned, baseQueue.IngressFencesDispositioned),
 		CurrentQueuedFrames:        observed.QueueCurrentFrames, MaximumQueuedFrames: observed.QueueHighFrames, CurrentQueuedBytes: int64(observed.QueueCurrentBytes), MaximumQueuedBytes: int64(observed.QueueHighBytes),
-		OldestLiveFrameNanoseconds: int64(queue.OldestFrameAge), LiveDeliveryCount: deliveries, MeanDeliveryDelayNanoseconds: mean,
+		OldestLiveFrameNanoseconds: int64(queue.OldestWaitingFrameAge), LiveDeliveryCount: deliveries, MeanDeliveryDelayNanoseconds: mean,
 		OneSecondMaxDelayNanoseconds: uint64(observed.MaxProcessingDelayOneSecond), OverallMaxDeliveryDelayNanoseconds: overallMax,
 		EngineQueueOccupancy: int64(observed.Engine.QueueOccupancy), AggregateConsumed: observed.Engine.Aggregates.Consumed, AggregateInserted: observed.Engine.Aggregates.Inserted,
 		AggregateRevised: observed.Engine.Aggregates.Revised, AggregateDuplicate: observed.Engine.Aggregates.ExactDuplicate,
@@ -696,7 +696,7 @@ func captureLiveDiagnosticQueueProbe(attempt *massive.LiveAttempt, baseline mass
 	return liveDiagnosticQueueProbe{
 		currentQueued: queue.FramesQueued + queue.FramesClassifying,
 		maximumQueued: queue.FramesQueued + queue.FramesClassifying,
-		oldest:        queue.OldestFrameAge,
+		oldest:        queue.OldestWaitingFrameAge,
 		rejections: subtractCounter(queue.FramesRejectedCapacity, baseline.FramesRejectedCapacity) +
 			subtractCounter(queue.FramesRejectedReceipt, baseline.FramesRejectedReceipt) +
 			subtractCounter(queue.FramesRejectedOversize, baseline.FramesRejectedOversize) +

@@ -759,7 +759,10 @@ history and continuous causal coverage are both required.
 A gap closes the affected trade or quote coverage interval and changes
 dependent fields to warming, stale, unavailable, or invalid as defined by the
 feature contract. It must not preserve an apparently current Tape Rate or
-Spread across an unknown interval.
+Spread across an unknown interval. Absence of trades or quotes while the
+acknowledged connection and channel coverage remain continuous is not a gap:
+Tape Rate may be zero and the last valid Spread remains numeric with quote age
+and stale status.
 
 Resubscription starts new coverage after its acknowledgement and warms the
 feature again. T/Q coverage, pressure state, and feature time never gate or

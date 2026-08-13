@@ -28,16 +28,16 @@ type IngressIdentityResult struct {
 }
 
 type IngressDiagnosticSample struct {
-	CapturedAt                                                   time.Time
-	FramesRead, FramesAdmitted, FramesDispositioned              uint64
-	FramesFenced, FramesRejectedSlot, FramesRejectedByte         uint64
-	QueuedFrames, ClassifyingFrames, HighFrames                  uint64
-	QueuedBytes, HighBytes, CapacityFrames, CapacityBytes        int
-	OldestFrameAge, ActiveDeliveryAge, MaxDeliveryDelayOneSecond time.Duration
-	ActiveDeliveryKind                                           massive.DeliveryKind
-	Deliveries                                                   uint64
-	Lifecycle                                                    string
-	HydrationPlanned, HydrationOpen                              uint64
+	CapturedAt                                                          time.Time
+	FramesRead, FramesAdmitted, FramesDispositioned                     uint64
+	FramesFenced, FramesRejectedSlot, FramesRejectedByte                uint64
+	QueuedFrames, ClassifyingFrames, HighFrames                         uint64
+	QueuedBytes, HighBytes, CapacityFrames, CapacityBytes               int
+	OldestWaitingFrameAge, ActiveDeliveryAge, MaxDeliveryDelayOneSecond time.Duration
+	ActiveDeliveryKind                                                  massive.DeliveryKind
+	Deliveries                                                          uint64
+	Lifecycle                                                           string
+	HydrationPlanned, HydrationOpen                                     uint64
 }
 
 type LastCoherentMarketProjection struct {

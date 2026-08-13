@@ -5,7 +5,7 @@ export function snapshotFixture(rowCount = 1) {
     rank: index + 1, symbol: `S${String(index + 1).padStart(2, "0")}`, last_usd: 10 + index, day_change_ratio: .0025 + (rowCount - index - 1) / 1000, mark_age_ms: 250,
     from_4am_change: measurement(0), hod_drawdown: measurement(-.01), day_range_position: measurement(.5), range_30m_position: measurement(.25), range_60m_position: measurement(.75), activity: measurement(.8),
     tape_rate: { status: "current", reason: "qualifying_original_prints", trade_coverage: true, one_second: { status: "current", reason: "qualifying_original_prints", trades_per_second: 2 }, five_second: { status: "current", reason: "qualifying_original_prints", trades_per_second: 1.4 }, timestamp_basis: "mixed", lifecycle_records_observed: true },
-    spread: { status: "current", reason: "", quote_coverage: true, cents: 1.5, basis_points: 15, valid_duration_ms: 5000, quality: "reviewed_ordinary" },
+    spread: { status: "current", reason: "", quote_coverage: true, cents: 1.5, basis_points: 15, quote_age_ms: 500, quality: "reviewed_ordinary" },
     tq_membership: { desired: true, provider_present: true, provider_membership_unknown: false },
   }));
   const desired = rows.map(row => row.symbol);
@@ -18,7 +18,7 @@ export function snapshotFixture(rowCount = 1) {
     rows,
     accounting: { population: { universe_total: populationSize, valid_prior_close: populationSize, invalid_or_missing_prior_close: 0, trusted_rankable_mark: rowCount, trusted_below_price_mark: 0, no_print_through_t: populationSize - rowCount, invalid_mark: 0, unknown_due_failure_or_fence: 0, covered_population: populationSize, unresolved_population: 0 }, qualification: { not_yet_passed: populationSize - rowCount, provisional: rowCount, finalized: 0, unresolved: 0 }, uncertainty: { bootstrap_origin: 0, post_bootstrap_gap: 0, local_invalid: 0 } },
     recovery: { purpose: "fresh_bootstrap", generation: "1", start: "2026-08-08T15:58:00Z", end: "2026-08-08T15:59:00Z", supported_through: "2026-08-08T15:59:58Z", fence_reconciled: true, policy_waiting: false, work: { planned: String(populationSize), open: "0", completed_value: String(rowCount), completed_empty: String(populationSize - rowCount), failed: "0", canceled: "0", fenced: "0" }, rows: { consumed: String(rowCount), inserted: String(rowCount), duplicate: "0", conflict_or_withdrawal: "0", rejected: "0", fenced: "0", integrity: "0" } },
-    tq: { desired_symbols: desired, pressure_mode: "normal", aggregate_only: false, shed: false, retained_bound_hit: false, pressure_misses: 0, pressure_transitions: "0", pressure_fenced: "0", known_present: rowCount, known_absent: 0, unknown: 0, retained_trades: rowCount, retained_quotes: rowCount, retained_fingerprints: rowCount, facts: { consumed: String(rowCount * 2), applied: String(rowCount * 2), duplicate: "0", rejected: "0", fenced: "0", pressure_shed: "0", integrity: "0" }, commands: { issued: String(rowCount), pending: "0", acknowledged: String(rowCount), failed: "0", fenced: "0", result_fenced: "0" } },
+    tq: { desired_symbols: desired, pressure_mode: "normal", pressure_cause: "", aggregate_only: false, shed: false, retained_bound_hit: false, pressure_misses: 0, pressure_transitions: "0", pressure_fenced: "0", known_present: rowCount, known_absent: 0, unknown: 0, retained_trades: rowCount, retained_quotes: rowCount, retained_fingerprints: rowCount, facts: { consumed: String(rowCount * 2), applied: String(rowCount * 2), duplicate: "0", rejected: "0", fenced: "0", pressure_shed: "0", integrity: "0", normalized_trades: String(rowCount), normalized_quotes: String(rowCount), applied_trades: String(rowCount), applied_quotes: String(rowCount), pressure_shed_trades: "0", pressure_shed_quotes: "0" }, commands: { issued: String(rowCount), pending: "0", acknowledged: String(rowCount), failed: "0", fenced: "0", result_fenced: "0" } },
     checkpoint: { installed: false, projection_in_progress: "0", submitted: "0", in_progress: "0", pending: "0", completed: "0", failed: "0", canceled: "0", superseded: "0" },
     operations: { sample_accounting_valid: true, queue_capacity_frames: 64, queue_current_frames: 0, queue_high_frames: 2, queue_current_bytes: 0, queue_high_bytes: 2048, deliveries: "10", consumer_deferred: "0", mean_processing_delay_ms: 1, max_processing_delay_ms: 2, max_processing_delay_one_second_ms: 2, heap_alloc_bytes: "1024", heap_in_use_bytes: "2048", goroutines: 8, connection_recovery_attempts: "0" },
   };
@@ -45,12 +45,12 @@ export function replaySnapshotFixture(sequence = 0) {
   };
   snapshot.tq = {
     ...snapshot.tq, desired_symbols: [], known_present: 0, known_absent: 0, unknown: 0, retained_trades: 0, retained_quotes: 0, retained_fingerprints: 0,
-    facts: { consumed: "0", applied: "0", duplicate: "0", rejected: "0", fenced: "0", pressure_shed: "0", integrity: "0" },
+    facts: { consumed: "0", applied: "0", duplicate: "0", rejected: "0", fenced: "0", pressure_shed: "0", integrity: "0", normalized_trades: "0", normalized_quotes: "0", applied_trades: "0", applied_quotes: "0", pressure_shed_trades: "0", pressure_shed_quotes: "0" },
     commands: { issued: "0", pending: "0", acknowledged: "0", failed: "0", fenced: "0", result_fenced: "0" },
   };
   for (const row of snapshot.rows) {
     row.tape_rate = { status: "unavailable", reason: "replay_unavailable", trade_coverage: false, one_second: { status: "unavailable", reason: "replay_unavailable", trades_per_second: null }, five_second: { status: "unavailable", reason: "replay_unavailable", trades_per_second: null }, timestamp_basis: "", lifecycle_records_observed: false };
-    row.spread = { status: "unavailable", reason: "replay_unavailable", quote_coverage: false, cents: null, basis_points: null, valid_duration_ms: 0, quality: "" };
+    row.spread = { status: "unavailable", reason: "replay_unavailable", quote_coverage: false, cents: null, basis_points: null, quote_age_ms: 0, quality: "" };
     row.tq_membership = { desired: false, provider_present: false, provider_membership_unknown: false };
   }
   snapshot.replay = {
