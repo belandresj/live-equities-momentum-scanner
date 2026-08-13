@@ -218,12 +218,22 @@ func mapCheckpoint(installed bool, metrics operations.Metrics) Checkpoint {
 }
 
 func mapOperations(metrics operations.Metrics, operational engine.OperationalView) Operations {
+	attribution := metrics.DeliveryLatencyAttribution
+	if attribution.MaximumFamily == "" {
+		attribution.MaximumFamily = operations.DeliveryLatencyUnknown
+	}
 	result := Operations{SampleAccountingValid: metrics.AccountingValid, QueueCapacityFrames: nonnegativeInt(metrics.LiveQueue.CapacityFrames),
 		QueueCurrentFrames: metrics.QueueCurrentFrames, QueueHighFrames: metrics.QueueHighFrames,
 		QueueCurrentBytes: nonnegativeInt(metrics.QueueCurrentBytes), QueueHighBytes: nonnegativeInt(metrics.QueueHighBytes),
 		Deliveries: decimal(metrics.Deliveries), ConsumerDeferred: decimal(metrics.ConsumerDeferred),
 		MeanProcessingDelayMS: durationMilliseconds(metrics.MeanProcessingDelay), MaxProcessingDelayMS: durationMilliseconds(metrics.MaxProcessingDelay),
-		MaxProcessingDelayOneSecondMS: durationMilliseconds(metrics.MaxProcessingDelayOneSecond), HeapAllocBytes: decimal(metrics.HeapAllocBytes),
+		MaxProcessingDelayOneSecondMS: durationMilliseconds(metrics.MaxProcessingDelayOneSecond),
+		DeliveryLatencyAttribution: DeliveryLatencyAttribution{
+			Aggregate: decimal(attribution.Aggregate), TQ: decimal(attribution.TQ), Control: decimal(attribution.Control),
+			HydrationFence: decimal(attribution.HydrationFence), Checkpoint: decimal(attribution.Checkpoint), Timer: decimal(attribution.Timer), Unknown: decimal(attribution.Unknown),
+			MaximumMS: durationMilliseconds(attribution.MaximumDuration), MaximumFamily: string(attribution.MaximumFamily),
+		},
+		HeapAllocBytes: decimal(metrics.HeapAllocBytes),
 		HeapInUseBytes: decimal(metrics.HeapInUseBytes), Goroutines: nonnegativeInt(metrics.Goroutines),
 		ConnectionRecoveryAttempts: decimal(operational.Connection.RecoveryAttempts)}
 	if failure := operational.IntegrityFailure; failure != nil {
@@ -291,12 +301,17 @@ func validateSnapshot(value Snapshot) error {
 	if !validTimestamp(value.Sample.SampledAt) || !validTimestamp(value.Publication.GeneratedAt) || !validTimestamp(value.Status.CausalTarget) || !validTradingDate(value.Publication.TradingDate) {
 		return rejectMapping("required_time")
 	}
+	latency := value.Operations.DeliveryLatencyAttribution
 	if !validPositiveDecimal(value.Sample.ID) || !validPositiveDecimal(value.Publication.ID) || !validDecimal(value.Publication.LastEngineSequence) ||
 		!validDecimal(value.Publication.ConnectionEpoch) || !validDecimal(value.Recovery.Generation) || !validDecimal(value.TQ.PressureTransitions) ||
 		!validDecimal(value.TQ.PressureFenced) || !validDecimal(value.TQ.Commands.ResultFenced) || !validDecimal(value.Operations.Deliveries) ||
 		!validDecimal(value.Operations.ConsumerDeferred) || !validDecimal(value.Operations.HeapAllocBytes) || !validDecimal(value.Operations.HeapInUseBytes) ||
-		!validDecimal(value.Operations.ConnectionRecoveryAttempts) {
+		!validDecimal(value.Operations.ConnectionRecoveryAttempts) || !sumDecimalEquals(value.Operations.Deliveries,
+		latency.Aggregate, latency.TQ, latency.Control, latency.HydrationFence, latency.Checkpoint, latency.Timer, latency.Unknown) {
 		return rejectMapping("decimal_encoding")
+	}
+	if !deliveryLatencyAttributionValid(value.Operations) {
+		return rejectMapping("delivery_latency_attribution")
 	}
 	if !oneOf(value.Publication.RunMode, "live", "replay") {
 		return rejectMapping("run_mode")
@@ -394,7 +409,7 @@ func validateSnapshot(value Snapshot) error {
 		value.TQ.KnownPresent, value.TQ.KnownAbsent, value.TQ.Unknown, value.Operations.QueueCapacityFrames,
 		value.TQ.PressureMisses, value.TQ.RetainedTrades, value.TQ.RetainedQuotes, value.TQ.RetainedFingerprints,
 		value.Operations.QueueCurrentFrames, value.Operations.QueueHighFrames, value.Operations.QueueCurrentBytes, value.Operations.QueueHighBytes,
-		value.Operations.MeanProcessingDelayMS, value.Operations.MaxProcessingDelayMS, value.Operations.MaxProcessingDelayOneSecondMS, value.Operations.Goroutines,
+		value.Operations.MeanProcessingDelayMS, value.Operations.MaxProcessingDelayMS, value.Operations.MaxProcessingDelayOneSecondMS, latency.MaximumMS, value.Operations.Goroutines,
 		checkpoint.UsableAgeMS, checkpoint.ProjectionTotalMS, checkpoint.ProjectionLockMS, checkpoint.WriteMS, checkpoint.EncodeMS, checkpoint.ReopenValidationMS} {
 		if count > maximumExactJSONInteger {
 			return rejectMapping("exact_json_integer_bound")
@@ -608,6 +623,34 @@ func validDecimal(value string) bool {
 }
 
 func validPositiveDecimal(value string) bool { return value != "0" && validDecimal(value) }
+
+func deliveryLatencyAttributionValid(value Operations) bool {
+	attribution := value.DeliveryLatencyAttribution
+	if !oneOf(attribution.MaximumFamily, "aggregate", "tq", "control", "hydration_fence", "checkpoint", "timer", "unknown") ||
+		attribution.MaximumMS != value.MaxProcessingDelayOneSecondMS {
+		return false
+	}
+	if value.Deliveries == "0" {
+		return attribution.MaximumMS == 0 && attribution.MaximumFamily == "unknown"
+	}
+	countByFamily := attribution.Unknown
+	switch attribution.MaximumFamily {
+	case "aggregate":
+		countByFamily = attribution.Aggregate
+	case "tq":
+		countByFamily = attribution.TQ
+	case "control":
+		countByFamily = attribution.Control
+	case "hydration_fence":
+		countByFamily = attribution.HydrationFence
+	case "checkpoint":
+		countByFamily = attribution.Checkpoint
+	case "timer":
+		countByFamily = attribution.Timer
+	}
+	count, err := strconv.ParseUint(countByFamily, 10, 64)
+	return err == nil && count != 0
+}
 
 func validTimestamp(value string) bool {
 	parsed, err := time.Parse(time.RFC3339Nano, value)

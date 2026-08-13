@@ -320,6 +320,12 @@ maximum remains unchanged for operator reporting. The operations timer samples
 pressure once per second, and command synchronization runs after timer and
 delivery completions without a second owner.
 
+C8 may expose the same one-second maximum with a closed diagnostic work-family
+attribution and exact per-family delivery counts. C9 consumes only the duration
+scalar: family, tie order, and attribution counts are not pressure predicates
+and cannot alter any threshold, persistence dwell, recovery dwell, shedding,
+or restoration decision.
+
 A mixed-frame or required aggregate/control classification/accounting failure
 is not a C9 pressure sample: C5 emits the existing aggregate-ingress integrity
 fact and the engine follows recovery/suppression. Only an identity proven to

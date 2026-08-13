@@ -317,22 +317,35 @@ type Checkpoint struct {
 }
 
 type Operations struct {
-	SampleAccountingValid         bool              `json:"sample_accounting_valid"`
-	QueueCapacityFrames           uint64            `json:"queue_capacity_frames"`
-	QueueCurrentFrames            uint64            `json:"queue_current_frames"`
-	QueueHighFrames               uint64            `json:"queue_high_frames"`
-	QueueCurrentBytes             uint64            `json:"queue_current_bytes"`
-	QueueHighBytes                uint64            `json:"queue_high_bytes"`
-	Deliveries                    string            `json:"deliveries"`
-	ConsumerDeferred              string            `json:"consumer_deferred"`
-	MeanProcessingDelayMS         uint64            `json:"mean_processing_delay_ms"`
-	MaxProcessingDelayMS          uint64            `json:"max_processing_delay_ms"`
-	MaxProcessingDelayOneSecondMS uint64            `json:"max_processing_delay_one_second_ms"`
-	HeapAllocBytes                string            `json:"heap_alloc_bytes"`
-	HeapInUseBytes                string            `json:"heap_in_use_bytes"`
-	Goroutines                    uint64            `json:"goroutines"`
-	ConnectionRecoveryAttempts    string            `json:"connection_recovery_attempts"`
-	IntegrityFailure              *IntegrityFailure `json:"integrity_failure,omitempty"`
+	SampleAccountingValid         bool                       `json:"sample_accounting_valid"`
+	QueueCapacityFrames           uint64                     `json:"queue_capacity_frames"`
+	QueueCurrentFrames            uint64                     `json:"queue_current_frames"`
+	QueueHighFrames               uint64                     `json:"queue_high_frames"`
+	QueueCurrentBytes             uint64                     `json:"queue_current_bytes"`
+	QueueHighBytes                uint64                     `json:"queue_high_bytes"`
+	Deliveries                    string                     `json:"deliveries"`
+	ConsumerDeferred              string                     `json:"consumer_deferred"`
+	MeanProcessingDelayMS         uint64                     `json:"mean_processing_delay_ms"`
+	MaxProcessingDelayMS          uint64                     `json:"max_processing_delay_ms"`
+	MaxProcessingDelayOneSecondMS uint64                     `json:"max_processing_delay_one_second_ms"`
+	DeliveryLatencyAttribution    DeliveryLatencyAttribution `json:"delivery_latency_attribution"`
+	HeapAllocBytes                string                     `json:"heap_alloc_bytes"`
+	HeapInUseBytes                string                     `json:"heap_in_use_bytes"`
+	Goroutines                    uint64                     `json:"goroutines"`
+	ConnectionRecoveryAttempts    string                     `json:"connection_recovery_attempts"`
+	IntegrityFailure              *IntegrityFailure          `json:"integrity_failure,omitempty"`
+}
+
+type DeliveryLatencyAttribution struct {
+	Aggregate      string `json:"aggregate"`
+	TQ             string `json:"tq"`
+	Control        string `json:"control"`
+	HydrationFence string `json:"hydration_fence"`
+	Checkpoint     string `json:"checkpoint"`
+	Timer          string `json:"timer"`
+	Unknown        string `json:"unknown"`
+	MaximumMS      uint64 `json:"maximum_ms"`
+	MaximumFamily  string `json:"maximum_family"`
 }
 
 type IntegrityFailure struct {

@@ -1,6 +1,8 @@
 # Readiness and operations
 
-**Status:** Component 8 finally accepted for the private/local V1 RC
+**Status:** Component 8 reaccepted 2026-08-13 after the fixed-cardinality
+engine-delivery latency attribution correction; runtime/readiness, capacity,
+checkpoint, and prior measurement evidence remain accepted
 
 **Boundary approval:** Approved 2026-08-07 by the owner through the Version 1
 Release Program revision
@@ -44,6 +46,7 @@ Sections 8-19 are completed here after its just-in-time V2 reconnaissance.
 | 2026-08-11 engine-to-API correction | `accepted_after_correction_review` | [`live-engine-api-first-ready-correction.md`](../live-engine-api-first-ready-correction.md) proves small and 5,691-symbol first-ready/post-fence publications map through the production Runtime/API boundary and fixes a reasonless timer erasing the fixed `ingress_integrity` suppression cause. The initial post-fence-publication P2 and diagnostic-wiring P2 are closed; focused re-reviews found no remaining P1/P2. No provider or credential was accessed. | Complete locally; original failed live capture and provider confirmation remain unavailable/deferred |
 | Cached hydration fence correction | `accepted_deterministically` | [`live-fence-finalization-cached-hydration-correction.md`](../live-fence-finalization-cached-hydration-correction.md) records the sealed-artifact full 1x pass, a second current-source full 1x pass, the strengthened 3,072,000-row bounded 2x burst pass, and the preserved honest sustained-2x failure. No provider or credential was accessed. | Complete; do not rerun sustained full 2x |
 | Checkpoint hot-path measurement composition | `finally_accepted` | [`live-checkpoint-hot-path-correction.md`](../live-checkpoint-hot-path-correction.md) adds fixed-cardinality projection/submit/terminal/timing/byte facts, returns writer terminals to engine accounting, and proves a real completed/discoverable artifact. Three real-consumer dense 6,000-symbol boundaries limited observation delay to 55.523ms and aggregate delivery to 66.874ms; focused re-review is clean. | Preserve for V1 integration; provider capacity remains unproved |
+| Engine-delivery latency attribution | `accepted_after_correction` | `P-C8-DELIVERY-ATTRIBUTION` proves the exact seven-family count identity, same-record duration/family maximum, deterministic ties, unknown/mixed fail-closed classification, unchanged duration-only C9 pressure input, unchanged engine snapshot/status, and bounded coherent C10 mapping. The narrow proof, repository short suite, and affected operations/snapshot API/scanner race suite pass. | Complete; a family identifies the measured delivery, not a sampled CPU-stack cause inside earlier queued work. |
 | `C8-S2` measurements/load | `accepted_after_correction` | `P-C8-LOAD`: 6,000-symbol bound population, 100 active aggregate symbols, 20 corrections, 20 duplicates, 20 rejects, and 60 normalized T/Q facts correctly fenced without acknowledged membership; 53.67 s end-to-end and exact accounting | Complete |
 | Final component review | `accepted_after_2026-08-10_correction` | Focused re-review confirmed the hydration-deadline/live-tail correction plus synchronized concurrent-terminal diagnostics and an explicit active-attempt shutdown join. No P1/P2 finding remains; uncached ordinary, focused race, vet, UI-model, and diff checks pass. Unchanged non-short load evidence is reused. | Complete |
 | Private daily operational finalization | `accepted_after_final_review` | `./scripts/run-private-scanner` supplies the exact two-worker/persistent-path workflow, isolates credentials, gates dashboard startup on `/livez`, reports engine `/readyz`, and contains both processes. Public-wrapper/fake-process tests, current-source capacity evidence, ordinary/race/vet/UI checks, and correction/re-review are clean. | Complete locally; exact-date provider observation remains separately authorized |
@@ -197,7 +200,7 @@ meaning.
 | `C8-READY-01` | `process_live` means the runtime has started and not joined. `backend_ready` requires live mode, lifecycle `live` or permitted exact/current `hydrating`, a current engine ranking claim, current acknowledgement, reconciled startup/recovery fence, no suppression, and watermark within two seconds of `min(floor(now)-4s,E)`. Ranking and field statuses remain separate. |
 | `C8-RECOVERY-01` | Disconnect/gap facts enter only the engine-owned stale/recovery path. Each attempt and the attempt count are bounded; exhaustion produces honest suppressed/unavailable output and cannot leave an inactive recovery loop. |
 | `C8-SHUTDOWN-01` | Cancellation closes ingress, drains/fences accepted work, stops the checkpoint writer/engine, and joins every owned goroutine within ten seconds; timeout is terminal and never reported clean. |
-| `C8-MEASURE-01` | Fixed-cardinality observations report ingress/admission/disposition throughput, processing delay, watermark lag, queue current/high-water count/bytes, memory/goroutines, aggregate/TQ reject/drop/shed counts, hydration/recovery accounting, and checkpoint status. Counters reconcile and labels are closed enums. |
+| `C8-MEASURE-01` | Fixed-cardinality observations report ingress/admission/disposition throughput, processing delay, watermark lag, queue current/high-water count/bytes, memory/goroutines, aggregate/TQ reject/drop/shed counts, hydration/recovery accounting, and checkpoint status. Engine-delivery counts partition exactly into aggregate, T/Q, control, hydration/fence, checkpoint-related, timer, or unknown. The one-second maximum duration and family are one atomic winning-delivery record; equal durations use the fixed listed-family order, and absent or cross-family completion evidence is unknown. Counters reconcile and labels are closed enums. |
 | `C8-CAPACITY-01` | A deterministic 6,000-symbol mixed aggregate/control/TQ-deferred load stays within configured queue/memory/work bounds, preserves exact aggregate accounting/ranking, and does not let T/Q pressure change readiness or ranking. |
 
 ## 11. Trust boundaries and false-success containment
@@ -220,7 +223,8 @@ claims remain runtime-validated.
 | Requirement(s) | Primary proof, counterexample, observable result, limitation |
 | --- | --- |
 | `C8-RUNTIME-01`, `C8-READY-01`, `C8-RECOVERY-01`, `C8-SHUTDOWN-01` | `P-C8-RUNTIME`: deterministic startup/current/disconnect/recovery/exhaustion/stop trace through real engine admissions and fake C5/C6 boundaries. It rejects process-live-as-ready, stale generation success, T/Q-as-gate, and unjoined shutdown. It observes exact lifecycle/readiness reasons and all goroutines joined. It does not prove provider availability or scale. |
-| `C8-MEASURE-01`, `C8-CAPACITY-01` | `P-C8-LOAD`: explicit non-short 6,000-symbol mixed-load acceptance with fixed seed/count manifest, correction and rejection classes, segmented throughput/delay/lag/queue/memory/goroutine observations, exact accounting/ranking oracle, and zero-to-nonzero T/Q diagnostic variation. It detects loss, unbounded growth, and readiness coupling. It is host/fixture evidence, not live capacity or an SLA. |
+| `C8-MEASURE-01` | `P-C8-DELIVERY-ATTRIBUTION`: compact operations/C10 trace proving the exact seven-family delivery identity, atomic duration/family maximum, fixed tie order, unknown/mixed containment, unchanged pressure/ranking/watermark/readiness, and bounded coherent schema output. Counterexamples are a split maximum pair, count mismatch, dynamic family, mixed completion labeled specific, or family-dependent pressure. It identifies the measured input family, not the sole CPU/queueing cause. |
+| `C8-CAPACITY-01` | `P-C8-LOAD`: explicit non-short 6,000-symbol mixed-load acceptance with fixed seed/count manifest, correction and rejection classes, segmented throughput/delay/lag/queue/memory/goroutine observations, exact accounting/ranking oracle, and zero-to-nonzero T/Q diagnostic variation. It detects loss, unbounded growth, and readiness coupling. It is host/fixture evidence, not live capacity or an SLA. |
 
 ## 13. Slice plan and assignments
 
@@ -233,8 +237,9 @@ deferred.
 
 `C8-S2` adds fixed-cardinality measurements and the controlled-load proof in
 the same operations boundary. It completes `C8-MEASURE-01` and
-`C8-CAPACITY-01` with `P-C8-LOAD`. It may revise the delivery settings from
-recorded measurements but may not change Phase 1 market/readiness semantics.
+`C8-CAPACITY-01` with `P-C8-DELIVERY-ATTRIBUTION` and `P-C8-LOAD`
+respectively. It may revise the delivery settings from recorded measurements
+but may not change Phase 1 market/readiness semantics.
 
 ## 14-19. Verification, review, discretion, deferrals, and correction
 
@@ -421,3 +426,28 @@ focused full-retention 2x burst completed all 3,072,000 measured rows and
 reconciled accounting. The separate sustained full 2x artifact remains a
 failure after 7,078,180 hydration rows and is explicitly unsupported. These
 results are distinct trials and no metrics were combined.
+
+The 2026-08-13 `P-C8-DELIVERY-ATTRIBUTION` correction replaces the duration-
+only one-second record with one lock-protected maximum pair and seven scalar
+cumulative counters: aggregate, T/Q, control, hydration/fence, checkpoint,
+timer, and unknown. Massive delivery completions are classified only from one
+unambiguous typed result; explicit runtime timer and checkpoint-terminal waits
+use their closed families. Absent evidence, an unsupported family, or evidence
+claiming more than one family is counted as unknown. Equal durations resolve in
+the listed fixed order, so concurrent arrival order cannot choose the label.
+The exact identity is `deliveries = aggregate + tq + control +
+hydration_fence + checkpoint + timer + unknown`, and a nonempty maximum family
+must have a nonzero matching count. Duration, family, counts, delivery total,
+mean, lifetime maximum, and reset version are copied under the same mutex.
+
+C9 still receives only `MaxProcessingDelayOneSecond`; no family or count enters
+its thresholds or dwell logic. The proof holds the duration constant while
+changing family and obtains an identical pressure sample, and it records a
+diagnostic observation around an unchanged immutable engine snapshot and
+readiness view. The additive C10 object repeats the paired maximum, carries no
+symbols or dynamic labels, and rejects broken count, duration/family, enum, and
+winner-presence identities. This is delivery-family attribution, not proof that
+the named input family was the sole CPU or queueing cause of its elapsed time.
+No independent review was triggered: the change adds no ownership,
+concurrency-linearization, persistence, or external-evidence authority; one
+mutex and the primary identity proof make the diagnostic boundary direct.

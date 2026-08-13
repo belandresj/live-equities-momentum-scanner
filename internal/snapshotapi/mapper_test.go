@@ -34,7 +34,7 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 		t.Fatal(err)
 	}
 	hash := sha256.Sum256(body)
-	const goldenSHA256 = "99185cc12dbd701e5f5446710c769cf0c028397588a618880d56840c8dc10685"
+	const goldenSHA256 = "c8bb99dc29fdbd17ace3a8390d27c7d23bc26d6bfc3a8a21b789c9619ce128d6"
 	if got := hex.EncodeToString(hash[:]); got != goldenSHA256 {
 		t.Fatalf("snapshot golden SHA-256 = %s", got)
 	}
@@ -44,6 +44,33 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 	}
 	if snapshot.Accounting.PopulationTransitionDiagnostic != (PopulationTransitionDiagnostic{BootstrapUnknown: 1, TrustedByLaterLiveMark: 1}) {
 		t.Fatalf("population-transition diagnostic mapping = %+v", snapshot.Accounting.PopulationTransitionDiagnostic)
+	}
+	latency := snapshot.Operations.DeliveryLatencyAttribution
+	if !sumDecimalEquals(snapshot.Operations.Deliveries, latency.Aggregate, latency.TQ, latency.Control, latency.HydrationFence, latency.Checkpoint, latency.Timer, latency.Unknown) ||
+		latency.MaximumMS != snapshot.Operations.MaxProcessingDelayOneSecondMS || latency.MaximumFamily != "aggregate" {
+		t.Fatalf("delivery-latency attribution mapping = %+v operations=%+v", latency, snapshot.Operations)
+	}
+	badLatencyCount := snapshot
+	badLatencyCount.Operations.DeliveryLatencyAttribution.Unknown = "2"
+	if err := validateSnapshot(badLatencyCount); err == nil {
+		t.Fatal("incoherent delivery-latency count serialized")
+	}
+	badLatencyPair := snapshot
+	badLatencyPair.Operations.DeliveryLatencyAttribution.MaximumMS++
+	if err := validateSnapshot(badLatencyPair); err == nil {
+		t.Fatal("split delivery-latency maximum pair serialized")
+	}
+	badLatencyFamily := snapshot
+	badLatencyFamily.Operations.DeliveryLatencyAttribution.MaximumFamily = "symbol:AAA"
+	if err := validateSnapshot(badLatencyFamily); err == nil {
+		t.Fatal("unbounded delivery-latency family serialized")
+	}
+	badLatencyWinner := snapshot
+	badLatencyWinner.Operations.DeliveryLatencyAttribution.MaximumFamily = "timer"
+	badLatencyWinner.Operations.DeliveryLatencyAttribution.Timer = "0"
+	badLatencyWinner.Operations.DeliveryLatencyAttribution.Unknown = "2"
+	if err := validateSnapshot(badLatencyWinner); err == nil {
+		t.Fatal("maximum family without a matching delivery serialized")
 	}
 	row := snapshot.Rows[0]
 	if row.From4AMChange.ValueRatio == nil || *row.From4AMChange.ValueRatio != 0 || row.HODDrawdown.ValueRatio != nil ||
@@ -436,7 +463,10 @@ func schemaCapture() operations.SnapshotCaptureView {
 		CheckpointEngine:   engine.CheckpointOperations{Eligible: 1, ProjectionStarted: 1, Projected: 1, Submitted: 1, Completed: 1},
 		QueueCurrentFrames: 2, QueueHighFrames: 3, QueueCurrentBytes: 100, QueueHighBytes: 200,
 		Deliveries: 10, ConsumerDeferred: 1, MeanProcessingDelay: 2 * time.Millisecond, MaxProcessingDelay: 3 * time.Millisecond,
-		MaxProcessingDelayOneSecond: time.Millisecond, HeapAllocBytes: 1 << 20, HeapInUseBytes: 2 << 20, Goroutines: 8, AccountingValid: true}
+		MaxProcessingDelayOneSecond: time.Millisecond,
+		DeliveryLatencyAttribution: operations.DeliveryLatencyAttribution{Aggregate: 3, TQ: 2, Control: 1, HydrationFence: 1, Checkpoint: 1, Timer: 1, Unknown: 1,
+			MaximumDuration: time.Millisecond, MaximumFamily: operations.DeliveryLatencyAggregate},
+		HeapAllocBytes: 1 << 20, HeapInUseBytes: 2 << 20, Goroutines: 8, AccountingValid: true}
 	status := operations.Status{ProcessLive: true, BackendReady: true, RankingCurrent: true, Lifecycle: "live", RankingMode: "qualified_current", SampledAt: at,
 		PublicationID: operational.PublicationID, Watermark: &target, CausalTarget: &target, AccountingValid: true}
 	return operations.SnapshotCaptureView{SampleID: 9007199254740999, SampledAt: at, ProcessLive: true,

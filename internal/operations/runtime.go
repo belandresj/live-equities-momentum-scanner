@@ -34,43 +34,45 @@ func (c Config) valid() bool {
 }
 
 type Runtime struct {
-	engine                    *engine.Engine
-	binding                   reference.Binding
-	config                    Config
-	clock                     func() time.Time
-	processLive               atomic.Bool
-	joined                    atomic.Bool
-	writer                    *checkpoint.Writer
-	checkpointResultDone      chan struct{}
-	metricsMu                 sync.Mutex
-	liveMu                    sync.Mutex
-	shutdownMu                sync.Mutex
-	captureMu                 sync.Mutex
-	captureSequence           uint64
-	attempt                   *massive.LiveAttempt
-	adapter                   *massive.LiveAdapter
-	liveCancel                context.CancelFunc
-	liveDone                  chan struct{}
-	liveRunning               bool
-	queueHighFrames           uint64
-	queueHighBytes            int
-	deliveryCount             atomic.Uint64
-	deliveryTotalNanos        atomic.Uint64
-	deliveryMaxNanos          atomic.Uint64
-	deliveryWindowMu          sync.Mutex
-	deliveryOneSecondMaxNanos uint64
-	deliveryWindowVersion     uint64
-	consumerDeferred          atomic.Uint64
-	pressureSampler           func(Metrics) engine.TQPressureSample
-	metricsSnapshot           func() Metrics
-	timerCancel               context.CancelFunc
-	timerDone                 chan struct{}
-	ingressSamplerCancel      context.CancelFunc
-	ingressSamplerDone        chan struct{}
-	automaticTimerObserverMu  sync.RWMutex
-	automaticTimerObserver    func(automaticTimerObservation)
-	ingressIncident           ingressIncidentLatch
-	ingressHistory            ingressDiagnosticHistory
+	engine                     *engine.Engine
+	binding                    reference.Binding
+	config                     Config
+	clock                      func() time.Time
+	processLive                atomic.Bool
+	joined                     atomic.Bool
+	writer                     *checkpoint.Writer
+	checkpointResultDone       chan struct{}
+	metricsMu                  sync.Mutex
+	liveMu                     sync.Mutex
+	shutdownMu                 sync.Mutex
+	captureMu                  sync.Mutex
+	captureSequence            uint64
+	attempt                    *massive.LiveAttempt
+	adapter                    *massive.LiveAdapter
+	liveCancel                 context.CancelFunc
+	liveDone                   chan struct{}
+	liveRunning                bool
+	queueHighFrames            uint64
+	queueHighBytes             int
+	deliveryCount              atomic.Uint64
+	deliveryTotalNanos         atomic.Uint64
+	deliveryMaxNanos           atomic.Uint64
+	deliveryWindowMu           sync.Mutex
+	deliveryOneSecondMaxNanos  uint64
+	deliveryOneSecondMaxFamily DeliveryLatencyFamily
+	deliveryFamilyCounts       [deliveryLatencyFamilyCount]uint64
+	deliveryWindowVersion      uint64
+	consumerDeferred           atomic.Uint64
+	pressureSampler            func(Metrics) engine.TQPressureSample
+	metricsSnapshot            func() Metrics
+	timerCancel                context.CancelFunc
+	timerDone                  chan struct{}
+	ingressSamplerCancel       context.CancelFunc
+	ingressSamplerDone         chan struct{}
+	automaticTimerObserverMu   sync.RWMutex
+	automaticTimerObserver     func(automaticTimerObservation)
+	ingressIncident            ingressIncidentLatch
+	ingressHistory             ingressDiagnosticHistory
 	// beforeHydrationPump is a package-private diagnostic-test seam. A nil
 	// hook is the complete production behavior; tests use it only to hold the
 	// consumer while exercising the fixed production queue ceiling.
@@ -103,7 +105,7 @@ func NewWithCheckpoint(ctx context.Context, binding reference.Binding, config Co
 	if err != nil {
 		return nil, err
 	}
-	runtime := &Runtime{engine: owner, binding: binding, config: config, clock: clock, writer: writer, pressureSampler: defaultTQPressureSample}
+	runtime := &Runtime{engine: owner, binding: binding, config: config, clock: clock, writer: writer, pressureSampler: defaultTQPressureSample, deliveryOneSecondMaxFamily: DeliveryLatencyUnknown}
 	runtime.metricsSnapshot = runtime.Metrics
 	admission, completion := owner.AdmitBinding(ctx, engine.BindingInstall{SchemaVersion: engine.BindingInstallSchemaV1, BindingIdentity: binding.Identity(), Binding: binding})
 	if admission != engine.AdmissionAdmitted || completion == nil {
@@ -144,11 +146,13 @@ func (r *Runtime) runCheckpointResults() {
 		if err != nil {
 			return
 		}
+		started := time.Now()
 		admission, completion := r.engine.AdmitCheckpointTerminal(context.Background(), result)
 		if admission != engine.AdmissionAdmitted || completion == nil {
 			continue
 		}
 		<-completion
+		r.recordDeliveryLatency(time.Since(started), DeliveryLatencyCheckpoint)
 	}
 }
 
@@ -164,6 +168,7 @@ func (r *Runtime) runTimer(ctx context.Context) {
 			return
 		case <-evaluationTicker.C:
 			r.captureLiveCoverage(ctx)
+			started := time.Now()
 			admission, completion := r.engine.AdmitTimer(ctx)
 			if admission != engine.AdmissionAdmitted || completion == nil {
 				if ctx.Err() != nil {
@@ -175,6 +180,7 @@ func (r *Runtime) runTimer(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case disposition := <-completion:
+				r.recordDeliveryLatency(time.Since(started), DeliveryLatencyTimer)
 				r.captureAutomaticTimerObservation(disposition)
 				r.recordEngineDispositionIncident(disposition.Code, disposition.Reason)
 				r.syncTQCommand(ctx)
@@ -319,6 +325,7 @@ func (r *Runtime) syncTQPressure(ctx context.Context) {
 			r.deliveryWindowMu.Lock()
 			if r.deliveryWindowVersion == metrics.deliveryWindowVersion {
 				r.deliveryOneSecondMaxNanos = 0
+				r.deliveryOneSecondMaxFamily = DeliveryLatencyUnknown
 			}
 			r.deliveryWindowMu.Unlock()
 		}
