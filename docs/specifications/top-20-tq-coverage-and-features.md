@@ -1,7 +1,8 @@
 # Top-20 T/Q coverage and features
 
-**Status:** Component 9 finally accepted for the private/local V1 release
-candidate; both slices and the final review are complete
+**Status:** Component 9 finally reaccepted 2026-08-13 after the owner-selected
+current-host heap-gate correction; membership, features, non-heap pressure
+gates, and prior evidence remain accepted
 
 **Boundary approval:** Approved 2026-08-07 by the owner through the Version 1
 Release Program revision
@@ -37,7 +38,8 @@ Sections 8-19 are completed here after just-in-time V2 reconnaissance.
 | Completed contract | `accepted_current_plan` | Focused read-only review clean after corrections for ambiguous membership, accounting failure domains, bounds, out-of-order quote time, pressure authority/expiry, and the distinct acknowledged Q time/causal boundaries | Complete; remains revisable through the correction loop |
 | `C9-S1` membership/coverage/features | `accepted_after_owner_revision` | Owner shortened Spread to a five-second weighted median with four-of-five valid-duration coverage; focused boundary/window proof, ordinary/race verification, and focused read-only review pass | Complete |
 | `C9-S2` pressure/shedding/restoration | `accepted` | `P-C9-PRESSURE`; ordinary and affected race gates; focused corrections and re-review clean | Complete |
-| Final component review | `accepted_after_owner_revision` | Original final review plus the 2026-08-09 focused read-only review found no remaining P1/P2/P3 after the Spread correction | Complete; reopen only through the V1 correction loop |
+| `C9-S2-H` current-host heap gates | `accepted_after_correction_review` | The 2026-08-12 preserved live snapshot measured 1,785,959,440 bytes of Go heap while T/Q was `aggregate_only`; the 512-MiB degraded, 1.25-GiB aggregate-only, and 384-MiB recovery gates made normal T/Q and recovery structurally unreachable for that aggregate baseline. Owner direction on 2026-08-13 selected 2.5-GiB recovery, 3.25-GiB degraded, and 4-GiB aggregate-only heap gates for the private 8-GiB Apple M1 host. Exact boundary proof, ordinary/race verification, vet/diff, and focused final review pass. | Complete locally; current-host live behavior remains to be observed without claiming portable capacity. |
+| Final component review | `accepted_after_heap_correction` | Original reviews remain valid; the 2026-08-13 focused read-only re-review found no P1/P2 and one P3 unit mismatch, corrected before reacceptance. | Complete; reopen only through the V1 correction loop |
 
 ## 1-4. Outcome, scope, ownership, and settled boundary
 
@@ -236,20 +238,23 @@ sampling.
 | State | Entry | Consequence |
 | --- | --- | --- |
 | `normal` | Default/recovered | Selected T/Q is normalized and admitted. |
-| `taq_degraded` | Any of queue >=50%, oldest >=250 ms, delivery >=2 s, heap >=512 MiB, or goroutines >=64 persists 500 ms | Close all T/Q coverage and reject T/Q elements before expensive normalization; continue classifying every mixed frame. |
-| `aggregate_only` | Queue >=80%, oldest >=1.5 s, delivery >=5 s, heap >=1.25 GiB, goroutines >=128, or **T/Q-local** decode/accounting failure immediately; or degraded pressure persists 2 s | Keep early T/Q rejection and request paired unsubscribe for every known provider member, lowest current rank first, down to zero known membership; ambiguous members remain explicitly unknown until cleanup or epoch replacement. |
+| `taq_degraded` | Any of queue >=50%, oldest >=250 ms, delivery >=2 s, heap >=3.25 GiB, or goroutines >=64 persists 500 ms | Close all T/Q coverage and reject T/Q elements before expensive normalization; continue classifying every mixed frame. |
+| `aggregate_only` | Queue >=80%, oldest >=1.5 s, delivery >=5 s, heap >=4 GiB, goroutines >=128, or **T/Q-local** decode/accounting failure immediately; or degraded pressure persists 2 s | Keep early T/Q rejection and request paired unsubscribe for every known provider member, lowest current rank first, down to zero known membership; ambiguous members remain explicitly unknown until cleanup or epoch replacement. |
 
-Recovery requires queue <20%, oldest <100 ms, delivery <500 ms, heap <384 MiB,
+Recovery requires queue <20%, oldest <100 ms, delivery <500 ms, heap <2.5 GiB,
 goroutines <48, and coherent decoder/transport accounting continuously for 30
 seconds and at least 15 seconds since degradation. It returns to `normal`, then
 restores one current desired symbol at a time in rank order, no faster than one
 successful acknowledgement per five seconds. Every restored symbol starts new
-coverage and warm-up. These are conservative provisional V1 safety settings
-relative to C5's hard queue limits, the product's two-second readiness
-tolerance, C8's nominal 131 ms mean/318 ms maximum delivery evidence, and
-bounded predecessor regressions. They are not a measured saturation frontier
-or SLA; later capacity evidence may revise them below fixed aggregate-
-correctness limits.
+coverage and warm-up. The queue, age, delivery, goroutine, and accounting gates
+remain the conservative provisional V1 settings relative to C5's hard queue
+limits and the product's two-second readiness tolerance. The revised heap gates
+are a private current-host profile: they give the observed 1.786-GB
+(1.663-GiB) aggregate baseline approximately 1.59 GiB before optional T/Q
+shedding, retain a further 0.75 GiB before full provider unsubscription, and
+permit recovery after T/Q state is cleared. They are not a measured saturation
+frontier, portable capacity claim, or SLA; current-host live observation may
+revise them again below fixed aggregate-correctness limits.
 
 `C9-BOUNDS-01` — Per covered symbol retain only the trailing six seconds of raw
 trade contributions/lifecycle timestamps, 16 minutes of compact trade-identity
@@ -505,6 +510,33 @@ host saturation frontier; the conservative numeric gates remain provisional
 safety settings, and no provider credential, market-hours, capacity, or SLA
 claim is made. Component 10 may rely on the accepted C9 view and accounting
 boundary without making ranking depend on T/Q health.
+
+### C9-S2-H current-host heap-gate correction — 2026-08-13
+
+The preserved 2026-08-12 live snapshot invalidated only C9's provisional heap
+profile. Its 1,785,959,440-byte aggregate baseline exceeded the old immediate
+1.25-GiB aggregate-only gate and could never satisfy the old below-384-MiB
+recovery gate. The owner selected a private 8-GiB Apple M1 profile of below
+2.5 GiB for recovery, 3.25 GiB for degraded entry, and 4 GiB for immediate
+aggregate-only entry. Queue occupancy, oldest-frame age, delivery delay,
+goroutine, sample expiry, accounting, shedding, unsubscription, restoration,
+and aggregate-independence behavior are unchanged.
+
+`TestPC9CurrentHostHeapGateBoundaries` proves the exact configured constants,
+strict ordering, the observed baseline remaining normal across timely samples,
+the equal-3.25-GiB 500-ms dwell, immediate equal-4-GiB containment, rejection
+of recovery at exactly 2.5 GiB, and recovery one byte below only after 30
+continuous healthy seconds. The existing pressure proof still checks exact
+aggregate-evaluation and committed-watermark equality across pressure changes.
+
+Focused proof, `go test -short -timeout 2m ./... -count=1`, affected
+engine/Massive/operations race verification under five minutes, `go vet ./...`,
+and `git diff --check` passed. The required `gpt-5.6-sol` medium read-only final
+review found no P1/P2 and one P3 documentation unit mismatch; the ledger now
+states the exact 1.663-GiB baseline and approximately 1.59-GiB normal-mode
+headroom. No provider request or credential access occurred. The revised
+profile is current-host policy, not evidence of market-hours T/Q behavior, a
+portable capacity limit, or an SLA.
 
 Reopen S1 if a normalized shape cannot carry the stated identity/quality facts,
 paired acknowledgement cannot prove per-symbol/channel coverage, the weighted

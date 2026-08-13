@@ -95,6 +95,78 @@ func TestPC9PressureTransitionsExpiryAndRankedRestoration(t *testing.T) {
 	e.mu.Unlock()
 }
 
+func TestPC9CurrentHostHeapGateBoundaries(t *testing.T) {
+	policy := defaultTQPressurePolicy()
+	got := [3]uint64{policy.recoveryHeap, policy.degradedHeap, policy.aggregateHeap}
+	want := [3]uint64{2560 << 20, 3328 << 20, 4096 << 20}
+	if got != want || tqRecoveryHeapBytes != want[0] || tqDegradedHeapBytes != want[1] || tqAggregateHeapBytes != want[2] ||
+		!(policy.recoveryHeap < policy.degradedHeap && policy.degradedHeap < policy.aggregateHeap) {
+		t.Fatalf("current-host heap policy = recovery=%d degraded=%d aggregate=%d", policy.recoveryHeap, policy.degradedHeap, policy.aggregateHeap)
+	}
+
+	t.Run("observed aggregate baseline leaves TQ normal", func(t *testing.T) {
+		e, _, clockNanos, start := pressureProofEngine(t)
+		defer closeAndWait(t, e)
+		sample := TQPressureSample{QueueCapacityFrames: 100, HeapAllocBytes: 1_785_959_440, TQLocalAccountingHealthy: true, Goroutines: 1}
+		applyPressureSample(t, e, clockNanos, start, sample)
+		applyPressureSample(t, e, clockNanos, start.Add(time.Second), sample)
+		applyPressureSample(t, e, clockNanos, start.Add(2*time.Second), sample)
+		if view := e.ObserveTQ(); view.Pressure != TQPressureNormal || view.ShedTradesQuotes {
+			t.Fatalf("observed baseline shed T/Q = %+v", view)
+		}
+	})
+
+	t.Run("degraded heap gate retains dwell boundary", func(t *testing.T) {
+		e, _, clockNanos, start := pressureProofEngine(t)
+		defer closeAndWait(t, e)
+		sample := TQPressureSample{QueueCapacityFrames: 100, HeapAllocBytes: tqDegradedHeapBytes, TQLocalAccountingHealthy: true, Goroutines: 1}
+		applyPressureSample(t, e, clockNanos, start, sample)
+		if got := e.ObserveTQ().Pressure; got != TQPressureNormal {
+			t.Fatalf("degraded heap bypassed dwell = %s", got)
+		}
+		applyPressureSample(t, e, clockNanos, start.Add(500*time.Millisecond), sample)
+		if got := e.ObserveTQ().Pressure; got != TQPressureDegraded {
+			t.Fatalf("degraded heap boundary = %s", got)
+		}
+	})
+
+	t.Run("aggregate heap gate remains immediate", func(t *testing.T) {
+		e, _, clockNanos, start := pressureProofEngine(t)
+		defer closeAndWait(t, e)
+		sample := TQPressureSample{QueueCapacityFrames: 100, HeapAllocBytes: tqAggregateHeapBytes, TQLocalAccountingHealthy: true, Goroutines: 1}
+		applyPressureSample(t, e, clockNanos, start, sample)
+		if view := e.ObserveTQ(); view.Pressure != TQPressureAggregateOnly || !view.AggregateOnly {
+			t.Fatalf("aggregate heap boundary = %+v", view)
+		}
+	})
+
+	t.Run("recovery heap gate remains strict", func(t *testing.T) {
+		e, _, clockNanos, start := pressureProofEngine(t)
+		defer closeAndWait(t, e)
+		e.mu.Lock()
+		e.state.tq.members, e.state.tq.desired = nil, nil
+		e.state.tq.pressure.mode = TQPressureAggregateOnly
+		e.state.tq.aggregateOnly = true
+		e.state.tq.pressure.degradedAt = start.Add(-time.Minute)
+		e.mu.Unlock()
+		atGate := TQPressureSample{QueueCapacityFrames: 100, HeapAllocBytes: tqRecoveryHeapBytes, TQLocalAccountingHealthy: true, Goroutines: 1}
+		for second := 0; second <= 30; second++ {
+			applyPressureSample(t, e, clockNanos, start.Add(time.Duration(second)*time.Second), atGate)
+		}
+		if got := e.ObserveTQ().Pressure; got != TQPressureAggregateOnly {
+			t.Fatalf("recovered at non-strict heap boundary = %s", got)
+		}
+		belowGate := atGate
+		belowGate.HeapAllocBytes--
+		for second := 31; second <= 61; second++ {
+			applyPressureSample(t, e, clockNanos, start.Add(time.Duration(second)*time.Second), belowGate)
+		}
+		if got := e.ObserveTQ().Pressure; got != TQPressureNormal {
+			t.Fatalf("did not recover below heap boundary = %s", got)
+		}
+	})
+}
+
 func TestPC9PressureMissingAndLateResultsCannotLeaveNormal(t *testing.T) {
 	e, _, clockNanos, start := pressureProofEngine(t)
 	defer closeAndWait(t, e)

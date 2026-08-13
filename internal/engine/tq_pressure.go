@@ -55,6 +55,12 @@ type tqPressurePolicy struct {
 	degradedGoroutines, aggregateGoroutines, recoveryGoroutines       int
 }
 
+const (
+	tqRecoveryHeapBytes  = uint64(2560) << 20
+	tqDegradedHeapBytes  = uint64(3328) << 20
+	tqAggregateHeapBytes = uint64(4096) << 20
+)
+
 func defaultTQPressurePolicy() tqPressurePolicy {
 	return tqPressurePolicy{
 		sampleCadence: time.Second, commandTimeout: 2 * time.Second, degradedDwell: 500 * time.Millisecond, aggregateDwell: 2 * time.Second,
@@ -62,7 +68,7 @@ func defaultTQPressurePolicy() tqPressurePolicy {
 		degradedQueuePercent: 50, aggregateQueuePercent: 80, recoveryQueuePercent: 20,
 		degradedOldest: 250 * time.Millisecond, aggregateOldest: 1500 * time.Millisecond, recoveryOldest: 100 * time.Millisecond,
 		degradedDelivery: 2 * time.Second, aggregateDelivery: 5 * time.Second, recoveryDelivery: 500 * time.Millisecond,
-		degradedHeap: 512 << 20, aggregateHeap: 1280 << 20, recoveryHeap: 384 << 20,
+		degradedHeap: tqDegradedHeapBytes, aggregateHeap: tqAggregateHeapBytes, recoveryHeap: tqRecoveryHeapBytes,
 		degradedGoroutines: 64, aggregateGoroutines: 128, recoveryGoroutines: 48,
 	}
 }
