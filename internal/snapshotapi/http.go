@@ -127,7 +127,7 @@ func (h *handler) recordMappingFailure(route string, capture operations.Snapshot
 }
 
 func productRoute(path string) bool {
-	return path == "/api/v1/snapshot" || path == "/livez" || path == "/readyz"
+	return path == "/api/v2/snapshot" || path == "/livez" || path == "/readyz"
 }
 
 func (h *handler) authorizeOrigin(request *http.Request) (origin string, allowed, preflight bool) {

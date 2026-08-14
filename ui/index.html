@@ -25,12 +25,10 @@
     <div class="table-shell">
       <table id="scanner-table">
         <caption>Server-ranked top 20 qualifying equities</caption>
-        <thead><tr>
-          <th scope="col">Rank</th><th scope="col">Symbol</th><th scope="col">Last</th><th scope="col">Day %</th>
-          <th scope="col">From 4AM %</th><th scope="col">HOD DD %</th><th scope="col">Day Range %</th>
-          <th scope="col">60 MIN Range %</th><th scope="col">30 MIN Range %</th><th scope="col">Activity</th>
-          <th scope="col">Tape Rate</th><th scope="col">Spread</th>
-        </tr></thead>
+        <thead>
+          <tr class="group-header"><th scope="colgroup" colspan="4">CONTEXT</th><th scope="colgroup" colspan="3">LOCATION</th><th scope="colgroup" colspan="2">CURRENT MOMENTUM</th><th scope="colgroup" colspan="2">EXECUTION</th></tr>
+          <tr class="leaf-header"><th scope="col">SYMBOL</th><th scope="col">FLOAT</th><th scope="col">VOLUME</th><th scope="col">LAST</th><th scope="col">DAY %</th><th scope="col">FROM OPEN %</th><th scope="col">DAY RANGE</th><th scope="col">ACTIVITY 30s</th><th scope="col">MOVE 30s</th><th scope="col">TAPE 5s</th><th scope="col">SPREAD</th></tr>
+        </thead>
         <tbody id="rows"></tbody>
       </table>
     </div>

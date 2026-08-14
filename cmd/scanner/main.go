@@ -84,6 +84,9 @@ func run(ctx context.Context, arguments []string) error {
 	if *checkpointMode != "on" && *checkpointMode != "off" {
 		return errors.New("checkpoint-mode must be on or off")
 	}
+	if *checkpointMode == "on" {
+		return errors.New("checkpoint-mode on is incompatible with the live feature MVP; use --checkpoint-mode=off for fresh hydration")
+	}
 	if *diagnosticDirectory == "" {
 		return errors.New("diagnostic-dir is required")
 	}
@@ -116,8 +119,13 @@ func run(ctx context.Context, arguments []string) error {
 	if err != nil {
 		return errors.New("assemble immutable binding")
 	}
+	floatCtx, cancelFloat := context.WithTimeout(runCtx, 15*time.Second)
+	floatLookup := (&reference.FloatResolver{BaseURL: *restOrigin, APIKey: credential, DataDir: *referenceDirectory, HTTPClient: client}).Resolve(floatCtx, universe)
+	cancelFloat()
+	runtimeConfig := operations.DefaultConfig()
+	runtimeConfig.FloatLookup = floatLookup
 	startup, cancelStartup := context.WithTimeout(runCtx, 30*time.Second)
-	runtime, store, err := composeLiveRuntime(startup, runCtx, binding, operations.DefaultConfig(), func() time.Time { return time.Now().UTC() }, *checkpointMode, *checkpointDirectory)
+	runtime, store, err := composeLiveRuntime(startup, runCtx, binding, runtimeConfig, func() time.Time { return time.Now().UTC() }, *checkpointMode, *checkpointDirectory)
 	cancelStartup()
 	if err != nil {
 		return err

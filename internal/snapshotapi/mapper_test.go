@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -34,7 +35,7 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 		t.Fatal(err)
 	}
 	hash := sha256.Sum256(body)
-	const goldenSHA256 = "fe91d17daaacd05eadd1f8af6ccf3db4cfa4b6e49eea2580574beaec36077862"
+	const goldenSHA256 = "4b159bf0f371d8faa795844ac6692ee0918a55f3182b92d760aceb73ea790a89"
 	if got := hex.EncodeToString(hash[:]); got != goldenSHA256 {
 		t.Fatalf("snapshot golden SHA-256 = %s", got)
 	}
@@ -78,13 +79,23 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 		t.Fatal("maximum family without a matching delivery serialized")
 	}
 	row := snapshot.Rows[0]
-	if row.From4AMChange.ValueRatio == nil || *row.From4AMChange.ValueRatio != 0 || row.HODDrawdown.ValueRatio != nil ||
-		row.TapeRate.OneSecond.TradesPerSecond == nil || *row.TapeRate.OneSecond.TradesPerSecond != 0 || row.Spread.Cents == nil || *row.Spread.Cents != 0 {
+	if row.FromOpenChange.ValueRatio == nil || *row.FromOpenChange.ValueRatio != 0 ||
+		row.Volume.ValueShares == nil || *row.Volume.ValueShares != 0 || row.Move30s.ValueRatio == nil || *row.Move30s.ValueRatio != 0 ||
+		row.Tape5s.TradesPerSecond == nil || *row.Tape5s.TradesPerSecond != 0 || row.Spread.Cents == nil || *row.Spread.Cents != 0 {
 		t.Fatalf("null versus genuine zero = %+v", row)
 	}
 	if row.DayChangeRatio != .0025 || row.DayRangePosition.ValueRatio == nil || *row.DayRangePosition.ValueRatio != .005 ||
-		row.Activity.ValueRatio == nil || *row.Activity.ValueRatio != .0125 {
+		row.Activity30s.ValueRatio == nil || *row.Activity30s.ValueRatio != .0125 || row.Float.ValueShares == nil || *row.Float.ValueShares != 12_000_000 {
 		t.Fatalf("percentage-point to ratio mapping = %+v", row)
+	}
+	var rowFields map[string]json.RawMessage
+	if err := json.Unmarshal(mustJSON(t, row), &rowFields); err != nil {
+		t.Fatal(err)
+	}
+	for _, superseded := range []string{"from_4am_change", "hod_drawdown", "range_30m_position", "range_60m_position", "activity", "tape_rate"} {
+		if _, exists := rowFields[superseded]; exists {
+			t.Fatalf("superseded v1 row field %q serialized", superseded)
+		}
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(body, &fields); err != nil {
@@ -180,22 +191,190 @@ func TestPC10SchemaPercentagePointBoundariesMapToRatios(t *testing.T) {
 	capture := schemaCapture()
 	row := &capture.Engine.Publication.AggregateEvaluation.Rows[0]
 	row.DayPercent = 250
-	row.From4AMPercent = engine.ReplayFieldView{Status: "current", Value: -100}
-	row.HODDrawdown = engine.ReplayFieldView{Status: "current", Value: 0}
-	row.SessionRange = engine.ReplayFieldView{Status: "current", Value: 100}
-	row.Rolling30 = engine.ReplayFieldView{Status: "current", Value: 25}
-	row.Rolling60 = engine.ReplayFieldView{Status: "current", Value: 75}
-	row.Activity = engine.ReplayFieldView{Status: "current", Value: 100}
+	row.FromOpenPercent = engine.ReplayFieldView{Status: "current", Value: -100}
+	row.DayRange = engine.ReplayFieldView{Status: "current", Value: 100}
+	row.Activity30s = engine.ReplayFieldView{Status: "current", Value: 100}
+	row.Move30s = engine.ReplayFieldView{Status: "current", Value: -25}
 
 	snapshot, err := mapCaptureView(capture)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := snapshot.Rows[0]
-	if got.DayChangeRatio != 2.5 || *got.From4AMChange.ValueRatio != -1 || *got.HODDrawdown.ValueRatio != 0 ||
-		*got.DayRangePosition.ValueRatio != 1 || *got.Range30MPosition.ValueRatio != .25 ||
-		*got.Range60MPosition.ValueRatio != .75 || *got.Activity.ValueRatio != 1 {
+	if got.DayChangeRatio != 2.5 || *got.FromOpenChange.ValueRatio != -1 || *got.DayRangePosition.ValueRatio != 1 ||
+		*got.Activity30s.ValueRatio != 1 || *got.Move30s.ValueRatio != -.25 {
 		t.Fatalf("boundary ratios = %+v", got)
+	}
+}
+
+func TestPMVPAPISchemaAvailabilityProvenanceOrderingAndBounds(t *testing.T) {
+	t.Run("independent states and units", func(t *testing.T) {
+		capture := schemaCapture()
+		row := &capture.Engine.Publication.AggregateEvaluation.Rows[0]
+		percent := 25.0
+		row.Float = engine.ReplayFloatFieldView{Status: "stale", Reason: "cached_fallback", Value: 8_500_000, Percent: &percent,
+			Provider: "massive-stocks-float-experimental", EffectiveDate: "2026-08-01", RetrievedAt: capture.SampledAt.Add(-time.Hour), Provenance: "cache"}
+		row.SessionVolume = engine.ReplayFieldView{Status: "unavailable", Reason: "history_incomplete"}
+		row.FromOpenPercent = engine.ReplayFieldView{Status: "unavailable", Reason: "before_first_print"}
+		row.DayRange = engine.ReplayFieldView{Status: "invalid", Reason: "historical_conflict"}
+		row.Activity30s = engine.ReplayFieldView{Status: "current", Value: 0}
+		row.Move30s = engine.ReplayFieldView{Status: "unavailable", Reason: "no_aggregate_in_target"}
+		capture.Engine.TQ.Rows[0].Tape.Status, capture.Engine.TQ.Rows[0].Tape.Reason = engine.TQWarming, "five_second_warming"
+		capture.Engine.TQ.Rows[0].Tape.FiveSecondStatus, capture.Engine.TQ.Rows[0].Tape.FiveSecondReason = engine.TQWarming, "five_second_warming"
+		capture.Engine.TQ.Rows[0].Spread.Status = engine.TQStale
+		capture.Engine.TQ.Rows[0].Spread.Reason = "stale_quote"
+		capture.Engine.TQ.Rows[0].Spread.Cents = 1.5
+		capture.Engine.TQ.Rows[0].Spread.BasisPoints = 15
+		capture.Engine.TQ.Rows[0].Spread.QuoteAge = 45 * time.Minute
+
+		snapshot, err := mapCaptureView(capture)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := snapshot.Rows[0]
+		if got.Float.Status != "stale" || got.Float.ValueShares == nil || *got.Float.ValueShares != 8_500_000 ||
+			got.Float.PercentRatio == nil || *got.Float.PercentRatio != .25 || got.Float.EffectiveDate == nil || *got.Float.EffectiveDate != "2026-08-01" ||
+			got.Float.RetrievedAt == nil || got.Float.Provenance != "cache" || got.Volume.ValueShares != nil ||
+			got.FromOpenChange.Status != "unavailable" || got.DayRangePosition.Status != "invalid" || got.Activity30s.ValueRatio == nil || *got.Activity30s.ValueRatio != 0 ||
+			got.Move30s.ValueRatio != nil || got.Tape5s.TradesPerSecond != nil || got.Spread.Cents == nil || got.Spread.QuoteAgeMS != uint64((45*time.Minute)/time.Millisecond) {
+			t.Fatalf("independent v2 mapping = %+v", got)
+		}
+	})
+
+	t.Run("order and top twenty", func(t *testing.T) {
+		capture := schemaCapture()
+		base := capture.Engine.Publication.AggregateEvaluation.Rows[0]
+		rows := make([]engine.ReplayRankingRowView, 20)
+		for index := range rows {
+			rows[index] = base
+			rows[index].Rank = uint32(index + 1)
+			rows[index].Symbol = fmt.Sprintf("S%02d", index+1)
+			rows[index].DayPercent = float64(20 - index)
+			rows[index].TQIntentEligible = index == 0
+		}
+		capture.Engine.Publication.AggregateEvaluation.Rows = rows
+		capture.Engine.Publication.AggregateEvaluation.Population = engine.ReplayPopulationView{UniverseTotal: 20, ValidPriorClose: 20, TrustedRankableMark: 20, CoveredPopulation: 20}
+		capture.Engine.Publication.AggregateEvaluation.Qualification = engine.ReplayQualificationAccountingView{Provisional: 20}
+		capture.Engine.Publication.AggregateEvaluation.PopulationTransition = engine.ReplayPopulationTransitionDiagnosticView{}
+		capture.Engine.Publication.AggregateEvaluation.TotalPassers = 20
+		capture.Engine.Publication.AggregateEvaluation.KnownRankableCount = 20
+		snapshot, err := mapCaptureView(capture)
+		if err != nil || len(snapshot.Rows) != 20 {
+			t.Fatalf("top twenty mapping rows=%d err=%v", len(snapshot.Rows), err)
+		}
+		for index, row := range snapshot.Rows {
+			if row.Rank != uint64(index+1) || row.Symbol != fmt.Sprintf("S%02d", index+1) || row.DayChangeRatio != float64(20-index)/100 {
+				t.Fatalf("row %d reordered: %+v", index, row)
+			}
+		}
+		capture.Engine.Publication.AggregateEvaluation.Rows = append(capture.Engine.Publication.AggregateEvaluation.Rows, base)
+		if _, err := mapCaptureView(capture); mappingInvariant(err) != "capture_coherence" {
+			t.Fatalf("twenty-one rows reached schema: %v", err)
+		}
+	})
+
+	t.Run("malformed source and wire values", func(t *testing.T) {
+		mutations := []struct {
+			name string
+			edit func(*operations.SnapshotCaptureView)
+		}{
+			{"last below rankability bound", func(v *operations.SnapshotCaptureView) { v.Engine.Publication.AggregateEvaluation.Rows[0].Last = .249 }},
+			{"negative volume", func(v *operations.SnapshotCaptureView) {
+				v.Engine.Publication.AggregateEvaluation.Rows[0].SessionVolume.Value = -1
+			}},
+			{"nonfinite Float", func(v *operations.SnapshotCaptureView) {
+				v.Engine.Publication.AggregateEvaluation.Rows[0].Float.Value = math.NaN()
+			}},
+			{"bad Float effective date", func(v *operations.SnapshotCaptureView) {
+				v.Engine.Publication.AggregateEvaluation.Rows[0].Float.EffectiveDate = "2026-02-30"
+			}},
+			{"Activity above bound", func(v *operations.SnapshotCaptureView) {
+				v.Engine.Publication.AggregateEvaluation.Rows[0].Activity30s.Value = 100.01
+			}},
+			{"Day Range below bound", func(v *operations.SnapshotCaptureView) {
+				v.Engine.Publication.AggregateEvaluation.Rows[0].DayRange.Value = -.01
+			}},
+			{"negative Tape", func(v *operations.SnapshotCaptureView) { v.Engine.TQ.Rows[0].Tape.FiveSecond = -1 }},
+			{"negative Spread", func(v *operations.SnapshotCaptureView) { v.Engine.TQ.Rows[0].Spread.Cents = -1 }},
+			{"negative quote age", func(v *operations.SnapshotCaptureView) { v.Engine.TQ.Rows[0].Spread.QuoteAge = -time.Millisecond }},
+		}
+		for _, mutation := range mutations {
+			t.Run(mutation.name, func(t *testing.T) {
+				capture := schemaCapture()
+				mutation.edit(&capture)
+				if _, err := mapCaptureView(capture); err == nil {
+					t.Fatal("malformed internal value reached v2")
+				}
+			})
+		}
+		snapshot, err := mapCaptureView(schemaCapture())
+		if err != nil {
+			t.Fatal(err)
+		}
+		zero := 0.0
+		snapshot.Rows[0].Volume = ShareMeasurement{Status: "unavailable", Reason: "history_incomplete", ValueShares: &zero}
+		if err := validateSnapshot(snapshot); err == nil {
+			t.Fatal("unavailable wire value encoded as numeric zero")
+		}
+	})
+}
+
+func TestPMVPAPIRejectsContradictoryMeasurementTuples(t *testing.T) {
+	base, err := mapCaptureView(schemaCapture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	zero := 0.0
+	mutations := []struct {
+		name string
+		edit func(*Row)
+	}{
+		{"current ratio with absence reason", func(r *Row) { r.Move30s.Reason = "history_incomplete" }},
+		{"warming ratio without reason", func(r *Row) { r.Activity30s = RatioMeasurement{Status: "warming"} }},
+		{"unavailable ratio without reason", func(r *Row) { r.FromOpenChange = RatioMeasurement{Status: "unavailable"} }},
+		{"invalid ratio without reason", func(r *Row) { r.DayRangePosition = RatioMeasurement{Status: "invalid"} }},
+		{"warming Volume", func(r *Row) { r.Volume = ShareMeasurement{Status: "warming", Reason: "history_incomplete"} }},
+		{"unavailable Volume without reason", func(r *Row) { r.Volume = ShareMeasurement{Status: "unavailable"} }},
+		{"invalid Volume without reason", func(r *Row) { r.Volume = ShareMeasurement{Status: "invalid"} }},
+		{"unavailable Volume with zero", func(r *Row) {
+			r.Volume = ShareMeasurement{Status: "unavailable", Reason: "history_incomplete", ValueShares: &zero}
+		}},
+		{"current Float with cache provenance", func(r *Row) { r.Float.Provenance, r.Float.Reason = "cache", "cached_fallback" }},
+		{"stale Float with fresh provenance", func(r *Row) {
+			r.Float.Status, r.Float.Provenance = "stale", "fresh"
+			r.Float.Reason = "cached_fallback"
+		}},
+		{"unavailable Float without reason", func(r *Row) { r.Float = FloatMeasurement{Status: "unavailable"} }},
+		{"invalid Float without reason", func(r *Row) { r.Float = FloatMeasurement{Status: "invalid"} }},
+		{"warming Tape without reason", func(r *Row) { r.Tape5s = Tape5s{Status: "warming", TradeCoverage: true} }},
+		{"current Tape with warmup reason", func(r *Row) { r.Tape5s.Reason = "five_second_warming" }},
+		{"unavailable Tape without reason", func(r *Row) { r.Tape5s = Tape5s{Status: "unavailable"} }},
+		{"invalid Tape without reason", func(r *Row) { r.Tape5s = Tape5s{Status: "invalid", TradeCoverage: true} }},
+		{"current Spread with stale reason", func(r *Row) { r.Spread.Reason = "stale_quote" }},
+		{"stale Spread without retained values", func(r *Row) { r.Spread = Spread{Status: "stale", Reason: "stale_quote", QuoteCoverage: true} }},
+		{"unavailable Spread without reason", func(r *Row) { r.Spread = Spread{Status: "unavailable"} }},
+		{"invalid Spread without reason", func(r *Row) { r.Spread = Spread{Status: "invalid", QuoteCoverage: true} }},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			value := base
+			value.Rows = append([]Row(nil), base.Rows...)
+			mutation.edit(&value.Rows[0])
+			if err := validateSnapshot(value); err == nil {
+				t.Fatal("contradictory tuple serialized")
+			}
+		})
+	}
+
+	// Genuine numeric zero is current data for each numeric family.
+	valid := base
+	valid.Rows = append([]Row(nil), base.Rows...)
+	valid.Rows[0].Volume = ShareMeasurement{Status: "current", ValueShares: &zero}
+	valid.Rows[0].Move30s = RatioMeasurement{Status: "current", ValueRatio: &zero}
+	valid.Rows[0].Tape5s = Tape5s{Status: "current", Reason: "qualifying_original_prints", TradeCoverage: true, TradesPerSecond: &zero, TimestampBasis: "none"}
+	valid.Rows[0].Spread = Spread{Status: "current", QuoteCoverage: true, Cents: &zero, BasisPoints: &zero, Quality: "reviewed_ordinary"}
+	if err := validateSnapshot(valid); err != nil {
+		t.Fatalf("genuine zero rejected: %v", err)
 	}
 }
 
@@ -238,8 +417,8 @@ func TestPC10SchemaSampleIdentityAndMutationIsolation(t *testing.T) {
 		t.Fatalf("sample identity overlaid engine facts: first=%s second=%s", firstEngine, secondEngine)
 	}
 	secondCapture.Engine.TQ.Desired[0] = "MUTATED"
-	secondCapture.Engine.TQ.Rows[0].Tape.OneSecond = 99
-	if first.TQ.DesiredSymbols[0] != "AAA" || first.Rows[0].TapeRate.OneSecond.TradesPerSecond == nil || *first.Rows[0].TapeRate.OneSecond.TradesPerSecond != 0 {
+	secondCapture.Engine.TQ.Rows[0].Tape.FiveSecond = 99
+	if first.TQ.DesiredSymbols[0] != "AAA" || first.Rows[0].Tape5s.TradesPerSecond == nil || *first.Rows[0].Tape5s.TradesPerSecond != 0 {
 		t.Fatal("mapped snapshot retained mutable aliases")
 	}
 }
@@ -260,6 +439,7 @@ func TestPC10SchemaPublicationStateCorpus(t *testing.T) {
 		{"exact empty", func(v *operations.SnapshotCaptureView) {
 			v.Engine.Publication.AggregateEvaluation.Rows = nil
 			v.Engine.Publication.AggregateEvaluation.TotalPassers = 0
+			v.Engine.Publication.AggregateEvaluation.Qualification = engine.ReplayQualificationAccountingView{NotYetPassed: 1}
 			v.Engine.TQ.Desired, v.Engine.TQ.Rows = nil, nil
 		}, "qualified_current", 0},
 		{"degraded", func(v *operations.SnapshotCaptureView) {
@@ -285,8 +465,8 @@ func TestPC10SchemaPublicationStateCorpus(t *testing.T) {
 			v.Engine.TQ.Pressure = engine.TQPressureDegraded
 			v.Engine.TQ.PressureCause = engine.TQPressureCauseWaitingFrames
 			v.Engine.TQ.ShedTradesQuotes = true
-			v.Engine.TQ.Rows[0].Tape = engine.TapeRateView{Status: engine.TQPressureShed, OneSecondStatus: engine.TQPressureShed, FiveSecondStatus: engine.TQPressureShed}
-			v.Engine.TQ.Rows[0].Spread = engine.SpreadView{Status: engine.TQPressureShed}
+			v.Engine.TQ.Rows[0].Tape = engine.TapeRateView{Status: engine.TQPressureShed, Reason: "pressure", OneSecondStatus: engine.TQPressureShed, OneSecondReason: "pressure", FiveSecondStatus: engine.TQPressureShed, FiveSecondReason: "pressure"}
+			v.Engine.TQ.Rows[0].Spread = engine.SpreadView{Status: engine.TQPressureShed, Reason: "pressure"}
 		}, "qualified_current", 1},
 		{"stale", func(v *operations.SnapshotCaptureView) {
 			v.Engine.Publication.AggregateEvaluation.Mode = "stale"
@@ -349,7 +529,7 @@ func TestPC10SchemaRejectsRepresentableInvalidShape(t *testing.T) {
 			v.Engine.Publication.AggregateEvaluation.Rows = append(v.Engine.Publication.AggregateEvaluation.Rows, row)
 		}},
 		{"nonfinite current value", func(v *operations.SnapshotCaptureView) {
-			v.Engine.Publication.AggregateEvaluation.Rows[0].From4AMPercent.Value = math.NaN()
+			v.Engine.Publication.AggregateEvaluation.Rows[0].FromOpenPercent.Value = math.NaN()
 		}},
 		{"sample overlay", func(v *operations.SnapshotCaptureView) { v.Status.ProcessLive = false }},
 		{"foreign TQ publication", func(v *operations.SnapshotCaptureView) { v.Engine.TQ.PublicationID++ }},
@@ -432,7 +612,7 @@ func TestMappingDiagnosticsIdentifyInvariantAndRemainBounded(t *testing.T) {
 
 	diagnostics := NewMappingDiagnostics()
 	for sequence := uint64(1); sequence <= 100; sequence++ {
-		diagnostics.record(MappingFailure{Invariant: mappingInvariant(err), Route: "/api/v1/snapshot", PublicationID: "8",
+		diagnostics.record(MappingFailure{Invariant: mappingInvariant(err), Route: "/api/v2/snapshot", PublicationID: "8",
 			LastEngineSequence: decimal(sequence), Lifecycle: "live", RankingMode: "degraded_bootstrap"})
 	}
 	latest, ok := diagnostics.Latest()
@@ -478,9 +658,10 @@ func schemaCapture() operations.SnapshotCaptureView {
 		Qualification: engine.ReplayQualificationAccountingView{Provisional: 1}, TotalPassers: 1, KnownRankableCount: 1, TQIntentAvailable: true,
 		PopulationTransition: engine.ReplayPopulationTransitionDiagnosticView{BootstrapUnknown: 1, TrustedByLaterLiveMark: 1},
 		Rows: []engine.ReplayRankingRowView{{Rank: 1, Symbol: "AAA", Last: 10, DayPercent: .25, MarkAge: 250 * time.Millisecond,
-			From4AMPercent: engine.ReplayFieldView{Status: "current", Value: 0}, HODDrawdown: engine.ReplayFieldView{Status: "unavailable", Reason: "before_first_print"},
-			SessionRange: engine.ReplayFieldView{Status: "current", Value: .5}, Rolling30: engine.ReplayFieldView{Status: "warming", Reason: "rolling_warmup"},
-			Rolling60: engine.ReplayFieldView{Status: "invalid", Reason: "historical_conflict"}, Activity: engine.ReplayFieldView{Status: "current", Value: 1.25}, TQIntentEligible: true}}}
+			Float:           engine.ReplayFloatFieldView{Status: "current", Value: 12_000_000, Provider: "massive-stocks-float-experimental", EffectiveDate: "2026-08-07", RetrievedAt: at, Provenance: "fresh"},
+			SessionVolume:   engine.ReplayFieldView{Status: "current", Value: 0},
+			FromOpenPercent: engine.ReplayFieldView{Status: "current", Value: 0}, DayRange: engine.ReplayFieldView{Status: "current", Value: .5},
+			Activity30s: engine.ReplayFieldView{Status: "current", Value: 1.25}, Move30s: engine.ReplayFieldView{Status: "current", Value: 0}, TQIntentEligible: true}}}
 	operational := engine.OperationalView{PublicationID: 9007199254741001, LastEngineSequence: 9007199254741003, BindingIdentity: "binding", TradingDate: "2026-08-08",
 		RunMode: engine.RunModeLive, Lifecycle: "live", Watermark: &target, GeneratedAt: at, RankingMode: "qualified_current", CurrentMarketClaim: true,
 		Connection: engine.OperationalConnection{Epoch: 4, AckFrame: 20, AckPosition: engine.LivePosition{ConnectionEpoch: 4, FrameSequence: 20, ArrayIndex: 7}, RecoveryAttempts: 2, Active: true, Acknowledged: true},
@@ -508,6 +689,15 @@ func schemaCapture() operations.SnapshotCaptureView {
 		PublicationID: operational.PublicationID, Watermark: &target, CausalTarget: &target, AccountingValid: true}
 	return operations.SnapshotCaptureView{SampleID: 9007199254740999, SampledAt: at, ProcessLive: true,
 		Engine: engine.SnapshotView{Publication: publication, Operational: operational, TQ: tq}, Status: status, Metrics: metrics}
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	body, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
 }
 
 func snapshotBinding(t *testing.T, requestedSymbols ...string) reference.Binding {

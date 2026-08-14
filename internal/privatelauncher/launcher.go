@@ -263,7 +263,7 @@ func run(ctx context.Context, repoRoot string, arguments []string, stdout, stder
 	}
 
 	fmt.Fprintf(stdout, "Dashboard: %s\n", dashboardOrigin)
-	fmt.Fprintf(stdout, "Scanner snapshot: %s/api/v1/snapshot\n", scannerOrigin)
+	fmt.Fprintf(stdout, "Scanner snapshot: %s/api/v2/snapshot\n", scannerOrigin)
 	fmt.Fprintf(stdout, "Scanner liveness: %s/livez\n", scannerOrigin)
 	fmt.Fprintf(stdout, "Scanner readiness: %s/readyz\n", scannerOrigin)
 	if parsed.open {

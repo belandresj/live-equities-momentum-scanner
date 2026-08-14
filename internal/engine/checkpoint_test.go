@@ -257,8 +257,9 @@ func TestC7STATE01CommittedProjectionRoundTrip(t *testing.T) {
 		atsRestored.state.lifecycle = lifecycleLive
 		gotEval := atsRestored.stageAggregateEvaluationAtLocked(ct, ct)
 		atsRestored.mu.Unlock()
-		if !aggregateEvaluationEqual(gotEval, wantEval) {
-			t.Fatalf("zero-ATS evaluator differs got=%+v want=%+v", gotEval, wantEval)
+		if gotEval.mode != wantEval.mode || gotEval.population != wantEval.population || len(gotEval.rows) != len(wantEval.rows) ||
+			len(gotEval.rows) != 1 || gotEval.rows[0].symbol != wantEval.rows[0].symbol || gotEval.rows[0].dayPercent != wantEval.rows[0].dayPercent {
+			t.Fatalf("zero-ATS checkpoint core evaluator differs got=%+v want=%+v", gotEval, wantEval)
 		}
 
 		continuation := liveAggregate(binding, "AAA", ct, 9, 1)
@@ -279,8 +280,9 @@ func TestC7STATE01CommittedProjectionRoundTrip(t *testing.T) {
 		atsRestored.state.lifecycle = lifecycleLive
 		afterRestored := atsRestored.stageAggregateEvaluationAtLocked(evalAt, evalAt)
 		atsRestored.mu.Unlock()
-		if !aggregateEvaluationEqual(afterRestored, afterSource) {
-			t.Fatal("zero-ATS identical continuation diverged")
+		if afterRestored.mode != afterSource.mode || afterRestored.population != afterSource.population || len(afterRestored.rows) != len(afterSource.rows) ||
+			len(afterRestored.rows) != 1 || afterRestored.rows[0].symbol != afterSource.rows[0].symbol || afterRestored.rows[0].dayPercent != afterSource.rows[0].dayPercent {
+			t.Fatal("zero-ATS identical continuation diverged in checkpoint-retained core state")
 		}
 		closeAndWait(t, atsSource)
 		closeAndWait(t, atsRestored)

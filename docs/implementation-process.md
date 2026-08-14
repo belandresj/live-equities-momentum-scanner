@@ -4,17 +4,18 @@
 
 **Approved:** 2026-08-05
 
-**Revised:** 2026-08-07 for the Version 1 Release Program
+**Revised:** 2026-08-14 for the Live feature-set MVP program
 
-**Scope:** Component research, contracts, predecessor reuse, proof allocation,
-implementation assignments, correction, acceptance, integration, and private
-V1 release validation.
+**Scope:** Capability/component research, contracts, predecessor reuse, proof
+allocation, implementation assignments, correction, acceptance, integration,
+and private/local release validation.
 
 This process does not redefine scanner behavior. The product and architecture
-contracts remain authoritative. For C7-C11, the owner-approved
-[`Version 1 Release Program`](v1-release-program.md) makes lower-level delivery
-decisions revisable and requires uninterrupted correction through the private
-V1 RC outcome.
+contracts remain authoritative. The current
+[`Live feature-set MVP program`](live-feature-mvp-program.md) supplies the
+active capability sequence, delivery scope, and completion boundary. The
+[`Version 1 Release Program`](v1-release-program.md) remains applicable as
+historical authority and compatible evidence for its former C7-C11 scope.
 
 ## 1. Authority and correction model
 
@@ -22,16 +23,16 @@ The operational rule is:
 
 ```text
 fixed product/architecture meaning
-  -> current component plan
+  -> current capability/component plan
   -> implementation and evidence
   -> accept, or diagnose and revise the lowest unsuitable artifact
-  -> continue in component order
+  -> continue in the current program order
 ```
 
 A lower-level contract, fixture, test, benchmark, whitelist, slice, interface,
 review route, or implementation does not become coequal with Phase 1 because it
 was previously approved. If evidence exposes a mistake, revise it. An accepted
-slice/component may be reopened before final V1 acceptance.
+slice/capability/component may be reopened before final program acceptance.
 
 For C7-C11 there is no component-local owner-response state. All correctable
 failures use the program's required correction loop; excluded external/live
@@ -45,8 +46,8 @@ component remain in force.
 
 Before implementation, the component plan must:
 
-1. read `AGENTS.md`, `README.md`, the specification map, the V1 program when
-   applicable, every relevant Phase 1 authority, and accepted dependency
+1. read `AGENTS.md`, `README.md`, the specification map, the current delivery
+   program, every relevant Phase 1 authority, and accepted dependency
    contracts;
 2. enumerate exact controlling `PG-*`, `ARCH-*`, `DTE-*`, and `LIFE-*` IDs;
 3. state one ownership boundary, inputs/outputs, dependencies, and explicit
@@ -234,7 +235,7 @@ When a test, benchmark, review, fixture, or implementation fails:
 
 1. preserve the observed command, configuration, fixture manifest, and result;
 2. identify the exact claim and classify the cause;
-3. revise the lowest unsuitable C7-C11 artifact or implementation;
+3. revise the lowest unsuitable current-program artifact or implementation;
 4. mark any affected accepted slice/component `reopened` while preserving
    unrelated clean evidence;
 5. run the narrowest distinguishing proof and direct regressions;
@@ -265,10 +266,10 @@ Record:
 - review trigger/result; and
 - whether the next slice is valid or needs an in-program revision.
 
-Under the V1 program, a clean evidence-based gate records `accepted` and
+Under the current program, a clean evidence-based gate records `accepted` and
 continues. A correctable failure records `reopened` or `correction_active` and
-continues through Section 5.1. C7-C11 do not record a component-local waiting-
-for-owner state.
+continues through Section 5.1. Historical C7-C11 work does not record a
+component-local waiting-for-owner state.
 
 ### 5.3 Final component review
 
@@ -283,9 +284,9 @@ component set and verifies:
 - one clear ownership/data path.
 
 Correct findings and request focused re-review. Do not repeat the broad review.
-When clean, record final component acceptance and update the specification map.
-Later integration evidence may still reopen the component before final V1
-acceptance.
+When clean, record final capability/component acceptance and update the
+specification map. Later integration evidence may still reopen it before final
+current-program acceptance.
 
 ## 6. Verification tiers and cost policy
 
@@ -315,9 +316,11 @@ reason.
 
 ### 6.3 Capacity
 
-Use the smallest population crossing the claimed boundary. The normal V1 local
-reference is exactly 6,000 symbols; theoretical 100,000-symbol structural
-admission is a separate bounded proof and not an operating-capacity claim.
+Use the smallest population crossing the claimed boundary. For the current
+MVP, a controlled 6,000-symbol measurement runs only when ordinary evidence or
+live observation suggests the revised full-universe calculation threatens
+accepted responsiveness. Theoretical 100,000-symbol structural admission is a
+separate bounded proof and not an operating-capacity claim.
 
 Record OS/architecture/CPU, Go version, configuration, fixture bytes and
 structure, trial deadlines/segments, throughput, processing delay, queue high-
@@ -325,18 +328,20 @@ water/growth, memory, rejected/dropped/shedded counts, and limitations. Run the
 capacity proof once after the implementation is stable, not in ordinary or
 repeated correction loops.
 
-### 6.4 Replay
+### 6.4 Deterministic fixtures and retained replay
 
-Use compact deterministic logical-time streams. Do not simulate full-session
-wall duration. Multiple playback rates are used only to prove rate invariance.
-Replay/fake-provider evidence may complete the private V1 RC while the market
-is closed.
+For the live feature-set MVP, use compact deterministic event traces,
+fake-provider inputs, API fixtures, and UI fixtures. These may prove formulas,
+state transitions, and presentation while the market is closed, but they are
+not product replay. Retained replay code has unknown current capability and is
+not an MVP proof or acceptance gate.
 
 ### 6.5 Live validation
 
 Live observation is separate, credentialed, and owner-authorized per execution.
 Follow [`market-hours-validation.md`](market-hours-validation.md). Pending live
-validation does not block the private/local RC.
+validation does not block deterministic private/local MVP acceptance and does
+not authorize replay as a substitute operating claim.
 
 ### 6.6 Universal bounds
 
@@ -363,8 +368,8 @@ Use an independent review only for:
    boundary is introduced or changed;
 2. a narrow implementation review when one such boundary is difficult to
    assess from primary proof and construction alone;
-3. one final read-only review per completed component; and
-4. one final integrated V1 RC review after C11.
+3. one final read-only review per completed current-program capability; and
+4. one final integrated review at current-program completion.
 
 After correction, request focused re-review of the finding and affected
 boundary. Do not repeat a complete review or ask a reviewer to reconfirm an
@@ -374,45 +379,41 @@ delays only that review while other work continues.
 
 Reviewer execution/model policy is in `AGENTS.md`.
 
-## 8. Component sequence and integration milestones
+## 8. Current capability sequence and integration milestones
 
-The specification map is the only component sequence. C7-C11 implementation
-is sequential:
+The specification map identifies the current program. Under the live
+feature-set MVP, implementation is sequential:
 
-1. **C7 checkpoint recovery:** coherent restart and replay continuation, with
-   bounded host evidence materially faster than equivalent fresh recovery.
-2. **C8 production aggregate lifecycle:** runnable composition, readiness,
-   recovery/shutdown, measurements, and 6,000-symbol controlled mixed load.
-3. **C9 T/Q enrichment:** normal top-20 Tape Rate/Spread plus aggregate-first
-   complete shedding and current-rank restoration.
-4. **C10/C11 private product delivery:** loopback versioned API plus independent
-   Chrome desktop dashboard.
+1. **MVP-S1 live backend:** final aggregate measurements, all-symbol retained
+   evidence, and Float reference enrichment;
+2. **MVP-S2 snapshot API v2:** one sealed backend publication mapped to only
+   the revised public fields;
+3. **MVP-S3 dashboard:** exact final presentation without browser-owned market
+   calculations; and
+4. **MVP-S4 integrated live MVP:** deterministic production-path composition
+   plus a separately authorized or owner-run live observation when available.
 
-Distinct vertical milestones are:
+Replay proof, checkpoint repair, numbered-component cleanup, and broad
+refactoring are not milestones in this sequence. Reuse accepted lower-layer
+evidence instead of duplicating it.
 
-- production aggregate lifecycle after C8;
-- T/Q enrichment after C9; and
-- private/local V1 RC after C11.
-
-Each milestone proves only the new cross-component boundary. Reuse accepted
-lower-layer evidence instead of duplicating it.
-
-## 9. Final V1 RC validation
+## 9. Final live-MVP validation
 
 Final validation assembles, rather than reinvents, evidence:
 
-1. confirm every V1 capability routes to one primary proof in
-   [`v1-release-program.md`](v1-release-program.md#6-v1-capability-and-primary-proof-matrix);
+1. confirm each MVP requirement routes to its primary proof in
+   [`live-feature-mvp-program.md`](live-feature-mvp-program.md);
 2. run the short repository command;
-3. run each current component acceptance/capacity proof once in its recorded
-   configuration;
-4. run one compact deterministic cross-component scenario through scanner,
-   checkpoint/recovery, T/Q, API, and UI, asserting only integration meanings;
-5. verify independent UI restart/deployment leaves backend processing live;
-6. run one final integrated read-only review; and
+3. run the narrow backend, API, and UI proofs once in their recorded
+   configurations;
+4. run one compact deterministic cross-capability scenario through scanner,
+   T/Q, API, and UI, asserting only integration meanings;
+5. verify independent UI restart leaves backend processing live;
+6. run the required final read-only reviews; and
 7. record market-hours validation as `pending` unless separately executed.
 
-The result is a private/local V1 RC. It is not live-provider validation, public
+The result is a private/local live-feature MVP. It does not establish replay
+support, checkpoint compatibility, live-provider validation, public
 deployment, production cutover, or trading-edge evidence.
 
 ## 10. Drift audit
@@ -429,10 +430,10 @@ and each milestone, ask whether the work introduced:
 - duplicated responsibility; or
 - unnecessary machinery.
 
-If the `yes` is in a lower-level C7-C11 artifact, correct that artifact and
-continue. If the apparent tension reaches fixed Phase 1 meaning, apply the V1
-program's authority order, strict compatible intersection, simplest design,
-and honest unavailable-output rule; do not solicit an in-goal owner decision.
+If the `yes` is in a lower-level current-program artifact, correct that
+artifact and continue. If the apparent tension reaches fixed Phase 1 meaning,
+apply the current program's authority order, simplest compatible design, and
+honest unavailable-output rule; do not silently change product meaning.
 
 ## 11. Orchestration and Git
 
@@ -442,8 +443,8 @@ reviewers are quiescent.
 
 Stage exact paths after verifying unrelated user changes are preserved. Make
 local commits at coherent planning/correction milestones, accepted slices,
-final component acceptance, and distinct vertical milestones when safe. If an
-exact-path commit would combine unrelated work or Git repair would rewrite user
-history, leave a precise working-tree handoff and continue; commits are not V1
-capability prerequisites. Never push, rebase, amend, rewrite history, delete
-branches, or use destructive reset.
+final capability/component acceptance, and distinct vertical milestones when
+safe. If an exact-path commit would combine unrelated work or Git repair would
+rewrite user history, leave a precise working-tree handoff and continue;
+commits are not capability prerequisites. Never push, rebase, amend, rewrite
+history, delete branches, or use destructive reset.

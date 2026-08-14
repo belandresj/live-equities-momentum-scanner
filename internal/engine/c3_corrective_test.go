@@ -309,8 +309,8 @@ func TestC3R1IndependentFeatureAccountingAndOrigins(t *testing.T) {
 		t.Fatalf("invalid-prior independent accounting = %+v", invalidPrior)
 	}
 	tampered := invalidPrior
-	tampered.features.activity.reasons[4]--
-	tampered.features.activity.reasons[1]++
+	tampered.features.activity30s.reasons[0]--
+	tampered.features.activity30s.reasons[1]++
 	if validateAggregateEvaluation(tampered) == nil {
 		t.Fatal("contradictory feature status/reason counters reconciled")
 	}

@@ -1,6 +1,6 @@
 package snapshotapi
 
-const SchemaVersion = "scanner.snapshot.v1"
+const SchemaVersion = "scanner.snapshot.v2"
 
 type Snapshot struct {
 	SchemaVersion string      `json:"schema_version"`
@@ -120,20 +120,30 @@ type RatioMeasurement struct {
 	ValueRatio *float64 `json:"value_ratio"`
 }
 
-type RateMeasurement struct {
-	Status          string   `json:"status"`
-	Reason          string   `json:"reason"`
-	TradesPerSecond *float64 `json:"trades_per_second"`
+type ShareMeasurement struct {
+	Status      string   `json:"status"`
+	Reason      string   `json:"reason"`
+	ValueShares *float64 `json:"value_shares"`
 }
 
-type TapeRate struct {
-	Status                   string          `json:"status"`
-	Reason                   string          `json:"reason"`
-	TradeCoverage            bool            `json:"trade_coverage"`
-	OneSecond                RateMeasurement `json:"one_second"`
-	FiveSecond               RateMeasurement `json:"five_second"`
-	TimestampBasis           string          `json:"timestamp_basis"`
-	LifecycleRecordsObserved bool            `json:"lifecycle_records_observed"`
+type FloatMeasurement struct {
+	Status        string   `json:"status"`
+	Reason        string   `json:"reason"`
+	ValueShares   *float64 `json:"value_shares"`
+	PercentRatio  *float64 `json:"percent_ratio"`
+	Provider      string   `json:"provider"`
+	EffectiveDate *string  `json:"effective_date"`
+	RetrievedAt   *string  `json:"retrieved_at"`
+	Provenance    string   `json:"provenance"`
+}
+
+type Tape5s struct {
+	Status                   string   `json:"status"`
+	Reason                   string   `json:"reason"`
+	TradeCoverage            bool     `json:"trade_coverage"`
+	TradesPerSecond          *float64 `json:"trades_per_second"`
+	TimestampBasis           string   `json:"timestamp_basis"`
+	LifecycleRecordsObserved bool     `json:"lifecycle_records_observed"`
 }
 
 type Spread struct {
@@ -155,16 +165,16 @@ type TQMembership struct {
 type Row struct {
 	Rank             uint64           `json:"rank"`
 	Symbol           string           `json:"symbol"`
+	Float            FloatMeasurement `json:"float"`
+	Volume           ShareMeasurement `json:"volume"`
 	LastUSD          float64          `json:"last_usd"`
 	DayChangeRatio   float64          `json:"day_change_ratio"`
 	MarkAgeMS        uint64           `json:"mark_age_ms"`
-	From4AMChange    RatioMeasurement `json:"from_4am_change"`
-	HODDrawdown      RatioMeasurement `json:"hod_drawdown"`
+	FromOpenChange   RatioMeasurement `json:"from_open_change"`
 	DayRangePosition RatioMeasurement `json:"day_range_position"`
-	Range30MPosition RatioMeasurement `json:"range_30m_position"`
-	Range60MPosition RatioMeasurement `json:"range_60m_position"`
-	Activity         RatioMeasurement `json:"activity"`
-	TapeRate         TapeRate         `json:"tape_rate"`
+	Activity30s      RatioMeasurement `json:"activity_30s"`
+	Move30s          RatioMeasurement `json:"move_30s"`
+	Tape5s           Tape5s           `json:"tape_5s"`
 	Spread           Spread           `json:"spread"`
 	TQMembership     TQMembership     `json:"tq_membership"`
 }

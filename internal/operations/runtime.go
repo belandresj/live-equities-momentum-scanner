@@ -20,6 +20,7 @@ type Config struct {
 	SampleCadence                               time.Duration
 	RecoveryBackoffInitial, RecoveryBackoffMax  time.Duration
 	ConnectionAttemptDeadline, ShutdownDeadline time.Duration
+	FloatLookup                                 reference.FloatLookup
 }
 
 func DefaultConfig() Config {
@@ -107,7 +108,7 @@ func NewWithCheckpoint(ctx context.Context, binding reference.Binding, config Co
 		submitter = writer
 	}
 	owner, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: clock, Capacity: config.EngineCapacity, RequiredReserve: config.RequiredReserve, EvaluationDelay: &config.EvaluationDelay,
-		CheckpointSubmitter: submitter, RecoveryBackoffInitial: config.RecoveryBackoffInitial, RecoveryBackoffMaximum: config.RecoveryBackoffMax})
+		CheckpointSubmitter: submitter, FloatLookup: config.FloatLookup, RecoveryBackoffInitial: config.RecoveryBackoffInitial, RecoveryBackoffMaximum: config.RecoveryBackoffMax})
 	if err != nil {
 		return nil, err
 	}

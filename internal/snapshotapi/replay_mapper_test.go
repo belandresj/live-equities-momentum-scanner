@@ -17,7 +17,7 @@ func TestReplaySchemaRejectsMixedPhasePublicationAndAccounting(t *testing.T) {
 		t.Fatal(err)
 	}
 	if snapshot.Replay == nil || snapshot.Replay.Phase != "observing" || snapshot.Status.BackendReady || snapshot.Status.ReadinessReason != "not_live_mode" ||
-		len(snapshot.Rows) != 1 || snapshot.Rows[0].TapeRate.Reason != "replay_unavailable" || snapshot.Rows[0].Spread.Reason != "replay_unavailable" {
+		len(snapshot.Rows) != 1 || snapshot.Rows[0].Tape5s.Reason != "replay_unavailable" || snapshot.Rows[0].Spread.Reason != "replay_unavailable" {
 		t.Fatalf("replay schema = %+v", snapshot)
 	}
 	mutations := []struct {

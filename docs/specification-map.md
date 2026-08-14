@@ -1,21 +1,26 @@
 # Specification map
 
-**Status:** Approved Phase 1 authority index, Phase 2 sequence, accepted
-private/local V1 RC, and active C12 follow-on sequence.
+**Status:** Approved authority index; the 2026-08-14 live feature-set MVP is
+the current sequential delivery program.
 
 **Phase 1 approved:** 2026-08-05
+
+**Product feature-set revision approved:** 2026-08-14
+
+**Live feature-set MVP program approved:** 2026-08-14
 
 **Phase 2 sequence approved:** 2026-08-05
 
 **Version 1 Release Program approved:** 2026-08-07; replaces the former
 C7-C11 unattended program
 
-**C12 follow-on sequence approved:** 2026-08-09; begins only after accepted
-C11/private V1 RC and accepted C4-S6
+**C12 follow-on sequence approved:** 2026-08-09; retained as historical
+authority and not active under the live feature-set MVP
 
 This map identifies authoritative documents, component entry points,
-dependencies, and coarse completion state. Detailed delivery state lives only
-in each component parent.
+dependencies, and coarse completion state. Current MVP delivery state lives in
+the [`Live feature-set MVP program`](live-feature-mvp-program.md); historical
+component evidence remains routed through each component parent.
 
 ## Authority
 
@@ -45,18 +50,50 @@ records are never tie-breakers.
 
 | Document | Status and role |
 | --- | --- |
-| [`product/product-goals.md`](product/product-goals.md) | Approved product contract, 2026-08-05; highest product authority. |
+| [`product/product-goals.md`](product/product-goals.md) | Approved product contract, 2026-08-05 and owner-revised 2026-08-14; highest product authority. The revised feature set supersedes conflicting lower-level formulas and displayed-field contracts pending sequential reconciliation. |
 | [`architecture/system-overview.md`](architecture/system-overview.md) | Approved architecture; runtime topology, sole ownership, components, failure containment, checkpoint/API/UI boundaries. |
 | [`architecture/data-time-and-event-contract.md`](architecture/data-time-and-event-contract.md) | Approved architecture; session, identity, clocks, causal order, merge/reconciliation, watermark, replay, and checkpoint cutoff. |
 | [`architecture/scanner-state-engine-lifecycle.md`](architecture/scanner-state-engine-lifecycle.md) | Approved architecture; legal live/replay lifecycle, progress/exit, publication, recovery, suppression, session end, and shutdown. |
 | [`glossary.md`](glossary.md) | Approved vocabulary; controlling product/architecture text wins when more specific. |
 
-Phase 1 settles the eligible universe, prior-close basis, qualification, exact
-Day-% ranking/top 20, displayed V1 fields, one engine/state/watermark/evaluator,
-04:00-20:00 New York session, half-open windows, REST/live identity and
-precedence, no-print proof, lifecycle, failure domains, accounting,
-checkpoints, replay, API/UI ownership, and independent availability. Focused
-contracts cite these meanings; they do not create a shared replacement layer.
+Phase 1 and the 2026-08-14 owner revision settle the eligible universe,
+prior-close basis, unchanged qualification, exact qualified Day-% ranking/top
+20, revised displayed fields, one engine/state/watermark/evaluator, 04:00-20:00
+New York session, half-open windows, REST/live identity and precedence,
+no-print proof, lifecycle, failure domains, accounting, API/UI ownership, and
+independent availability. Existing checkpoint and replay architecture remains
+available for future work, but neither path is a current MVP operating or
+acceptance requirement. Focused contracts cite these meanings; they do not
+create a shared replacement layer.
+
+## 2026-08-14 product feature-set revision
+
+The owner replaced the prior displayed feature set with:
+
+```text
+SYMBOL | FLOAT | VOLUME | LAST || DAY % | FROM OPEN % | DAY RANGE ||
+ACTIVITY 30s | MOVE 30s || TAPE 5s | SPREAD
+```
+
+The revision retains the existing aggregate qualification latch, ranks
+qualified passers strictly by Day % descending with exact-symbol tie-breaking,
+and preserves selected-row T/Q independence. It adds public Float, cumulative
+session share Volume, a five-minute-local share-volume Activity percentile,
+aggregate-mark Move 30s with known-no-print carry, and an all-symbol minimum
+330-second aggregate/coverage-evidence guarantee. It removes HOD drawdown,
+30/60-minute ranges, the transaction/price-expansion Activity composite, and
+the one-second Tape burst from the product.
+
+The accepted pre-revision component evidence remains historical baseline
+evidence, not proof of conformance to the revised product. The current work is
+organized by the smallest affected capabilities—live backend measurements and
+Float enrichment, snapshot API v2, final dashboard, and integrated live-MVP
+acceptance—rather than by reopening every numbered historical component.
+Offline replay and checkpoint persistence are specifically not reopened.
+Until that sequential reconciliation and integrated acceptance are complete,
+the repository implementation and the previously accepted private V1 RC
+implement the superseded field set and must not be described as the revised
+product.
 
 Historical files under [`history/`](history/) are non-authoritative drafting
 and review records.
@@ -65,33 +102,37 @@ and review records.
 
 | Document | Status and role |
 | --- | --- |
-| [`v1-release-program.md`](v1-release-program.md) | Owner-approved C7-C11 authority, 2026-08-07: fixed/revisable decisions, zero-interruption correction/containment, minimum scope, capability/proof matrix, test tiers, and private/local V1 RC definition. |
-| [`implementation-process.md`](implementation-process.md) | Owner-approved process, revised 2026-08-07: contract-first planning, revisable C7-C11 delivery, correction/reopening, bounded verification, risk-based review, integration, and final validation. |
+| [`live-feature-mvp-program.md`](live-feature-mvp-program.md) | Current owner-approved delivery authority, 2026-08-14: smallest sequential live feature cutover; explicit backend/API/UI slices; replay unverified and non-gating; checkpoints disabled and non-gating. |
+| [`v1-release-program.md`](v1-release-program.md) | Accepted 2026-08-07 authority and evidence for the former C7-C11 field set. Its conflicting delivery gates are superseded for the current live feature-set MVP; still-compatible architecture and proof decisions remain usable evidence. |
+| [`implementation-process.md`](implementation-process.md) | Owner-approved process, revised 2026-08-14: contract-first capability/component planning, correction/reopening, bounded verification, risk-based review, integration, and final validation under the current delivery program. |
 | [`specifications/focused-component-spec-template.md`](specifications/focused-component-spec-template.md) | Mandatory template, revised 2026-08-07: compact/modular routing, current-plan and correction records, single parent ledger, proof and slice rules. |
-| [`market-hours-validation.md`](market-hours-validation.md) | Procedure approved; execution pending a separate owner authorization. Not a private V1 RC gate and not credential authority by itself. |
+| [`market-hours-validation.md`](market-hours-validation.md) | Procedure approved; execution pending a separate owner authorization. Not a live-MVP gate and not credential authority by itself. |
 | [`live-scanner-recovery-narrow-fix.md`](live-scanner-recovery-narrow-fix.md) | Accepted owner-requested scanner-recovery baseline. Deterministic S1/S2, Gates A-E, the local D4 fence/capacity correction, and the D5 REST/live-precedence correction are accepted locally. D1-D4 observations remain evidence; another provider retry requires separate exact authorization. |
 | [`live-tq-resilience-correction.md`](live-tq-resilience-correction.md) | Accepted 2026-08-14 T/Q resilience correction transplanted onto clean main: asynchronous status correlation, T/Q-local quarantine/accounting, exact recovery for possible aggregate loss, and engine-scheduled same-binding continuation pass focused and repository-wide deterministic proofs. Later D8 queue-pressure constants remain authoritative. Credentialed live confirmation is owner-run and not yet claimed. |
 | [`live-ingress-first-cause-diagnostic.md`](live-ingress-first-cause-diagnostic.md) | D1 identified generic queue capacity after clean hydration; D2 made capacity causes decisive; D3 corrected the localized-conflict population transition and added its reason ledger. The D3 retry completed hydration but selected a long ingress-fence stall and slot saturation before retaining that ledger. |
 | [`live-fence-finalization-and-burst-capacity-correction.md`](live-fence-finalization-and-burst-capacity-correction.md) | Accepted D4 correction: retained-tail full-universe evaluation now remains below the fixed responsiveness limit; terminal incidents preserve bounded last-coherent D3/accounting evidence; and owner-selected 32,768-slot retry headroom remains under the unchanged 128-MiB byte cap with fail-closed controls. |
 | [`live-checkpoint-hot-path-correction.md`](live-checkpoint-hot-path-correction.md) | Finally accepted C7/C8 correction: bounded FIFO-tail projection continuations replace the multi-second monolithic owner hold, alias-isolated per-symbol transfer prevents retained writer aliases, checkpoint terminals return to engine accounting, O(1) continuation occupancy preserves saturated ingress cost, and the bounded decoder/restart objective passes; focused final re-review is clean. |
-| [`v1-release-follow-on-goal.md`](v1-release-follow-on-goal.md) | Short handoff prompt for the subsequent autonomous C7-C11 goal. |
+| [`v1-release-follow-on-goal.md`](v1-release-follow-on-goal.md) | Historical handoff prompt for the completed former C7-C11 program; not current execution authority. |
 | [`replay-rest-feasibility-benchmark.md`](replay-rest-feasibility-benchmark.md) | Completed non-authoritative C12 acquisition evidence record and separately gated rerun protocol. It authorizes no credentials, provider request, production change, rerun, or capacity claim. |
-| [`c12-implementation-goal.md`](c12-implementation-goal.md) | Owner-approved handoff prompt: close C11/private V1 RC, then implement and accept C4-S6, C12-S1, and C12-S2 sequentially. The focused component contracts remain authoritative. |
+| [`c12-implementation-goal.md`](c12-implementation-goal.md) | Historical replay follow-on handoff. Its retained implementation is unverified and non-gating for the live feature-set MVP. |
 
-## Version 1 Release Program
+## Current delivery program
 
-The former C7-C11 program froze post-approval fixtures, proofs, slices,
-benchmarks, interfaces, codecs, and accepted implementation decisions. The
-owner replaced it with the
-[`Version 1 Release Program`](v1-release-program.md): Phase 1 product and
-architecture meaning remain fixed, while C7-C11 lower-level delivery decisions
-remain revisable through final V1 acceptance.
+The [`Live feature-set MVP program`](live-feature-mvp-program.md) supersedes
+conflicting former-field, replay, checkpoint, and component-number delivery
+gates for this feature cutover. Implementation remains sequential with one
+active slice and final read-only review at each accepted capability boundary.
+The active order is:
 
-Implementation stays sequential with one active slice. Correctable failures
-reopen the affected item and continue. C7-C11 have no planned owner-response
-gate; excluded work and operational friction use the program's automatic
-containment/fallback rules. Review is risk-triggered, plus one final read-only
-review per component and one final integrated V1 RC review.
+1. live backend measurements and Float reference enrichment;
+2. snapshot API v2;
+3. final dashboard; and
+4. integrated live-MVP acceptance.
+
+The [`Version 1 Release Program`](v1-release-program.md) remains an accepted
+record of the former feature-set delivery and reusable evidence. It is not the
+current execution plan and cannot require replay proof, checkpoint repair, or
+unrelated repository cleanup before the revised live product works.
 
 ## Phase 2 focused component sequence
 
@@ -105,24 +146,22 @@ ledgers.
 | 1 | [Reference data and session binding](specifications/reference-data-and-session-binding.md) | Finally accepted 2026-08-05. Owns immutable trading date/session bounds, eligible universe, required prior session, adjusted prior closes, and binding identity. |
 | 2 | [ScannerStateEngine and canonical state](specifications/scanner-state-engine-and-canonical-state.md) | Finally accepted 2026-08-05. Owns sole ordered mutation, canonical aggregate state, committed watermark, immutable publication, and typed extension seams. |
 | 3 | [Aggregate features, qualification, ranking, and accounting](specifications/aggregate-features-qualification-ranking-and-accounting.md) | Finally accepted 2026-08-06. Owns formulas, correction-aware qualification, exact order/top 20, independent availability, and population accounting. |
-| 4 | [Aggregate replay](specifications/aggregate-replay.md) | Finally re-accepted after the narrow production-reader and playback-preparation resource corrections. The exact 2,584,011,150-byte artifact validates all 7,671,171 records in 40.53 seconds; trusted 17:15 preparation plus same-open stream validates the 7,587,384-record prefix and 7,581,690-row valid-prior subset in 2m6.65s. Compact/adversarial trust proofs, repository short, focused race, vet/diff, and persisted-trust reviews are clean without changed schema or admission semantics. Owns offline downloader/compiler, normalized artifact, deterministic source/clock, shared aggregate path, and full-source-trusted prefix completion with distinct lifecycle/accounting. |
+| 4 | [Aggregate replay](specifications/aggregate-replay.md) | Historical accepted evidence for the former aggregate fields. The live feature-set MVP does not reopen this component, depend on it, or claim that its retained implementation works with the revised fields. |
 | 5 | [Massive live adapter](specifications/massive-live-adapter.md) | Finally accepted 2026-08-09 after the integrated V1 RC reopened and corrected blocked-dequeue T/Q acknowledgement/deadline correlation with clean focused re-review. Owns bounded A/T/Q/control classification, normalization, causal positions, epochs, commands, and acknowledgements. |
 | 6 | [Aggregate REST hydration and recovery](specifications/aggregate-rest-hydration-and-recovery.md) | Finally accepted 2026-08-07. Owns production pagination/workers, fresh/checkpoint/gap plans, exact terminal outcomes, ingress fencing, and REST/live reconciliation. |
-| 7 | [Checkpoints and restart](specifications/checkpoints-and-restart.md) | Finally accepted 2026-08-07 under the V1 program. S1-S3 and all eight proofs pass; the corrected 6,000-symbol restart median is 10.286 seconds versus 36.641 seconds fresh (71.9% faster), with clean focused final re-review. |
+| 7 | [Checkpoints and restart](specifications/checkpoints-and-restart.md) | Historical accepted evidence for the former state schema. Checkpoint code is retained but disabled and non-gating for the live feature-set MVP; fresh hydration is the supported restart path, and an old schema must not be presented as compatible with revised fields. |
 | 8 | [Readiness and operations](specifications/readiness-and-operations.md) | Finally accepted 2026-08-07 and corrected with clean focused re-review 2026-08-10 after live-start analysis invalidated the whole-hydration 60-second deadline. Connection establishment remains bounded; finite C6 hydration continues under per-request bounds while the subscribed live tail is consumed; readiness waits for the exact ingress fence; concurrent terminal diagnostics and shutdown joins are race-safe. Runnable composition, honest readiness/staleness, engine-owned bounded recovery/exhaustion, fixed-cardinality measurements, and controlled 6,000-symbol mixed load remain accepted. |
 | 9 | [Top-20 T/Q coverage and features](specifications/top-20-tq-coverage-and-features.md) | Reaccepted after the owner-directed waiting-pressure/frame-local correction. Ordinary live configuration targets all ranked displayed rows up to 20 through serialized paired acknowledgements. Global pressure uses waiting frame/byte backlog, separate capacity/accounting/bound loss, and guarded aggregate lag; active-frame age is diagnostic only, with a 500-ms frame-local T/Q budget preserving later aggregates/controls. Spread retains the latest valid numeric quote with age through quiet coverage. Required deterministic, ordinary, affected race, vet, and diff gates pass; live/provider capacity remains unclaimed. |
 | 10 | [Versioned snapshot API](specifications/versioned-snapshot-api.md) | Finally accepted 2026-08-08. One sealed immutable capture maps to the exact versioned schema; loopback HTTP, exact-origin CORS, liveness/readiness, bounded transport, and joined scanner composition pass with clean focused final re-review. |
 | 11 | [Independent UI](specifications/independent-ui.md) | Finally accepted 2026-08-09. Production Chrome visual/interaction/accessibility/independence proof, final correction review, and integrated private V1 RC review are clean. Independent Chrome-desktop UI has every V1 field/status and no browser-owned market logic. |
-| 12 | [Historical replay product mode](specifications/historical-replay-product-mode.md) | C12-S1 accepted 2026-08-09 after C11/private V1 RC and C4-S6. Cache-only full validation, deterministic warm-up, cumulative 1x observation, atomic replay API state, exact C4 terminal identity, and bounded failure containment pass allocated proofs, correction/re-review, full short, focused race, and vet. C12-S2 presentation has deterministic coverage, but the 2026-08-13 in-place B4 attempt exposed warm-up throughput far outside the 15-minute acceptance bound; the scale correction and full B4/Chrome acceptance remain open. C12 is not part of the C7-C11 V1 RC gate. |
+| 12 | [Historical replay product mode](specifications/historical-replay-product-mode.md) | Historical, incomplete follow-on work. Its currently runnable capability is unknown; it is neither a supported path nor an acceptance gate for the live feature-set MVP. |
 
-Implementation is sequential. C8-C11 detailed contracts are completed just in
-time after the preceding final interface unless an already stable dependency
-permits safe earlier reconnaissance. Each future contract is compact and uses
-at most two slices unless a third protects a distinct consequential boundary.
-Later evidence may revise/reopen C7-C11 lower-level decisions but may not create
-concurrent implementation or a competing owner.
+The numbered component contracts remain the source of reusable ownership and
+proof evidence. They are not being renamed or comprehensively cleaned up in
+the MVP. Current implementation follows MVP-S1 through MVP-S4, and only the
+lower-level boundaries touched by those capabilities are reconciled.
 
-## V1 vertical milestones
+## Historical V1 vertical milestones
 
 1. **Deterministic aggregate core:** C1-C4, already accepted.
 2. **Production aggregate lifecycle:** C5-C8, including corrected checkpoint
@@ -133,7 +172,12 @@ concurrent implementation or a competing owner.
    independent Chrome UI, deterministic production-path integrated evidence,
    and the final read-only review are clean.
 
-The private/local V1 RC can complete while the market is closed. Credentialed
-market-hours observation remains pending under
-[`market-hours-validation.md`](market-hours-validation.md). Scanner correctness
-does not prove trading edge or executable expectancy.
+These milestones describe the accepted former feature set. They do not prove
+the revised product, replay compatibility, or checkpoint compatibility.
+
+The current MVP uses deterministic fixtures for formula, API, and UI work while
+the market is closed, but the only supported operating claim is the fresh-start
+live scanner. Replay is not a fallback acceptance path. Any credentialed
+market-hours observation still requires the separate authorization described
+in [`market-hours-validation.md`](market-hours-validation.md). Scanner
+correctness does not prove trading edge or executable expectancy.

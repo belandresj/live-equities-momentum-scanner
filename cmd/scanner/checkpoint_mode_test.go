@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,7 +43,7 @@ func TestCheckpointOffProductionCompositionConstructsAndSubmitsNoWork(t *testing
 	}
 	for poll := 0; poll < 10; poll++ {
 		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/snapshot", nil))
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v2/snapshot", nil))
 		if response.Code != http.StatusOK {
 			t.Fatalf("checkpoint-off API poll %d status=%d body=%s", poll+1, response.Code, response.Body.String())
 		}
@@ -58,22 +59,18 @@ func TestCheckpointOffProductionCompositionConstructsAndSubmitsNoWork(t *testing
 	}
 }
 
-func TestCheckpointModeDefaultPathStillConstructsExistingComposition(t *testing.T) {
+func TestCheckpointModeOnFailsBeforeRestoreOrWriterConstruction(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	binding := scannerTestBinding(t)
 	config := operations.DefaultConfig()
 	config.SampleCadence = 10 * time.Minute
-	runtime, store, err := composeLiveRuntime(ctx, ctx, binding, config, func() time.Time { return binding.SessionStart() }, "on", filepath.Join(t.TempDir(), "checkpoints"))
-	if err != nil {
-		t.Fatal(err)
+	directory := filepath.Join(t.TempDir(), "checkpoints")
+	runtime, store, err := composeLiveRuntime(ctx, ctx, binding, config, func() time.Time { return binding.SessionStart() }, "on", directory)
+	if err == nil || runtime != nil || store != nil || !strings.Contains(err.Error(), "incompatible with the live feature MVP") {
+		t.Fatalf("checkpoint guard runtime=%v store=%v err=%v", runtime, store, err)
 	}
-	if store == nil {
-		t.Fatal("default checkpoint composition did not construct store/writer")
-	}
-	shutdown, stop := context.WithTimeout(context.Background(), time.Second)
-	defer stop()
-	if err := runtime.Shutdown(shutdown); err != nil {
-		t.Fatal(err)
+	if _, statErr := os.Stat(directory); !os.IsNotExist(statErr) {
+		t.Fatalf("checkpoint guard touched restore path: %v", statErr)
 	}
 }

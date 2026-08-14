@@ -1012,7 +1012,8 @@ func validTQPublication(value TQView, publicationID uint64, evaluation aggregate
 		row := value.Rows[index]
 		if !validTQFieldStatus(row.Tape.Status) || !validTQFieldStatus(row.Tape.OneSecondStatus) || !validTQFieldStatus(row.Tape.FiveSecondStatus) ||
 			!validTQFieldStatus(row.Spread.Status) || !finiteTQ(row.Tape.OneSecond) || !finiteTQ(row.Tape.FiveSecond) ||
-			!finiteTQ(row.Spread.Cents) || !finiteTQ(row.Spread.BasisPoints) || row.Spread.QuoteAge < 0 {
+			!finiteTQ(row.Spread.Cents) || !finiteTQ(row.Spread.BasisPoints) || row.Spread.QuoteAge < 0 ||
+			row.Tape.Status != row.Tape.FiveSecondStatus || row.Tape.Reason != row.Tape.FiveSecondReason {
 			return false
 		}
 	}
@@ -1082,7 +1083,7 @@ func tapeView(m *tqSymbolState, target *time.Time) TapeRateView {
 	v.OneSecondStatus, v.OneSecondReason, v.OneSecond = TQCurrent, "qualifying_original_prints", float64(one)
 	if age < 5*time.Second {
 		v.Status, v.Reason = TQWarming, "five_second_warming"
-		v.FiveSecondStatus, v.FiveSecondReason = TQWarming, "coverage_warming"
+		v.FiveSecondStatus, v.FiveSecondReason = TQWarming, "five_second_warming"
 	} else {
 		v.Status, v.Reason = TQCurrent, "qualifying_original_prints"
 		v.FiveSecondStatus, v.FiveSecondReason = TQCurrent, "qualifying_original_prints"

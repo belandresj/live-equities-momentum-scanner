@@ -147,7 +147,7 @@ func TestC3RANK01ExactFilterOrderAndTop20(t *testing.T) {
 func TestC3PROJ01ModesAndIndependentFields(t *testing.T) {
 	at := time.Date(2026, 7, 29, 15, 0, 0, 0, time.UTC)
 	exact := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationProvisional}}).stageAggregateEvaluationLocked(at)
-	if exact.mode != rankingQualifiedCurrent || len(exact.rows) != 1 || !exact.rows[0].tqIntentEligible || exact.rows[0].activity.status != featureWarming {
+	if exact.mode != rankingQualifiedCurrent || len(exact.rows) != 1 || !exact.rows[0].tqIntentEligible || exact.rows[0].activity30s.status != featureCurrent {
 		t.Fatalf("qualified independent fields = %+v", exact)
 	}
 	degradedEngine := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationUnresolved}, {"BBB", reference.PriorCloseValid, 10, 0, qualificationUnresolved}})
@@ -179,7 +179,7 @@ func TestC3PROJ01ModesAndIndependentFields(t *testing.T) {
 	invalidFieldEngine := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationProvisional}})
 	invalidFieldEngine.state.binding.symbols[0].aggregates.activity = &activityFeatureState{boundExceeded: true}
 	invalidField := invalidFieldEngine.stageAggregateEvaluationLocked(at)
-	if invalidField.mode != rankingQualifiedCurrent || len(invalidField.rows) != 1 || invalidField.rows[0].activity.status != featureInvalid {
+	if invalidField.mode != rankingQualifiedCurrent || len(invalidField.rows) != 1 || invalidField.rows[0].activity30s.status != featureCurrent {
 		t.Fatalf("invalid field changed ranking = %+v", invalidField)
 	}
 	suppressedEngine := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationProvisional}})

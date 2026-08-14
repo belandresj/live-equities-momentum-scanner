@@ -81,8 +81,14 @@ type ReplayFeatureAccountingView struct {
 }
 
 type ReplayAllFeatureAccountingView struct {
+	SessionVolume, FromOpenPercent, DayRange              ReplayFeatureAccountingView
+	Activity30s, Move30s                                  ReplayFeatureAccountingView
 	DayPercent, From4AMPercent, HODDrawdown, SessionRange ReplayFeatureAccountingView
 	Rolling30, Rolling60, Activity                        ReplayFeatureAccountingView
+}
+
+type ReplayFloatAccountingView struct {
+	Current, Stale, Unavailable, Invalid uint64
 }
 
 type ReplayUncertaintyView struct {
@@ -97,13 +103,23 @@ type ReplayPopulationTransitionDiagnosticView struct {
 }
 
 type ReplayRankingRowView struct {
-	Rank                                      uint32
-	Symbol                                    string
-	Last, DayPercent                          float64
-	MarkAge                                   time.Duration
-	From4AMPercent, HODDrawdown, SessionRange ReplayFieldView
-	Rolling30, Rolling60, Activity            ReplayFieldView
-	TQIntentEligible                          bool
+	Rank                                     uint32
+	Symbol                                   string
+	Last, DayPercent                         float64
+	MarkAge                                  time.Duration
+	Float                                    ReplayFloatFieldView
+	SessionVolume, FromOpenPercent, DayRange ReplayFieldView
+	Activity30s, Move30s                     ReplayFieldView
+	TQIntentEligible                         bool
+}
+
+type ReplayFloatFieldView struct {
+	Status, Reason          string
+	Value                   float64
+	Percent                 *float64
+	Provider, EffectiveDate string
+	RetrievedAt             time.Time
+	Provenance              string
 }
 
 type ReplayEvaluationView struct {
@@ -112,6 +128,7 @@ type ReplayEvaluationView struct {
 	Population                              ReplayPopulationView
 	Qualification                           ReplayQualificationAccountingView
 	Features                                ReplayAllFeatureAccountingView
+	Floats                                  ReplayFloatAccountingView
 	Uncertainty                             ReplayUncertaintyView
 	PopulationTransition                    ReplayPopulationTransitionDiagnosticView
 	TotalPassers, KnownRankableCount        uint64
@@ -163,7 +180,7 @@ func ValidateReplayEvaluationAccounting(r ReplayEvaluationView) bool {
 	if r.Uncertainty.BootstrapOrigin+r.Uncertainty.PostBootstrapGap+r.Uncertainty.LocalInvalid != p.UnknownDueFailureOrFence+q.Unresolved {
 		return false
 	}
-	for _, dimension := range []ReplayFeatureAccountingView{r.Features.DayPercent, r.Features.From4AMPercent, r.Features.HODDrawdown, r.Features.SessionRange, r.Features.Rolling30, r.Features.Rolling60, r.Features.Activity} {
+	for _, dimension := range []ReplayFeatureAccountingView{r.Features.DayPercent, r.Features.SessionVolume, r.Features.FromOpenPercent, r.Features.DayRange, r.Features.Activity30s, r.Features.Move30s} {
 		var statuses, reasons, pairs uint64
 		var pairStatuses [4]uint64
 		var pairReasons [featureReasonBucketCount]uint64
@@ -181,6 +198,9 @@ func ValidateReplayEvaluationAccounting(r ReplayEvaluationView) bool {
 		if statuses != p.UniverseTotal || reasons != p.UniverseTotal || pairs != p.UniverseTotal || pairStatuses != dimension.Statuses || pairReasons != dimension.Reasons {
 			return false
 		}
+	}
+	if r.Floats.Current+r.Floats.Stale+r.Floats.Unavailable+r.Floats.Invalid != p.UniverseTotal {
+		return false
 	}
 	return true
 }
@@ -304,11 +324,15 @@ func replayEvaluationView(value aggregateEvaluationResult) ReplayEvaluationView 
 		Qualification: ReplayQualificationAccountingView{NotYetPassed: value.qualification.notYetPassed, Provisional: value.qualification.provisional,
 			Finalized: value.qualification.finalized, Unresolved: value.qualification.unresolved},
 		Features: ReplayAllFeatureAccountingView{
+			SessionVolume: replayFeatureAccountingView(value.features.sessionVolume), FromOpenPercent: replayFeatureAccountingView(value.features.fromOpenPercent),
+			DayRange: replayFeatureAccountingView(value.features.dayRange), Activity30s: replayFeatureAccountingView(value.features.activity30s),
+			Move30s:    replayFeatureAccountingView(value.features.move30s),
 			DayPercent: replayFeatureAccountingView(value.features.dayPercent), From4AMPercent: replayFeatureAccountingView(value.features.from4AMPercent),
 			HODDrawdown: replayFeatureAccountingView(value.features.hodDrawdown), SessionRange: replayFeatureAccountingView(value.features.sessionRange),
 			Rolling30: replayFeatureAccountingView(value.features.rolling30), Rolling60: replayFeatureAccountingView(value.features.rolling60),
 			Activity: replayFeatureAccountingView(value.features.activity),
 		},
+		Floats:      ReplayFloatAccountingView{Current: value.floats.current, Stale: value.floats.stale, Unavailable: value.floats.unavailable, Invalid: value.floats.invalid},
 		Uncertainty: ReplayUncertaintyView{BootstrapOrigin: value.uncertainty.bootstrapOrigin, PostBootstrapGap: value.uncertainty.postBootstrapGap, LocalInvalid: value.uncertainty.localInvalid},
 		PopulationTransition: ReplayPopulationTransitionDiagnosticView{
 			BootstrapUnknown: value.populationTransition.bootstrapUnknown, TrustedByLaterLiveMark: value.populationTransition.trustedByLaterLiveMark,
@@ -323,11 +347,23 @@ func replayEvaluationView(value aggregateEvaluationResult) ReplayEvaluationView 
 	}
 	for index, row := range value.rows {
 		result.Rows[index] = ReplayRankingRowView{Rank: row.rank, Symbol: row.symbol, Last: row.last, DayPercent: row.dayPercent,
-			MarkAge: row.markAge, From4AMPercent: replayFieldView(row.from4AMPercent), HODDrawdown: replayFieldView(row.hodDrawdown),
-			SessionRange: replayFieldView(row.sessionRange), Rolling30: replayFieldView(row.rolling30), Rolling60: replayFieldView(row.rolling60),
-			Activity: replayFieldView(row.activity), TQIntentEligible: row.tqIntentEligible}
+			MarkAge: row.markAge, Float: replayFloatFieldView(row.float), SessionVolume: replayFieldView(row.sessionVolume),
+			FromOpenPercent: replayFieldView(row.fromOpenPercent), DayRange: replayFieldView(row.dayRange),
+			Activity30s: replayFieldView(row.activity30s), Move30s: replayFieldView(row.move30s),
+			TQIntentEligible: row.tqIntentEligible}
 	}
 	return result
+}
+
+func replayFloatFieldView(field aggregateFloatField) ReplayFloatFieldView {
+	var percent *float64
+	if field.fact.FreeFloatPercent != nil {
+		value := *field.fact.FreeFloatPercent
+		percent = &value
+	}
+	return ReplayFloatFieldView{Status: string(field.status), Reason: field.reason, Value: field.fact.FreeFloat,
+		Percent: percent, Provider: field.fact.Provider, EffectiveDate: field.fact.EffectiveDate,
+		RetrievedAt: field.fact.RetrievedAt, Provenance: string(field.fact.Provenance)}
 }
 
 func replayFeatureAccountingView(value featureDimensionAccounting) ReplayFeatureAccountingView {

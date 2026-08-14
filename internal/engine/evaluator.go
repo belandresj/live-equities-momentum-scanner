@@ -120,7 +120,33 @@ type featureDimensionAccounting struct {
 }
 
 type featureAccounting struct {
+	sessionVolume, fromOpenPercent, dayRange, activity30s, move30s featureDimensionAccounting
+	// Legacy diagnostic dimensions remain populated until snapshot API v2 owns
+	// the schema cutover in MVP-S2. They are not part of the ranking row model.
 	dayPercent, from4AMPercent, hodDrawdown, sessionRange, rolling30, rolling60, activity featureDimensionAccounting
+}
+
+type floatAccounting struct {
+	current, stale, unavailable, invalid uint64
+}
+
+func (a floatAccounting) reconciles(universe uint64) bool {
+	return a.current+a.stale+a.unavailable+a.invalid == universe
+}
+
+type aggregateFloatStatus string
+
+const (
+	aggregateFloatCurrent     aggregateFloatStatus = "current"
+	aggregateFloatStale       aggregateFloatStatus = "stale"
+	aggregateFloatUnavailable aggregateFloatStatus = "unavailable"
+	aggregateFloatInvalid     aggregateFloatStatus = "invalid"
+)
+
+type aggregateFloatField struct {
+	status aggregateFloatStatus
+	reason string
+	fact   reference.FloatFact
 }
 
 type uncertaintyAccounting struct {
@@ -143,13 +169,14 @@ func (d populationTransitionDiagnostic) reconciles() bool {
 }
 
 type aggregateRankingRow struct {
-	rank                                      uint32
-	symbol                                    string
-	last, dayPercent                          float64
-	markAge                                   time.Duration
-	from4AMPercent, hodDrawdown, sessionRange aggregateFeatureField
-	rolling30, rolling60, activity            aggregateFeatureField
-	tqIntentEligible                          bool
+	rank                                     uint32
+	symbol                                   string
+	last, dayPercent                         float64
+	markAge                                  time.Duration
+	float                                    aggregateFloatField
+	sessionVolume, fromOpenPercent, dayRange aggregateFeatureField
+	activity30s, move30s                     aggregateFeatureField
+	tqIntentEligible                         bool
 }
 
 type aggregateEvaluationResult struct {
@@ -159,6 +186,7 @@ type aggregateEvaluationResult struct {
 	population           populationAccounting
 	qualification        qualificationAccounting
 	features             featureAccounting
+	floats               floatAccounting
 	uncertainty          uncertaintyAccounting
 	populationTransition populationTransitionDiagnostic
 	totalPassers         uint64
@@ -178,6 +206,7 @@ type aggregateSymbolEvaluationUpdate struct {
 	committedLatest *committedAggregateMark
 	priceRange      priceRangeFeatureResult
 	activity        activityFeatureResult
+	mvpMeasurements mvpMeasurementResult
 	present         bool
 }
 
@@ -374,6 +403,12 @@ func (e *Engine) applyAggregateCandidateLocked(at, engineTime time.Time) {
 		evaluateQualificationThrough(symbol.aggregates, e.state.binding, at, engineTime)
 		ensurePriceRangeState(symbol.aggregates).result = evaluatePriceRangeFeatures(e.state.binding, symbol, at)
 		applyActivityResult(symbol.aggregates, e.state.binding, evaluateActivityFeatures(e.state.binding, symbol.aggregates, at))
+		var invalid *invalidMarkEvidence
+		if evidence, ok := e.state.aggregateEvaluator.invalidMarks[index]; ok {
+			copyEvidence := evidence
+			invalid = &copyEvidence
+		}
+		ensureMVPMeasurementState(symbol.aggregates).result = evaluateMVPMeasurements(e.state.binding, symbol.aggregates, at, invalid)
 	}
 	e.commitAggregateTargetLocked(at)
 }
@@ -393,6 +428,7 @@ func (e *Engine) applyStagedAggregateCandidateLocked(staged aggregateEvaluationR
 		state.qualification = update.qualification
 		ensurePriceRangeState(state).result = update.priceRange
 		applyActivityResult(state, e.state.binding, update.activity)
+		ensureMVPMeasurementState(state).result = update.mvpMeasurements
 	}
 	e.commitAggregateTargetLocked(staged.at)
 }
@@ -545,6 +581,7 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 
 		features := unavailablePriceRangeResult(at)
 		activity := unavailableActivityResult(at)
+		measurements := unavailableMVPMeasurementResult(at)
 		var projectedQualification *qualificationState
 		if state != nil {
 			projectionState.qualification = cloneQualificationState(state.qualification)
@@ -553,8 +590,9 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 			evaluateQualificationThrough(&projectionState, e.state.binding, at, engineTime)
 			features = evaluatePriceRangeFeatures(e.state.binding, &projectionSymbol, at)
 			activity = evaluateActivityFeatures(e.state.binding, &projectionState, at)
+			measurements = evaluateMVPMeasurements(e.state.binding, &projectionState, at, invalidEvidence)
 			projectedQualification = projectionState.qualification
-			update := aggregateSymbolEvaluationUpdate{qualification: projectedQualification, priceRange: features, activity: activity, present: true}
+			update := aggregateSymbolEvaluationUpdate{qualification: projectedQualification, priceRange: features, activity: activity, mvpMeasurements: measurements, present: true}
 			if hasMark {
 				update.committedLatest = committedMark(mark)
 			}
@@ -568,10 +606,15 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 			unknown := aggregateFeatureField{status: featureUnavailable, reason: featureReasonHistoryIncomplete}
 			features.from4AMPercent, features.hodDrawdown, features.sessionRange = unknown, unknown, unknown
 			features.rolling30, features.rolling60, activity.activity = unknown, unknown, unknown
+			measurements.sessionVolume = unknownUnlessInvalid(measurements.sessionVolume, unknown)
+			measurements.activity30s = unknownUnlessInvalid(measurements.activity30s, unknown)
+			measurements.move30s = unknownUnlessInvalid(measurements.move30s, unknown)
 		}
-		if !countFeatureResult(&result.features, features, activity.activity) {
+		if !countFeatureResult(&result.features, features, activity.activity, measurements) {
 			result.invalidSupport = true
 		}
+		floatField := e.floatForSymbol(symbol.symbol)
+		countFloatResult(&result.floats, floatField)
 		if !validPrior {
 			result.population.invalidOrMissingPriorClose++
 			continue
@@ -631,9 +674,9 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 			countUncertaintyOrigin(&result.uncertainty, origin)
 			allUnresolvedBootstrap = allUnresolvedBootstrap && origin == uncertaintyBootstrapOrigin
 		}
-		row := aggregateRankingRow{symbol: symbol.symbol, last: mark.values.Close, markAge: age,
-			from4AMPercent: features.from4AMPercent, hodDrawdown: features.hodDrawdown, sessionRange: features.sessionRange,
-			rolling30: features.rolling30, rolling60: features.rolling60, activity: activity.activity}
+		row := aggregateRankingRow{symbol: symbol.symbol, last: mark.values.Close, markAge: age, float: floatField,
+			sessionVolume: measurements.sessionVolume, fromOpenPercent: features.from4AMPercent, dayRange: features.sessionRange,
+			activity30s: measurements.activity30s, move30s: measurements.move30s}
 		if features.dayPercent.status != featureCurrent || !finiteEvaluator(features.dayPercent.value) {
 			result.dayInvalidRankable++
 			if qualifiedPasser {
@@ -799,10 +842,13 @@ func validateAggregateEvaluation(r aggregateEvaluationResult) *evaluatorValidati
 		r.population.unknownDueFailureOrFence+r.qualification.unresolved {
 		return invalidEvaluation(EvaluatorUncertaintyAccounting, "accounting.uncertainty", "", "identity_mismatch")
 	}
-	for _, counts := range []featureDimensionAccounting{r.features.dayPercent, r.features.from4AMPercent, r.features.hodDrawdown, r.features.sessionRange, r.features.rolling30, r.features.rolling60, r.features.activity} {
+	for _, counts := range []featureDimensionAccounting{r.features.dayPercent, r.features.sessionVolume, r.features.fromOpenPercent, r.features.dayRange, r.features.activity30s, r.features.move30s} {
 		if !counts.reconciles(r.population.universeTotal) {
 			return invalidEvaluation(EvaluatorFeatureAccounting, "accounting.feature", "", "identity_mismatch")
 		}
+	}
+	if !r.floats.reconciles(r.population.universeTotal) {
+		return invalidEvaluation(EvaluatorFeatureAccounting, "accounting.float", "", "identity_mismatch")
 	}
 	if r.mode == rankingDegradedBootstrap && (r.knownRankableCount == 0 || (r.population.unknownDueFailureOrFence == 0 && r.qualification.unresolved == 0) || uint64(len(r.rows)) != wantDegradedRows) {
 		return invalidEvaluation(EvaluatorRankingProjection, "ranking.degraded", "", "projection_mismatch")
@@ -855,19 +901,39 @@ func minUint64(value uint64, limit int) uint64 {
 
 func cloneAggregateEvaluation(r aggregateEvaluationResult) aggregateEvaluationResult {
 	r.rows = append([]aggregateRankingRow(nil), r.rows...)
+	for i := range r.rows {
+		r.rows[i].float.fact = cloneRankingFloatFact(r.rows[i].float.fact)
+	}
 	r.updates = nil
 	return r
 }
 func aggregateEvaluationEqual(a, b aggregateEvaluationResult) bool {
-	if a.at != b.at || a.mode != b.mode || a.reason != b.reason || a.population != b.population || a.qualification != b.qualification || a.features != b.features || a.uncertainty != b.uncertainty || a.populationTransition != b.populationTransition || a.totalPassers != b.totalPassers || a.knownRankableCount != b.knownRankableCount || a.dayInvalidRankable != b.dayInvalidRankable || a.qualifiedDayInvalid != b.qualifiedDayInvalid || a.invalidSupport != b.invalidSupport || a.tqIntentAvailable != b.tqIntentAvailable || len(a.rows) != len(b.rows) {
+	if a.at != b.at || a.mode != b.mode || a.reason != b.reason || a.population != b.population || a.qualification != b.qualification || a.features != b.features || a.floats != b.floats || a.uncertainty != b.uncertainty || a.populationTransition != b.populationTransition || a.totalPassers != b.totalPassers || a.knownRankableCount != b.knownRankableCount || a.dayInvalidRankable != b.dayInvalidRankable || a.qualifiedDayInvalid != b.qualifiedDayInvalid || a.invalidSupport != b.invalidSupport || a.tqIntentAvailable != b.tqIntentAvailable || len(a.rows) != len(b.rows) {
 		return false
 	}
 	for i := range a.rows {
-		if a.rows[i] != b.rows[i] {
+		if !aggregateRankingRowEqual(a.rows[i], b.rows[i]) {
 			return false
 		}
 	}
 	return true
+}
+
+func aggregateRankingRowEqual(a, b aggregateRankingRow) bool {
+	aPercent, bPercent := a.float.fact.FreeFloatPercent, b.float.fact.FreeFloatPercent
+	a.float.fact.FreeFloatPercent, b.float.fact.FreeFloatPercent = nil, nil
+	if a != b || (aPercent == nil) != (bPercent == nil) {
+		return false
+	}
+	return aPercent == nil || *aPercent == *bPercent
+}
+
+func cloneRankingFloatFact(fact reference.FloatFact) reference.FloatFact {
+	if fact.FreeFloatPercent != nil {
+		value := *fact.FreeFloatPercent
+		fact.FreeFloatPercent = &value
+	}
+	return fact
 }
 func finiteEvaluator(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 func featureStatusIndex(status aggregateFeatureStatus) (int, bool) {
@@ -917,7 +983,7 @@ func validFeatureStatusReason(status aggregateFeatureStatus, reason aggregateFea
 	case featureCurrent:
 		return reason == featureReasonNone
 	case featureWarming:
-		return reason == featureReasonHistoryIncomplete || reason == featureReasonRollingWarmup || reason == featureReasonReferenceWarmup
+		return reason == featureReasonBeforeFirstPrint || reason == featureReasonHistoryIncomplete || reason == featureReasonRollingWarmup || reason == featureReasonReferenceWarmup
 	case featureUnavailable:
 		return reason == featureReasonBeforeFirstPrint || reason == featureReasonHistoryIncomplete || reason == featureReasonZeroWidth ||
 			reason == featureReasonPriorCloseUnavailable || reason == featureReasonNoAggregateInTarget
@@ -976,9 +1042,23 @@ func featureReasonFromIndex(index int) aggregateFeatureReason {
 		featureReasonStateBoundExceeded, featureReasonPriorCloseUnavailable, featureReasonNoAggregateInTarget}[index]
 }
 
-func countFeatureResult(f *featureAccounting, p priceRangeFeatureResult, activity aggregateFeatureField) bool {
+func countFeatureResult(f *featureAccounting, p priceRangeFeatureResult, activity aggregateFeatureField, measurements mvpMeasurementResult) bool {
+	if !countFeatureFields(
+		[]aggregateFeatureField{p.dayPercent, measurements.sessionVolume, p.from4AMPercent, p.sessionRange, measurements.activity30s, measurements.move30s},
+		[]*featureDimensionAccounting{&f.dayPercent, &f.sessionVolume, &f.fromOpenPercent, &f.dayRange, &f.activity30s, &f.move30s},
+	) {
+		return false
+	}
+	// Preserve the v1 diagnostic accounting projection until MVP-S2 replaces
+	// its schema. These fields do not participate in the revised row model.
 	fields := []aggregateFeatureField{p.dayPercent, p.from4AMPercent, p.hodDrawdown, p.sessionRange, p.rolling30, p.rolling60, activity}
 	counts := []*featureDimensionAccounting{&f.dayPercent, &f.from4AMPercent, &f.hodDrawdown, &f.sessionRange, &f.rolling30, &f.rolling60, &f.activity}
+	// DayPercent was already counted in the revised set.
+	fields, counts = fields[1:], counts[1:]
+	return countFeatureFields(fields, counts)
+}
+
+func countFeatureFields(fields []aggregateFeatureField, counts []*featureDimensionAccounting) bool {
 	for i := range fields {
 		status, statusOK := featureStatusIndex(fields[i].status)
 		reason, reasonOK := featureReasonIndex(fields[i].reason)
@@ -992,6 +1072,34 @@ func countFeatureResult(f *featureAccounting, p priceRangeFeatureResult, activit
 	return true
 }
 
+func (e *Engine) floatForSymbol(symbol string) aggregateFloatField {
+	fact, ok := e.floatLookup.Lookup(symbol)
+	if !ok {
+		return aggregateFloatField{status: aggregateFloatUnavailable, reason: "not_available"}
+	}
+	switch fact.Provenance {
+	case reference.FloatFresh:
+		return aggregateFloatField{status: aggregateFloatCurrent, fact: fact}
+	case reference.FloatCache:
+		return aggregateFloatField{status: aggregateFloatStale, reason: "cached_fallback", fact: fact}
+	default:
+		return aggregateFloatField{status: aggregateFloatInvalid, reason: "invalid_provenance"}
+	}
+}
+
+func countFloatResult(accounting *floatAccounting, field aggregateFloatField) {
+	switch field.status {
+	case aggregateFloatCurrent:
+		accounting.current++
+	case aggregateFloatStale:
+		accounting.stale++
+	case aggregateFloatUnavailable:
+		accounting.unavailable++
+	default:
+		accounting.invalid++
+	}
+}
+
 func countUncertaintyOrigin(accounting *uncertaintyAccounting, origin uncertaintyOrigin) {
 	switch origin {
 	case uncertaintyBootstrapOrigin:
@@ -1001,4 +1109,11 @@ func countUncertaintyOrigin(accounting *uncertaintyAccounting, origin uncertaint
 	default:
 		accounting.localInvalid++
 	}
+}
+
+func unknownUnlessInvalid(field, unknown aggregateFeatureField) aggregateFeatureField {
+	if field.status == featureInvalid {
+		return field
+	}
+	return unknown
 }

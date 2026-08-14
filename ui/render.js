@@ -6,10 +6,9 @@ function statusItem(document, label, value, state = "") {
   const item = element(document, "div"); item.append(textElement(document, "span", label)); const strong = textElement(document, "strong", value); if (state) strong.dataset.state = state; item.append(strong); return item;
 }
 function rangeWeights(position) {
-  const bounded = Math.max(0, Math.min(100, position));
-  return { red: bounded < 50 ? (50 - bounded) * 2 : 0, green: bounded > 50 ? (bounded - 50) * 2 : 0 };
+  return { red: position < 50 ? (50 - position) * 2 : 0, green: position > 50 ? (position - 50) * 2 : 0 };
 }
-function percentageWeight(position) { return `${Math.round(Math.max(0, Math.min(100, position)) * 100) / 100}%`; }
+function percentageWeight(position) { return `${Math.round(position * 100) / 100}%`; }
 function cell(document, value, state, detail, overallCurrent, band = 0, focusKey = "", palette = "", position = null) {
   const td = element(document, "td"); td.dataset.state = overallCurrent ? state : "retained"; td.dataset.fieldState = state;
   td.dataset.band = String(band); if (palette) td.dataset.palette = palette;
@@ -23,16 +22,20 @@ function buildTable(document, model) {
   const shell = element(document, "div", "table-shell");
   const table = element(document, "table"); table.id = "scanner-table"; table.dataset.publicationState = model.rowsCurrent ? "current" : "noncurrent";
   table.append(textElement(document, "caption", model.partial ? "Server-ranked top 20 trusted marks by Day %, qualification not asserted" : "Server-ranked top 20 qualifying equities"));
-  const thead = element(document, "thead"), header = element(document, "tr");
-  for (const label of ["Rank", "Symbol", "Last", "Day %", "From 4AM %", "HOD DD %", "Day Range %", "60 MIN Range %", "30 MIN Range %", "Activity", "Tape Rate", "Spread"]) { const th = textElement(document, "th", label); th.setAttribute("scope", "col"); header.append(th); }
-  thead.append(header); table.append(thead);
+  const thead = element(document, "thead"), groups = element(document, "tr", "group-header"), header = element(document, "tr", "leaf-header");
+  for (const [label, span] of [["CONTEXT", 4], ["LOCATION", 3], ["CURRENT MOMENTUM", 2], ["EXECUTION", 2]]) {
+    const th = textElement(document, "th", label); th.setAttribute("scope", "colgroup"); th.setAttribute("colspan", String(span)); groups.append(th);
+  }
+  for (const label of ["SYMBOL", "FLOAT", "VOLUME", "LAST", "DAY %", "FROM OPEN %", "DAY RANGE", "ACTIVITY 30s", "MOVE 30s", "TAPE 5s", "SPREAD"]) { const th = textElement(document, "th", label); th.setAttribute("scope", "col"); header.append(th); }
+  thead.append(groups, header); table.append(thead);
   const tbody = element(document, "tbody"); tbody.id = "rows";
   for (const row of model.rows) {
-    const tr = element(document, "tr"); tr.dataset.publicationState = model.rowsCurrent ? "current" : "noncurrent";
+    const tr = element(document, "tr"); tr.dataset.publicationState = model.rowsCurrent ? "current" : "noncurrent"; tr.setAttribute("aria-label", `Server rank ${row.rank}, ${row.symbol}`);
     const key = row.symbol;
-    tr.append(cell(document, String(row.rank), "current", "", model.rowsCurrent), cell(document, row.symbol, "current", "", model.rowsCurrent), cell(document, row.last, "current", `mark age ${row.markAgeMS} ms`, model.rowsCurrent, 0, `${key}:last`), cell(document, row.day, "current", "", model.rowsCurrent, row.dayBand),
-      cell(document, row.from4am.text, row.from4am.state, row.from4am.reason, model.rowsCurrent, row.from4am.band, `${key}:from4am`), cell(document, row.hod.text, row.hod.state, row.hod.reason, model.rowsCurrent, row.hod.band, `${key}:hod`), cell(document, row.dayRange.text, row.dayRange.state, row.dayRange.reason, model.rowsCurrent, row.dayRange.band, `${key}:dayrange`, "range", row.dayRange.position),
-      cell(document, row.range60.text, row.range60.state, row.range60.reason, model.rowsCurrent, row.range60.band, `${key}:range60`, "range", row.range60.position), cell(document, row.range30.text, row.range30.state, row.range30.reason, model.rowsCurrent, row.range30.band, `${key}:range30`, "range", row.range30.position), cell(document, row.activity.text, row.activity.state, row.activity.reason, model.rowsCurrent, row.activity.band, `${key}:activity`, "heat", row.activity.position),
+    tr.append(cell(document, row.symbol, "current", `server rank ${row.rank}`, model.rowsCurrent, 0, `${key}:symbol`),
+      cell(document, row.float.text, row.float.state, row.float.detail, model.rowsCurrent, 0, `${key}:float`), cell(document, row.volume.text, row.volume.state, row.volume.detail, model.rowsCurrent, 0, `${key}:volume`), cell(document, row.last, "current", `mark age ${row.markAgeMS} ms`, model.rowsCurrent, 0, `${key}:last`),
+      cell(document, row.day, "current", "Day %: server-published ranking value", model.rowsCurrent, row.dayBand, `${key}:day`), cell(document, row.fromOpen.text, row.fromOpen.state, row.fromOpen.detail, model.rowsCurrent, row.fromOpen.band, `${key}:fromopen`), cell(document, row.dayRange.text, row.dayRange.state, row.dayRange.detail, model.rowsCurrent, row.dayRange.band, `${key}:dayrange`, "range", row.dayRange.position),
+      cell(document, row.activity.text, row.activity.state, row.activity.detail, model.rowsCurrent, row.activity.band, `${key}:activity`, "heat", row.activity.position), cell(document, row.move.text, row.move.state, row.move.detail, model.rowsCurrent, row.move.band, `${key}:move`, row.move.palette),
       cell(document, row.tape.primary, row.tape.state, row.tape.detail, model.rowsCurrent, 0, `${key}:tape`, "heat", row.tape.position), cell(document, row.spread.primary, row.spread.state, row.spread.detail, model.rowsCurrent, row.spread.band, `${key}:spread`, "spread"));
     tbody.append(tr);
   }

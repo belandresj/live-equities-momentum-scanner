@@ -3,8 +3,9 @@
 ## Authority
 
 Read `README.md`, `docs/specification-map.md`, and the relevant approved
-product, architecture, component, and V1 program documents before changing code
-or contracts.
+product, architecture, delivery-program, and component documents before
+changing code or contracts. The current program is
+[`docs/live-feature-mvp-program.md`](docs/live-feature-mvp-program.md).
 
 Authority descends in this order:
 
@@ -24,23 +25,31 @@ component-local owner gate.
 ## Current phase
 
 Phase 1 product and architecture are complete and owner-approved. Components
-1-6 are finally accepted. Component 7 has accepted S1/S2 evidence and preserved
-S3 work, but its contract and S3 proof are revised by the owner-approved
-[`Version 1 Release Program`](docs/v1-release-program.md). Components 8-11 have
-owner-approved V1 boundary/reconnaissance plans linked from
-[`docs/specification-map.md`](docs/specification-map.md).
+1-11 and the former private/local V1 RC are historical accepted evidence for
+the superseded feature set. C12 replay work is incomplete and its current
+runnable capability is unknown.
 
-The active goal is a private/local V1 Release Candidate through C11. Public
-deployment and separately authorized market-hours validation are not part of
-that completion claim.
+The active goal is the private/local
+[`Live feature-set MVP`](docs/live-feature-mvp-program.md): live backend
+measurements and Float enrichment, snapshot API v2, final dashboard, then
+integrated live-MVP acceptance. Replay is retained but unverified and
+non-gating. Checkpoint persistence is retained but disabled and non-gating;
+fresh hydration is the supported restart path. Public deployment and
+credentialed market-hours validation are not part of the program's authority.
 
-Implementation remains sequential in the specification-map order. Keep one
-active implementation slice. Finish and finally review component N before
-implementing N+1. Planning and contract reconnaissance may use an already
-stable dependency boundary, but any later evidence may revise the lower-level
-plan without freezing or silently reinterpreting the dependency.
+Implementation remains sequential in MVP-S1 through MVP-S4. Keep one active
+write-capable implementation slice and finally review each capability before
+starting the next. Do not begin a component-number cleanup, replay proof, or
+checkpoint repair as a prerequisite for the live feature cutover.
 
 ## V1 fixed and revisable decisions
+
+For the current feature cutover, the fixed behavior, revisable delivery
+choices, containment, proof allocation, and completion boundary in
+[`docs/live-feature-mvp-program.md`](docs/live-feature-mvp-program.md) control.
+The material below remains applicable to work explicitly resumed under the
+historical C7-C11 program and as compatible evidence; it does not create a
+current replay or checkpoint gate.
 
 The fixed product/architecture meanings and agent-revisable delivery decisions
 are authoritative in
@@ -65,8 +74,8 @@ not create an owner-interruption gate.
 
 Contract-first design remains mandatory:
 
-1. Read this file, the repository guide and map, the V1 program, relevant
-   Phase 1 authorities, and accepted dependency contracts.
+1. Read this file, the repository guide and map, the current delivery program,
+   relevant Phase 1 authorities, and accepted dependency contracts.
 2. Enumerate the exact controlling Phase 1 requirement IDs.
 3. State one component ownership boundary and explicit non-scope.
 4. Choose the simplest design satisfying every cited requirement and V1
@@ -139,22 +148,22 @@ At each slice gate, record:
 - whether a narrow independent review was triggered and its result; and
 - whether the next slice remains valid or needs an in-program revision.
 
-Final component acceptance requires its allocated proofs, proportionate
-verification, one final read-only review, a clean conformance walkthrough, and
-no unresolved fixed-authority conflict. It may later be reopened by integration
-evidence before final V1 acceptance.
+Final capability/component acceptance requires its allocated proofs,
+proportionate verification, one final read-only review, a clean conformance
+walkthrough, and no unresolved fixed-authority conflict. It may later be
+reopened by integration evidence before final current-program acceptance.
 
-## V1 orchestration and Git
+## Program orchestration and Git
 
-The future V1 goal may use one write-capable implementation worker at a time.
-Independent reviewers are read-only. The orchestrator updates ledgers, stages,
-or commits only while all workers/reviewers are quiescent.
+The current delivery goal may use one write-capable implementation worker at a
+time. Independent reviewers are read-only. The orchestrator updates ledgers,
+stages, or commits only while all workers/reviewers are quiescent.
 
 The orchestrator alone stages exact paths after verifying unrelated user
 changes remain untouched. Make local commits at coherent planning/correction
-milestones, accepted implementation slices, final component acceptance, and
-distinct vertical milestones. Do not push, rebase, amend, rewrite history,
-delete branches, or use destructive reset operations.
+milestones, accepted implementation slices, final capability/component
+acceptance, and distinct vertical milestones. Do not push, rebase, amend,
+rewrite history, delete branches, or use destructive reset operations.
 
 ## Engineering rules
 
@@ -202,9 +211,10 @@ smallest invalid evidence that could falsely appear complete/current/valid.
 Distinguish invalid states prevented by construction from representable states
 requiring runtime validation.
 
-The ordinary repository command and the acceptance, capacity, replay, and live
-tiers are authoritative in
-[`docs/v1-release-program.md`](docs/v1-release-program.md#7-verification-tiers-and-cost-limits).
+The ordinary repository command and the current acceptance, capacity,
+deterministic-fixture, and live tiers are authoritative in the
+[`implementation process`](docs/implementation-process.md#6-verification-tiers-and-cost-policy)
+as bounded by the current delivery program.
 In particular:
 
 - ordinary verification is `go test -short -timeout 2m ./...`;
@@ -259,18 +269,18 @@ One assignment covers exactly one current slice and states:
 7. deferred behavior and decisions delegated to the implementer;
 8. prohibited fixed-authority changes;
 9. consequential trust-boundary counterexamples and proof limitations; and
-10. the V1 zero-interruption/containment reference plus in-program correction
+10. the current-program containment reference plus in-program correction
     triggers.
 
 Implementers make routine lower-level choices within those bounds. If the
-current slice is no longer coherent, revise/split it through the V1 correction
-loop, record the change, and continue sequentially. This repository does not
-use an ADR workflow.
+current slice is no longer coherent, revise/split it through the current
+program's correction loop, record the change, and continue sequentially. This
+repository does not use an ADR workflow.
 
 ## Independent review execution
 
-Use the risk-based cadence in
-[`docs/v1-release-program.md`](docs/v1-release-program.md#8-review-cadence).
+Use the risk-based cadence in the
+[`implementation process`](docs/implementation-process.md#7-independent-review-cadence).
 Do not spawn a reviewer merely because a slice or contract changed.
 
 When a review is required and the model is available, use `gpt-5.6-sol` with
@@ -286,5 +296,5 @@ preferred model is unavailable, record a substitution; if review capacity is
 temporarily unavailable, complete other work and retry without asking the
 owner to unblock it.
 
-One final read-only review is required per completed component, plus one final
-integrated V1 RC review after C11.
+One final read-only review is required per completed current-program
+capability, plus one final integrated review at current-program completion.

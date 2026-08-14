@@ -4,6 +4,13 @@
 
 **Approved:** 2026-08-07
 
+**Current applicability:** Accepted authority and evidence for the former
+feature set. The owner-approved
+[`Live feature-set MVP program`](live-feature-mvp-program.md) supersedes this
+document's conflicting former-field, replay, checkpoint, and component-number
+delivery gates for the 2026-08-14 feature cutover. This document is not the
+current execution plan.
+
 **Scope:** Autonomous correction and sequential completion of Components 7
 through 11 into a private/local Version 1 Release Candidate (V1 RC).
 

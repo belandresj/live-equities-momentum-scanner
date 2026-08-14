@@ -42,7 +42,7 @@ func TestLiveWarmupSnapshotIsServableAndBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/snapshot", nil))
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v2/snapshot", nil))
 	var snapshot Snapshot
 	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &snapshot) != nil {
 		t.Fatalf("warm-up snapshot=%d %s", response.Code, response.Body.String())
@@ -82,7 +82,7 @@ func TestRecoverableIngressLossSnapshotIsServableBoundAndNoncurrent(t *testing.T
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/snapshot", nil))
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v2/snapshot", nil))
 	var snapshot Snapshot
 	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &snapshot) != nil {
 		t.Fatalf("recovering snapshot=%d %s", response.Code, response.Body.String())

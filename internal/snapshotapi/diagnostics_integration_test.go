@@ -58,7 +58,7 @@ func TestMappingFailureTraversesHTTPServerDiagnostics(t *testing.T) {
 		}
 	})
 	client := &http.Client{Timeout: 2 * time.Second}
-	response, err := client.Get("http://" + server.Address() + "/api/v1/snapshot")
+	response, err := client.Get("http://" + server.Address() + "/api/v2/snapshot")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestMappingFailureTraversesHTTPServerDiagnostics(t *testing.T) {
 	}
 
 	latest, ok := server.LatestMappingFailure()
-	if !ok || latest.Invariant != "population_prior_close_identity" || latest.Route != "/api/v1/snapshot" || latest.PublicationID == "0" ||
+	if !ok || latest.Invariant != "population_prior_close_identity" || latest.Route != "/api/v2/snapshot" || latest.PublicationID == "0" ||
 		latest.LastEngineSequence == "0" || latest.Lifecycle != "live" || latest.RankingMode == "" {
 		t.Fatalf("private mapper diagnostic=%+v ok=%t", latest, ok)
 	}

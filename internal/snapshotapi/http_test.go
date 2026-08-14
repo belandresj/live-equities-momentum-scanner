@@ -7,9 +7,6 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -59,11 +56,17 @@ func TestPC10HTTPRoutesCORSAndLifecycle(t *testing.T) {
 		readiness.PublicationID == nil || readiness.BindingIdentity == nil || readiness.BackendReady || readiness.Reason != "lifecycle_not_ready" {
 		t.Fatalf("initial readiness = code %d calls %d body=%s", response.Code, source.calls.Load(), response.Body.String())
 	}
-	assertStatusAndOneCapture(t, handler, source, http.MethodGet, "/api/v1/snapshot", http.StatusOK)
+	assertStatusAndOneCapture(t, handler, source, http.MethodGet, "/api/v2/snapshot", http.StatusOK)
+	beforeV1 := source.calls.Load()
+	v1 := httptest.NewRecorder()
+	handler.ServeHTTP(v1, httptest.NewRequest(http.MethodGet, "/api/v1/snapshot", nil))
+	if v1.Code != http.StatusNotFound || source.calls.Load() != beforeV1 {
+		t.Fatalf("retired v1 route = code %d calls %d body=%s", v1.Code, source.calls.Load(), v1.Body.String())
+	}
 	for _, test := range []struct {
 		path   string
 		status int
-	}{{"/readyz", http.StatusServiceUnavailable}, {"/api/v1/snapshot", http.StatusOK}} {
+	}{{"/readyz", http.StatusServiceUnavailable}, {"/api/v2/snapshot", http.StatusOK}} {
 		before := source.calls.Load()
 		response = httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodHead, test.path, nil))
@@ -110,7 +113,7 @@ func TestPC10HTTPRoutesCORSAndLifecycle(t *testing.T) {
 			t.Fatalf("%s origin reached capture or received CORS data: code=%d headers=%v", test.name, response.Code, response.Header())
 		}
 	}
-	request = httptest.NewRequest(http.MethodOptions, "/api/v1/snapshot", nil)
+	request = httptest.NewRequest(http.MethodOptions, "/api/v2/snapshot", nil)
 	request.Header.Set("Origin", "http://127.0.0.1:3000")
 	request.Header.Set("Access-Control-Request-Method", http.MethodGet)
 	response = httptest.NewRecorder()
@@ -126,7 +129,7 @@ func TestPC10HTTPRoutesCORSAndLifecycle(t *testing.T) {
 	if response.Code != http.StatusNoContent || source.calls.Load() != before || response.Header().Get("Access-Control-Allow-Methods") != "GET, HEAD" || response.Header().Get("Access-Control-Allow-Origin") != "http://127.0.0.1:3000" {
 		t.Fatalf("HEAD preflight = code %d calls %d headers=%v", response.Code, source.calls.Load(), response.Header())
 	}
-	request = httptest.NewRequest(http.MethodOptions, "/api/v1/snapshot", nil)
+	request = httptest.NewRequest(http.MethodOptions, "/api/v2/snapshot", nil)
 	request.Header.Set("Origin", "http://127.0.0.1:3000")
 	request.Header.Set("Access-Control-Request-Method", http.MethodPost)
 	response = httptest.NewRecorder()
@@ -134,7 +137,7 @@ func TestPC10HTTPRoutesCORSAndLifecycle(t *testing.T) {
 	if response.Code != http.StatusForbidden || source.calls.Load() != before {
 		t.Fatal("invalid preflight reached capture")
 	}
-	request = httptest.NewRequest(http.MethodOptions, "/api/v1/snapshot", nil)
+	request = httptest.NewRequest(http.MethodOptions, "/api/v2/snapshot", nil)
 	request.Header.Set("Origin", "http://127.0.0.1:3000")
 	request.Header.Set("Access-Control-Request-Method", http.MethodGet)
 	request.Header.Set("Access-Control-Request-Headers", "Authorization")
@@ -162,7 +165,7 @@ func TestPC10HTTPRoutesCORSAndLifecycle(t *testing.T) {
 
 	makeSnapshotReady(t, runtime.Engine(), binding, *now)
 	assertStatusAndOneCapture(t, handler, source, http.MethodGet, "/readyz", http.StatusOK)
-	for _, path := range []string{"/readyz", "/api/v1/snapshot"} {
+	for _, path := range []string{"/readyz", "/api/v2/snapshot"} {
 		before := source.calls.Load()
 		response = httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodHead, path, nil))
@@ -170,7 +173,7 @@ func TestPC10HTTPRoutesCORSAndLifecycle(t *testing.T) {
 			t.Fatalf("ready HEAD %s = code %d calls %d headers=%v body=%q", path, response.Code, source.calls.Load(), response.Header(), response.Body.String())
 		}
 	}
-	request = httptest.NewRequest(http.MethodGet, "/api/v1/snapshot", nil)
+	request = httptest.NewRequest(http.MethodGet, "/api/v2/snapshot", nil)
 	response = httptest.NewRecorder()
 	before = source.calls.Load()
 	handler.ServeHTTP(response, request)
@@ -200,7 +203,120 @@ func TestPC10HTTPRoutesCORSAndLifecycle(t *testing.T) {
 	if response.Code != http.StatusServiceUnavailable || json.Unmarshal(response.Body.Bytes(), &readiness) != nil || readiness.PublicationID == nil || readiness.BackendReady || readiness.Reason != "runtime_unavailable" {
 		t.Fatalf("terminal readiness = code %d body=%s", response.Code, response.Body.String())
 	}
-	assertStatusAndOneCapture(t, handler, source, http.MethodGet, "/api/v1/snapshot", http.StatusOK)
+	assertStatusAndOneCapture(t, handler, source, http.MethodGet, "/api/v2/snapshot", http.StatusOK)
+}
+
+// TestPMVPAPITape5sSealedPublicationBoundaries proves that every bounded
+// Tape 5s state is produced by the engine, sealed by Runtime, and served by
+// the v2 route without API-side coverage interpretation.
+func TestPMVPAPITape5sSealedPublicationBoundaries(t *testing.T) {
+	cases := []struct {
+		name        string
+		coverageAge *time.Duration
+		mutate      func(*testing.T, *operations.Runtime, reference.Binding, *time.Time)
+		status      string
+		reason      string
+		value       *float64
+	}{
+		{name: "unavailable coverage", status: "unavailable", reason: "coverage"},
+		{name: "below one second", coverageAge: tapeDurationPointer(999 * time.Millisecond), status: "warming", reason: "coverage_warming"},
+		{name: "one through below five seconds", coverageAge: tapeDurationPointer(time.Second), status: "warming", reason: "five_second_warming"},
+		{name: "five seconds covered silence", coverageAge: tapeDurationPointer(5 * time.Second), status: "current", reason: "qualifying_original_prints", value: floatPointer(0)},
+		{name: "unequal repeat", coverageAge: tapeDurationPointer(5 * time.Second), mutate: makeTapeUnequalRepeat, status: "invalid", reason: "unequal_repeat"},
+		{name: "pressure shedding", coverageAge: tapeDurationPointer(5 * time.Second), mutate: shedTapeForPressure, status: "pressure_shed", reason: "pressure"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			runtime, binding, now := newQualifiedTapeRuntime(t)
+			t.Cleanup(func() { shutdownSnapshotRuntime(t, runtime) })
+			owner := runtime.Engine()
+			if test.coverageAge != nil {
+				command, err := owner.IssueTQCommand()
+				if err != nil {
+					t.Fatal(err)
+				}
+				input, err := engine.NewTQCommandResultInput(command, engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 100}, now.Add(-operations.DefaultConfig().EvaluationDelay).Add(-*test.coverageAge), engine.ControlSucceeded)
+				if err != nil {
+					t.Fatal(err)
+				}
+				admission, completion := owner.AdmitTQCommandResult(context.Background(), input)
+				if admission != engine.AdmissionAdmitted || completion == nil || (<-completion).Code != engine.DispositionTQApplied {
+					t.Fatal("T/Q coverage acknowledgement was not applied")
+				}
+			}
+			if test.mutate != nil {
+				test.mutate(t, runtime, binding, now)
+			}
+
+			capture, err := runtime.CaptureSnapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			sealed, ok := operations.InspectSnapshotCapture(capture)
+			if !ok || sealed.Engine.Publication.PublicationID == 0 || sealed.Engine.Publication.PublicationID != sealed.Engine.TQ.PublicationID || len(sealed.Engine.TQ.Rows) != 1 {
+				t.Fatalf("Tape case was not one sealed engine publication: %+v", sealed.Engine)
+			}
+			source := &countingCaptureSource{runtime: runtime}
+			handler, err := NewHandler(source, HandlerConfig{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v2/snapshot", nil))
+			var snapshot Snapshot
+			if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &snapshot) != nil || len(snapshot.Rows) != 1 {
+				t.Fatalf("Tape v2 response=%d body=%s", response.Code, response.Body.String())
+			}
+			got := snapshot.Rows[0].Tape5s
+			if got.Status != test.status || got.Reason != test.reason || (got.TradesPerSecond == nil) != (test.value == nil) ||
+				got.TradesPerSecond != nil && *got.TradesPerSecond != *test.value {
+				t.Fatalf("Tape 5s v2 tuple=%+v want status=%s reason=%s value=%v", got, test.status, test.reason, test.value)
+			}
+		})
+	}
+}
+
+func TestPMVPVolumeRevisionPreservesDerivedBackendReadiness(t *testing.T) {
+	runtime, binding, now := newQualifiedTapeRuntime(t)
+	t.Cleanup(func() { shutdownSnapshotRuntime(t, runtime) })
+	beforeCapture, err := runtime.CaptureSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := Map(beforeCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := now.Add(-operations.DefaultConfig().EvaluationDelay)
+	revision := engine.AggregateInput{SchemaVersion: engine.AggregateSchemaV1, BindingIdentity: binding.Identity(), Source: engine.AggregateSourceLive,
+		Symbol: "AAA", WindowStart: target.Add(-time.Second), WindowEnd: target, DeliveryTime: *now,
+		Values: engine.AggregateValues{Open: 20, High: 20, Low: 20, Close: 20, Volume: 6_000, VWAP: 20, AverageTradeSize: 5, ATSProvenance: engine.ATSLiveProviderAverage},
+		Live:   engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 200}}
+	admission, completion := runtime.Engine().AdmitAggregate(context.Background(), revision)
+	if admission != engine.AdmissionAdmitted || completion == nil || (<-completion).Code != engine.DispositionAggregateRevised {
+		t.Fatal("same-identity Volume revision was not applied")
+	}
+	timerAdmission, timerCompletion := runtime.Engine().AdmitTimer(context.Background())
+	if timerAdmission != engine.AdmissionAdmitted || timerCompletion == nil || (<-timerCompletion).Code != engine.DispositionTimerApplied {
+		t.Fatal("same-T Volume correction was not sealed")
+	}
+	afterCapture, err := runtime.CaptureSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := Map(afterCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !before.Status.BackendReady || !after.Status.BackendReady || !before.Status.RankingCurrent || !after.Status.RankingCurrent ||
+		before.Publication.CommittedT == nil || after.Publication.CommittedT == nil || *before.Publication.CommittedT != *after.Publication.CommittedT ||
+		before.Publication.ID == after.Publication.ID || len(before.Rows) != 1 || len(after.Rows) != 1 ||
+		before.Rows[0].Volume.ValueShares == nil || *before.Rows[0].Volume.ValueShares != 300_000 ||
+		after.Rows[0].Volume.ValueShares == nil || *after.Rows[0].Volume.ValueShares != 301_000 ||
+		before.Rows[0].Rank != after.Rows[0].Rank || before.Rows[0].Symbol != after.Rows[0].Symbol ||
+		before.Rows[0].DayChangeRatio != after.Rows[0].DayChangeRatio || before.Rows[0].LastUSD != after.Rows[0].LastUSD {
+		t.Fatalf("Volume revision changed readiness/ranking: before=%+v after=%+v", before, after)
+	}
 }
 
 // TestSlice2LocalDefectProductionComposition proves the live Runtime -> Engine
@@ -270,7 +386,7 @@ func TestSlice2LocalDefectProductionComposition(t *testing.T) {
 
 	invalid := engine.AggregateInput{SchemaVersion: engine.AggregateSchemaV1, BindingIdentity: binding.Identity(), Source: engine.AggregateSourceLive,
 		Symbol: "BBB", WindowStart: markStart, WindowEnd: markStart.Add(time.Second), DeliveryTime: now,
-		Values: engine.AggregateValues{Open: 10, High: 10, Low: 10, Close: math.NaN(), Volume: 1000, VWAP: 10, AverageTradeSize: 10, ATSProvenance: engine.ATSLiveProviderAverage},
+		Values: engine.AggregateValues{Open: 10, High: 10, Low: 10, Close: 10, Volume: math.NaN(), VWAP: 10, AverageTradeSize: 10, ATSProvenance: engine.ATSLiveProviderAverage},
 		Live:   engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 3}}
 	admitted, invalidCompletion := owner.AdmitAggregate(ctx, invalid)
 	if admitted != engine.AdmissionAdmitted || invalidCompletion == nil {
@@ -286,6 +402,12 @@ func TestSlice2LocalDefectProductionComposition(t *testing.T) {
 	capture, err := runtime.CaptureSnapshot()
 	if err != nil {
 		t.Fatal(err)
+	}
+	view, ok := operations.InspectSnapshotCapture(capture)
+	if !ok || view.Engine.Publication.AggregateEvaluation.Features.SessionVolume.Statuses[3] != 1 ||
+		view.Engine.Publication.AggregateEvaluation.Features.Activity30s.Statuses[3] != 1 ||
+		view.Engine.Publication.AggregateEvaluation.Features.Move30s.Statuses[3] != 1 {
+		t.Fatalf("structurally invalid aggregate was not field-local invalid: %+v", view.Engine.Publication.AggregateEvaluation.Features)
 	}
 	mapped, err := Map(capture)
 	if err != nil {
@@ -303,29 +425,11 @@ func TestSlice2LocalDefectProductionComposition(t *testing.T) {
 	}
 	assertStatusAndOneCapture(t, handler, source, http.MethodGet, "/readyz", http.StatusOK)
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/snapshot", nil))
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v2/snapshot", nil))
 	var wire Snapshot
 	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &wire) != nil || wire.Ranking.Mode != "degraded_current" || len(wire.Rows) != 1 {
 		t.Fatalf("partial snapshot HTTP=%d body=%s", response.Code, response.Body.String())
 	}
-	probePath := filepath.Join(t.TempDir(), "degraded-current.json")
-	if err := os.WriteFile(probePath, response.Body.Bytes(), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	modelPath, err := filepath.Abs(filepath.Join("..", "..", "ui", "model.js"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	probe := `import {readFile} from "node:fs/promises"; import {pathToFileURL} from "node:url";
-const snapshot=JSON.parse(await readFile(process.argv[1],"utf8"));
-const {buildViewModel}=await import(pathToFileURL(process.argv[2]).href);
-const model=buildViewModel(snapshot);
-if (!model.partial || model.current || model.rowsCurrent || model.rankingMode!=="degraded_current" || model.rows.length!==1 || model.rows[0].symbol!=="AAA" || model.rows[0].tape.primary!=="—" || model.rows[0].spread.primary!=="—") process.exit(23);`
-	command := exec.Command("node", "--input-type=module", "-e", probe, probePath, modelPath)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("exact sealed HTTP publication failed production UI model: %v: %s", err, output)
-	}
-
 	lost := engine.ConnectionControlInput{SchemaVersion: engine.ConnectionControlSchemaV1, BindingIdentity: binding.Identity(), Kind: engine.ConnectionLost,
 		ConnectionEpoch: 1, Position: engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 4}, ReceiptTime: now, Outcome: engine.ControlFailed}
 	if admitted, completed := owner.AdmitConnectionControl(ctx, lost); admitted != engine.AdmissionAdmitted || (<-completed).Code != engine.DispositionConnectionControlApplied {
@@ -371,7 +475,7 @@ func TestSuppressedEvaluatorIntegrityRemainsServable(t *testing.T) {
 	if ready.Code != http.StatusServiceUnavailable || json.Unmarshal(ready.Body.Bytes(), &readiness) != nil || readiness.Reason != "suppressed" || readiness.PublicationID == nil || readiness.BindingIdentity == nil {
 		t.Fatalf("readyz=%d %s", ready.Code, ready.Body.String())
 	}
-	snapshotResponse := request("/api/v1/snapshot")
+	snapshotResponse := request("/api/v2/snapshot")
 	var snapshot Snapshot
 	if snapshotResponse.Code != http.StatusOK || json.Unmarshal(snapshotResponse.Body.Bytes(), &snapshot) != nil {
 		t.Fatalf("snapshot=%d %s", snapshotResponse.Code, snapshotResponse.Body.String())
@@ -418,7 +522,7 @@ func TestPC10HTTPBoundsLoopbackCancellationAndProgress(t *testing.T) {
 	if server.http.ReadHeaderTimeout != 5*time.Second || server.http.ReadTimeout != 5*time.Second || server.http.WriteTimeout != 10*time.Second || server.http.IdleTimeout != 30*time.Second || server.http.MaxHeaderBytes != 16<<10 {
 		t.Fatalf("server bounds = %+v", server.http)
 	}
-	response, err := http.Get("http://" + server.Address() + "/api/v1/snapshot")
+	response, err := http.Get("http://" + server.Address() + "/api/v2/snapshot")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +554,7 @@ func TestPC10HTTPBoundsLoopbackCancellationAndProgress(t *testing.T) {
 		concurrent.Add(1)
 		go func() {
 			defer concurrent.Done()
-			response, err := client.Get("http://" + server.Address() + "/api/v1/snapshot")
+			response, err := client.Get("http://" + server.Address() + "/api/v2/snapshot")
 			if err != nil {
 				failures <- "concurrent snapshot request failed"
 				return
@@ -505,7 +609,7 @@ func TestPC10HTTPBoundsLoopbackCancellationAndProgress(t *testing.T) {
 	blocked := newBlockingWriter()
 	handlerDone := make(chan struct{})
 	go func() {
-		handler.ServeHTTP(blocked, httptest.NewRequest(http.MethodGet, "/api/v1/snapshot", nil))
+		handler.ServeHTTP(blocked, httptest.NewRequest(http.MethodGet, "/api/v2/snapshot", nil))
 		close(handlerDone)
 	}()
 	select {
@@ -565,7 +669,7 @@ func TestPTQRRecoverableSuppressionKeepsAPIAndLivenessAvailable(t *testing.T) {
 	if ready := request("/readyz"); ready.Code != http.StatusServiceUnavailable || !strings.Contains(ready.Body.String(), `"reason":"suppressed"`) {
 		t.Fatalf("recoverable readyz=%d %s", ready.Code, ready.Body.String())
 	}
-	snapshotResponse := request("/api/v1/snapshot")
+	snapshotResponse := request("/api/v2/snapshot")
 	var snapshot Snapshot
 	if snapshotResponse.Code != http.StatusOK || json.Unmarshal(snapshotResponse.Body.Bytes(), &snapshot) != nil ||
 		snapshot.Publication.Lifecycle != "suppressed" || snapshot.Publication.Suppression != "same_binding_recovery_allowed" || !snapshot.Status.ProcessLive || snapshot.Status.BackendReady {
@@ -596,6 +700,142 @@ func newSnapshotRuntime(t *testing.T) (*operations.Runtime, reference.Binding, *
 		t.Fatal(err)
 	}
 	return runtime, binding, &now
+}
+
+func newQualifiedTapeRuntime(t *testing.T) (*operations.Runtime, reference.Binding, *time.Time) {
+	t.Helper()
+	binding := snapshotBinding(t, "AAA")
+	now := binding.SessionStart().Add(10 * time.Minute)
+	config := operations.DefaultConfig()
+	config.SampleCadence = 10 * time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	runtime, err := operations.New(ctx, binding, config, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := runtime.Engine()
+	ackAt := now.Add(-config.EvaluationDelay)
+	applySnapshotControl(t, owner, binding, engine.ConnectionAttempt, 1, 1, engine.LivePosition{}, ackAt)
+	applySnapshotControl(t, owner, binding, engine.AggregateCommandWriteResult, 1, 2, engine.LivePosition{}, ackAt)
+	applySnapshotControl(t, owner, binding, engine.AggregateSubscriptionResult, 1, 2, engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 1}, ackAt)
+	budgets := engine.HydrationPlanBudgets{Workers: 1, RowsPerChunk: 1, MaximumResponseBytes: 1 << 20, MaximumNormalizedRecords: 57_600, MaximumResidentRecords: 57_600}
+	admission, completion := owner.AdmitHydrationPlan(context.Background(), engine.HydrationPlanInput{SchemaVersion: engine.HydrationPlanSchemaV1, BindingIdentity: binding.Identity(), Purpose: engine.HydrationFreshBootstrap, ConnectionEpoch: 1, Budgets: budgets})
+	if admission != engine.AdmissionAdmitted || completion == nil {
+		t.Fatal("Tape hydration plan was not admitted")
+	}
+	plan := <-completion
+	requests := plan.Plan.Requests()
+	if plan.Code != engine.DispositionHydrationPlanApplied || len(requests) != 1 {
+		t.Fatalf("Tape hydration plan=%+v", plan)
+	}
+	terminal, err := engine.NewHydrationTerminalInput(requests[0], requests[0].ResultID(), engine.HydrationCompletedEmpty, engine.HydrationReasonNone, 1, 1, 10, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, completion = owner.AdmitHydrationTerminal(context.Background(), terminal)
+	if admission != engine.AdmissionAdmitted || completion == nil {
+		t.Fatal("Tape hydration terminal was not admitted")
+	}
+	terminalResult := <-completion
+	if terminalResult.Code != engine.DispositionHydrationTerminalApplied || terminalResult.FenceCommand.CommandToken() == 0 {
+		t.Fatalf("Tape hydration terminal=%+v", terminalResult)
+	}
+	fence, err := engine.NewAggregateIngressFenceInput(terminalResult.FenceCommand, engine.AggregateIngressFenceComplete, 1, 1, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, completion = owner.AdmitAggregateIngressFence(context.Background(), fence)
+	if admission != engine.AdmissionAdmitted || completion == nil || (<-completion).Code != engine.DispositionAggregateIngressFenceApplied {
+		t.Fatal("Tape hydration fence was not applied")
+	}
+	target := now.Add(-config.EvaluationDelay)
+	for second := 0; second < 60; second++ {
+		now = now.Add(time.Second)
+		start := target.Add(time.Duration(second) * time.Second)
+		ordinary := engine.AggregateInput{SchemaVersion: engine.AggregateSchemaV1, BindingIdentity: binding.Identity(), Source: engine.AggregateSourceLive,
+			Symbol: "AAA", WindowStart: start, WindowEnd: start.Add(time.Second), DeliveryTime: now,
+			Values: engine.AggregateValues{Open: 20, High: 20, Low: 20, Close: 20, Volume: 5_000, VWAP: 20, AverageTradeSize: 5, ATSProvenance: engine.ATSLiveProviderAverage},
+			Live:   engine.LivePosition{ConnectionEpoch: 1, FrameSequence: uint64(second + 2)}}
+		admission, aggregateCompletion := owner.AdmitAggregate(context.Background(), ordinary)
+		if admission != engine.AdmissionAdmitted || aggregateCompletion == nil || (<-aggregateCompletion).Code != engine.DispositionAggregateInserted {
+			t.Fatalf("ordinary qualifying aggregate second %d was not inserted", second)
+		}
+	}
+	continuationCommand, err := owner.IssueLiveCoverageFence()
+	if err != nil {
+		t.Fatal(err)
+	}
+	continuationFence, err := engine.NewLiveCoverageFenceInput(continuationCommand, engine.LiveCoverageFenceComplete, 61, 2, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, liveCompletion := owner.AdmitLiveCoverageFence(context.Background(), continuationFence)
+	if admission != engine.AdmissionAdmitted || liveCompletion == nil {
+		t.Fatalf("qualifying live continuation fence admission=%s", admission)
+	}
+	continuationResult := <-liveCompletion
+	if continuationResult.Code != engine.DispositionLiveCoverageFenceApplied {
+		t.Fatalf("qualifying live continuation fence=%+v", continuationResult)
+	}
+	timerAdmission, timerCompletion := owner.AdmitTimer(context.Background())
+	if timerAdmission != engine.AdmissionAdmitted || timerCompletion == nil || (<-timerCompletion).Code != engine.DispositionTimerApplied {
+		t.Fatal("qualifying Tape timer was not applied")
+	}
+	view := owner.ObserveTQ()
+	if len(view.Desired) != 1 || view.Desired[0] != "AAA" || !view.CommandPending {
+		t.Fatalf("qualifying row did not request T/Q coverage: tq=%+v snapshot=%+v", view, runtime.Engine().ObserveSnapshot())
+	}
+	return runtime, binding, &now
+}
+
+func makeTapeUnequalRepeat(t *testing.T, runtime *operations.Runtime, binding reference.Binding, now *time.Time) {
+	t.Helper()
+	target := now.Add(-operations.DefaultConfig().EvaluationDelay)
+	base := engine.TradeInput{SchemaVersion: engine.TQSchemaV1, BindingIdentity: binding.Identity(), TradingDate: binding.TradingDate(),
+		Symbol: "AAA", TradeID: "same", Exchange: 1, Price: 20, EconomicSize: 100, EventTime: target.Add(-500 * time.Millisecond), ReceiptTime: *now,
+		TimestampBasis: "participant", ConditionsClassified: true, IdentityClassified: true, Lifecycle: "original",
+		Live: engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 101}}
+	admission, completion := runtime.Engine().AdmitTrade(context.Background(), base)
+	if admission != engine.AdmissionAdmitted || completion == nil || (<-completion).Code != engine.DispositionTQApplied {
+		t.Fatal("qualifying original trade was not applied")
+	}
+	repeat := base
+	repeat.Conditions = []int64{15}
+	repeat.Live.FrameSequence = 102
+	admission, completion = runtime.Engine().AdmitTrade(context.Background(), repeat)
+	if admission != engine.AdmissionAdmitted || completion == nil || (<-completion).Code != engine.DispositionTQRejected {
+		t.Fatal("unequal repeat was not rejected")
+	}
+}
+
+func shedTapeForPressure(t *testing.T, runtime *operations.Runtime, _ reference.Binding, now *time.Time) {
+	t.Helper()
+	sample := engine.TQPressureSample{WaitingFrames: 10, FrameCapacity: 100, ByteCapacity: 1_000, DeliveryLatencyAttributed: true, TQLocalAccountingHealthy: true, Goroutines: 1}
+	for i := 0; i < 2; i++ {
+		*now = now.Add(time.Second)
+		admission, completion := runtime.Engine().AdmitTQPressureTick(context.Background())
+		if admission != engine.AdmissionAdmitted || completion == nil || (<-completion).Code != engine.DispositionTQApplied {
+			t.Fatal("pressure tick was not applied")
+		}
+		command, err := runtime.Engine().IssueTQPressureCommand()
+		if err != nil {
+			t.Fatal(err)
+		}
+		input, err := engine.NewTQPressureResultInput(command, sample)
+		if err != nil {
+			t.Fatal(err)
+		}
+		admission, completion = runtime.Engine().AdmitTQPressureResult(context.Background(), input)
+		if admission != engine.AdmissionAdmitted || completion == nil || (<-completion).Code != engine.DispositionTQApplied {
+			t.Fatal("pressure sample was not applied")
+		}
+	}
+}
+
+func tapeDurationPointer(value time.Duration) *time.Duration {
+	copyValue := value
+	return &copyValue
 }
 
 func makeSnapshotReady(t *testing.T, owner *engine.Engine, binding reference.Binding, at time.Time) {

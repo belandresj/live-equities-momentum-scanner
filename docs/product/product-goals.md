@@ -1,8 +1,22 @@
 # Product goals
 
-**Status:** Approved product contract.
+**Status:** Approved product contract; feature-set revision approved 2026-08-14.
 
 **Approved:** 2026-08-05
+
+**Revised:** 2026-08-14 — preserves the eligible universe, aggregate
+qualification latch, exact qualified Day-% ranking, top-20 limit, lifecycle,
+availability, recovery, and ownership model while replacing the displayed
+context/location/momentum feature set. Lower-level component contracts and the
+implementation still describe the previously accepted feature set until they
+are reconciled through the current capability sequence.
+
+**Current delivery profile:** The owner-approved
+[`Live feature-set MVP program`](../live-feature-mvp-program.md) makes the
+ordinary fresh-start live scanner the only required operating path for the
+interview MVP. Replay remains present but unverified and non-gating;
+checkpoint persistence remains present but disabled and non-gating. Neither
+may fabricate revised-feature compatibility.
 
 **Scope:** User-facing behavior, product priorities, version 1 outcomes, and
 developer-facing product constraints. Provider mappings, internal component
@@ -19,12 +33,14 @@ discretionary U.S. equities momentum trader. It answers:
 
 1. Which eligible stocks with a sufficiently demonstrated aggregate tape have
    gained the most from the adjusted previous regular-session close?
-2. Where is each displayed stock trading relative to its current-session and
-   recent price ranges?
-3. How active is the stock's recent aggregate behavior relative to its own
-   current-session history?
-4. For displayed leaders, how quickly are qualifying trades printing and what
-   quoted spread is currently being shown?
+2. What are each displayed stock's public float, cumulative session share
+   volume, and latest price?
+3. Where is each displayed stock relative to its first session print and
+   current-session range?
+4. Is 30-second share-volume participation accelerating, and is price moving
+   directionally with it?
+5. For displayed leaders, how quickly are condition-qualified original trades
+   printing and what quoted spread is currently being shown?
 
 The scanner provides measurements and situational awareness. It does not
 produce a recommendation, forecast, entry, exit, order, or claim of executable
@@ -40,10 +56,11 @@ The user's primary workflow is:
 
 ```text
 find the qualified Day-% leaders
-  -> inspect latest price and mark age
-  -> distinguish front-side strength from pullback using HOD and ranges
-  -> assess recent aggregate activity
-  -> inspect current Tape Rate and Spread
+  -> inspect Float, cumulative session Volume, Last, and mark age
+  -> distinguish gap context and front-side/backside location using From Open
+     and Day Range
+  -> compare Activity 30s with signed Move 30s
+  -> inspect Tape 5s and Spread
   -> form an independent trading decision using charts, news, and other tools
 ```
 
@@ -60,8 +77,9 @@ When goals conflict, version 1 uses this priority order:
    data as complete and current.
 3. **Operational continuity.** Recover quickly from process and transport
    failures without fabricating market state.
-4. **Aggregate-derived context.** Preserve current-session and rolling features
-   independently where their required history is trustworthy.
+4. **Aggregate-derived context and momentum.** Preserve session Volume, From
+   Open, Day Range, Activity 30s, and Move 30s independently where their
+   required history is trustworthy.
 5. **Trade/quote enrichment.** Normally provide T/Q-derived features for all
    displayed rows, but degrade them before risking aggregate correctness.
 6. **Presentation continuity.** Permit UI development and deployment without
@@ -90,6 +108,30 @@ A missing or invalid close makes only that symbol unrankable and separately
 counted. Never substitute today's open, an unadjusted close, or an older
 unidentified session. A validated cache for the exact required prior-session
 date is equivalent in product meaning to a fresh retrieval.
+
+### PG-REFERENCE-02 — public free float
+
+Float means public free float in shares: shares considered available for public
+trading after excluding strategic, controlling, restricted, locked-up, and
+other non-tradable holdings under the provider's documented methodology. It is
+not `share_class_shares_outstanding`, weighted shares outstanding, or another
+outstanding-share proxy.
+
+The initial source is Massive's dedicated
+[Stocks Float dataset](https://massive.com/docs/rest/stocks/fundamentals/float).
+Each usable fact retains exact symbol, finite positive `free_float`,
+`effective_date` when supplied, provider/source identity, retrieval time, and
+cache provenance. The source is experimental and disclosure-derived rather
+than real-time; the scanner must preserve that provenance and must not imply
+intraday freshness.
+
+Float is optional, display-only reference enrichment. A bounded startup
+retrieval may populate an immutable symbol lookup and may fall back to the last
+validated cached value when refresh fails. Missing, malformed, duplicate,
+ambiguous, or unavailable Float affects only that symbol's Float field. It
+cannot change the session binding's market meaning, qualification, rank,
+backend readiness, or live processing. A retained older value must remain
+visibly dated or stale rather than silently current.
 
 ### PG-RANK-01 — adjusted-prior-close basis
 
@@ -165,8 +207,9 @@ If fewer than 20 symbols qualify, the table contains fewer than 20 rows. It must
 not fabricate rows, weaken qualification, or duplicate symbols to fill the
 table.
 
-No Activity, range, T/Q, pressure, or presentation field may become an implicit
-secondary ranking key.
+No Float, Volume, From Open, Day Range, Activity 30s, Move 30s, T/Q, pressure,
+or presentation field may become an implicit qualification rule or secondary
+ranking key.
 
 ### PG-RANK-05 — complete-population honesty
 
@@ -196,84 +239,157 @@ Version 1 includes the following fields with the product meanings and ranking
 effects defined here. Focused feature specifications may settle subordinate
 measurement and provider-mapping details but cannot change these meanings.
 
+The visible columns appear in this exact order and grouping:
+
+```text
+CONTEXT                  LOCATION                     CURRENT MOMENTUM     EXECUTION
+SYMBOL FLOAT VOLUME LAST | DAY % FROM OPEN % DAY RANGE | ACTIVITY 30s MOVE 30s | TAPE 5s SPREAD
+```
+
 | Field | User question answered | Ranking effect |
 | --- | --- | --- |
-| Rank | Where does this qualified symbol stand among all passers? | Output of Day-% ordering. |
 | Symbol | Which exact listed security is this? | Exact symbol breaks Day-% ties. |
+| Float | How constrained is the stock's effective publicly tradable share supply? | Display only. |
+| Volume | How many shares have traded during the scanner session? | Display only. |
 | Last | What is the latest trusted aggregate mark? | Required for rankability. |
-| Day % | How far is Last from the adjusted previous regular-session close? | Sole numeric ranking field. |
-| From 4AM % | How far is Last from the first trustworthy current-session aggregate open? | Display only. |
-| HOD drawdown | How far is Last below the trustworthy current-session high? | Display only. |
-| Day range position | Where is Last inside the trustworthy current-session low/high range? | Display only. |
-| 30-minute range position | Where is Last inside the trailing 30-minute low/high range? | Display only. |
-| 60-minute range position | Where is Last inside the trailing 60-minute low/high range? | Display only. |
-| Activity | How unusual are recent aggregate-estimated transactions and price expansion relative to the stock's own current-session reference periods? | Display only. |
-| Tape Rate | How quickly are accepted qualifying trades printing now? | Display only. |
+| Day % | How far is Last from the adjusted previous regular-session close? | Sole numeric ordering field after qualification. |
+| From Open % | How far is Last from the first eligible session trade represented by canonical aggregates? | Display only. |
+| Day Range | Where is Last inside the trustworthy current-session low/high range? | Display only. |
+| Activity 30s | How unusual is current 30-second share-volume participation versus the immediately preceding five-minute regime? | Display only. |
+| Move 30s | What signed price return occurred over the trailing 30 seconds? | Display only. |
+| Tape 5s | How quickly are distinct condition-qualified original trades printing now? | Display only. |
 | Spread | What is the latest valid quoted spread for the displayed leader, and how old is that quote? | Display only. |
 
-Historical and T/Q-derived fields are not prerequisites for displaying an
-otherwise trustworthy qualified Day-% row unless a later owner-approved product
-change explicitly makes a field part of qualification.
+Row order itself expresses rank. A versioned API may carry an explicit rank
+ordinal for validation and accessibility, but the dashboard does not add a
+visible Rank column to the table above.
 
-### PG-FEATURE-01 — price and range formulas
+Float, aggregate context/momentum, and T/Q-derived fields are not prerequisites
+for displaying an otherwise trustworthy qualified Day-% row unless a later
+owner-approved product change explicitly makes a field part of qualification.
+
+The product deliberately keeps participation, direction, immediate tape tempo,
+execution cost, and session location separate: Activity 30s measures relative
+share-volume participation; Move 30s measures signed price response; Tape 5s
+measures immediate absolute qualifying-print tempo; Spread measures execution
+friction; and Day Range measures front-side/backside location. None is a hidden
+composite score.
+
+### PG-FEATURE-01 — price and session-location formulas
 
 At committed watermark `T`:
 
 ```text
 Day % = 100 * (Last / adjusted_prior_close - 1)
 
-From 4AM % = 100 * (Last / first_session_aggregate_open - 1)
+From Open % = 100 * (Last / first_session_aggregate_open - 1)
 
-HOD drawdown % = 100 * (Last / session_high - 1)
-
-range_position = 100 * (Last - range_low) / (range_high - range_low)
+Day Range = 100 * (Last - session_low) / (session_high - session_low)
 ```
 
 `first_session_aggregate_open` is the Open of the earliest accepted aggregate
-beginning at or after 04:00 ET. Range position is calculated for session
-`[04:00,T)`, rolling `[T-30m,T)`, and rolling `[T-60m,T)` ranges.
+beginning in `[S,T)`, where `S` is 04:00 America/New_York. It is the
+provider-independent full-universe representation of the first eligible trade
+in that one-second aggregate; the scanner does not wait for selected-row raw
+T/Q coverage or substitute an assumed 04:00 price. Day Range uses trustworthy
+session extrema over `[S,T)`.
 
-A missing, incomplete, invalid, or zero-width range is unavailable rather than
-clamped or reported as zero.
+A missing, incomplete, invalid, or zero-width session range is unavailable
+rather than clamped or reported as zero. From Open and Day Range are
+independent of qualification and ranking after their own required history is
+established.
 
-### PG-FEATURE-02 — Activity
+### PG-FEATURE-02 — cumulative session Volume
 
-Activity measures aggregate-estimated transactions and price expansion over
-`[T-30s,T)`:
-
-```text
-transactions  = sum(Volume / AverageTradeSize)
-expansion_bps = 10,000 * ln(max(High) / min(Low))
-```
-
-Compare both components with independently eligible completed 30-second blocks
-from the 04:00 session boundary through the completed block immediately before
-the target. The baseline never resets at regular-hours open or after-hours
-open. Require at least 10 reference blocks, use
-inclusive empirical percentiles, and report:
+Volume is cumulative accepted canonical aggregate economic share volume over
+the scanner session:
 
 ```text
-Activity = sqrt(transaction_percentile * expansion_percentile)
+Session Volume(T) = sum(aggregate Volume_i), for window_start in [S,T)
 ```
 
-The result is bounded to `[0,100]`. The focused feature specification must
-define reference-block eligibility and exact invalid-input handling consistently
-with this product meaning.
+Known no-print seconds contribute zero without creating synthetic bars.
+Unknown coverage, a historical conflict, or invalid aggregate volume makes the
+field unavailable or invalid rather than reporting a partial session total.
+Accepted inserts, revisions, and withdrawals update the result exactly.
+Internal precision preserves provider-supported fractional economic quantity;
+display formatting may use compact share units but cannot feed back into state.
 
-### PG-FEATURE-03 — Tape Rate
+### PG-FEATURE-03 — Activity 30s
 
-Tape Rate reports unique condition-qualified original trades per second over
-the trailing five seconds and the trailing one-second burst rate. Use participant
-execution time with explicit SIP-time fallback. Exclude known non-volume and
-lifecycle-adjustment records from the initial qualifying-original basis, and
-disclose incomplete lifecycle handling rather than implying exact corrected
-tape when the required provider semantics are unavailable.
+Activity 30s measures relative share-volume participation only. It does not
+use Average Trade Size, transaction estimates, range expansion, volatility, or
+price direction.
+
+At committed watermark `T`, define the target rate:
+
+```text
+V30(T) = sum(aggregate Volume over [T-30s,T)) / 30
+```
+
+Define 55 reference endpoints at five-second spacing:
+
+```text
+r_k = T - 30s - 5s*k, for k = 0..54
+V30(r_k) = sum(aggregate Volume over [r_k-30s,r_k)) / 30
+```
+
+The reference inputs therefore cover exactly `[T-330s,T-30s)` and never
+overlap the current target `[T-30s,T)`. With the complete reference set:
+
+```text
+Activity 30s = 100 * count(V30(r_k) <= V30(T)) / 55
+```
+
+Ties are inclusive. Known no-print seconds are genuine zero share volume for
+this product calculation without becoming fabricated aggregate bars. The
+field is `warming` until the complete target and five-minute reference regime
+can be evaluated, `unavailable` when required coverage is unknown, and
+`invalid` for conflicting or invalid contributing evidence. The finite result
+is bounded to `[0,100]` and is a descriptive empirical percentile, not a
+probability.
+
+### PG-FEATURE-04 — Move 30s
+
+Move 30s is a signed aggregate-mark return, not volatility:
+
+```text
+Move 30s = 100 * (P(T) / P(T-30s) - 1)
+```
+
+`P(b)` is the latest trusted accepted canonical aggregate Close strictly
+before boundary `b`. A completely known no-print interval carries the last
+actual mark to the boundary for this calculation; it does not manufacture a
+bar or a trade. If no prior actual mark exists, or an unknown/conflicted
+interval could hide a later mark before either boundary, Move 30s is warming,
+unavailable, or invalid as appropriate. Accepted aggregate corrections update
+both boundary marks exactly.
+
+Move 30s uses full-universe aggregate history. It must not use selected-row BBO
+midpoint or T/Q coverage, because selection-dependent input would make the
+field unavailable merely because a symbol had just entered the top 20.
+
+### PG-FEATURE-05 — Tape 5s
+
+Tape 5s reports distinct condition-qualified original trades per second over
+`[T-5s,T)`. Use participant execution time with explicit SIP-time fallback.
+Exclude exact duplicates, incomplete identities, unknown or unreviewed
+conditions, known non-volume records, and lifecycle-adjustment records from the
+qualifying-original basis. Unequal repeats or incomplete lifecycle semantics
+must be disclosed rather than treated as exact corrected tape.
+
+```text
+Tape 5s = distinct qualifying original trade count in [T-5s,T) / 5
+```
+
+Genuine silence during continuous acknowledged trade coverage is numeric zero.
+The product does not expose a separate one-second Tape burst field.
 
 The focused feature specification must define the evidenced condition fixtures,
 identity rules, and any attention threshold without changing this measurement
 meaning.
 
-### PG-FEATURE-04 — Spread
+### PG-FEATURE-06 — Spread
 
 Spread reports the latest valid two-sided non-crossed NBBO quote spread in
 cents and basis points together with quote age. Locked quotes are valid zero
@@ -286,11 +402,36 @@ valid spread.
 The focused feature specification must define its evidenced quote validation
 and stale-age boundary without changing this measurement meaning.
 
-### PG-FEATURE-05 — corrections and coverage gaps
+### PG-FEATURE-07 — corrections, coverage gaps, and preselection retention
 
 Accepted aggregate corrections and out-of-order inserts inside the approved
 correction horizon update every dependent aggregate feature exactly. T/Q
 coverage gaps clear current T/Q measurements and require fresh warm-up.
+
+Every symbol capable of entering a qualified or permitted degraded displayed
+set retains canonical aggregate and exact coverage evidence sufficient to
+evaluate at least `[max(S,T-330s),T)` before selection. Ranking membership must
+not initiate, backfill, or alter aggregate history. Consequently, a symbol
+that enters the top 20 after spending more than five minutes outside it can
+immediately evaluate Activity 30s and Move 30s when its all-symbol aggregate
+coverage is trustworthy; only its newly selected T/Q fields warm from fresh
+acknowledged coverage.
+
+Retention means accepted aggregates plus exact present, proven-absent,
+unknown, and conflict evidence for the interval, together with the latest
+trusted actual predecessor mark at or before the interval floor when one
+exists. It does not require 330 printed aggregates and does not permit
+fabricated zero-volume bars. The focused canonical-state contract must
+preserve this guarantee across compaction, a stalled committed watermark,
+fresh hydration, same-process recovery, and ordinary live evaluation.
+Optional replay or checkpoint support cannot claim compatibility until it
+separately proves the same guarantee for its path.
+
+The full-universe pass owns qualification, trusted marks, Day %, and exact
+top-20 selection. Display-only Activity 30s and Move 30s may be materialized
+only after selection, but their result must be identical to evaluation from the
+same preselection canonical state and committed `T`. Selection cannot create,
+discard, backfill, warm, or otherwise change their aggregate inputs.
 
 ## 6. Independent field availability
 
@@ -303,10 +444,12 @@ Each field must explain its own absence or degradation using a bounded,
 user-meaningful reason. A field may be current while another field for the same
 symbol is warming or unavailable.
 
-### PG-AVAIL-02 — historical independence
+### PG-AVAIL-02 — reference and aggregate-history independence
 
-Incomplete history for From 4AM, HOD, a rolling range, or Activity affects only
-the dependent fields. It does not globally block a trusted Last and Day-% row.
+Missing or stale Float, or incomplete history for Volume, From Open, Day Range,
+Activity 30s, or Move 30s, affects only the dependent field. It does not
+globally block a trusted Last and Day-% row, qualification, or exact Day-%
+ordering.
 
 ### PG-AVAIL-03 — T/Q independence
 
@@ -316,8 +459,8 @@ aggregate ranking or invalidate aggregate-derived fields.
 
 After dropped or unsubscribed T/Q coverage, affected measurements warm again
 from new covered events. The product must not silently bridge the gap. Quiet
-acknowledged coverage is not a gap: Tape Rate advances to genuine numeric zero
-when its trailing windows contain no qualifying trades, while Spread retains
+acknowledged coverage is not a gap: Tape 5s advances to genuine numeric zero
+when its trailing window contains no qualifying trades, while Spread retains
 the last valid quote with increasing age and stale status.
 
 ## 7. Trade and quote product behavior
@@ -371,32 +514,38 @@ Every proposed feature must state:
 - its window and currentness semantics;
 - its behavior across corrections and data gaps;
 - whether it affects qualification/ranking or is display-only; and
-- its bounded retention and restart requirements.
+- its bounded retained-state requirements.
 
 This is an extensibility requirement, not approval for a generic plugin system.
 Features remain explicit product decisions. A T/Q-derived feature available
 only for selected symbols cannot silently become a full-universe ranking input.
 
-## 9. Production continuity and checkpoints
+## 9. Production continuity and optional checkpoints
 
-### PG-OPS-01 — version 1 restart support
+### PG-OPS-01 — fresh-start restart support
 
-Coherent checkpoints and bounded catch-up are mandatory in version 1. A normal
-process restart should restore prior trustworthy session state and retrieve
-only the missing interval rather than requiring full-session reconstruction.
+The required process-restart path for the live feature-set MVP is fresh
+reference resolution and aggregate hydration through the ordinary ingress
+fence. Until that work is terminal, the scanner reports warming, unavailable,
+or degraded state honestly; it cannot present partial session Volume, From
+Open, Day Range, Activity 30s, Move 30s, qualification, or population coverage
+as current.
 
-Every restored field must describe one coherent committed timestamp. A
-checkpoint may not combine a newer mark with older supposedly complete range,
-qualification, or Activity state.
+Checkpoint persistence is optional and disabled by default. Existing
+checkpoint code may remain for later evaluation, but checkpoint performance,
+repair, migration, and revised-feature restart equivalence are not version 1
+or live-MVP gates. A checkpoint-enabled launch must fail clearly unless its
+schema and installation proof cover every active product field at one coherent
+committed timestamp. It may not combine a newer mark with older supposedly
+complete session context or silently omit revised state.
 
-The checkpoint specification must set an evidenced cadence and restart target.
-Approximately 130 seconds of fresh reconstruction is not an acceptable normal
-production-restart objective.
+Fresh reconstruction latency must be measured honestly when claimed, but this
+product contract sets no checkpoint-relative restart target.
 
 ### PG-OPS-02 — recovery does not freeze ordinary evaluation
 
-Fresh bootstrap, checkpoint catch-up, and same-process gap recovery feed the
-same canonical state and ranking path used during ordinary operation. Once all
+Fresh bootstrap and same-process gap recovery feed the same canonical state
+and ranking path used during ordinary operation. Once all
 required hydration work is terminal—including successful empty results—the
 scanner returns to ordinary live evaluation even if the candidate population is
 sparse.
@@ -404,21 +553,24 @@ sparse.
 There must be no terminal recovery state that indefinitely freezes the ranking
 watermark while accepted aggregate data continues arriving.
 
-## 10. Offline aggregate replay
+## 10. Optional, unverified aggregate replay
 
-### PG-REPLAY-01 — version 1 aggregate replay
+### PG-REPLAY-01 — retained implementation without an MVP claim
 
-Version 1 includes tooling to obtain historical one-second aggregates,
-normalize them to the same provider-independent aggregate event contract used
-by live processing, and replay them through the same scanner state and feature
-path under a deterministic simulated clock.
+Replay code and tooling may remain available for later evaluation, but the
+live feature-set MVP makes no claim that replay currently starts, completes
+within a useful time, reproduces the revised fields, or provides a supported
+user workflow. Replay repair, performance, deletion, and revised-feature
+equivalence are explicitly outside the MVP.
 
-Replay supports product and engineering review while markets are closed. It
-must reproduce the same market-time result regardless of playback speed.
+Deterministic in-memory event traces, fake-provider inputs, HTTP fixtures, and
+UI fixtures remain valid engineering proofs. They are not product replay and
+do not imply that the replay runtime works.
 
-Historical REST replay does not, by itself, prove actual live receipt latency,
-transport behavior, or correction-arrival chronology. Those claims require
-separate evidence.
+If replay is later claimed, it requires a separate owner-approved contract and
+proof for the then-current feature set. Historical replay cannot by itself
+prove live receipt latency, transport behavior, correction-arrival chronology,
+or T/Q behavior.
 
 ### PG-REPLAY-02 — T/Q replay deferred
 
@@ -448,6 +600,29 @@ The UI update transport and the amount of predecessor UI code to reuse remain
 architecture and implementation decisions after the snapshot contract is
 approved.
 
+### PG-UI-03 — visual hierarchy
+
+The dashboard uses color sparingly and consistently with the column groups:
+
+- Symbol, Float, Volume, and Last are predominantly neutral context.
+- Day % remains readable but subdued because row order already communicates it.
+- From Open uses modest positive/negative treatment.
+- Day Range is the strongest location cue, progressing from low/red-neutral to
+  high/green.
+- Activity 30s and Tape 5s use a common gray-to-amber-to-bright-orange attention
+  scale as measured activity rises.
+- Move 30s emphasizes strong positive movement in orange and uses restrained
+  red for negative movement.
+- Spread is predominantly neutral when acceptable and reserves red for
+  meaningfully poor execution conditions.
+
+The visual grammar is: green means favorable location, orange means something
+is happening now, and red means execution friction or unfavorable state. A
+numeric threshold for poor Spread must come from observed target-universe data
+rather than an unevidenced product-spec guess. Color never changes ranking,
+field availability, or the displayed numeric value, and every meaning remains
+available without color alone.
+
 ## 12. Accounting and observability goals
 
 ### PG-OBS-01 — complete symbol accounting
@@ -468,9 +643,10 @@ valid_prior_close
   + unknown_due_failure_or_fence
 ```
 
-Qualification, Activity, historical availability, T/Q coverage, and range
-diagnostics are overlapping dimensions and must be reported separately rather
-than used to break the primary identity.
+Qualification, Float availability, session Volume/history availability,
+Activity 30s, Move 30s, T/Q coverage, and location diagnostics are overlapping
+dimensions and must be reported separately rather than used to break the
+primary identity.
 
 ### PG-OBS-02 — complete work accounting
 
@@ -495,7 +671,7 @@ The product must expose enough bounded status to distinguish:
 - current aggregate ranking from stale ranking;
 - aggregate correctness from T/Q availability;
 - normal no-print sparsity from failed/unknown data; and
-- successful restart/catch-up from incomplete recovery.
+- successful fresh hydration or recovery from incomplete work.
 
 The product exposes four separate concepts:
 
@@ -528,6 +704,12 @@ Version 1 does not include:
 - predictive signals, price targets, entries/exits, or expectancy claims;
 - full-universe trade/quote ranking inputs;
 - full-session or two-pass T/Q replay;
+- a supported or performance-validated aggregate replay workflow;
+- checkpoint persistence, checkpoint performance, or checkpoint restart
+  equivalence as a release requirement;
+- visible Float Turnover or another Float-derived score;
+- the superseded transaction/price-expansion Activity composite, HOD drawdown,
+  30-minute range position, 60-minute range position, or one-second Tape burst;
 - a generic user-installed feature/plugin framework;
 - a database or raw-event journal without a separately approved need;
 - a generalized event bus, microservice architecture, or per-symbol worker
@@ -546,14 +728,32 @@ Version 1 is product-complete only when reviewed evidence demonstrates that:
 - fewer-than-20 and exact-symbol tie behavior are deterministic;
 - accepted live aggregates continue advancing the committed ranking during
   sparse premarket conditions;
-- historical fields degrade independently from Last and Day-%;
+- Float and every aggregate context/momentum field degrade independently from
+  Last, qualification, and Day-% ordering;
+- session Volume equals the correction-aware sum of accepted aggregate share
+  volume from `S` through `T` and never presents partial history as complete;
+- a symbol outside the displayed set for more than five minutes retains exact
+  all-symbol evidence, then enters the top 20 with immediately correct Activity
+  30s and Move 30s while Tape 5s and Spread alone warm from selected coverage;
+- known no-print intervals carry the last actual aggregate mark for Move 30s
+  without creating a synthetic bar;
+- missing Float is unavailable and a cached Float retains its effective date
+  and stale/provenance status without substituting shares outstanding;
 - all displayed rows normally receive T/Q coverage;
 - T/Q overload can degrade to zero without changing aggregate ranking;
-- restart from a coherent checkpoint reproduces the same aggregate-derived
-  state before new input and catches up within the approved target;
-- aggregate replay produces the same market-time output regardless of playback
-  speed;
+- a fresh process start reconstructs the revised aggregate-derived state
+  through exact hydration and does not claim readiness before the ingress fence;
+- checkpoint-on operation cannot silently claim compatibility with the revised
+  feature set, while checkpoint-off is the supported MVP configuration;
+- the visible dashboard contains only Symbol, Float, Volume, Last, Day %, From
+  Open %, Day Range, Activity 30s, Move 30s, Tape 5s, and Spread in the
+  contracted grouping/order;
+- the dashboard's neutral/green/orange/red hierarchy communicates context,
+  location, current activity, and execution friction without browser-owned
+  market classification or color-only meaning;
 - the backend operates without the UI and compatible UI releases do not restart
   it; and
+- unknown replay capability remains disclosed and does not block or falsely
+  strengthen the live-product acceptance claim;
 - no outcome is described as trading edge or executable expectancy merely
   because scanner correctness tests pass.

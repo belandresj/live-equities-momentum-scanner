@@ -359,6 +359,38 @@ concurrencyComplete:
 	closeAndWait(t, e)
 }
 
+func TestTape5sStatusReasonBoundaries(t *testing.T) {
+	target := time.Date(2026, 8, 14, 18, 0, 5, 0, time.UTC)
+	cases := []struct {
+		name     string
+		state    *tqSymbolState
+		target   *time.Time
+		status   TQFieldStatus
+		reason   string
+		value    float64
+		coverage bool
+	}{
+		{"unavailable coverage", &tqSymbolState{}, &target, TQUnavailable, "coverage", 0, false},
+		{"below one second", &tqSymbolState{tradeCoverage: tqCoverage{active: true, start: target.Add(-999 * time.Millisecond)}}, &target, TQWarming, "coverage_warming", 0, true},
+		{"one through below five seconds", &tqSymbolState{tradeCoverage: tqCoverage{active: true, start: target.Add(-time.Second)}}, &target, TQWarming, "five_second_warming", 0, true},
+		{"five seconds covered silence", &tqSymbolState{tradeCoverage: tqCoverage{active: true, start: target.Add(-5 * time.Second)}}, &target, TQCurrent, "qualifying_original_prints", 0, true},
+		{"unequal repeat", &tqSymbolState{tradeCoverage: tqCoverage{active: true, start: target.Add(-5 * time.Second)}, unequalRepeat: true}, &target, TQInvalid, "unequal_repeat", 0, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tapeView(tc.state, tc.target)
+			if got.Status != tc.status || got.Reason != tc.reason || got.FiveSecondStatus != tc.status || got.FiveSecondReason != tc.reason || got.FiveSecond != tc.value {
+				t.Fatalf("Tape 5s boundary = %+v", got)
+			}
+		})
+	}
+
+	pressure := TapeRateView{Status: TQPressureShed, Reason: "pressure", FiveSecondStatus: TQPressureShed, FiveSecondReason: "pressure"}
+	if pressure.Status != TQPressureShed || pressure.Reason != "pressure" {
+		t.Fatalf("pressure Tape 5s = %+v", pressure)
+	}
+}
+
 func TestC9DefaultDesiredMembershipUsesAllDisplayedRowsUpToTwenty(t *testing.T) {
 	e, _, _, now := pressureProofEngine(t)
 	defer closeAndWait(t, e)
@@ -513,15 +545,16 @@ func pressureQualifiedEvaluation(at time.Time) aggregateEvaluationResult {
 	counts.statuses[1], counts.statuses[2] = 2, 1
 	counts.reasons[0], counts.reasons[9] = 2, 1
 	counts.pairs[1][0], counts.pairs[2][9] = 2, 1
-	features := featureAccounting{dayPercent: counts, from4AMPercent: counts, hodDrawdown: counts, sessionRange: counts, rolling30: counts, rolling60: counts, activity: counts}
+	features := featureAccounting{dayPercent: counts, sessionVolume: counts, fromOpenPercent: counts, dayRange: counts, activity30s: counts, move30s: counts,
+		from4AMPercent: counts, hodDrawdown: counts, sessionRange: counts, rolling30: counts, rolling60: counts, activity: counts}
 	current := aggregateFeatureField{status: featureCurrent}
 	return aggregateEvaluationResult{
 		at: at, mode: rankingQualifiedCurrent,
 		population:    populationAccounting{universeTotal: 3, validPriorClose: 2, invalidOrMissingPriorClose: 1, trustedRankableMark: 2, coveredPopulation: 3},
-		qualification: qualificationAccounting{provisional: 2}, features: features, totalPassers: 2, knownRankableCount: 2, tqIntentAvailable: true,
+		qualification: qualificationAccounting{provisional: 2}, features: features, floats: floatAccounting{unavailable: 3}, totalPassers: 2, knownRankableCount: 2, tqIntentAvailable: true,
 		rows: []aggregateRankingRow{
-			{rank: 1, symbol: "AAA", last: 2, dayPercent: 1, from4AMPercent: current, hodDrawdown: current, sessionRange: current, rolling30: current, rolling60: current, activity: current, tqIntentEligible: true},
-			{rank: 2, symbol: "MISSING", last: 1, dayPercent: 0, from4AMPercent: current, hodDrawdown: current, sessionRange: current, rolling30: current, rolling60: current, activity: current, tqIntentEligible: true},
+			{rank: 1, symbol: "AAA", last: 2, dayPercent: 1, sessionVolume: current, fromOpenPercent: current, dayRange: current, activity30s: current, move30s: current, tqIntentEligible: true},
+			{rank: 2, symbol: "MISSING", last: 1, dayPercent: 0, sessionVolume: current, fromOpenPercent: current, dayRange: current, activity30s: current, move30s: current, tqIntentEligible: true},
 		},
 	}
 }

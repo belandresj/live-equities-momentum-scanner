@@ -116,7 +116,7 @@ func applyReplayPresentation(value *Snapshot) {
 	value.Status.ReadinessReason = "not_live_mode"
 	value.TQ.DesiredSymbols = []string{}
 	for index := range value.Rows {
-		value.Rows[index].TapeRate = TapeRate{Status: "unavailable", Reason: "replay_unavailable", OneSecond: RateMeasurement{Status: "unavailable", Reason: "replay_unavailable"}, FiveSecond: RateMeasurement{Status: "unavailable", Reason: "replay_unavailable"}}
+		value.Rows[index].Tape5s = Tape5s{Status: "unavailable", Reason: "replay_unavailable"}
 		value.Rows[index].Spread = Spread{Status: "unavailable", Reason: "replay_unavailable"}
 		value.Rows[index].TQMembership = TQMembership{}
 	}
@@ -251,28 +251,61 @@ func mapOperations(metrics operations.Metrics, operational engine.OperationalVie
 }
 
 func mapRow(row engine.ReplayRankingRowView, tq engine.TQSymbolView) (Row, error) {
-	if row.Rank == 0 || row.Rank > 20 || row.Symbol == "" || !finite(row.Last) || !finite(row.DayPercent) || row.MarkAge < 0 {
+	if row.Rank == 0 || row.Rank > 20 || row.Symbol == "" || !finite(row.Last) || row.Last < .25 || !finite(row.DayPercent) || row.MarkAge < 0 ||
+		tq.Symbol != "" && tq.Spread.QuoteAge < 0 {
 		return Row{}, rejectMapping("ranking_source_row")
 	}
-	result := Row{Rank: uint64(row.Rank), Symbol: row.Symbol, LastUSD: row.Last, DayChangeRatio: percentagePointsToRatio(row.DayPercent),
-		MarkAgeMS: durationMilliseconds(row.MarkAge), From4AMChange: mapRatio(row.From4AMPercent), HODDrawdown: mapRatio(row.HODDrawdown),
-		DayRangePosition: mapRatio(row.SessionRange), Range30MPosition: mapRatio(row.Rolling30), Range60MPosition: mapRatio(row.Rolling60), Activity: mapRatio(row.Activity),
-		TapeRate: TapeRate{Status: "unselected", OneSecond: RateMeasurement{Status: "unselected"}, FiveSecond: RateMeasurement{Status: "unselected"}},
-		Spread:   Spread{Status: "unselected"}}
+	result := Row{Rank: uint64(row.Rank), Symbol: row.Symbol, Float: mapFloat(row.Float), Volume: mapShares(row.SessionVolume),
+		LastUSD: row.Last, DayChangeRatio: percentagePointsToRatio(row.DayPercent), MarkAgeMS: durationMilliseconds(row.MarkAge),
+		FromOpenChange: mapRatio(row.FromOpenPercent), DayRangePosition: mapRatio(row.DayRange), Activity30s: mapRatio(row.Activity30s),
+		Move30s: mapRatio(row.Move30s), Tape5s: Tape5s{Status: "unselected"},
+		Spread: Spread{Status: "unselected"}}
 	if tq.Symbol == "" {
 		return result, nil
 	}
 	result.TQMembership = TQMembership{Desired: tq.Desired, ProviderPresent: tq.ProviderPresent, ProviderMembershipUnknown: tq.ProviderMembershipUnknown}
-	result.TapeRate = TapeRate{Status: string(tq.Tape.Status), Reason: tq.Tape.Reason, TradeCoverage: tq.TradeCoverage,
-		OneSecond:      mapRate(tq.Tape.OneSecondStatus, tq.Tape.OneSecondReason, tq.Tape.OneSecond),
-		FiveSecond:     mapRate(tq.Tape.FiveSecondStatus, tq.Tape.FiveSecondReason, tq.Tape.FiveSecond),
+	// Tape.Status/Reason is the engine's authoritative five-second product
+	// projection. The retained nested members exist for the superseded v1
+	// shape and are required by engine publication validation to agree.
+	result.Tape5s = Tape5s{Status: string(tq.Tape.Status), Reason: tq.Tape.Reason, TradeCoverage: tq.TradeCoverage,
 		TimestampBasis: tq.Tape.TimestampBasis, LifecycleRecordsObserved: tq.Tape.LifecycleRecordsObserved}
+	if tq.Tape.Status == engine.TQCurrent {
+		result.Tape5s.TradesPerSecond = floatPointer(tq.Tape.FiveSecond)
+	}
 	result.Spread = Spread{Status: string(tq.Spread.Status), Reason: tq.Spread.Reason, QuoteCoverage: tq.QuoteCoverage,
 		QuoteAgeMS: durationMilliseconds(tq.Spread.QuoteAge), Quality: tq.Spread.Quality}
 	if tq.Spread.Status == engine.TQCurrent || tq.Spread.Status == engine.TQStale {
 		result.Spread.Cents, result.Spread.BasisPoints = floatPointer(tq.Spread.Cents), floatPointer(tq.Spread.BasisPoints)
 	}
 	return result, nil
+}
+
+func mapShares(value engine.ReplayFieldView) ShareMeasurement {
+	result := ShareMeasurement{Status: value.Status, Reason: value.Reason}
+	if value.Status == "current" {
+		result.ValueShares = floatPointer(value.Value)
+	}
+	return result
+}
+
+func mapFloat(value engine.ReplayFloatFieldView) FloatMeasurement {
+	result := FloatMeasurement{Status: value.Status, Reason: value.Reason}
+	if value.Status != "current" && value.Status != "stale" {
+		return result
+	}
+	result.ValueShares = floatPointer(value.Value)
+	if value.Percent != nil {
+		result.PercentRatio = floatPointer(percentagePointsToRatio(*value.Percent))
+	}
+	result.Provider, result.Provenance = value.Provider, value.Provenance
+	if value.EffectiveDate != "" {
+		result.EffectiveDate = stringPointer(value.EffectiveDate)
+	}
+	if !value.RetrievedAt.IsZero() {
+		retrieved := timestamp(value.RetrievedAt)
+		result.RetrievedAt = &retrieved
+	}
+	return result
 }
 
 func mapRatio(value engine.ReplayFieldView) RatioMeasurement {
@@ -283,19 +316,11 @@ func mapRatio(value engine.ReplayFieldView) RatioMeasurement {
 	return result
 }
 
-// Aggregate feature values are engine-owned percentage points. The public V1
+// Aggregate feature values are engine-owned percentage points. The public v2
 // schema deliberately exposes dimensionless ratios so every percentage field
 // has one stable wire unit (for example, 0.125 means 12.5%).
 func percentagePointsToRatio(value float64) float64 {
 	return value / 100
-}
-
-func mapRate(status engine.TQFieldStatus, reason string, value float64) RateMeasurement {
-	result := RateMeasurement{Status: string(status), Reason: reason}
-	if status == engine.TQCurrent {
-		result.TradesPerSecond = floatPointer(value)
-	}
-	return result
 }
 
 func validateSnapshot(value Snapshot) error {
@@ -373,6 +398,9 @@ func validateSnapshot(value Snapshot) error {
 	}
 	if !sumUint64Equals(p.ValidPriorClose, p.TrustedRankableMark, p.TrustedBelowPriceMark, p.NoPrintThroughT, p.InvalidMark, p.UnknownDueFailureOrFence) {
 		return rejectMapping("population_mark_identity")
+	}
+	if p.CoveredPopulation != p.UniverseTotal-p.UnknownDueFailureOrFence || p.UnresolvedPopulation != p.UnknownDueFailureOrFence {
+		return rejectMapping("population_coverage_identity")
 	}
 	if !sumUint64Equals(d.BootstrapUnknown, d.TrustedByLaterLiveMark, d.NoLaterEligibleMark, d.LatestMarkNotLiveAuthority,
 		d.NoStrictlyOlderLocalizedConflict, d.ConflictAtOrAfterMark, d.InvalidAtOrAfterMark, d.IncompletePostMarkCoverage) ||
@@ -462,27 +490,139 @@ func validateSnapshot(value Snapshot) error {
 }
 
 func measurementsValid(row Row) bool {
-	for _, field := range []RatioMeasurement{row.From4AMChange, row.HODDrawdown, row.DayRangePosition, row.Range30MPosition, row.Range60MPosition, row.Activity} {
-		if !oneOf(field.Status, "warming", "current", "unavailable", "invalid") || !fieldReason(field.Reason) ||
-			(field.Status == "current") != (field.ValueRatio != nil) || field.ValueRatio != nil && !finite(*field.ValueRatio) {
-			return false
-		}
-	}
-	if !tqStatus(row.TapeRate.Status) || !tqReason(row.TapeRate.Reason) || !tqStatus(row.TapeRate.OneSecond.Status) ||
-		!tqReason(row.TapeRate.OneSecond.Reason) || !tqStatus(row.TapeRate.FiveSecond.Status) || !tqReason(row.TapeRate.FiveSecond.Reason) ||
-		!oneOf(row.TapeRate.TimestampBasis, "", "none", "participant", "sip_fallback", "mixed") ||
-		(row.TapeRate.OneSecond.Status == "current") != (row.TapeRate.OneSecond.TradesPerSecond != nil) ||
-		(row.TapeRate.FiveSecond.Status == "current") != (row.TapeRate.FiveSecond.TradesPerSecond != nil) ||
-		row.TapeRate.OneSecond.TradesPerSecond != nil && !finite(*row.TapeRate.OneSecond.TradesPerSecond) ||
-		row.TapeRate.FiveSecond.TradesPerSecond != nil && !finite(*row.TapeRate.FiveSecond.TradesPerSecond) {
+	if !ratioMeasurementValid(row.FromOpenChange, "from_open") || !ratioMeasurementValid(row.DayRangePosition, "day_range") ||
+		!ratioMeasurementValid(row.Activity30s, "activity_30s") || !ratioMeasurementValid(row.Move30s, "move_30s") {
 		return false
 	}
-	if !tqStatus(row.Spread.Status) || !tqReason(row.Spread.Reason) || !oneOf(row.Spread.Quality, "", "reviewed_ordinary", "known_special", "unclassified") ||
+	if !shareMeasurementValid(row.Volume) || !floatMeasurementValid(row.Float) ||
+		!tape5sValid(row.Tape5s) ||
+		(row.Tape5s.Status == "current") != (row.Tape5s.TradesPerSecond != nil) ||
+		row.Tape5s.TradesPerSecond != nil && (!finite(*row.Tape5s.TradesPerSecond) || *row.Tape5s.TradesPerSecond < 0) {
+		return false
+	}
+	if row.DayRangePosition.ValueRatio != nil && (*row.DayRangePosition.ValueRatio < 0 || *row.DayRangePosition.ValueRatio > 1) ||
+		row.Activity30s.ValueRatio != nil && (*row.Activity30s.ValueRatio < 0 || *row.Activity30s.ValueRatio > 1) {
+		return false
+	}
+	if !spreadTupleValid(row.Spread) || !oneOf(row.Spread.Quality, "", "reviewed_ordinary", "known_special", "unclassified") ||
 		(row.Spread.Status == "current" || row.Spread.Status == "stale") != (row.Spread.Cents != nil && row.Spread.BasisPoints != nil) ||
-		(row.Spread.Cents == nil) != (row.Spread.BasisPoints == nil) || row.Spread.Cents != nil && (!finite(*row.Spread.Cents) || !finite(*row.Spread.BasisPoints)) {
+		(row.Spread.Cents == nil) != (row.Spread.BasisPoints == nil) || row.Spread.Cents != nil &&
+		(!finite(*row.Spread.Cents) || !finite(*row.Spread.BasisPoints) || *row.Spread.Cents < 0 || *row.Spread.BasisPoints < 0) {
 		return false
 	}
 	return true
+}
+
+func ratioMeasurementValid(value RatioMeasurement, field string) bool {
+	if value.ValueRatio != nil && !finite(*value.ValueRatio) {
+		return false
+	}
+	if value.Status == "current" {
+		return value.Reason == "" && value.ValueRatio != nil
+	}
+	if value.ValueRatio != nil {
+		return false
+	}
+	switch field {
+	case "from_open":
+		return statusReason(value.Status, value.Reason,
+			[]string{}, []string{"before_first_print", "history_incomplete"}, []string{"historical_conflict", "invalid_input", "state_bound_exceeded"})
+	case "day_range":
+		return statusReason(value.Status, value.Reason,
+			[]string{}, []string{"before_first_print", "history_incomplete", "zero_width"}, []string{"historical_conflict", "invalid_input", "state_bound_exceeded"})
+	case "activity_30s":
+		return statusReason(value.Status, value.Reason,
+			[]string{"reference_warmup"}, []string{"history_incomplete"}, []string{"historical_conflict", "invalid_input", "state_bound_exceeded"})
+	case "move_30s":
+		return statusReason(value.Status, value.Reason,
+			[]string{"before_first_print", "rolling_warmup"}, []string{"history_incomplete", "no_aggregate_in_target"}, []string{"historical_conflict", "invalid_input", "state_bound_exceeded"})
+	default:
+		return false
+	}
+}
+
+func shareMeasurementValid(value ShareMeasurement) bool {
+	if value.Status == "current" {
+		return value.Reason == "" && value.ValueShares != nil && finite(*value.ValueShares) && *value.ValueShares >= 0
+	}
+	if value.ValueShares != nil {
+		return false
+	}
+	return statusReason(value.Status, value.Reason, nil, []string{"history_incomplete"}, []string{"historical_conflict", "invalid_input", "state_bound_exceeded"})
+}
+
+func floatMeasurementValid(value FloatMeasurement) bool {
+	available := value.Status == "current" || value.Status == "stale"
+	if !oneOf(value.Status, "current", "stale", "unavailable", "invalid") ||
+		available != (value.ValueShares != nil) || !available && (value.PercentRatio != nil || value.Provider != "" || value.EffectiveDate != nil || value.RetrievedAt != nil || value.Provenance != "") {
+		return false
+	}
+	if !available {
+		return value.Status == "unavailable" && value.Reason == "not_available" || value.Status == "invalid" && value.Reason == "invalid_provenance"
+	}
+	if !finite(*value.ValueShares) || *value.ValueShares <= 0 || value.Provider != "massive-stocks-float-experimental" || value.RetrievedAt == nil || !validTimestamp(*value.RetrievedAt) ||
+		value.PercentRatio != nil && (!finite(*value.PercentRatio) || *value.PercentRatio < 0 || *value.PercentRatio > 1) ||
+		value.EffectiveDate != nil && !validTradingDate(*value.EffectiveDate) {
+		return false
+	}
+	return value.Status == "current" && value.Reason == "" && value.Provenance == "fresh" ||
+		value.Status == "stale" && value.Reason == "cached_fallback" && value.Provenance == "cache"
+}
+
+func tape5sValid(value Tape5s) bool {
+	if !oneOf(value.TimestampBasis, "", "none", "participant", "sip_fallback", "mixed") {
+		return false
+	}
+	switch value.Status {
+	case "unselected":
+		return value.Reason == "" && !value.TradeCoverage
+	case "warming":
+		return value.TradeCoverage && oneOf(value.Reason, "coverage_warming", "five_second_warming")
+	case "current":
+		return value.TradeCoverage && value.Reason == "qualifying_original_prints"
+	case "unavailable":
+		return oneOf(value.Reason, "coverage", "replay_unavailable")
+	case "invalid":
+		return value.TradeCoverage && value.Reason == "unequal_repeat"
+	case "pressure_shed":
+		return value.Reason == "pressure"
+	default:
+		return false
+	}
+}
+
+func spreadTupleValid(value Spread) bool {
+	switch value.Status {
+	case "unselected":
+		return value.Reason == "" && !value.QuoteCoverage
+	case "warming":
+		return value.QuoteCoverage && value.Reason == "coverage_warming"
+	case "current":
+		return value.QuoteCoverage && value.Reason == ""
+	case "stale":
+		return value.QuoteCoverage && value.Reason == "stale_quote"
+	case "unavailable":
+		return value.Reason == "coverage" || value.Reason == "replay_unavailable" || value.QuoteCoverage && value.Reason == "one_sided_quote"
+	case "invalid":
+		return value.QuoteCoverage && value.Reason == "crossed_quote"
+	case "pressure_shed":
+		return value.Reason == "pressure"
+	default:
+		return false
+	}
+}
+
+func statusReason(status, reason string, warming, unavailable, invalid []string) bool {
+	switch status {
+	case "warming":
+		return oneOf(reason, warming...)
+	case "unavailable":
+		return oneOf(reason, unavailable...)
+	case "invalid":
+		return oneOf(reason, invalid...)
+	default:
+		return false
+	}
 }
 
 func fieldReason(value string) bool {
@@ -757,6 +897,11 @@ func sameOptionalTime(left, right *time.Time) bool {
 }
 
 func floatPointer(value float64) *float64 {
+	copyValue := value
+	return &copyValue
+}
+
+func stringPointer(value string) *string {
 	copyValue := value
 	return &copyValue
 }

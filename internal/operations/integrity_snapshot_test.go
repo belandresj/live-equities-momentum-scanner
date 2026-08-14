@@ -24,3 +24,19 @@ func TestEvaluatorIntegrityInspectionIsDetached(t *testing.T) {
 		t.Fatalf("inspection mutated sealed diagnostics: %+v", second)
 	}
 }
+
+func TestFloatPercentageInspectionIsDetached(t *testing.T) {
+	percent := 25.0
+	capture := SnapshotCapture{sealed: &sealedSnapshotCapture{view: SnapshotCaptureView{Engine: engine.SnapshotView{Publication: engine.ReplayPublicationView{
+		AggregateEvaluation: engine.ReplayEvaluationView{Rows: []engine.ReplayRankingRowView{{Symbol: "AAA", Float: engine.ReplayFloatFieldView{Percent: &percent}}}},
+	}}}}}
+	first, ok := InspectSnapshotCapture(capture)
+	if !ok || first.Engine.Publication.AggregateEvaluation.Rows[0].Float.Percent == nil {
+		t.Fatal("sealed Float capture unavailable")
+	}
+	*first.Engine.Publication.AggregateEvaluation.Rows[0].Float.Percent = 99
+	second, ok := InspectSnapshotCapture(capture)
+	if !ok || second.Engine.Publication.AggregateEvaluation.Rows[0].Float.Percent == nil || *second.Engine.Publication.AggregateEvaluation.Rows[0].Float.Percent != 25 {
+		t.Fatalf("inspection mutated sealed Float percentage: %+v", second.Engine.Publication.AggregateEvaluation.Rows)
+	}
+}

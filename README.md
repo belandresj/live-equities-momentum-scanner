@@ -16,15 +16,18 @@ The scanner is designed to:
 
 - bind each run to an exchange schedule, eligible U.S. common-stock/ADRC
   universe, and exact adjusted prior closes;
-- consume live and historical one-second aggregates through one canonical event
-  and state path;
+- consume live one-second aggregates through one canonical event and state
+  path;
 - qualify symbols using the approved same-session aggregate-tape gate, then rank
   passers by Day % descending with exact-symbol tie-breaking;
-- publish at most 20 rows with independently available price, range, Activity,
-  Tape Rate, and Spread measurements;
-- recover from fresh start, checkpoint restart, and same-process aggregate gaps
-  without fabricating marks or treating successful empty hydration as unfinished
-  work; and
+- publish at most 20 rows with independently available Float, session share
+  Volume, Last, Day %, From Open %, Day Range, Activity 30s, Move 30s, Tape 5s,
+  and Spread;
+- retain at least 330 seconds of aggregate/coverage evidence plus the
+  predecessor mark for every display-eligible symbol, independent of top-20
+  membership;
+- recover from fresh start and same-process aggregate gaps without fabricating
+  marks or treating successful empty hydration as unfinished work; and
 - expose readiness, coverage, population accounting, and field availability
   honestly through a versioned read-only API.
 
@@ -37,14 +40,14 @@ The design has:
 
 - one authoritative `ScannerStateEngine` and one canonical per-symbol session
   state;
-- normalized aggregate, trade, quote, control, hydration, replay, and timer
-  inputs;
+- normalized aggregate, trade, quote, control, hydration, and timer inputs;
 - one committed aggregate watermark and one qualification/ranking path;
-- explicit bootstrap, checkpoint catch-up, live, recovery, replay, suppression,
-  session-end, and shutdown lifecycles;
+- explicit bootstrap, live, recovery, suppression, session-end, and shutdown
+  lifecycles;
 - default T/Q coverage for displayed rows, with T/Q degraded before aggregate
   correctness;
-- coherent checkpoints and deterministic offline aggregate replay;
+- retained optional checkpoint and replay code that is outside the current MVP
+  operating claim;
 - immutable snapshots served by the scanner backend; and
 - an independently deployable UI that owns presentation, not market state.
 
@@ -58,14 +61,15 @@ approved requirement establishes a concrete need.
 | --- | --- |
 | [`AGENTS.md`](AGENTS.md) | Repository rules, authority order, engineering invariants, and agent-assignment requirements. |
 | [`docs/product/product-goals.md`](docs/product/product-goals.md) | Highest product authority: user-facing behavior, formulas, version 1 scope, and non-goals. |
+| [`docs/live-feature-mvp-program.md`](docs/live-feature-mvp-program.md) | Current delivery authority: incremental backend, API, UI, and integrated-live feature cutover; replay unverified and checkpoints disabled. |
 | [`docs/architecture/system-overview.md`](docs/architecture/system-overview.md) | Runtime topology, component boundaries, state ownership, and failure containment. |
 | [`docs/architecture/data-time-and-event-contract.md`](docs/architecture/data-time-and-event-contract.md) | Session, clock, event, ordering, coverage, reconciliation, replay, and checkpoint-cutoff semantics. |
 | [`docs/architecture/scanner-state-engine-lifecycle.md`](docs/architecture/scanner-state-engine-lifecycle.md) | Legal engine states, transitions, publication permissions, recovery, and termination. |
 | [`docs/glossary.md`](docs/glossary.md) | Shared vocabulary; the controlling product or architecture contract wins when more specific. |
 | [`docs/specification-map.md`](docs/specification-map.md) | Current component sequence, document status, dependencies, and implementation milestones. |
 | [`docs/implementation-process.md`](docs/implementation-process.md) | Contract-first research, approval, predecessor-reuse, proof, slice, integration, and release workflow. |
-| [`docs/v1-release-program.md`](docs/v1-release-program.md) | Owner-approved C7-C11 authority, fixed/revisable decisions, zero-interruption correction and containment, capability/proof matrix, test tiers, and private V1 RC completion. |
-| [`docs/c12-implementation-goal.md`](docs/c12-implementation-goal.md) | Owner-approved handoff prompt to close C11/private V1 RC, then implement C4-S6 and C12 sequentially. |
+| [`docs/v1-release-program.md`](docs/v1-release-program.md) | Historical accepted delivery authority and reusable evidence for the former feature set; superseded where it conflicts with the current MVP. |
+| [`docs/c12-implementation-goal.md`](docs/c12-implementation-goal.md) | Historical replay follow-on authority; not active and not an MVP gate. |
 | [`docs/market-hours-validation.md`](docs/market-hours-validation.md) | Separately authorized post-RC live-provider observation procedure; pending by default. |
 | [`docs/specifications/focused-component-spec-template.md`](docs/specifications/focused-component-spec-template.md) | Mandatory template and modular-layout rules for focused component contracts. |
 | [`docs/history/`](docs/history/) | Non-authoritative Phase 1 drafting and review history. |
@@ -76,41 +80,28 @@ Phase 1 product and architecture contracts are owner-approved. Current component
 status and the sequential implementation roadmap are maintained only in the
 [`specification map`](docs/specification-map.md).
 
-Focused component contracts follow the contract-first
-[`implementation process`](docs/implementation-process.md): establish the Phase
-1-derived boundary, record a narrow Version 2 reconnaissance scope, complete
-the component contract/proof allocation, and implement one sequential slice at
-a time. A contract may be one file or a compact indexed parent with cohesive
-details; either remains one component authority. Under the V1 program, lower-
-level C7-C11 decisions remain revisable when evidence exposes a defect.
+The current incremental plan is the
+[`Live feature-set MVP program`](docs/live-feature-mvp-program.md): implement
+the backend measurements and Float enrichment, cut the snapshot API to v2,
+finish the dashboard, then verify the integrated live composition. Keep one
+write-capable slice active. The numbered component contracts remain reusable
+evidence; this MVP does not rename or comprehensively refactor them.
 
-### Authorized Version 1 Release Program
+### Current live feature-set MVP
 
-The owner replaced the former C7-C11 unattended authority on 2026-08-07 with
-the [`Version 1 Release Program`](docs/v1-release-program.md). It permits a
-future goal on `codex/c7-c11-program` to correct C7, complete C7-C11
-sequentially, and revise lower-level contracts, fixtures, proofs, thresholds,
-slices, whitelists, reviews, and accepted implementation decisions without
-another owner message. The approved Phase 1 market semantics and architecture
-remain fixed. C7-C11 have no planned owner-response gate: lower-level failures
-are corrected, excluded external/live work is deferred, and user/Git/tool
-friction uses recorded containment and fallback while the goal continues.
+The owner approved the
+[`Live feature-set MVP program`](docs/live-feature-mvp-program.md) on
+2026-08-14. The only supported operating path in this cut is the ordinary
+fresh-start live scanner. Deterministic unit, fake-provider, API, and UI
+fixtures remain the normal proof and weekend-development tools; they are not a
+claim that product replay works.
 
-The target is a reviewed and locally verified private release candidate through
-Component 11. Deterministic replay and fake-provider evidence may finish it
-while the market is closed. The program does not authorize credentialed live-
-provider observation, a public capacity claim, public deployment,
-authentication/TLS/hosting, production cutover, pushing, or history rewriting.
-Chrome desktop is the required UI target, and Component 11 is a high-fidelity
-adaptation of the useful V2 scanner UI without V2 browser-owned calculations,
-readiness logic, obsolete state semantics, or backend coupling.
-
-After C11 and the integrated private V1 RC are finally accepted, the owner-
-approved [C12 implementation goal](docs/c12-implementation-goal.md) reopens C4
-only for its bounded manual-driver prerequisite, then implements the historical
-observation replay backend/API and dashboard in two sequential slices. That
-follow-on authorizes no provider request, credential access, public deployment,
-or claim of trading edge.
+Replay implementation remains in the repository with unknown current
+capability and no MVP acceptance role. Checkpoint persistence also remains but
+is disabled; the MVP restarts through fresh hydration. An old checkpoint must
+not be restored and presented as complete revised-feature state. The program
+does not authorize credential access or provider requests, public deployment,
+or any claim of trading edge.
 
 ## Private local dashboard
 
@@ -123,11 +114,10 @@ workflow documented in the
 ```
 
 Start it at approximately 03:55 America/New_York. It builds and supervises the
-existing scanner and dashboard, uses persistent reference/checkpoint
-directories, and reports authoritative liveness and readiness without moving
-market-state ownership into the launcher. Checkpoint discovery and cadence are
-off by default and require an explicit `--checkpoint-mode on` scanner launch.
-Hydration defaults to eight workers;
+existing scanner and dashboard and reports authoritative liveness and readiness
+without moving market-state ownership into the launcher. For the current MVP,
+checkpoint mode stays off and restart uses fresh hydration. Hydration defaults
+to eight workers;
 `--hydration-workers 1|2|4|8` selects a lower supported concurrency when
 needed. The manual commands below remain useful for development and
 independent-process inspection.
@@ -141,27 +131,18 @@ go run ./cmd/scanner --trading-date YYYY-MM-DD --api-address 127.0.0.1:8080 --al
 go run ./cmd/dashboard --address 127.0.0.1:4173 --api-origin http://127.0.0.1:8080 --assets ui
 ```
 
-Open `http://127.0.0.1:4173` in Chrome. The UI polls the versioned snapshot once
-per second with one request in flight. Restarting the dashboard does not stop
+Open `http://127.0.0.1:4173` in Chrome. The UI polls `GET /api/v2/snapshot`
+once per second with one request in flight. Restarting the dashboard does not stop
 or relink the scanner. This is a private/local configuration; it does not add
 public binding, authentication, TLS, hosting, or credentialed live validation.
 
-### Historical replay visualization
+### Retained replay tooling
 
-For local development, point the existing replay CLI at a previously downloaded
-complete one-second aggregate artifact and its exact-date reference cache. The
-scanner validates both, fast-forwards to the New York observation start, then
-publishes the selected interval at ordinary playback pace:
-
-```text
-go run ./cmd/scanner --run-mode replay --replay-artifact /absolute/path/session.replay --reference-dir /absolute/path/reference --observation-start 09:30:00 --observation-end 09:35:00 --api-address 127.0.0.1:8080 --allow-origin http://127.0.0.1:4173
-go run ./cmd/dashboard --address 127.0.0.1:4173 --api-origin http://127.0.0.1:8080 --assets ui
-```
-
-Open `http://127.0.0.1:4173`. Replay rows use the ordinary scanner table and
-formatting, with `HISTORICAL · NONLIVE` and the backend's logical replay time
-shown explicitly. This is a visualization harness, not live market data or a
-trader replay product; it has no browser replay controls.
+Historical replay code and commands remain in the repository, but their current
+runnable capability has not been verified and they are not supported by the
+live feature-set MVP. Use deterministic fixtures to develop formulas, the API,
+and the UI while the market is closed. Do not describe fixture-driven tests as
+product replay or use unknown replay behavior as an MVP acceptance gate.
 
 ## Predecessor evidence
 

@@ -125,7 +125,7 @@ func TestReplayWindowRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/snapshot", nil))
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v2/snapshot", nil))
 	if response.Code != http.StatusOK {
 		t.Fatalf("snapshot status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -339,7 +339,7 @@ func TestReplayContainment(t *testing.T) {
 			t.Fatal(handlerErr)
 		}
 		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/snapshot", nil))
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v2/snapshot", nil))
 		if response.Code != http.StatusServiceUnavailable {
 			t.Fatalf("failed snapshot status=%d body=%s", response.Code, response.Body.String())
 		}
@@ -574,7 +574,7 @@ func assertFinalReplaySnapshot(t *testing.T, snapshot snapshotapi.Snapshot, comp
 		t.Fatalf("final replay snapshot = %+v", snapshot)
 	}
 	for _, row := range snapshot.Rows {
-		if row.TapeRate.Status != "unavailable" || row.TapeRate.Reason != "replay_unavailable" || row.Spread.Status != "unavailable" || row.Spread.Reason != "replay_unavailable" {
+		if row.Tape5s.Status != "unavailable" || row.Tape5s.Reason != "replay_unavailable" || row.Spread.Status != "unavailable" || row.Spread.Reason != "replay_unavailable" {
 			t.Fatalf("replay row exposes live T/Q = %+v", row)
 		}
 	}

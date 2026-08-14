@@ -166,7 +166,7 @@ func TestPV1RCVertical(t *testing.T) {
 			t.Fatal(err)
 		}
 	}()
-	request, err := http.NewRequestWithContext(proof, http.MethodGet, "http://"+api.Address()+"/api/v1/snapshot", nil)
+	request, err := http.NewRequestWithContext(proof, http.MethodGet, "http://"+api.Address()+"/api/v2/snapshot", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestPV1RCVertical(t *testing.T) {
 			Symbol string `json:"symbol"`
 		} `json:"rows"`
 	}
-	if err := json.Unmarshal(body, &wire); err != nil || wire.SchemaVersion != "scanner.snapshot.v1" || len(wire.Rows) != 1 || wire.Rows[0].Symbol != "AAA" {
+	if err := json.Unmarshal(body, &wire); err != nil || wire.SchemaVersion != "scanner.snapshot.v2" || len(wire.Rows) != 1 || wire.Rows[0].Symbol != "AAA" {
 		t.Fatalf("snapshot wire=%+v err=%v", wire, err)
 	}
 

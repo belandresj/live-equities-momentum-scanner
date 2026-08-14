@@ -119,7 +119,7 @@ func TestLiveFirstReadyResolvedDiscrepancyIsTransportable(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := &http.Client{Timeout: 2 * time.Second}
-	for _, path := range []string{"/api/v1/snapshot", "/readyz"} {
+	for _, path := range []string{"/api/v2/snapshot", "/readyz"} {
 		response, requestErr := client.Get("http://" + server.Address() + path)
 		if requestErr != nil {
 			t.Fatal(requestErr)

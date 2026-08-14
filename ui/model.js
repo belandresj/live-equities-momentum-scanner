@@ -4,6 +4,7 @@ const DECIMAL = /^(0|[1-9][0-9]*)$/;
 const TRADING_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 const KNOWN_FIELD_STATUS = new Set(["warming", "current", "unavailable", "invalid"]);
+const KNOWN_FLOAT_STATUS = new Set(["current", "stale", "unavailable", "invalid"]);
 const KNOWN_FIELD_REASON = new Set(["", "before_first_print", "history_incomplete", "prior_close_unavailable", "no_aggregate_in_target", "rolling_warmup", "reference_warmup", "zero_width", "historical_conflict", "invalid_input", "state_bound_exceeded"]);
 const KNOWN_TQ_STATUS = new Set(["unselected", "warming", "current", "stale", "unavailable", "invalid", "pressure_shed"]);
 const KNOWN_TQ_REASON = new Set(["", "coverage", "coverage_warming", "five_second_warming", "qualifying_original_prints", "unequal_repeat", "one_sided_quote", "crossed_quote", "stale_quote", "insufficient_coverage", "pressure", "replay_unavailable"]);
@@ -11,8 +12,14 @@ const CURRENT_LIFECYCLE = new Set(["live", "hydrating"]);
 const BACKEND_READY_RANKING_MODE = new Set(["qualified_current", "degraded_bootstrap", "degraded_current"]);
 const TIMESTAMP_BASIS = new Set(["", "none", "participant", "sip_fallback", "mixed"]);
 const SPREAD_QUALITY = new Set(["", "reviewed_ordinary", "known_special", "unclassified"]);
-const PRESSURE_CAUSE = new Set(["", "queue_occupancy", "oldest_unread_frame", "capacity_drop", "tq_retention_bound", "transport_accounting_loss"]);
+const PRESSURE_CAUSE = new Set(["", "waiting_frames", "waiting_bytes", "oldest_waiting_frame", "aggregate_watermark_lag", "capacity_drop", "tq_retention_bound", "transport_accounting_loss"]);
 const EVALUATOR_INTEGRITY_CATEGORY = new Set(["candidate_target_mismatch", "support_contradiction", "population_accounting", "qualification_accounting", "uncertainty_accounting", "feature_accounting", "ranking_projection", "ranking_row", "tq_intent", "unknown_evaluator_integrity"]);
+const LIFECYCLE = new Set(["initializing", "awaiting_session", "awaiting_aggregate_ack", "hydrating", "live", "recovering", "replaying", "suppressed", "ended"]);
+const LIFECYCLE_REASON = new Set(["", "binding_before_session", "binding_in_session", "binding_after_session", "session_start_without_aggregate_ack", "session_end", "controlled_stop", "sequence_exhaustion", "clock_regression", "canonical_integrity", "publication_integrity", "accounting_integrity", "closed", "replay_start", "replay_end", "replay_requested_end", "replay_failure", "aggregate_acknowledged", "aggregate_acknowledged_at_session_start", "aggregate_epoch_lost", "ingress_integrity", "hydration_complete", "recovery_exhausted"]);
+const SUPPRESSION = new Set(["", "same_binding_recovery_allowed", "clean_reinitialization_required", "restart_required", "terminal_replay_failure"]);
+const READINESS_REASON = new Set(["", "runtime_unavailable", "binding_mismatch", "not_live_mode", "lifecycle_not_ready", "suppressed", "aggregate_unacknowledged", "fence_pending", "ranking_noncurrent", "watermark_missing", "watermark_stale", "accounting_invalid"]);
+const RANKING_MODE = new Set(["unavailable", "qualified_current", "degraded_bootstrap", "degraded_current", "stale", "suppressed"]);
+const RANKING_REASON = new Set(["", "no_committed_watermark", "no_trusted_marks", "incomplete_population", "qualification_incomplete", "global_suppression", "replay_warming"]);
 
 function fail(message) { throw new Error(message); }
 function object(value, name) {
@@ -45,51 +52,74 @@ function calendar(year, month, day) {
 const POPULATION_FIELDS = ["universe_total", "valid_prior_close", "invalid_or_missing_prior_close", "trusted_rankable_mark", "trusted_below_price_mark", "no_print_through_t", "invalid_mark", "unknown_due_failure_or_fence", "covered_population", "unresolved_population"];
 const QUALIFICATION_FIELDS = ["not_yet_passed", "provisional", "finalized", "unresolved"];
 const UNCERTAINTY_FIELDS = ["bootstrap_origin", "post_bootstrap_gap", "local_invalid"];
+const POPULATION_TRANSITION_FIELDS = ["bootstrap_unknown", "trusted_by_later_live_mark", "no_later_eligible_mark", "latest_mark_not_live_authority", "no_strictly_older_localized_conflict", "conflict_at_or_after_mark", "invalid_at_or_after_mark", "incomplete_post_mark_coverage"];
 const WORK_FIELDS = ["planned", "open", "completed_value", "completed_empty", "failed", "canceled", "fenced"];
 const RECOVERY_ROW_FIELDS = ["consumed", "inserted", "duplicate", "conflict_or_withdrawal", "rejected", "fenced", "integrity"];
 const FACT_FIELDS = ["consumed", "applied", "duplicate", "rejected", "fenced", "pressure_shed", "integrity", "normalized_trades", "normalized_quotes", "applied_trades", "applied_quotes", "pressure_shed_trades", "pressure_shed_quotes"];
 const COMMAND_FIELDS = ["issued", "pending", "acknowledged", "failed", "fenced", "result_fenced"];
-const CHECKPOINT_FIELDS = ["installed", "submitted", "in_progress", "pending", "completed", "failed", "canceled", "superseded"];
+const CHECKPOINT_DECIMAL_FIELDS = ["eligible", "pressure_deferred", "projection_started", "projection_in_progress", "projected", "projection_rejected", "submit_rejected", "submitted", "outstanding", "in_progress", "pending", "completed", "failed", "canceled", "superseded", "artifact_bytes"];
+const CHECKPOINT_UINT_FIELDS = ["usable_age_ms", "projection_total_ms", "projection_lock_ms", "write_ms", "encode_ms", "reopen_validation_ms"];
 const OPERATION_UINT_FIELDS = ["queue_capacity_frames", "queue_current_frames", "queue_high_frames", "queue_current_bytes", "queue_high_bytes", "mean_processing_delay_ms", "max_processing_delay_ms", "max_processing_delay_one_second_ms", "goroutines"];
 const OPERATION_DECIMAL_FIELDS = ["deliveries", "consumer_deferred", "heap_alloc_bytes", "heap_in_use_bytes", "connection_recovery_attempts"];
 
-function validateMeasurement(value, name) {
+function validateMeasurement(value, name, field) {
   fields(value, ["status", "reason", "value_ratio"], name);
   string(value.status, `${name}.status`); string(value.reason, `${name}.reason`);
   if (value.value_ratio !== null) finite(value.value_ratio, `${name}.value_ratio`);
-  if (KNOWN_FIELD_STATUS.has(value.status) && ((value.status === "current") !== (value.value_ratio !== null))) fail(`${name} status/value conflict`);
-  const reasons = { current: new Set([""]), warming: new Set(["rolling_warmup", "reference_warmup"]), unavailable: new Set(["before_first_print", "history_incomplete", "prior_close_unavailable", "no_aggregate_in_target", "zero_width"]), invalid: new Set(["historical_conflict", "invalid_input", "state_bound_exceeded"]) };
-  if (KNOWN_FIELD_STATUS.has(value.status) && KNOWN_FIELD_REASON.has(value.reason) && !reasons[value.status].has(value.reason)) fail(`${name} status/reason conflict`);
+  const reasons = {
+    from_open: { warming: [], unavailable: ["before_first_print", "history_incomplete"] },
+    day_range: { warming: [], unavailable: ["before_first_print", "history_incomplete", "zero_width"] },
+    activity_30s: { warming: ["reference_warmup"], unavailable: ["history_incomplete"] },
+    move_30s: { warming: ["before_first_print", "rolling_warmup"], unavailable: ["history_incomplete", "no_aggregate_in_target"] },
+  }[field];
+  if (!KNOWN_FIELD_STATUS.has(value.status) || !KNOWN_FIELD_REASON.has(value.reason) || !reasons) fail(`${name} unknown status/reason`);
+  const legal = value.status === "current" ? value.reason === "" && value.value_ratio !== null
+    : value.value_ratio === null && (value.status === "invalid" ? ["historical_conflict", "invalid_input", "state_bound_exceeded"].includes(value.reason) : reasons[value.status].includes(value.reason));
+  if (!legal) fail(`${name} status/reason/value conflict`);
+  if ((field === "day_range" || field === "activity_30s") && value.value_ratio !== null && (value.value_ratio < 0 || value.value_ratio > 1)) fail(`${name} value outside [0,1]`);
 }
 
-function validateRate(value, name) {
-  fields(value, ["status", "reason", "trades_per_second"], name);
+function validateShares(value, name) {
+  fields(value, ["status", "reason", "value_shares"], name);
   string(value.status, `${name}.status`); string(value.reason, `${name}.reason`);
-  if (value.trades_per_second !== null) {
-    finite(value.trades_per_second, `${name}.trades_per_second`);
-    if (value.trades_per_second < 0) fail(`${name} status/value conflict: negative rate`);
-  }
-  if (KNOWN_TQ_STATUS.has(value.status) && ((value.status === "current") !== (value.trades_per_second !== null))) fail(`${name} status/value conflict`);
+  if (value.value_shares !== null) finite(value.value_shares, `${name}.value_shares`);
+  const legal = value.status === "current" ? value.reason === "" && value.value_shares !== null && value.value_shares >= 0
+    : value.value_shares === null && (value.status === "unavailable" && value.reason === "history_incomplete" || value.status === "invalid" && ["historical_conflict", "invalid_input", "state_bound_exceeded"].includes(value.reason));
+  if (!legal) fail(`${name} status/reason/value conflict`);
 }
 
-function validateTape(value, name, replay) {
-  fields(value, ["status", "reason", "trade_coverage", "one_second", "five_second", "timestamp_basis", "lifecycle_records_observed"], name);
+function validateFloat(value, name) {
+  fields(value, ["status", "reason", "value_shares", "percent_ratio", "provider", "effective_date", "retrieved_at", "provenance"], name);
+  string(value.status, `${name}.status`); string(value.reason, `${name}.reason`); string(value.provider, `${name}.provider`); string(value.provenance, `${name}.provenance`);
+  if (value.value_shares !== null) finite(value.value_shares, `${name}.value_shares`);
+  if (value.percent_ratio !== null) finite(value.percent_ratio, `${name}.percent_ratio`);
+  if (value.effective_date !== null) { string(value.effective_date, `${name}.effective_date`); const date = TRADING_DATE.exec(value.effective_date); if (!date || !calendar(Number(date[1]), Number(date[2]), Number(date[3]))) fail(`${name}.effective_date invalid`); }
+  optionalTimestamp(value.retrieved_at, `${name}.retrieved_at`);
+  const available = value.status === "current" || value.status === "stale";
+  if (!KNOWN_FLOAT_STATUS.has(value.status)) fail(`${name} unknown status`);
+  const empty = value.value_shares === null && value.percent_ratio === null && value.provider === "" && value.effective_date === null && value.retrieved_at === null && value.provenance === "";
+  const legalAvailable = value.value_shares !== null && value.value_shares > 0 && value.provider === "massive-stocks-float-experimental" && value.retrieved_at !== null && (value.percent_ratio === null || value.percent_ratio >= 0 && value.percent_ratio <= 1) &&
+    (value.status === "current" ? value.reason === "" && value.provenance === "fresh" : value.reason === "cached_fallback" && value.provenance === "cache");
+  const legalEmpty = empty && (value.status === "unavailable" && value.reason === "not_available" || value.status === "invalid" && value.reason === "invalid_provenance");
+  if (available ? !legalAvailable : !legalEmpty) fail(`${name} provenance/status/value conflict`);
+}
+
+function validateTape(value, name) {
+  fields(value, ["status", "reason", "trade_coverage", "trades_per_second", "timestamp_basis", "lifecycle_records_observed"], name);
   string(value.status, `${name}.status`); string(value.reason, `${name}.reason`); bool(value.trade_coverage, `${name}.trade_coverage`); string(value.timestamp_basis, `${name}.timestamp_basis`); bool(value.lifecycle_records_observed, `${name}.lifecycle_records_observed`);
-  validateRate(value.one_second, `${name}.one_second`); validateRate(value.five_second, `${name}.five_second`);
+  if (value.trades_per_second !== null) { finite(value.trades_per_second, `${name}.trades_per_second`); if (value.trades_per_second < 0) fail(`${name} negative rate`); }
   if (!TIMESTAMP_BASIS.has(value.timestamp_basis)) fail(`${name} unknown timestamp basis`);
-  if (!KNOWN_TQ_STATUS.has(value.status) || !KNOWN_TQ_REASON.has(value.reason)) return;
-  const same = (status, reason) => value.one_second.status === status && value.one_second.reason === reason && value.five_second.status === status && value.five_second.reason === reason;
+  if (!KNOWN_TQ_STATUS.has(value.status) || !KNOWN_TQ_REASON.has(value.reason)) fail(`${name} unknown status/reason`);
   let legal = false;
   switch (value.status) {
-    case "unselected": legal = !value.trade_coverage && value.reason === "" && value.timestamp_basis === "" && same("unselected", ""); break;
-    case "unavailable": legal = !value.trade_coverage && value.timestamp_basis === "" && (value.reason === "coverage" && !replay || value.reason === "replay_unavailable" && replay) && same("unavailable", value.reason); break;
-    case "invalid": legal = value.trade_coverage && value.reason === "unequal_repeat" && value.timestamp_basis === "" && same("invalid", "unequal_repeat"); break;
-    case "warming":
-      legal = value.trade_coverage && (value.reason === "coverage_warming" && value.timestamp_basis === "" && same("warming", "coverage_warming") || value.reason === "five_second_warming" && value.one_second.status === "current" && value.one_second.reason === "qualifying_original_prints" && value.five_second.status === "warming" && value.five_second.reason === "coverage_warming" && TIMESTAMP_BASIS.has(value.timestamp_basis) && value.timestamp_basis !== "");
-      break;
-    case "current": legal = value.trade_coverage && value.reason === "qualifying_original_prints" && value.timestamp_basis !== "" && value.one_second.status === "current" && value.one_second.reason === "qualifying_original_prints" && value.five_second.status === "current" && value.five_second.reason === "qualifying_original_prints"; break;
-    case "pressure_shed": legal = value.reason === "pressure" && value.timestamp_basis === "" && same("pressure_shed", "pressure"); break;
+    case "unselected": legal = !value.trade_coverage && value.reason === ""; break;
+    case "warming": legal = value.trade_coverage && ["coverage_warming", "five_second_warming"].includes(value.reason); break;
+    case "current": legal = value.trade_coverage && value.reason === "qualifying_original_prints"; break;
+    case "unavailable": legal = ["coverage", "replay_unavailable"].includes(value.reason); break;
+    case "invalid": legal = value.trade_coverage && value.reason === "unequal_repeat"; break;
+    case "pressure_shed": legal = value.reason === "pressure"; break;
   }
+  legal &&= (value.status === "current") === (value.trades_per_second !== null);
   if (!legal) fail(`${name} trust tuple conflict`);
 }
 
@@ -103,36 +133,40 @@ function validateSpread(value, name, replay) {
     if (value.cents < 0 || value.basis_points < 0) fail(`${name} status/value conflict: negative spread`);
   }
   if ((value.status === "current" || value.status === "stale") !== (value.cents !== null)) fail(`${name} status/value conflict`);
-  if (!KNOWN_TQ_STATUS.has(value.status) || !KNOWN_TQ_REASON.has(value.reason)) return;
+  if (!KNOWN_TQ_STATUS.has(value.status) || !KNOWN_TQ_REASON.has(value.reason)) fail(`${name} unknown status/reason`);
   let legal = false;
   switch (value.status) {
     case "unselected": legal = !value.quote_coverage && value.reason === "" && value.quote_age_ms === 0 && value.quality === ""; break;
-    case "warming": legal = value.quote_coverage && value.reason === "coverage_warming" && value.quote_age_ms === 0; break;
-    case "current": legal = value.quote_coverage && value.reason === "" && value.quote_age_ms <= 2000 && value.quality !== ""; break;
-    case "stale": legal = value.quote_coverage && value.reason === "stale_quote" && value.quote_age_ms > 2000 && value.quality !== ""; break;
+    case "warming": legal = value.quote_coverage && value.reason === "coverage_warming"; break;
+    case "current": legal = value.quote_coverage && value.reason === ""; break;
+    case "stale": legal = value.quote_coverage && value.reason === "stale_quote"; break;
     case "invalid": legal = value.quote_coverage && value.reason === "crossed_quote"; break;
-    case "unavailable": legal = !value.quote_coverage && value.quote_age_ms === 0 && value.quality === "" && (value.reason === "coverage" && !replay || value.reason === "replay_unavailable" && replay) || value.quote_coverage && new Set(["one_sided_quote", "insufficient_coverage"]).has(value.reason); break;
-    case "pressure_shed": legal = value.reason === "pressure" && value.quote_age_ms === 0 && value.quality === ""; break;
+    case "unavailable": legal = value.reason === "coverage" || value.reason === "replay_unavailable" || value.quote_coverage && value.reason === "one_sided_quote"; break;
+    case "pressure_shed": legal = value.reason === "pressure"; break;
   }
   if (!legal) fail(`${name} trust tuple conflict`);
 }
 
-function validateRow(row, index, seen, replay) {
+function validateRow(row, index, seen) {
   const name = `rows[${index}]`;
-  fields(row, ["rank", "symbol", "last_usd", "day_change_ratio", "mark_age_ms", "from_4am_change", "hod_drawdown", "day_range_position", "range_30m_position", "range_60m_position", "activity", "tape_rate", "spread", "tq_membership"], name);
+  fields(row, ["rank", "symbol", "float", "volume", "last_usd", "day_change_ratio", "mark_age_ms", "from_open_change", "day_range_position", "activity_30s", "move_30s", "tape_5s", "spread", "tq_membership"], name);
   uint(row.rank, `${name}.rank`); string(row.symbol, `${name}.symbol`); finite(row.last_usd, `${name}.last_usd`); finite(row.day_change_ratio, `${name}.day_change_ratio`); uint(row.mark_age_ms, `${name}.mark_age_ms`);
   if (row.rank !== index + 1 || row.symbol === "" || seen.has(row.symbol)) fail(`${name} rank/symbol invalid`);
   seen.add(row.symbol);
-  for (const field of ["from_4am_change", "hod_drawdown", "day_range_position", "range_30m_position", "range_60m_position", "activity"]) validateMeasurement(row[field], `${name}.${field}`);
-  validateTape(row.tape_rate, `${name}.tape_rate`, replay);
-  validateSpread(row.spread, `${name}.spread`, replay);
+  validateFloat(row.float, `${name}.float`); validateShares(row.volume, `${name}.volume`);
+  validateMeasurement(row.from_open_change, `${name}.from_open_change`, "from_open");
+  validateMeasurement(row.day_range_position, `${name}.day_range_position`, "day_range");
+  validateMeasurement(row.activity_30s, `${name}.activity_30s`, "activity_30s");
+  validateMeasurement(row.move_30s, `${name}.move_30s`, "move_30s");
+  validateTape(row.tape_5s, `${name}.tape_5s`);
+  validateSpread(row.spread, `${name}.spread`, false);
   fields(row.tq_membership, ["desired", "provider_present", "provider_membership_unknown"], `${name}.tq_membership`);
   bool(row.tq_membership.desired, `${name}.tq_membership.desired`); bool(row.tq_membership.provider_present, `${name}.tq_membership.provider_present`); bool(row.tq_membership.provider_membership_unknown, `${name}.tq_membership.provider_membership_unknown`);
 }
 
 export function validateSnapshot(snapshot) {
   fields(snapshot, ["schema_version", "sample", "publication", "status", "ranking", "rows", "accounting", "recovery", "tq", "checkpoint", "operations"], "root");
-  if (snapshot.schema_version !== "scanner.snapshot.v1") fail("unsupported schema");
+  if (snapshot.schema_version !== "scanner.snapshot.v2") fail("unsupported schema");
   fields(snapshot.sample, ["id", "sampled_at"], "sample"); decimal(snapshot.sample.id, "sample.id"); timestamp(snapshot.sample.sampled_at, "sample.sampled_at");
   if (snapshot.sample.id === "0") fail("invalid sample identity");
   const p = snapshot.publication;
@@ -142,6 +176,7 @@ export function validateSnapshot(snapshot) {
   const date = TRADING_DATE.exec(p.trading_date);
   if (p.id === "0" || p.binding_identity === "" || !date || !calendar(Number(date[1]), Number(date[2]), Number(date[3]))) fail("invalid publication identity");
   if (p.run_mode !== "live" && p.run_mode !== "replay") fail("unknown publication run mode");
+  if (!LIFECYCLE.has(p.lifecycle) || !LIFECYCLE_REASON.has(p.lifecycle_reason) || !SUPPRESSION.has(p.suppression)) fail("unknown publication lifecycle meaning");
   timestamp(p.generated_at, "publication.generated_at"); optionalTimestamp(p.committed_t, "publication.committed_t"); bool(p.connection_active, "publication.connection_active"); bool(p.aggregate_acknowledged, "publication.aggregate_acknowledged");
   fields(p.aggregate_ack_position, ["connection_epoch", "frame_sequence", "array_index"], "publication.aggregate_ack_position");
   decimal(p.aggregate_ack_position.connection_epoch, "aggregate_ack_position.connection_epoch"); decimal(p.aggregate_ack_position.frame_sequence, "aggregate_ack_position.frame_sequence"); uint(p.aggregate_ack_position.array_index, "aggregate_ack_position.array_index");
@@ -160,28 +195,35 @@ export function validateSnapshot(snapshot) {
   fields(status, ["process_live", "backend_ready", "readiness_reason", "ranking_current", "causal_target", "watermark_lag_ms", "accounting_valid", "tq_pressure_mode", "tq_shed"], "status");
   for (const name of ["process_live", "backend_ready", "ranking_current", "accounting_valid", "tq_shed"]) bool(status[name], `status.${name}`);
   string(status.readiness_reason, "status.readiness_reason"); string(status.tq_pressure_mode, "status.tq_pressure_mode"); timestamp(status.causal_target, "status.causal_target");
+  if (!READINESS_REASON.has(status.readiness_reason)) fail("unknown readiness reason");
   if (status.watermark_lag_ms !== null) uint(status.watermark_lag_ms, "status.watermark_lag_ms");
   if ((p.committed_t === null) !== (status.watermark_lag_ms === null)) fail("watermark lag conflict");
 
   const ranking = snapshot.ranking;
   fields(ranking, ["mode", "reason", "total_passers", "known_rankable_count", "day_invalid_rankable", "qualified_day_invalid"], "ranking");
   string(ranking.mode, "ranking.mode"); string(ranking.reason, "ranking.reason");
+  if (!RANKING_MODE.has(ranking.mode) || !RANKING_REASON.has(ranking.reason)) fail("unknown ranking meaning");
   for (const name of ["total_passers", "known_rankable_count", "day_invalid_rankable", "qualified_day_invalid"]) uint(ranking[name], `ranking.${name}`);
 
   if (!Array.isArray(snapshot.rows) || snapshot.rows.length > 20) fail("rows must contain at most 20 values");
   const replay = p.run_mode === "replay";
-  const seen = new Set(); snapshot.rows.forEach((row, index) => validateRow(row, index, seen, replay));
+  const seen = new Set(); snapshot.rows.forEach((row, index) => validateRow(row, index, seen));
 
-  fields(snapshot.accounting, ["population", "qualification", "uncertainty"], "accounting");
+  fields(snapshot.accounting, ["population", "qualification", "uncertainty", "population_transition_diagnostic"], "accounting");
   const population = snapshot.accounting.population;
   fields(population, POPULATION_FIELDS, "accounting.population"); POPULATION_FIELDS.forEach(name => uint(population[name], `accounting.population.${name}`));
   if (population.universe_total !== population.valid_prior_close + population.invalid_or_missing_prior_close || population.valid_prior_close !== population.trusted_rankable_mark + population.trusted_below_price_mark + population.no_print_through_t + population.invalid_mark + population.unknown_due_failure_or_fence) fail("population accounting conflict");
+  if (population.covered_population !== population.universe_total - population.unknown_due_failure_or_fence || population.unresolved_population !== population.unknown_due_failure_or_fence) fail("population coverage accounting conflict");
   fields(snapshot.accounting.qualification, QUALIFICATION_FIELDS, "accounting.qualification"); QUALIFICATION_FIELDS.forEach(name => uint(snapshot.accounting.qualification[name], `accounting.qualification.${name}`));
   fields(snapshot.accounting.uncertainty, UNCERTAINTY_FIELDS, "accounting.uncertainty"); UNCERTAINTY_FIELDS.forEach(name => uint(snapshot.accounting.uncertainty[name], `accounting.uncertainty.${name}`));
+  const transition = snapshot.accounting.population_transition_diagnostic;
+  fields(transition, POPULATION_TRANSITION_FIELDS, "accounting.population_transition_diagnostic"); POPULATION_TRANSITION_FIELDS.forEach(name => uint(transition[name], `accounting.population_transition_diagnostic.${name}`));
+  if (transition.bootstrap_unknown !== POPULATION_TRANSITION_FIELDS.slice(1).reduce((total, name) => total + transition[name], 0)) fail("population transition accounting conflict");
 
   const recovery = snapshot.recovery;
   fields(recovery, ["purpose", "generation", "start", "end", "supported_through", "fence_reconciled", "policy_waiting", "work", "rows"], "recovery");
   string(recovery.purpose, "recovery.purpose"); decimal(recovery.generation, "recovery.generation"); optionalTimestamp(recovery.start, "recovery.start"); optionalTimestamp(recovery.end, "recovery.end"); optionalTimestamp(recovery.supported_through, "recovery.supported_through"); bool(recovery.fence_reconciled, "recovery.fence_reconciled"); bool(recovery.policy_waiting, "recovery.policy_waiting");
+  if (!new Set(["", "fresh_bootstrap", "checkpoint_catchup", "gap_recovery"]).has(recovery.purpose)) fail("unknown recovery purpose");
   fields(recovery.work, WORK_FIELDS, "recovery.work"); WORK_FIELDS.forEach(name => decimal(recovery.work[name], `recovery.work.${name}`));
   if (!sumDecimal(recovery.work.planned, recovery.work.open, recovery.work.completed_value, recovery.work.completed_empty, recovery.work.failed, recovery.work.canceled, recovery.work.fenced)) fail("recovery work conflict");
   fields(recovery.rows, RECOVERY_ROW_FIELDS, "recovery.rows"); RECOVERY_ROW_FIELDS.forEach(name => decimal(recovery.rows[name], `recovery.rows.${name}`));
@@ -203,18 +245,22 @@ export function validateSnapshot(snapshot) {
   if (ranking.mode === "degraded_bootstrap" || ranking.mode === "degraded_current") {
     if (tq.desired_symbols.length !== 0) fail("partial ranking promoted TQ membership");
     for (const row of snapshot.rows) {
-      const membership = row.tq_membership, tape = row.tape_rate, spread = row.spread;
+      const membership = row.tq_membership, tape = row.tape_5s, spread = row.spread;
       if (membership.desired || membership.provider_present || membership.provider_membership_unknown ||
-          tape.status !== "unselected" || tape.reason !== "" || tape.trade_coverage || tape.one_second.status !== "unselected" || tape.one_second.reason !== "" || tape.one_second.trades_per_second !== null || tape.five_second.status !== "unselected" || tape.five_second.reason !== "" || tape.five_second.trades_per_second !== null || tape.timestamp_basis !== "" || tape.lifecycle_records_observed ||
+          tape.status !== "unselected" || tape.reason !== "" || tape.trade_coverage || tape.trades_per_second !== null || tape.timestamp_basis !== "" || tape.lifecycle_records_observed ||
           spread.status !== "unselected" || spread.reason !== "" || spread.quote_coverage || spread.cents !== null || spread.basis_points !== null || spread.quote_age_ms !== 0 || spread.quality !== "") fail("partial ranking exposed TQ state");
     }
   }
 
-  fields(snapshot.checkpoint, CHECKPOINT_FIELDS, "checkpoint"); bool(snapshot.checkpoint.installed, "checkpoint.installed"); CHECKPOINT_FIELDS.slice(1).forEach(name => decimal(snapshot.checkpoint[name], `checkpoint.${name}`));
-  if (!sumDecimal(snapshot.checkpoint.submitted, snapshot.checkpoint.in_progress, snapshot.checkpoint.pending, snapshot.checkpoint.completed, snapshot.checkpoint.failed, snapshot.checkpoint.canceled, snapshot.checkpoint.superseded)) fail("checkpoint conflict");
-  const operationFields = ["sample_accounting_valid", ...OPERATION_UINT_FIELDS, ...OPERATION_DECIMAL_FIELDS];
+  const checkpointFields = ["installed", ...CHECKPOINT_DECIMAL_FIELDS, ...CHECKPOINT_UINT_FIELDS];
+  fields(snapshot.checkpoint, checkpointFields, "checkpoint"); bool(snapshot.checkpoint.installed, "checkpoint.installed"); CHECKPOINT_DECIMAL_FIELDS.forEach(name => decimal(snapshot.checkpoint[name], `checkpoint.${name}`)); CHECKPOINT_UINT_FIELDS.forEach(name => uint(snapshot.checkpoint[name], `checkpoint.${name}`));
+  if (!sumDecimal(snapshot.checkpoint.eligible, snapshot.checkpoint.pressure_deferred, snapshot.checkpoint.projection_started) || !sumDecimal(snapshot.checkpoint.projection_started, snapshot.checkpoint.projection_in_progress, snapshot.checkpoint.projected, snapshot.checkpoint.projection_rejected) || !sumDecimal(snapshot.checkpoint.projected, snapshot.checkpoint.submitted, snapshot.checkpoint.submit_rejected) || !sumDecimal(snapshot.checkpoint.submitted, snapshot.checkpoint.outstanding, snapshot.checkpoint.completed, snapshot.checkpoint.failed, snapshot.checkpoint.canceled, snapshot.checkpoint.superseded)) fail("checkpoint conflict");
+  const operationFields = ["sample_accounting_valid", "delivery_latency_attribution", ...OPERATION_UINT_FIELDS, ...OPERATION_DECIMAL_FIELDS];
   if (snapshot.operations.integrity_failure !== undefined) operationFields.push("integrity_failure");
   fields(snapshot.operations, operationFields, "operations"); bool(snapshot.operations.sample_accounting_valid, "operations.sample_accounting_valid"); OPERATION_UINT_FIELDS.forEach(name => uint(snapshot.operations[name], `operations.${name}`)); OPERATION_DECIMAL_FIELDS.forEach(name => decimal(snapshot.operations[name], `operations.${name}`));
+  const latency = snapshot.operations.delivery_latency_attribution, latencyFields = ["aggregate", "tq", "control", "hydration_fence", "checkpoint", "timer", "unknown"];
+  fields(latency, [...latencyFields, "maximum_ms", "maximum_family"], "operations.delivery_latency_attribution"); latencyFields.forEach(name => decimal(latency[name], `operations.delivery_latency_attribution.${name}`)); uint(latency.maximum_ms, "operations.delivery_latency_attribution.maximum_ms"); string(latency.maximum_family, "operations.delivery_latency_attribution.maximum_family");
+  if (!sumDecimal(snapshot.operations.deliveries, ...latencyFields.map(name => latency[name])) || !new Set(["aggregate", "tq", "control", "hydration_fence", "checkpoint", "timer", "unknown"]).has(latency.maximum_family)) fail("delivery latency attribution conflict");
   if (snapshot.operations.integrity_failure !== undefined) {
     const failure = snapshot.operations.integrity_failure;
     const diagnosticFields = ["category", "engine_sequence", "candidate_time", "expected_time"];
@@ -235,16 +281,30 @@ export function validateSnapshot(snapshot) {
   return snapshot;
 }
 
-function knownCurrentMeasurement(field) { return field.status === "current" && KNOWN_FIELD_REASON.has(field.reason); }
+function knownCurrentMeasurement(field) { return field.status === "current" && field.reason === ""; }
 function knownCurrentTQ(status, reason) { return status === "current" && KNOWN_TQ_REASON.has(reason); }
 function tqState(status, reason) { return KNOWN_TQ_STATUS.has(status) && KNOWN_TQ_REASON.has(reason) ? status : "unknown"; }
 export function formatPercent(ratio, digits = 2) { return `${(ratio * 100).toFixed(digits)}%`; }
+export function formatSignedPercent(ratio, digits = 2) { return `${ratio > 0 ? "+" : ""}${formatPercent(ratio, digits)}`; }
 function formatUSD(value) { return value >= 100 ? `$${value.toFixed(2)}` : `$${value.toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}`; }
+export function formatShares(value) {
+  const units = [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "K"]];
+  for (let index = 0; index < units.length; index++) if (Math.abs(value) >= units[index][0]) {
+    let [scale, suffix] = units[index];
+    if (index > 0 && Math.abs(Number((value / scale).toFixed(1))) >= 1000) [scale, suffix] = units[index - 1];
+    return `${(value / scale).toFixed(1).replace(/\.0$/, "")}${suffix}`;
+  }
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
 function band(value, stops) { const magnitude = Math.abs(value); let result = 0; for (let index = 1; index < stops.length; index++) if (magnitude >= stops[index]) result = index; return result; }
-function fieldView(field, stops = null, digits = 2) { return knownCurrentMeasurement(field) ? { state: "current", text: formatPercent(field.value_ratio, digits), reason: field.reason, band: stops ? band(field.value_ratio * 100, stops) : 0 } : { state: KNOWN_FIELD_STATUS.has(field.status) && KNOWN_FIELD_REASON.has(field.reason) ? field.status : "unknown", text: "—", reason: field.reason || field.status, band: 0 }; }
-function rangeFieldView(field) { const view = fieldView(field, null, 0); view.position = view.state === "current" ? field.value_ratio * 100 : null; return view; }
-function activityFieldView(field) { const view = fieldView(field, null, 0); view.position = view.state === "current" ? field.value_ratio * 100 : null; return view; }
-function rateView(rate, outerCurrent) { return outerCurrent && knownCurrentTQ(rate.status, rate.reason) ? `${rate.trades_per_second.toFixed(1)}/s` : "—"; }
+function fieldView(field, label, stops = null, digits = 2, signed = false) {
+  const state = KNOWN_FIELD_STATUS.has(field.status) && KNOWN_FIELD_REASON.has(field.reason) ? field.status : "unknown";
+  return knownCurrentMeasurement(field)
+    ? { state: "current", text: signed ? formatSignedPercent(field.value_ratio, digits) : formatPercent(field.value_ratio, digits), detail: `${label}: status current; reason none`, band: stops ? band(field.value_ratio * 100, stops) : 0 }
+    : { state, text: "—", detail: `${label}: status ${state}; reason ${field.reason || field.status || "unknown"}`, band: 0 };
+}
+function rangeFieldView(field) { const view = fieldView(field, "Day Range", null, 0); view.position = view.state === "current" ? field.value_ratio * 100 : null; return view; }
+function activityFieldView(field) { const view = fieldView(field, "Activity 30s", null, 0); view.position = view.state === "current" ? field.value_ratio * 100 : null; return view; }
 function groupedDecimal(value) { return value.replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
 function hydrationView(recovery) {
   const work = recovery.work;
@@ -265,15 +325,22 @@ export function buildViewModel(input, transport = "connected") {
   const replay = snapshot.publication.run_mode === "replay";
   const rowsCurrent = current || replay && snapshot.status.ranking_current && snapshot.ranking.mode === "qualified_current" && transport === "connected";
   const rows = snapshot.rows.map(row => {
-    const tapeCurrent = knownCurrentTQ(row.tape_rate.status, row.tape_rate.reason);
-    const fiveSecondCurrent = tapeCurrent && knownCurrentTQ(row.tape_rate.five_second.status, row.tape_rate.five_second.reason);
+    const floatAvailable = row.float.status === "current" || row.float.status === "stale";
+    const tapeCurrent = knownCurrentTQ(row.tape_5s.status, row.tape_5s.reason);
     const spreadCurrent = knownCurrentTQ(row.spread.status, row.spread.reason) || row.spread.status === "stale" && row.spread.reason === "stale_quote";
-    const fiveSecondRate = rateView(row.tape_rate.five_second, tapeCurrent);
+    const floatState = KNOWN_FLOAT_STATUS.has(row.float.status) ? row.float.status : "unknown";
+    const floatText = floatAvailable ? `${formatShares(row.float.value_shares)}${row.float.status === "stale" ? " · stale" : ""}` : "—";
+    const floatDetail = `Float: status ${floatState}; reason ${row.float.reason || "none"}; provider ${row.float.provider || "none"}; effective date ${row.float.effective_date || "unknown"}; retrieved ${row.float.retrieved_at || "unknown"}; provenance ${row.float.provenance || "none"}${row.float.percent_ratio === null ? "" : `; percent ${formatPercent(row.float.percent_ratio)}`}`;
+    const volumeCurrent = row.volume.status === "current";
+    const volumeState = KNOWN_FIELD_STATUS.has(row.volume.status) ? row.volume.status : "unknown";
+    const tapeText = tapeCurrent ? `${row.tape_5s.trades_per_second.toFixed(1)}/s` : "—";
     return {
-    rank: row.rank, symbol: row.symbol, last: formatUSD(row.last_usd), day: formatPercent(row.day_change_ratio), dayBand: 0, markAgeMS: row.mark_age_ms,
-    from4am: fieldView(row.from_4am_change), hod: fieldView(row.hod_drawdown), dayRange: rangeFieldView(row.day_range_position), range60: rangeFieldView(row.range_60m_position), range30: rangeFieldView(row.range_30m_position), activity: activityFieldView(row.activity),
-    tape: { state: tqState(row.tape_rate.status, row.tape_rate.reason), position: fiveSecondCurrent ? row.tape_rate.five_second.trades_per_second / 30 * 100 : null, primary: tapeCurrent ? fiveSecondRate : "—", secondary: "", detail: `five-second ${fiveSecondRate}; status ${row.tape_rate.status}; reason ${row.tape_rate.reason || "none"}; coverage ${row.tape_rate.trade_coverage ? "yes" : "no"}; timestamp ${row.tape_rate.timestamp_basis || "none"}; lifecycle records ${row.tape_rate.lifecycle_records_observed ? "observed" : "not observed"}; membership desired ${row.tq_membership.desired ? "yes" : "no"}, provider ${row.tq_membership.provider_present ? "present" : "absent"}, unknown ${row.tq_membership.provider_membership_unknown ? "yes" : "no"}` },
-    spread: { state: tqState(row.spread.status, row.spread.reason), band: spreadCurrent ? band(row.spread.basis_points, [0, 5, 10, 25, 50]) : 0, primary: spreadCurrent ? `${row.spread.basis_points.toFixed(1)} bps / ${row.spread.cents.toFixed(2)}¢` : "—", secondary: spreadCurrent ? `${(row.spread.quote_age_ms / 1000).toFixed(1)}s old${row.spread.status === "stale" ? " · stale" : ""}` : "", detail: `status ${row.spread.status}; reason ${row.spread.reason || "none"}; coverage ${row.spread.quote_coverage ? "yes" : "no"}; quote age ${row.spread.quote_age_ms} ms; quality ${row.spread.quality || "none"}; membership desired ${row.tq_membership.desired ? "yes" : "no"}, provider ${row.tq_membership.provider_present ? "present" : "absent"}, unknown ${row.tq_membership.provider_membership_unknown ? "yes" : "no"}` },
+    rank: row.rank, symbol: row.symbol, last: formatUSD(row.last_usd), day: formatSignedPercent(row.day_change_ratio), dayBand: 0, markAgeMS: row.mark_age_ms,
+    float: { state: floatState, text: floatText, detail: floatDetail },
+    volume: { state: volumeState, text: volumeCurrent ? formatShares(row.volume.value_shares) : "—", detail: `Volume: status ${volumeState}; reason ${row.volume.reason || "none"}` },
+    fromOpen: fieldView(row.from_open_change, "From Open", null, 2, true), dayRange: rangeFieldView(row.day_range_position), activity: activityFieldView(row.activity_30s), move: { ...fieldView(row.move_30s, "Move 30s", null, 2, true), palette: row.move_30s.status !== "current" || row.move_30s.value_ratio === 0 ? "" : row.move_30s.value_ratio < 0 ? "move-negative" : "move-positive" },
+    tape: { state: tqState(row.tape_5s.status, row.tape_5s.reason), position: tapeCurrent ? row.tape_5s.trades_per_second / 30 * 100 : null, primary: tapeText, detail: `Tape 5s: status ${row.tape_5s.status}; reason ${row.tape_5s.reason || "none"}; coverage ${row.tape_5s.trade_coverage ? "yes" : "no"}; timestamp ${row.tape_5s.timestamp_basis || "none"}; lifecycle records ${row.tape_5s.lifecycle_records_observed ? "observed" : "not observed"}; membership desired ${row.tq_membership.desired ? "yes" : "no"}, provider ${row.tq_membership.provider_present ? "present" : "absent"}, unknown ${row.tq_membership.provider_membership_unknown ? "yes" : "no"}` },
+    spread: { state: tqState(row.spread.status, row.spread.reason), band: spreadCurrent ? band(row.spread.basis_points, [0, 5, 10, 25, 50]) : 0, primary: spreadCurrent ? `${row.spread.basis_points.toFixed(1)} bps / ${row.spread.cents.toFixed(2)}¢${row.spread.status === "stale" ? " · stale" : ""}` : "—", detail: `Spread: status ${row.spread.status}; reason ${row.spread.reason || "none"}; coverage ${row.spread.quote_coverage ? "yes" : "no"}; quote age ${row.spread.quote_age_ms} ms; quality ${row.spread.quality || "none"}; membership desired ${row.tq_membership.desired ? "yes" : "no"}, provider ${row.tq_membership.provider_present ? "present" : "absent"}, unknown ${row.tq_membership.provider_membership_unknown ? "yes" : "no"}` },
   }; });
   const hydration = hydrationView(snapshot.recovery);
   const warming = !replay && snapshot.status.process_live && !snapshot.status.backend_ready && snapshot.publication.lifecycle === "hydrating" && !snapshot.recovery.fence_reconciled;

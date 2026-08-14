@@ -187,6 +187,7 @@ type symbolAggregateState struct {
 	lastConflict       *aggregateConflictEvidence
 	priceRange         *priceRangeFeatureState
 	activity           *activityFeatureState
+	mvpMeasurements    *mvpMeasurementState
 	qualification      *qualificationState
 	// tailCoverage is bounded derived acceleration for the at-most-961-second
 	// canonical correction tail. It is rebuilt from tail and never persisted.
@@ -669,6 +670,7 @@ func (e *Engine) installAggregateLocked(symbol *coreSymbol, input frozenAggregat
 		foldQualificationAggregate(state, e.state.binding, record, now)
 		foldPriceRangeAggregate(state, e.state.binding, record)
 		foldActivityAggregate(state, e.state.binding, record, now)
+		foldMVPMeasurementAggregate(state, record)
 		if state.olderLatest == nil || record.windowStart.After(state.olderLatest.windowStart) {
 			if state.olderLatest == nil {
 				state.olderLatest = &canonicalAggregate{}
@@ -702,6 +704,7 @@ func (e *Engine) integrityWithdrawLocked(symbol *coreSymbol, existing *canonical
 	state := ensureAggregateState(symbol)
 	delete(state.tail, existing.identity.start)
 	removeMutablePriceRangeEvidence(state.priceRange, existing.identity.start)
+	removeFoldedMVPMeasurement(state, existing.identity.start)
 	if state.presence != nil {
 		state.presence.clear(sessionSlot(e.state.binding, existing.windowStart))
 	}
@@ -724,6 +727,7 @@ func (e *Engine) historicalWithdrawLocked(symbol *coreSymbol, existing *canonica
 	state := ensureAggregateState(symbol)
 	delete(state.tail, existing.identity.start)
 	removeMutablePriceRangeEvidence(state.priceRange, existing.identity.start)
+	removeFoldedMVPMeasurement(state, existing.identity.start)
 	slot := sessionSlot(e.state.binding, existing.windowStart)
 	if state.presence != nil {
 		state.presence.clear(slot)
@@ -826,6 +830,7 @@ func (e *Engine) compactAggregateLocked(state *symbolAggregateState, binding *in
 	foldPriceRangeAggregate(state, binding, *record)
 	removeMutablePriceRangeEvidence(state.priceRange, record.identity.start)
 	foldActivityAggregate(state, binding, *record, now)
+	foldMVPMeasurementAggregate(state, *record)
 	if state.olderLatest == nil || record.windowStart.After(state.olderLatest.windowStart) {
 		copyRecord := *record
 		state.olderLatest = &copyRecord

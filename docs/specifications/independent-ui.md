@@ -1,8 +1,8 @@
 # Independent UI
 
-**Status:** Component 11 finally accepted after clean mandatory final review,
-two corrected cross-component boundary findings, clean focused re-reviews, and
-accepted integrated private V1 RC proof/review
+**Status:** Historical Component 11 evidence remains accepted for the
+superseded v1 field set. Section 20 is the current executable MVP-S3
+reconciliation contract for API v2 and the final dashboard.
 
 **Boundary approval:** Approved 2026-08-07 by the owner through the Version 1
 Release Program revision
@@ -538,3 +538,197 @@ market calculation, ranking order, poll cadence, or ownership changed. C11-S2
 is accepted. The mandatory final review and focused correction re-reviews are
 clean; Component 11 is finally accepted. The later integrated private V1 RC
 production-path proof and read-only review are also accepted.
+
+## 20. Current MVP-S3 reconciliation contract — 2026-08-14
+
+This section is the current executable UI contract under
+[`live-feature-mvp-program.md`](../live-feature-mvp-program.md). It supersedes
+the v1 schema, field list, column layout, fixture, and acceptance statements in
+Sections 9, 12, 14-19 only. The independent process boundary, bounded
+nonoverlapping transport, atomic validation/rendering, safe text handling,
+desktop density, keyboard/focus preservation, accessibility, and failure
+containment above remain applicable unless this section says otherwise.
+
+**Controlling requirements:** `PG-AVAIL-01` through `PG-AVAIL-03`,
+`PG-UI-01` through `PG-UI-03`, and the dashboard/accounting acceptance bullets
+in Product Goals Section 14. The accepted
+[`versioned-snapshot-api.md`](versioned-snapshot-api.md) is the sole wire
+contract. MVP-S3 changes presentation only; it cannot change qualification,
+Day-%/symbol ordering, backend readiness, field availability, T/Q membership,
+or any market calculation.
+
+**Outcome and non-scope:** Reconcile the existing independently runnable
+Chrome-desktop dashboard to `scanner.snapshot.v2` and
+`GET /api/v2/snapshot`, primarily by retaining the accepted shell, status
+hierarchy, polling, details, interaction, accessibility, and dense-table
+implementation while removing superseded columns and adding the approved
+semantic column groups. Do not add sorting, filtering, alerts, Float turnover,
+browser thresholds, browser market-state inference, a UI framework, mobile or
+multi-browser certification, public hosting, authentication, provider access,
+MVP-S4 integration claims, replay work, checkpoint work, or scanner/backend
+production changes.
+
+### 20.1 Exact grouped table contract
+
+The table has a two-row semantic header and exactly these 11 leaf columns in
+this order. There is no visible Rank column; API row order is preserved
+exactly, and rank remains a validated server-owned ordering fact.
+
+| Group | Columns | Presentation meaning |
+| --- | --- | --- |
+| `CONTEXT` | `SYMBOL`, `FLOAT`, `VOLUME`, `LAST` | Predominantly neutral identity, tradable-supply context, cumulative session participation, and current aggregate mark. |
+| `LOCATION` | `DAY %`, `FROM OPEN %`, `DAY RANGE` | Where the symbol is relative to the adjusted prior close, session open, and session range. Day Range retains the red-neutral-green location scale; signed returns remain readable and subdued. |
+| `CURRENT MOMENTUM` | `ACTIVITY 30s`, `MOVE 30s` | Recent aggregate participation and price movement. Activity uses gray-to-orange attention; positive Move uses orange and negative Move restrained red. |
+| `EXECUTION` | `TAPE 5s`, `SPREAD` | Selected-row transaction activity and NBBO friction. Tape uses gray-to-orange attention; Spread is neutral unless an already evidenced presentation band marks poor friction. |
+
+Group labels, visible separators, scoped leaf headers, and non-color text
+meaning must make these four scanning questions apparent without adding data
+columns. At the 1440x900, 100%-zoom Chrome target, the grouped header, status
+strip, and up to 20 rows fit without pagination or document-level horizontal
+or vertical overflow. The accepted 1120px content floor and below-target
+horizontal-scroll nonclaim remain unchanged.
+
+Formatting is presentation-only. Reuse the existing safe formatters and
+tabular-number treatment where compatible: compact Float and Volume share
+counts; magnitude-sensitive Last USD; Day %, From Open %, and Move 30s as
+signed percentages; Day Range and Activity 30s as percentages; Tape 5s as
+trades/second; and Spread as bps/cents. Genuine numeric zero is visible.
+Current values render normally. Stale Float or Spread may render retained
+numeric values only when API v2 supplies their exact valid stale tuple and must
+carry an explicit stale label plus provenance/age detail. Warming,
+unavailable, invalid, and pressure-shed values never become zero. Every field
+status/reason, Float provider/effective date/retrieval/provenance, Tape coverage
+and timestamp/lifecycle qualifiers, and Spread coverage/age/quality remains
+available through pointer and keyboard focus.
+
+### 20.2 API v2 view and transport boundary
+
+The client accepts only `scanner.snapshot.v2` from `/api/v2/snapshot`. It
+validates the response and swaps one detached render model atomically. It
+preserves the server row order, validates consecutive rank identities without
+displaying rank, rejects duplicate or empty symbols and more than 20 rows, and
+does not sort, filter, join, clamp, calculate readiness, infer availability,
+or reconstruct a missing value. Exact API v2 status/reason/value and Float
+provenance tuples are enforced before rendering; unknown incompatible schema
+or contradictory known facts fail closed and retain the last valid snapshot as
+explicitly frozen.
+
+Retain the accepted exact-loopback origin validation, CORS assumptions,
+one-second nonoverlapping polling, three-second request bound,
+`refresh_delayed` and disconnected/frozen behavior, response-size bound,
+sample/publication atomicity, text-node rendering, UI-only restart behavior,
+status hierarchy, disclosure, focus restoration, reduced-motion behavior, and
+WCAG-AA token requirements. Remove v1-only field validation, formatting,
+details, fixtures, headers, and DOM nodes rather than retaining hidden parallel
+representations.
+
+### 20.3 One implementation slice and primary proof
+
+MVP-S3 is one write-capable implementation slice because the accepted UI
+owner, runtime boundary, and interaction model remain unchanged. Allowed
+production boundaries are `ui/`, `internal/ui/`, and `cmd/dashboard/`; README
+run instructions, deterministic fixtures/tests, and this sole ledger may be
+updated as necessary. Dashboard work must not alter scanner production code or
+API v2 market meaning.
+
+`P-MVP-UI` is the primary proof. Its smallest deterministic API v2 corpus
+covers 20, fewer-than-20, and exact-empty rows; current and noncurrent
+publications; independent current/stale/warming/unavailable/invalid/
+pressure-shed fields; genuine zero; fresh, cached, missing, malformed, and
+unavailable Float; positive/negative Move; low/high Activity and Tape; retained
+stale Spread; hostile literal text; delayed, disconnected, and recovered
+transport; same-publication resampling; new-publication atomic replacement;
+and focus preservation when rows persist, reorder, or disappear. It asserts
+the exact four group labels, 11-column order, no Rank column, compact
+Float/Volume formatting, no client sorting or market-state calculation, and
+complete focus-accessible reasons/provenance.
+
+The bounded production-Chrome proof runs through the real dashboard server and
+poller at 1440x900. It verifies one-viewport density, semantic grouped headers,
+scoped leaf headers, table caption, polite live status, keyboard-operable
+details, visible focus, reduced motion, WCAG-AA contrast, safe hostile text,
+T/Q-only degradation, transport freeze/recovery, exact-origin CORS, and UI-only
+restart while the fixture API remains reachable. This is deterministic
+loopback evidence, not a live-provider, market-hours, browser-matrix, formal
+accessibility-audit, public-network, or performance-SLA claim.
+
+Implementation acceptance requires focused model/render/server tests, the
+narrow Chrome proof, ordinary `go test -count=1 -short -timeout 2m ./...`, the
+affected `internal/ui` and `cmd/dashboard` race tier with an explicit timeout
+no greater than five minutes, `git diff --check`, and one final independent
+read-only review with no unresolved P1/P2 findings. Record coherent behavior,
+dangerous false-current and fabricated-zero counterexamples, limitations, and
+review result here before marking MVP-S3 accepted. MVP-S4 does not begin as
+part of this slice.
+
+### 20.4 MVP-S3 acceptance record — 2026-08-14
+
+`MVP-S3` is accepted. The independently runnable dashboard consumes only
+`scanner.snapshot.v2` from `GET /api/v2/snapshot`, preserves the API row order
+while validating consecutive rank ordinals, and renders no Rank column. The
+two-row table header contains exactly the four `CONTEXT`, `LOCATION`, `CURRENT
+MOMENTUM`, and `EXECUTION` groups and the 11 contracted leaf columns. The
+accepted shell, bounded nonoverlapping poller, status hierarchy, operational
+disclosure, safe detached replacement, focus restoration, live region,
+reduced-motion rule, and desktop density remain in the production path.
+
+`P-MVP-UI` passes against the deterministic v2 corpus. Twenty, fewer-than-20,
+and exact-empty populations remain exact; server order is never sorted or
+filtered; rank, symbol uniqueness, row bounds, schema identity, publication
+coherence, population identities, and field-specific status/reason/value
+tuples fail closed before model construction. Genuine Volume and measurement
+zero remains visible. Noncurrent fields render an em dash rather than zero.
+Fresh and cached Float carries provider, effective date, retrieval time, and
+provenance; a retained cached Float and stale Spread retain their numeric value
+only under the exact stale tuple and show an explicit `stale` label. Float and
+Volume use compact share formatting with unit-boundary promotion. Move uses
+the validated raw sign for positive/neutral/negative presentation, so exact
+zero is neutral. Every status-bearing cell is keyboard-focusable and exposes
+its reason plus applicable Float, Tape, Spread, and membership provenance.
+
+The dangerous false-current counterexample mutates a ready publication so its
+covered/unresolved population totals contradict the universe and unknown
+counts. The client rejects it rather than replacing the last valid snapshot.
+The dangerous fabricated-zero counterexamples replace unavailable values with
+null-bearing warming/unavailable/invalid/pressure-shed tuples; they remain
+visibly unavailable and never become numeric zero. Further mutations reject
+v1 schema identity, nonconsecutive or duplicate rank/symbol rows, unknown
+field meaning, invalid Float provenance, incomplete stale Spread values, and a
+missing current Tape value. A renderer failure leaves the prior DOM intact;
+delayed or disconnected transport keeps the last valid publication explicitly
+noncurrent until a new valid sample succeeds.
+
+The bounded production Chrome proof used the real dashboard server and v2
+fixture poller with a 1440x900 CSS viewport. Its document scroll extent remained
+exactly 1440x900 with all 20 rows visible. The four scoped group headers had
+colspans `4/3/2/2`; the 11 scoped leaf headers, caption, polite live status,
+and absence of Rank were present. Keyboard navigation produced a visible 2px
+focus outline and complete Tape details. T/Q pressure left aggregate ranking
+current while Tape and Spread showed `pressure_shed`; hostile symbol text
+created no HTML/image node; delayed and disconnected polling retained 20
+frozen rows and recovered; a `localhost` origin different from the configured
+`127.0.0.1` origin was CORS-blocked; and stopping and restarting only the UI
+server reconnected to the still-running fixture API.
+
+Verification passed with fresh results: `node --test ui/model.test.mjs
+ui/visual.test.mjs` (13/13); focused `go test -count=1 -short -timeout 2m
+./internal/ui ./cmd/dashboard`; full `go test -count=1 -short -timeout 2m
+./...`; affected `go test -count=1 -race -short -timeout 5m ./internal/ui
+./cmd/dashboard`; JavaScript syntax checks for the production modules and
+fixture server; and `git diff --check`.
+
+The required final read-only review used `gpt-5.6-sol` with medium reasoning.
+It found two P2 defects: population coverage identities were not enforced
+before a response could appear current, and exact-zero Move inherited the
+positive/orange presentation. The correction added the missing coverage
+identities plus the prior false-current mutation, and moved signed presentation
+selection to the validated raw Move ratio with a neutral-zero render proof.
+The reviewer also noted cosmetic compact-unit rollover at just below `1M` and
+`1B`; that was corrected and tested. Focused re-review found no remaining P1
+or P2 issue.
+
+This evidence is deterministic private-loopback Chrome and local test evidence.
+It does not establish live-provider wiring, market-hours behavior, a browser
+matrix, mobile layout, a formal accessibility audit, public-network security,
+performance SLA, replay support, checkpoint compatibility, or trading edge.
+No credentials or provider requests were used. MVP-S4 has not started.

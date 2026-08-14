@@ -100,5 +100,11 @@ func cloneIntegrityFailure(value *engine.EvaluatorIntegrityView) *engine.Evaluat
 func cloneReplayEvaluation(value engine.ReplayEvaluationView) engine.ReplayEvaluationView {
 	result := value
 	result.Rows = append([]engine.ReplayRankingRowView(nil), value.Rows...)
+	for i := range result.Rows {
+		if result.Rows[i].Float.Percent != nil {
+			percent := *result.Rows[i].Float.Percent
+			result.Rows[i].Float.Percent = &percent
+		}
+	}
 	return result
 }

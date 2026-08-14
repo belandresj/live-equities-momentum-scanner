@@ -37,6 +37,7 @@ type Config struct {
 	RequiredReserve        int
 	EvaluationDelay        *time.Duration
 	CheckpointSubmitter    checkpoint.Submitter
+	FloatLookup            reference.FloatLookup
 	RecoveryBackoffInitial time.Duration
 	RecoveryBackoffMaximum time.Duration
 }
@@ -504,6 +505,7 @@ type Engine struct {
 	tqLimits              tqRetentionLimits
 	tqPressurePolicy      tqPressurePolicy
 	recoveryPolicy        recoveryPolicy
+	floatLookup           reference.FloatLookup
 }
 
 func (e *Engine) ArmEvaluationTimingForTest(clock func() time.Time) {
@@ -554,6 +556,7 @@ func New(config Config) (*Engine, error) {
 		tqLimits:            defaultTQRetentionLimits(),
 		tqPressurePolicy:    defaultTQPressurePolicy(),
 		recoveryPolicy:      recoveryPolicy,
+		floatLookup:         config.FloatLookup,
 	}
 	e.buildCandidate = buildInstalledBinding
 	e.installInitialPublication()
