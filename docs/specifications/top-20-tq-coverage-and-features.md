@@ -134,25 +134,32 @@ rank order, capped at 20. Every other mode has empty promotable membership.
 T/Q never changes aggregate values, qualification, rank, committed `T`, or
 backend readiness.
 
-`C9-COVER-01` — The engine issues at most one paired `T.symbol,Q.symbol`
-command at a time for the current binding and connection epoch. Removal
-precedes addition. A successful C5 write fact does not create coverage. The
-correlated successful terminal acknowledgement creates both channel coverage
-strictly after its final causal position; a failed, ambiguous, stale, extra,
-or wrong-token outcome creates no coverage. Stale-epoch, already-completed,
-duplicate, and wrong-token facts are fenced/counted and cannot mutate any
-current membership, coverage, pending command, or cleanup state. Only a failed
-or ambiguous terminal correlated to the current outstanding command closes its
-affected coverage. Because a partial provider success may already have changed
-one wire channel, that matching outcome makes the affected symbol
-`provider_membership_unknown`. The only further T/Q command permitted for it
-is one paired cleanup unsubscribe. A successful cleanup proves absent
-membership; a failed or ambiguous cleanup leaves the unknown count nonzero and
-blocks promotion until natural connection-epoch replacement. The engine never
-reports zero provider membership while an unknown remains. Unsubscribe intent
-closes coverage before the command leaves the engine. Connection loss/epoch
-change, rank removal, intentional rejection, session end, state-bound failure,
-and shutdown also close affected coverage.
+`C9-COVER-01` — The engine issues at most one T/Q membership command at a time
+for the current binding and connection epoch. On a fresh epoch with zero prior
+T/Q command acknowledgements, the first addition contains paired
+`T.symbol,Q.symbol` subscriptions for the complete current displayed set, up
+to 20 symbols, in one bounded command. This gives every initial row one shared
+terminal acknowledgement boundary without serial timer pacing or cross-command
+reuse of untagged provider statuses. Later rank churn, cleanup, pressure
+removal, and restoration retain one-symbol paired commands. Removal precedes
+addition. A successful C5 write fact does not create coverage. The correlated
+successful terminal acknowledgement creates both channel coverage for every
+command symbol strictly after its final causal position; a partial, failed,
+ambiguous, stale, extra, or wrong-token outcome creates no coverage for any
+symbol in the command. Stale-epoch, already-completed, duplicate, and
+wrong-token facts are fenced/counted and cannot mutate any current membership,
+coverage, pending command, or cleanup state. Only a failed or ambiguous
+terminal correlated to the current outstanding command closes its affected
+coverage. Because a partial provider success may already have changed wire
+membership, that matching outcome makes every command symbol
+`provider_membership_unknown`. The only further T/Q command permitted for each
+is a paired cleanup unsubscribe. A successful cleanup proves absent membership;
+a failed or ambiguous cleanup leaves the unknown count nonzero and blocks
+promotion until natural connection-epoch replacement. The engine never reports
+zero provider membership while an unknown remains. Unsubscribe intent closes
+coverage before the command leaves the engine. Connection loss/epoch change,
+rank removal, intentional rejection, session end, state-bound failure, and
+shutdown also close affected coverage.
 
 `C9-TAPE-01` — Tape Rate counts distinct original trade identities
 `(trading_date,symbol,exchange,trf_present,trf_id,trade_id)` whose normalized
@@ -733,6 +740,47 @@ affected `go test -race -short -timeout 5m ./internal/engine
 profile changes scalar delivery settings and a privately validated desired-rank
 prefix without changing provider acknowledgement causality, mutable ownership,
 persistence, concurrency linearization, or external-evidence acceptance.
+
+### C9 fresh-epoch initial subscription batch correction — 2026-08-14
+
+Direct owner instruction removes serial startup pacing for the displayed
+execution fields. On each fresh connection epoch, when provider T/Q membership
+is zero and no T/Q command has yet been acknowledged in that epoch, the engine
+places every currently displayed symbol, up to 20, into one sorted paired
+T/Q-subscribe command. One exact `2*N` terminal acknowledgement starts Trade
+and Quote coverage for the whole batch at the same causal position. Spread may
+therefore publish on each symbol's first valid post-ack two-sided quote, while
+Tape 5s retains its required five seconds of continuous post-ack coverage.
+
+The correction deliberately does not chain separate commands immediately on
+acknowledgement. Massive's generic success statuses do not carry a provider
+command token, so an arbitrarily delayed extra success from command `N` could
+otherwise be reused as evidence for command `N+1`. Later rank churn, cleanup,
+and pressure restoration retain the accepted serialized single-symbol path.
+A partial, extra, failed, or ambiguous initial acknowledgement opens no
+coverage and makes every batch symbol's possible provider membership explicit.
+If pressure becomes non-normal after the batch write but before its
+acknowledgement, successful wire membership is retained only as
+`resetRequired` cleanup liability; all batch coverage remains closed through
+shedding and recovery selects unsubscribe before any resubscription.
+
+`TestPC9TQFreshEpochSubscribesAllRankedRowsInOneCommand` proves that two ranked
+rows produce one wire command containing both paired subscriptions and one
+terminal acknowledgement starts both coverage windows. The engine proofs
+establish the 20-symbol bound, defensive-copy command immutability, all-symbol
+unknown/no-coverage containment after ambiguous failure, and the dangerous
+counterexample where a batch acknowledgement arrives during degraded pressure.
+The latter proves both symbols remain pressure-shed with coverage closed and
+normal recovery selects cleanup. Existing pressure restoration proofs retain
+the subsequent single-symbol unsubscribe/resubscribe sequence.
+
+Focused proofs, the ordinary `go test -count=1 -short -timeout 2m ./...`, the
+affected race tier under five minutes, and `git diff --check` passed. Focused
+`gpt-5.6-sol` medium review first rejected unsafe immediate serial chaining
+because delayed untagged statuses could create false coverage, then found the
+batch-ack/degraded-pressure race. After both corrections, focused re-review
+reported no remaining P1/P2 findings. No credentials, provider request, live
+observation, replay claim, capacity claim, or trading-edge claim occurred.
 
 Reopen S1 if a normalized shape cannot carry the stated identity/quality facts,
 paired acknowledgement cannot prove per-symbol/channel coverage, retained quote

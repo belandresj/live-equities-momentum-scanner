@@ -407,6 +407,74 @@ func TestC9DefaultDesiredMembershipUsesAllDisplayedRowsUpToTwenty(t *testing.T) 
 	if len(view.Desired) != maximumTQSymbols || view.Desired[0] != "S1" || view.Desired[maximumTQSymbols-1] != "S20" || !view.CommandPending || view.PendingSymbol != "S1" {
 		t.Fatalf("default desired membership = %+v", view)
 	}
+	command := issueTQForTest(t, e)
+	symbols := command.Symbols()
+	if len(symbols) != maximumTQSymbols || symbols[0] != "S1" || symbols[len(symbols)-1] != "S9" {
+		t.Fatalf("fresh-epoch subscription batch = %v", symbols)
+	}
+	symbols[0] = "MUTATED"
+	if command.Symbols()[0] != "S1" {
+		t.Fatal("command symbols escaped by mutable alias")
+	}
+}
+
+func TestC9FreshEpochBatchFailureOpensNoCoverage(t *testing.T) {
+	e, _, _, now := pressureProofEngine(t)
+	defer closeAndWait(t, e)
+	e.mu.Lock()
+	e.state.tq.members = make(map[string]*tqSymbolState)
+	e.state.aggregateEvaluator.current = pressureQualifiedEvaluation(now)
+	e.reconcileTQLocked(now)
+	e.mu.Unlock()
+	command := issueTQForTest(t, e)
+	if symbols := command.Symbols(); len(symbols) != 2 || symbols[0] != "AAA" || symbols[1] != "MISSING" {
+		t.Fatalf("fresh batch = %v", symbols)
+	}
+	result := tqResultForTest(t, command, LivePosition{ConnectionEpoch: 1, FrameSequence: 10}, now, ControlAmbiguous)
+	if got := admitTQResultForTest(t, e, result); got.Code != DispositionTQRejected {
+		t.Fatalf("ambiguous batch = %+v", got)
+	}
+	view := e.ObserveTQ()
+	if view.Accounting.KnownPresent != 0 || view.Accounting.Unknown != 2 || len(view.Rows) != 2 ||
+		view.Rows[0].TradeCoverage || view.Rows[0].QuoteCoverage || view.Rows[1].TradeCoverage || view.Rows[1].QuoteCoverage ||
+		!view.Rows[0].ProviderMembershipUnknown || !view.Rows[1].ProviderMembershipUnknown || !view.CommandPending || view.PendingAction != TQUnsubscribe {
+		t.Fatalf("ambiguous batch false coverage/cleanup = %+v", view)
+	}
+}
+
+func TestC9FreshEpochBatchAckDuringDegradedPressureKeepsCoverageClosed(t *testing.T) {
+	e, _, _, now := pressureProofEngine(t)
+	defer closeAndWait(t, e)
+	e.mu.Lock()
+	e.state.tq.members = make(map[string]*tqSymbolState)
+	e.state.aggregateEvaluator.current = pressureQualifiedEvaluation(now)
+	e.reconcileTQLocked(now)
+	e.mu.Unlock()
+	command := issueTQForTest(t, e)
+	if len(command.Symbols()) != 2 {
+		t.Fatalf("fresh batch = %v", command.Symbols())
+	}
+	e.mu.Lock()
+	e.setTQPressureModeLocked(TQPressureDegraded, now, TQPressureCauseWaitingFrames)
+	e.mu.Unlock()
+	result := tqResultForTest(t, command, LivePosition{ConnectionEpoch: 1, FrameSequence: 10}, now, ControlSucceeded)
+	if got := admitTQResultForTest(t, e, result); got.Code != DispositionTQApplied {
+		t.Fatalf("degraded batch acknowledgement = %+v", got)
+	}
+	view := e.ObserveTQ()
+	if view.Pressure != TQPressureDegraded || !view.ShedTradesQuotes || view.CommandPending || view.Accounting.KnownPresent != 2 ||
+		len(view.Rows) != 2 || view.Rows[0].TradeCoverage || view.Rows[0].QuoteCoverage || view.Rows[1].TradeCoverage || view.Rows[1].QuoteCoverage ||
+		view.Rows[0].Tape.Status != TQPressureShed || view.Rows[1].Tape.Status != TQPressureShed {
+		t.Fatalf("degraded batch reopened coverage = %+v", view)
+	}
+	e.mu.Lock()
+	e.setTQPressureModeLocked(TQPressureNormal, now.Add(time.Second), TQPressureCauseNone)
+	e.reconcileTQLocked(now.Add(time.Second))
+	e.mu.Unlock()
+	view = e.ObserveTQ()
+	if !view.CommandPending || view.PendingAction != TQUnsubscribe || view.Accounting.KnownPresent != 2 || view.Rows[0].TradeCoverage || view.Rows[1].TradeCoverage {
+		t.Fatalf("recovered batch omitted cleanup = %+v", view)
+	}
 }
 
 func TestSpreadViewRetainsLatestValidQuoteWithAge(t *testing.T) {

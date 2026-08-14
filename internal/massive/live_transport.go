@@ -81,10 +81,11 @@ func ChangeTQCommandFromEngine(command engine.TQCommand) (ChangeTQCommand, error
 	} else if command.Action() != engine.TQSubscribe {
 		return ChangeTQCommand{}, errCommand
 	}
-	if command.BindingIdentity() == "" || command.ConnectionEpoch() == 0 || command.CommandToken() == 0 || command.Symbol() == "" {
+	symbols := command.Symbols()
+	if command.BindingIdentity() == "" || command.ConnectionEpoch() == 0 || command.CommandToken() == 0 || len(symbols) == 0 {
 		return ChangeTQCommand{}, errCommand
 	}
-	return ChangeTQCommand{BindingIdentity: command.BindingIdentity(), ConnectionEpoch: command.ConnectionEpoch(), CommandToken: command.CommandToken(), Action: action, Symbols: []string{command.Symbol()}, engineCommand: command}, nil
+	return ChangeTQCommand{BindingIdentity: command.BindingIdentity(), ConnectionEpoch: command.ConnectionEpoch(), CommandToken: command.CommandToken(), Action: action, Symbols: symbols, engineCommand: command}, nil
 }
 
 type CloseCause string
@@ -941,7 +942,7 @@ func (a *LiveAttempt) validTQCommand(command ChangeTQCommand) bool {
 		return false
 	}
 	if command.engineCommand.CommandToken() != 0 && (command.engineCommand.BindingIdentity() != command.BindingIdentity || command.engineCommand.ConnectionEpoch() != command.ConnectionEpoch ||
-		command.engineCommand.CommandToken() != command.CommandToken || len(command.Symbols) != 1 || command.engineCommand.Symbol() != command.Symbols[0] ||
+		command.engineCommand.CommandToken() != command.CommandToken || !slices.Equal(command.engineCommand.Symbols(), command.Symbols) ||
 		command.engineCommand.Action() == engine.TQSubscribe != (command.Action == TQSubscribe)) {
 		return false
 	}
@@ -1601,7 +1602,7 @@ func DeliverToEngine(ctx context.Context, state *engine.Engine, delivery Adapter
 			return result
 		}
 		if (delivery.Control.Kind == engine.TradeQuoteSubscriptionResult ||
-			delivery.Control.Kind == engine.TradeQuoteCommandWriteResult && delivery.Control.Outcome != engine.ControlSucceeded) && len(delivery.TQSymbols) == 1 {
+			delivery.Control.Kind == engine.TradeQuoteCommandWriteResult && delivery.Control.Outcome != engine.ControlSucceeded) && len(delivery.TQSymbols) > 0 {
 			input, inputErr := engine.NewTQCommandResultInput(delivery.tqCommand, delivery.Control.Position, delivery.Control.ReceiptTime, delivery.Control.Outcome)
 			if delivery.tqCommand.CommandToken() != 0 && inputErr != nil {
 				return EngineDeliveryResult{}, inputErr

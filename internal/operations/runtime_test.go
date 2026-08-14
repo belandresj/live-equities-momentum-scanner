@@ -1178,6 +1178,120 @@ func TestPC9TAQOpaqueEngineCommandThroughC5Ack(t *testing.T) {
 	}
 }
 
+func TestPC9TQFreshEpochSubscribesAllRankedRowsInOneCommand(t *testing.T) {
+	binding := capacityBinding(t, []string{"AAA", "BBB"})
+	now := binding.SessionStart().Add(20 * time.Minute)
+	config := DefaultConfig()
+	config.EvaluationDelay, config.SampleCadence = 0, 10*time.Minute
+	run, err := New(context.Background(), binding, config, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Remove timer-driven command opportunities. One explicit synchronization
+	// must carry the complete fresh-epoch desired set.
+	run.timerCancel()
+	<-run.timerDone
+
+	commands := make(chan string, 2)
+	server := tqInitialBatchServer(t, commands)
+	defer server.Close()
+	adapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{Endpoint: "ws" + strings.TrimPrefix(server.URL, "http"), Credential: "fixture", Queue: massive.LiveQueueConfig{FrameSlots: 8, MaxFrameBytes: 4096, TotalFrameBytes: 16384}, Clock: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, started, err := adapter.Start(context.Background(), massive.OpenAggregateEpoch{BindingIdentity: binding.Identity(), CommandToken: 1, Durations: capacityDurations()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.setLiveSources(attempt, adapter)
+	if result, deliverErr := massive.DeliverToEngine(context.Background(), run.Engine(), started); deliverErr != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
+		t.Fatalf("start = %+v/%v", result, deliverErr)
+	}
+	handshake, err := attempt.Handshake(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, delivery := range handshake {
+		result, deliverErr := massive.DeliverToEngine(context.Background(), run.Engine(), delivery)
+		if deliverErr != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
+			t.Fatalf("handshake = %+v/%v", result, deliverErr)
+		}
+	}
+	completeHydration(t, run.Engine(), binding, engine.HydrationFreshBootstrap, attempt.Epoch(), now)
+
+	base := now
+	position := uint32(0)
+	for second := 0; second < 60; second++ {
+		window := base.Add(time.Duration(second) * time.Second)
+		now = window.Add(time.Second)
+		for _, symbol := range []string{"AAA", "BBB"} {
+			position++
+			input := engine.AggregateInput{SchemaVersion: engine.AggregateSchemaV1, BindingIdentity: binding.Identity(), Source: engine.AggregateSourceLive, Symbol: symbol,
+				WindowStart: window, WindowEnd: window.Add(time.Second), Values: engine.AggregateValues{Open: 12, High: 12, Low: 12, Close: 12, Volume: 10_000, VWAP: 12, AverageTradeSize: 10, ATSProvenance: engine.ATSLiveProviderAverage},
+				DeliveryTime: now, Live: engine.LivePosition{ConnectionEpoch: attempt.Epoch(), FrameSequence: 4, ArrayIndex: position}}
+			admission, completion := run.Engine().AdmitAggregate(context.Background(), input)
+			if admission != engine.AdmissionAdmitted || (<-completion).Code != engine.DispositionAggregateInserted {
+				t.Fatalf("aggregate %s/%d admission=%s", symbol, second, admission)
+			}
+		}
+	}
+	coverageCommand, err := run.Engine().IssueLiveCoverageFence()
+	if err != nil {
+		t.Fatal(err)
+	}
+	coverageInput, err := engine.NewLiveCoverageFenceInput(coverageCommand, engine.LiveCoverageFenceComplete, 4, 2, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, coverageCompletion := run.Engine().AdmitLiveCoverageFence(context.Background(), coverageInput)
+	if admission != engine.AdmissionAdmitted || (<-coverageCompletion).Code != engine.DispositionLiveCoverageFenceApplied {
+		t.Fatal("live coverage advance")
+	}
+	admission, timer := run.Engine().AdmitTimer(context.Background())
+	if admission != engine.AdmissionAdmitted || (<-timer).Code != engine.DispositionTimerApplied {
+		t.Fatal("qualification timer")
+	}
+	if desired := run.Engine().ObserveTQ().Desired; len(desired) != 2 || desired[0] != "AAA" || desired[1] != "BBB" {
+		t.Fatalf("desired rank order = %v", desired)
+	}
+
+	run.syncTQCommand(context.Background())
+	select {
+	case payload := <-commands:
+		if !strings.Contains(payload, `"params":"T.AAA,Q.AAA,T.BBB,Q.BBB"`) {
+			t.Fatalf("initial batch = %s", payload)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("initial subscription batch was not written")
+	}
+	startedDelivery := time.Now()
+	result, ok, err := attempt.DeliverNextToEngine(context.Background(), run.Engine())
+	if err != nil || !ok {
+		t.Fatalf("batch status = %+v/%v/%v", result, ok, err)
+	}
+	run.observeDelivery(startedDelivery, result)
+	if result.TQDisposition.Code != engine.DispositionTQApplied {
+		t.Fatalf("batch acknowledgement = %+v", result)
+	}
+	view := run.Engine().ObserveTQ()
+	if view.CommandPending || view.Commands.Issued != 1 || view.Commands.Acknowledged != 1 || view.Accounting.KnownPresent != 2 || len(view.Rows) != 2 ||
+		!view.Rows[0].TradeCoverage || !view.Rows[1].TradeCoverage || view.Rows[0].Tape.Status != engine.TQWarming || view.Rows[1].Tape.Status != engine.TQWarming {
+		t.Fatalf("completed initial batch = %+v", view)
+	}
+	select {
+	case payload := <-commands:
+		t.Fatalf("unexpected second command = %s", payload)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	_ = attempt.Close(massive.CloseEpochCommand{BindingIdentity: binding.Identity(), ConnectionEpoch: attempt.Epoch(), CommandToken: 100, Cause: massive.CloseControlledStop})
+	shutdown, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := run.Shutdown(shutdown); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func tqAckWebSocketServer(t *testing.T, eventAt time.Time) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -1210,6 +1324,37 @@ func tqAckWebSocketServer(t *testing.T, eventAt time.Time) *httptest.Server {
 			eventAt.UnixMilli(), window.UnixMilli(), window.Add(time.Second).UnixMilli()))
 		if _, _, err := connection.Read(ctx); err == nil {
 			_ = write(`[{"ev":"status","status":"success"},{"ev":"status","status":"success"}]`)
+		}
+		<-ctx.Done()
+	}))
+}
+
+func tqInitialBatchServer(t *testing.T, commands chan<- string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, err := websocket.Accept(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer connection.CloseNow()
+		ctx := request.Context()
+		write := func(value string) bool { return connection.Write(ctx, websocket.MessageText, []byte(value)) == nil }
+		if !write(`[{"ev":"status","status":"connected"}]`) {
+			return
+		}
+		if _, _, err := connection.Read(ctx); err != nil || !write(`[{"ev":"status","status":"auth_success"}]`) {
+			return
+		}
+		if _, _, err := connection.Read(ctx); err != nil || !write(`[{"ev":"status","status":"success"}]`) {
+			return
+		}
+		_, payload, err := connection.Read(ctx)
+		if err != nil {
+			return
+		}
+		commands <- string(payload)
+		if !write(`[{"ev":"status","status":"success"},{"ev":"status","status":"success"},{"ev":"status","status":"success"},{"ev":"status","status":"success"}]`) {
+			return
 		}
 		<-ctx.Done()
 	}))

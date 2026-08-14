@@ -68,7 +68,8 @@ type TQCommand struct {
 	connectionEpoch uint64
 	commandToken    uint64
 	action          TQAction
-	symbol          string
+	symbols         [maximumTQSymbols]string
+	symbolCount     int
 	done            chan Disposition
 }
 
@@ -83,7 +84,13 @@ func (c TQCommand) BindingIdentity() string { return c.bindingIdentity }
 func (c TQCommand) ConnectionEpoch() uint64 { return c.connectionEpoch }
 func (c TQCommand) CommandToken() uint64    { return c.commandToken }
 func (c TQCommand) Action() TQAction        { return c.action }
-func (c TQCommand) Symbol() string          { return c.symbol }
+func (c TQCommand) Symbol() string {
+	if c.symbolCount == 0 {
+		return ""
+	}
+	return c.symbols[0]
+}
+func (c TQCommand) Symbols() []string { return append([]string(nil), c.symbols[:c.symbolCount]...) }
 
 func NewTQCommandResultInput(command TQCommand, position LivePosition, receiptTime time.Time, outcome ConnectionControlOutcome) (TQCommandResultInput, error) {
 	hasPosition := position.ConnectionEpoch == command.connectionEpoch && position.FrameSequence > 0
@@ -189,6 +196,7 @@ type tqState struct {
 	aggregateOnly                                                                              bool
 	pressure                                                                                   tqPressureState
 	commandsIssued, commandsAcknowledged, commandsFailed, commandsFenced, commandResultsFenced uint64
+	epochCommandsAcknowledged                                                                  uint64
 	quarantined, quarantineRaisedAggregateOnly                                                 bool
 	quarantineReason                                                                           TQControlFailureClass
 	quarantineEpoch                                                                            uint64
@@ -341,7 +349,24 @@ func (e *Engine) AdmitTQDrop(ctx context.Context, input TQDropInput) (AdmissionR
 
 func validTQCommand(v TQCommand) bool {
 	return validIdentityShape(v.bindingIdentity) && v.connectionEpoch > 0 && v.commandToken > 0 &&
-		(v.action == TQSubscribe || v.action == TQUnsubscribe) && v.symbol != "" && len(v.symbol) <= maximumSymbolBytes && v.done != nil
+		(v.action == TQSubscribe || v.action == TQUnsubscribe) && validTQCommandSymbols(v) && v.done != nil
+}
+
+func validTQCommandSymbols(v TQCommand) bool {
+	if v.symbolCount <= 0 || v.symbolCount > maximumTQSymbols {
+		return false
+	}
+	for index := 0; index < v.symbolCount; index++ {
+		if v.symbols[index] == "" || len(v.symbols[index]) > maximumSymbolBytes || index > 0 && v.symbols[index] <= v.symbols[index-1] {
+			return false
+		}
+	}
+	for index := v.symbolCount; index < len(v.symbols); index++ {
+		if v.symbols[index] != "" {
+			return false
+		}
+	}
+	return true
 }
 
 func validTradeInput(v TradeInput) bool {
@@ -425,9 +450,14 @@ func (e *Engine) reconcileTQLocked(now time.Time) {
 			}
 		}
 	}
-	if s.pending != nil && s.pending.action == TQSubscribe && !s.dispatched && !desiredSet[s.pending.symbol] {
-		s.pending, s.dispatched = nil, false
-		s.commandsFenced++
+	if s.pending != nil && s.pending.action == TQSubscribe && !s.dispatched {
+		for _, symbol := range s.pending.symbols[:s.pending.symbolCount] {
+			if !desiredSet[symbol] {
+				s.pending, s.dispatched = nil, false
+				s.commandsFenced++
+				break
+			}
+		}
 	}
 	if s.pending != nil || s.quarantined || !e.state.liveEpochActive || e.state.lifecycle != lifecycleLive {
 		return
@@ -439,14 +469,14 @@ func (e *Engine) reconcileTQLocked(now time.Time) {
 		for index := len(desired) - 1; index >= 0; index-- {
 			member := s.members[desired[index]]
 			if member != nil && (member.present || (member.unknown && !member.cleanupAttempted)) {
-				e.issueTQCommandLocked(TQUnsubscribe, desired[index])
+				e.issueTQCommandLocked(TQUnsubscribe, []string{desired[index]})
 				return
 			}
 		}
 	}
 	for symbol, member := range s.members {
 		if (member.present || (member.unknown && !member.cleanupAttempted)) && (s.aggregateOnly || member.bound || member.resetRequired || !desiredSet[symbol]) {
-			e.issueTQCommandLocked(TQUnsubscribe, symbol)
+			e.issueTQCommandLocked(TQUnsubscribe, []string{symbol})
 			return
 		}
 	}
@@ -459,6 +489,7 @@ func (e *Engine) reconcileTQLocked(now time.Time) {
 			wireMembers++
 		}
 	}
+	missing := make([]string, 0, len(desired))
 	for _, symbol := range desired {
 		member := s.member(symbol)
 		if member.bound {
@@ -466,16 +497,26 @@ func (e *Engine) reconcileTQLocked(now time.Time) {
 		}
 		if member.unknown {
 			if !member.cleanupAttempted {
-				e.issueTQCommandLocked(TQUnsubscribe, symbol)
+				e.issueTQCommandLocked(TQUnsubscribe, []string{symbol})
 			}
 			return
 		}
 		if !member.present {
-			if wireMembers >= maximumTQSymbols {
-				return
+			if wireMembers+len(missing) < maximumTQSymbols {
+				missing = append(missing, symbol)
 			}
-			e.issueTQCommandLocked(TQSubscribe, symbol)
-			return
+		}
+	}
+	if len(missing) > 0 {
+		// A fresh epoch has no earlier T/Q command whose delayed, untagged
+		// provider status could contaminate this acknowledgement. Subscribe the
+		// complete displayed set in one command so every selected row begins
+		// causal coverage at the same terminal boundary. Later churn and pressure
+		// restoration retain the accepted single-symbol command path.
+		if wireMembers == 0 && s.epochCommandsAcknowledged == 0 {
+			e.issueTQCommandLocked(TQSubscribe, missing)
+		} else {
+			e.issueTQCommandLocked(TQSubscribe, missing[:1])
 		}
 	}
 	_ = now
@@ -519,19 +560,24 @@ func (s *tqState) prune(target, engineTime time.Time) {
 	}
 }
 
-func (e *Engine) issueTQCommandLocked(action TQAction, symbol string) {
+func (e *Engine) issueTQCommandLocked(action TQAction, symbols []string) {
 	s := &e.state.tq
-	if s.nextToken == 0 {
+	if s.nextToken == 0 || len(symbols) == 0 || len(symbols) > maximumTQSymbols {
 		e.enterTQGlobalBoundLocked()
 		return
 	}
-	command := &TQCommand{bindingIdentity: e.state.binding.identity, connectionEpoch: e.state.liveEpoch, commandToken: s.nextToken, action: action, symbol: symbol, done: make(chan Disposition, 1)}
+	symbols = append([]string(nil), symbols...)
+	sort.Strings(symbols)
+	command := &TQCommand{bindingIdentity: e.state.binding.identity, connectionEpoch: e.state.liveEpoch, commandToken: s.nextToken, action: action, symbolCount: len(symbols), done: make(chan Disposition, 1)}
+	copy(command.symbols[:], symbols)
 	s.nextToken++
 	s.pending, s.dispatched = command, false
 	s.commandsIssued++
 	if action == TQUnsubscribe {
-		m := s.member(symbol)
-		m.tradeCoverage.active, m.quoteCoverage.active = false, false
+		for _, symbol := range symbols {
+			m := s.member(symbol)
+			m.tradeCoverage.active, m.quoteCoverage.active = false, false
+		}
 	}
 }
 
@@ -593,38 +639,35 @@ func (e *Engine) applyTQCommandResultLocked(node *queueNode) (DispositionCode, D
 		s.commandResultsFenced++
 		return DispositionTQFenced, ReasonHistoricalContext
 	}
-	m := s.member(v.command.symbol)
+	commandSymbols := v.command.symbols[:v.command.symbolCount]
 	s.pending, s.dispatched = nil, false
 	if v.outcome != ControlSucceeded {
 		s.commandsFailed++
-		m.present, m.unknown = false, true
-		m.tradeCoverage.active, m.quoteCoverage.active = false, false
-		if v.command.action == TQUnsubscribe {
-			m.cleanupAttempted = true
+		for _, symbol := range commandSymbols {
+			m := s.member(symbol)
+			m.present, m.unknown = false, true
+			m.tradeCoverage.active, m.quoteCoverage.active = false, false
+			if v.command.action == TQUnsubscribe {
+				m.cleanupAttempted = true
+			}
 		}
 		s.rejected++
 		return DispositionTQRejected, ReasonControlOutcome
 	}
 	s.commandsAcknowledged++
+	s.epochCommandsAcknowledged++
 	if v.command.action == TQUnsubscribe {
-		m.present, m.unknown, m.cleanupAttempted = false, false, false
-		m.resetRequired = false
-		s.releaseMember(m)
-		m.unequalRepeat, m.lifecycleObserved = false, false
-		if !s.desiredContains(v.command.symbol) {
-			delete(s.members, v.command.symbol)
+		for _, symbol := range commandSymbols {
+			m := s.member(symbol)
+			m.present, m.unknown, m.cleanupAttempted = false, false, false
+			m.resetRequired = false
+			s.releaseMember(m)
+			m.unequalRepeat, m.lifecycleObserved = false, false
+			if !s.desiredContains(symbol) {
+				delete(s.members, symbol)
+			}
 		}
 	} else {
-		if s.aggregateOnly || m.bound || m.resetRequired || !s.desiredContains(v.command.symbol) {
-			// A subscribe already written before containment may still have been
-			// applied by the provider. Preserve that cleanup liability, but never
-			// reopen causal coverage after additions have stopped.
-			m.present, m.unknown, m.cleanupAttempted = true, false, false
-			m.tradeCoverage.active, m.quoteCoverage.active = false, false
-			s.releaseMember(m)
-			s.applied++
-			return DispositionTQApplied, ReasonNone
-		}
 		start := v.receiptTime
 		if start.Before(e.state.binding.sessionStart) {
 			start = e.state.binding.sessionStart
@@ -632,11 +675,25 @@ func (e *Engine) applyTQCommandResultLocked(node *queueNode) (DispositionCode, D
 		if start.After(e.state.binding.sessionEnd) {
 			start = e.state.binding.sessionEnd
 		}
-		m.present, m.unknown, m.cleanupAttempted = true, false, false
-		m.tradeCoverage = tqCoverage{active: true, epoch: v.command.connectionEpoch, start: start, ack: v.position, greatest: v.position}
-		m.quoteCoverage = m.tradeCoverage
-		s.releaseMember(m)
-		m.unequalRepeat, m.lifecycleObserved = false, false
+		for _, symbol := range commandSymbols {
+			m := s.member(symbol)
+			pressureContains := s.pressure.mode != "" && s.pressure.mode != TQPressureNormal
+			if pressureContains || s.aggregateOnly || m.bound || m.resetRequired || !s.desiredContains(symbol) {
+				// A subscribe already written before containment may still have been
+				// applied by the provider. Preserve that cleanup liability, but never
+				// reopen causal coverage after additions have stopped.
+				m.present, m.unknown, m.cleanupAttempted = true, false, false
+				m.resetRequired = true
+				m.tradeCoverage.active, m.quoteCoverage.active = false, false
+				s.releaseMember(m)
+				continue
+			}
+			m.present, m.unknown, m.cleanupAttempted = true, false, false
+			m.tradeCoverage = tqCoverage{active: true, epoch: v.command.connectionEpoch, start: start, ack: v.position, greatest: v.position}
+			m.quoteCoverage = m.tradeCoverage
+			s.releaseMember(m)
+			m.unequalRepeat, m.lifecycleObserved = false, false
+		}
 	}
 	s.applied++
 	return DispositionTQApplied, ReasonNone
@@ -666,9 +723,11 @@ func (e *Engine) applyTQControlQuarantineLocked(node *queueNode) (DispositionCod
 	}
 	s.quarantines++
 	if s.pending != nil {
-		member := s.member(s.pending.symbol)
-		member.present, member.unknown = false, true
-		member.tradeCoverage.active, member.quoteCoverage.active = false, false
+		for _, symbol := range s.pending.symbols[:s.pending.symbolCount] {
+			member := s.member(symbol)
+			member.present, member.unknown = false, true
+			member.tradeCoverage.active, member.quoteCoverage.active = false, false
+		}
 		s.pending, s.dispatched = nil, false
 		s.commandsFailed++
 	}
@@ -921,7 +980,7 @@ func (e *Engine) tqViewLocked() TQView {
 		QuarantineExpected: s.quarantineExpected, QuarantineObserved: s.quarantineObserved,
 		QuarantineDeadline: s.quarantineDeadline, Quarantines: s.quarantines, QuarantineFenced: s.quarantineFenced}
 	if s.pending != nil {
-		result.CommandPending, result.PendingAction, result.PendingSymbol = true, s.pending.action, s.pending.symbol
+		result.CommandPending, result.PendingAction, result.PendingSymbol = true, s.pending.action, s.pending.Symbol()
 	}
 	desired := make(map[string]bool, len(s.desired))
 	for _, symbol := range s.desired {

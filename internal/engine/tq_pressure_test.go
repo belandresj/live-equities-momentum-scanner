@@ -304,7 +304,7 @@ func TestPC9PressureEpochReplacementPreservesMonotonicAuthority(t *testing.T) {
 	e.state.tq.commandResultsFenced = 1
 	e.state.tq.pressure.mode, e.state.tq.pressure.cause, e.state.tq.pressure.transitions, e.state.tq.pressure.fenced = TQPressureDegraded, TQPressureCauseWaitingFrames, 2, 1
 	e.advanceTQPressureTimerLocked(start)
-	e.issueTQCommandLocked(TQUnsubscribe, "AAA")
+	e.issueTQCommandLocked(TQUnsubscribe, []string{"AAA"})
 	e.mu.Unlock()
 	oldPressure := issuePressureForTest(t, e)
 	oldPressureResult, err := NewTQPressureResultInput(oldPressure, healthy)
