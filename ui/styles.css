@@ -12,10 +12,7 @@ h1 { margin: 0; font-size: 22px; letter-spacing: -.02em; }
 .status-grid div { background: #0c1822; padding: 7px 9px; min-width: 0; }
 .status-grid span { display: block; color: #819bad; font-size: 9px; letter-spacing: .12em; text-transform: uppercase; }
 .status-grid strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 11px ui-monospace, monospace; }
-details { margin: 7px 0; color: #a8bbc9; font-size: 11px; }
-summary { cursor: pointer; width: fit-content; }
-summary:focus-visible, td:focus-visible { outline: 2px solid #88c9ff; outline-offset: 2px; }
-dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; } dt { color: #819bad; } dd { margin: 0; }
+td:focus-visible { outline: 2px solid #88c9ff; outline-offset: 2px; }
 .message { padding: 14px; border: 1px solid #42596a; background: #101e29; color: #c8d6e0; }
 .table-shell { overflow-x: auto; }
 table { width: 100%; min-width: 1120px; border-collapse: collapse; table-layout: fixed; font-variant-numeric: tabular-nums; }

@@ -41,17 +41,7 @@ function buildTable(document, model) {
   }
   table.append(tbody); shell.append(table); return shell;
 }
-function buildDiagnostics(document, model, open) {
-  const details = element(document, "details"); details.id = "diagnostics"; details.open = open;
-  const summary = textElement(document, "summary", "Operational details"); summary.dataset.focusKey = "diagnostics:summary"; details.append(summary);
-  const list = element(document, "dl");
-  for (const [label, value] of model.diagnostics) { list.append(textElement(document, "dt", label), textElement(document, "dd", value)); }
-  details.append(list); return details;
-}
-
 export function renderDashboard(document, event, options = {}) {
-  const previousDetails = document.getElementById?.("diagnostics");
-  const detailsOpen = Boolean(previousDetails?.open);
   const focusKey = document.activeElement?.dataset?.focusKey || "";
   const main = element(document, "main"), model = event.model;
   const header = element(document, "header"), title = element(document, "div"); title.append(textElement(document, "p", "LIVE EQUITIES", "eyebrow"), textElement(document, "h1", "Momentum Scanner"));
@@ -82,7 +72,6 @@ export function renderDashboard(document, event, options = {}) {
     partial.textContent = `PARTIAL RANKING · current trusted marks ordered by Day % · qualification is not asserted · ${model.rankingReason || "symbol-local uncertainty"}`;
     main.append(partial);
   }
-  if (model) main.append(buildDiagnostics(document, model, detailsOpen));
   const message = element(document, "div", "message"); message.id = "message";
   if (!model) message.textContent = "No valid scanner snapshot is available.";
   else if (model.rows.length === 0) message.textContent = model.rowsCurrent && model.rankingMode === "qualified_current" ? "No symbols currently qualify." : model.warming ? `Scanner warm-up in progress · ${model.hydrationProgress}${model.hydrationIssueText}.` : `No rows in retained noncurrent publication · ${model.rankingMode}${model.rankingReason ? ` · ${model.rankingReason}` : ""}.`;
@@ -98,7 +87,7 @@ export function renderDashboard(document, event, options = {}) {
   announcer.textContent = live.textContent;
   if (focusKey) {
     try {
-      const restored = mount.querySelector?.(`[data-focus-key="${CSS.escape(focusKey)}"]`) || mount.querySelector?.('[data-focus-key="diagnostics:summary"]');
+      const restored = mount.querySelector?.(`[data-focus-key="${CSS.escape(focusKey)}"]`);
       restored?.focus({ preventScroll: true });
     } catch { /* full coherent view is already committed */ }
   }

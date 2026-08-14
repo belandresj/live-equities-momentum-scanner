@@ -356,24 +356,7 @@ export function buildViewModel(input, transport = "connected") {
     suppression: snapshot.publication.suppression, lifecycleReason: snapshot.publication.lifecycle_reason, integrityFailure: snapshot.operations.integrity_failure || null,
     hydrationProgress: hydration.progress, hydrationIssueText: hydration.issueText, hydrationIssues: hydration.issues !== 0n,
     warming, finalizing,
-    diagnostics: diagnosticEntries(snapshot),
   };
-}
-
-function diagnosticEntries(snapshot) {
-  const entries = [];
-  const add = (prefix, value) => {
-    for (const [key, item] of Object.entries(value)) {
-      const label = prefix ? `${prefix}.${key}` : key;
-      if (item !== null && typeof item === "object" && !Array.isArray(item)) add(label, item);
-      else if (Array.isArray(item)) entries.push([label, item.join(", ")]);
-      else entries.push([label, item === null ? "null" : String(item)]);
-    }
-  };
-  add("sample", snapshot.sample); add("publication", snapshot.publication); add("status", snapshot.status); add("ranking", snapshot.ranking);
-  add("accounting", snapshot.accounting); add("recovery", snapshot.recovery); add("tq", snapshot.tq); add("checkpoint", snapshot.checkpoint); add("operations", snapshot.operations);
-  if (snapshot.replay) add("replay", snapshot.replay);
-  return entries;
 }
 
 export async function readBoundedJSON(response) {

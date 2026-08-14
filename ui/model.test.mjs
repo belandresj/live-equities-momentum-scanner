@@ -91,11 +91,14 @@ globalThis.CSS ??= { escape: value => String(value).replace(/["\\]/g, "\\$&") };
 
 test("P-MVP-UI renders exact groups/columns safely and atomically with keyed focus", async () => {
   const document = new FakeDocument(), snapshot = snapshotFixtureV2(2); snapshot.rows[0].symbol = "<img src=x onerror=owned()>"; snapshot.tq.desired_symbols[0] = snapshot.rows[0].symbol; renderDashboard(document, { transport: "connected", model: buildViewModel(snapshot) });
+  assert.equal(buildViewModel(snapshot).diagnostics, undefined);
+  assert.equal(document.getElementById("diagnostics"), null);
+  assert.doesNotMatch(document.body.textContent, /Operational details/);
   assert.match(document.body.textContent, /CONTEXT.*LOCATION.*CURRENT MOMENTUM.*EXECUTION/s);
   const headers = find(document.body, node => node.tagName === "TH"); assert.deepEqual(headers.filter(node => node.attributes.scope === "col").map(node => node.textContent), ["SYMBOL", "FLOAT", "VOLUME", "LAST", "DAY %", "FROM OPEN %", "DAY RANGE", "ACTIVITY 30s", "MOVE 30s", "TAPE 5s", "SPREAD"]); assert.ok(headers.every(node => node.textContent !== "Rank")); assert.equal(find(document.body, node => node.tagName === "TBODY")[0].children[0].children.length, 11);
   const committed = document.body.children[0]; assert.throws(() => renderDashboard(document, { transport: "connected", model: buildViewModel(snapshotFixtureV2()) }, { beforeCommit: () => { throw new Error("render failed"); } })); assert.equal(document.body.children[0], committed);
   const focused = find(document.body, node => node.dataset.focusKey?.endsWith(":spread"))[0]; focused.focus(); const key = focused.dataset.focusKey; [snapshot.rows[0], snapshot.rows[1]] = [snapshot.rows[1], snapshot.rows[0]]; snapshot.rows.forEach((row, index) => { row.rank = index + 1; }); snapshot.tq.desired_symbols = snapshot.rows.map(row => row.symbol); renderDashboard(document, { transport: "connected", model: buildViewModel(snapshot) }); assert.equal(document.activeElement.dataset.focusKey, key);
-  renderDashboard(document, { transport: "connected", model: buildViewModel(snapshotFixtureV2()) }); assert.equal(document.activeElement.dataset.focusKey, "diagnostics:summary"); const source = await readFile(new URL("./render.js", import.meta.url), "utf8"); assert.doesNotMatch(source, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
+  renderDashboard(document, { transport: "connected", model: buildViewModel(snapshotFixtureV2()) }); assert.equal(document.getElementById("diagnostics"), null); assert.doesNotMatch(document.body.textContent, /Operational details/); const source = await readFile(new URL("./render.js", import.meta.url), "utf8"); assert.doesNotMatch(source, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
 });
 
 test("P-MVP-UI renders genuine zero Move neutrally", () => {

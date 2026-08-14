@@ -560,13 +560,15 @@ or any market calculation.
 **Outcome and non-scope:** Reconcile the existing independently runnable
 Chrome-desktop dashboard to `scanner.snapshot.v2` and
 `GET /api/v2/snapshot`, primarily by retaining the accepted shell, status
-hierarchy, polling, details, interaction, accessibility, and dense-table
-implementation while removing superseded columns and adding the approved
-semantic column groups. Do not add sorting, filtering, alerts, Float turnover,
-browser thresholds, browser market-state inference, a UI framework, mobile or
-multi-browser certification, public hosting, authentication, provider access,
-MVP-S4 integration claims, replay work, checkpoint work, or scanner/backend
-production changes.
+hierarchy, polling, interaction, accessibility, and dense-table implementation
+while removing superseded columns and adding the approved semantic column
+groups. The secondary `Operational details` disclosure is intentionally not
+rendered; backend operations/accounting facts remain available through the
+snapshot/API for readiness, incident analysis, and future tooling. Do not add
+sorting, filtering, alerts, Float turnover, browser thresholds, browser
+market-state inference, a UI framework, mobile or multi-browser certification,
+public hosting, authentication, provider access, MVP-S4 integration claims,
+replay work, checkpoint work, or scanner/backend production changes.
 
 ### 20.1 Exact grouped table contract
 
@@ -617,10 +619,11 @@ Retain the accepted exact-loopback origin validation, CORS assumptions,
 one-second nonoverlapping polling, three-second request bound,
 `refresh_delayed` and disconnected/frozen behavior, response-size bound,
 sample/publication atomicity, text-node rendering, UI-only restart behavior,
-status hierarchy, disclosure, focus restoration, reduced-motion behavior, and
-WCAG-AA token requirements. Remove v1-only field validation, formatting,
-details, fixtures, headers, and DOM nodes rather than retaining hidden parallel
-representations.
+status hierarchy, focus restoration, reduced-motion behavior, and WCAG-AA token
+requirements. Remove v1-only field validation, formatting, the operational
+details DOM/flattened view-model representation, fixtures, and headers rather
+than retaining hidden parallel representations. Field-specific reasons and
+provenance remain focus-accessible on their relevant table cells.
 
 ### 20.3 One implementation slice and primary proof
 
@@ -646,7 +649,7 @@ complete focus-accessible reasons/provenance.
 The bounded production-Chrome proof runs through the real dashboard server and
 poller at 1440x900. It verifies one-viewport density, semantic grouped headers,
 scoped leaf headers, table caption, polite live status, keyboard-operable
-details, visible focus, reduced motion, WCAG-AA contrast, safe hostile text,
+field focus, visible focus, reduced motion, WCAG-AA contrast, safe hostile text,
 T/Q-only degradation, transport freeze/recovery, exact-origin CORS, and UI-only
 restart while the fixture API remains reachable. This is deterministic
 loopback evidence, not a live-provider, market-hours, browser-matrix, formal
@@ -668,9 +671,11 @@ part of this slice.
 while validating consecutive rank ordinals, and renders no Rank column. The
 two-row table header contains exactly the four `CONTEXT`, `LOCATION`, `CURRENT
 MOMENTUM`, and `EXECUTION` groups and the 11 contracted leaf columns. The
-accepted shell, bounded nonoverlapping poller, status hierarchy, operational
-disclosure, safe detached replacement, focus restoration, live region,
-reduced-motion rule, and desktop density remain in the production path.
+accepted shell, bounded nonoverlapping poller, compact status hierarchy, safe
+detached replacement, focus restoration, live region, reduced-motion rule, and
+desktop density remain in the production path. The backend operations and
+accounting facts remain validated and available in the snapshot, while the
+secondary operational-details disclosure is absent from the dashboard.
 
 `P-MVP-UI` passes against the deterministic v2 corpus. Twenty, fewer-than-20,
 and exact-empty populations remain exact; server order is never sorted or
