@@ -51,13 +51,14 @@ func run(ctx context.Context, arguments []string) error {
 	observationStart := flags.String("observation-start", "", "New York observation start HH:MM:SS")
 	observationEnd := flags.String("observation-end", "", "New York observation end HH:MM:SS")
 	apiAddress := flags.String("api-address", snapshotapi.DefaultAddress, "private loopback snapshot API address")
+	diagnosticPath := flags.String("diagnostic-log", "", "optional absolute path for private one-second live NDJSON (0600)")
 	var allowedOrigins originFlags
 	flags.Var(&allowedOrigins, "allow-origin", "exact browser origin allowed to read the snapshot API; repeatable")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
 		return errors.New("scanner flags are invalid")
 	}
 	if *runMode == "replay" {
-		for _, liveOnly := range []string{"trading-date", "checkpoint-dir", "rest-origin", "websocket-endpoint"} {
+		for _, liveOnly := range []string{"trading-date", "checkpoint-dir", "rest-origin", "websocket-endpoint", "diagnostic-log"} {
 			if provided[liveOnly] {
 				return errors.New("replay mode rejects live-only flags")
 			}
@@ -71,6 +72,11 @@ func run(ctx context.Context, arguments []string) error {
 	if *runMode != "live" || *tradingDate == "" || *replayArtifact != "" || *observationStart != "" || *observationEnd != "" {
 		return errors.New("live mode requires one trading date and rejects replay flags")
 	}
+	diagnostic, err := openDiagnosticLog(*diagnosticPath, os.Stderr)
+	if err != nil {
+		return err
+	}
+	defer diagnostic.Close()
 	credential := os.Getenv("MASSIVE_API_KEY")
 	if credential == "" {
 		return errors.New("MASSIVE_API_KEY is required")
@@ -140,7 +146,14 @@ func run(ctx context.Context, arguments []string) error {
 	go func() { done <- runtime.RunLive(runCtx, components) }()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
-	encoder := json.NewEncoder(os.Stdout)
+	operator := newOperatorRenderer(os.Stdout, os.Stderr)
+	if sample, err := captureLiveOperatorSample(runtime); err == nil {
+		if err := renderInitialOperator(operator, sample, func() error {
+			return joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, false)
+		}); err != nil {
+			return err
+		}
+	}
 	for {
 		select {
 		case <-runCtx.Done():
@@ -149,6 +162,9 @@ func run(ctx context.Context, arguments []string) error {
 			}
 			return runCtx.Err()
 		case err := <-done:
+			if sample, captureErr := captureLiveOperatorSample(runtime); captureErr == nil {
+				_ = operator.Render(sample, true)
+			}
 			if shutdownErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, true, false); shutdownErr != nil {
 				return shutdownErr
 			}
@@ -162,17 +178,41 @@ func run(ctx context.Context, arguments []string) error {
 			}
 			return fmt.Errorf("snapshot API: %w", err)
 		case <-ticker.C:
-			if err := encoder.Encode(struct {
-				Status  operations.Status
-				Metrics operations.Metrics
-			}{runtime.Status(), runtime.Metrics()}); err != nil {
+			sample, err := captureLiveOperatorSample(runtime)
+			if err != nil {
 				if stopErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, false); stopErr != nil {
 					return stopErr
 				}
-				return errors.New("encode operational status")
+				return errors.New("capture operational status")
+			}
+			diagnostic.Write(sample.Status, sample.Metrics)
+			if err := operator.Render(sample, false); err != nil {
+				if stopErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, false); stopErr != nil {
+					return stopErr
+				}
+				return errors.New("write operational status")
 			}
 		}
 	}
+}
+
+func renderInitialOperator(renderer *operatorRenderer, sample liveOperatorSample, shutdown func() error) error {
+	if err := renderer.Render(sample, true); err != nil {
+		return errors.Join(errors.New("write operational status"), shutdown())
+	}
+	return nil
+}
+
+func captureLiveOperatorSample(runtime *operations.Runtime) (liveOperatorSample, error) {
+	capture, err := runtime.CaptureSnapshot()
+	if err != nil {
+		return liveOperatorSample{}, err
+	}
+	view, valid := operations.InspectSnapshotCapture(capture)
+	if !valid {
+		return liveOperatorSample{}, errors.New("invalid operational snapshot")
+	}
+	return liveOperatorSample{Status: view.Status, Metrics: view.Metrics, Ranked: len(view.Engine.Publication.AggregateEvaluation.Rows)}, nil
 }
 
 func runReplay(ctx context.Context, cancelRun context.CancelFunc, config replaymode.StartupConfig, apiAddress string, allowedOrigins []string) error {

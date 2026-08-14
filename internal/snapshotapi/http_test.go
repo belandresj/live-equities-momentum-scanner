@@ -195,6 +195,89 @@ func TestPC10HTTPRoutesCORSAndLifecycle(t *testing.T) {
 	assertStatusAndOneCapture(t, handler, source, http.MethodGet, "/api/v1/snapshot", http.StatusOK)
 }
 
+func TestSuppressedEvaluatorIntegrityRemainsServable(t *testing.T) {
+	runtime, binding, now := newSnapshotRuntime(t)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := runtime.Shutdown(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	owner := runtime.Engine()
+	ackAt := now.Add(-operations.DefaultConfig().EvaluationDelay)
+	applySnapshotControl(t, owner, binding, engine.ConnectionAttempt, 1, 1, engine.LivePosition{}, ackAt)
+	applySnapshotControl(t, owner, binding, engine.AggregateCommandWriteResult, 1, 2, engine.LivePosition{}, ackAt)
+	applySnapshotControl(t, owner, binding, engine.AggregateSubscriptionResult, 1, 2, engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 1}, ackAt)
+
+	bad := engine.AggregateInput{SchemaVersion: engine.AggregateSchemaV1, BindingIdentity: binding.Identity(), Source: engine.AggregateSourceLive,
+		Symbol: "AAA", WindowStart: ackAt.Add(-time.Second), WindowEnd: ackAt, DeliveryTime: ackAt,
+		Values: engine.AggregateValues{Open: 10, High: 9, Low: 10, Close: 10, Volume: 1, VWAP: 10, AverageTradeSize: 1, ATSProvenance: engine.ATSLiveProviderAverage},
+		Live:   engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 2}}
+	admission, aggregateCompletion := owner.AdmitAggregate(context.Background(), bad)
+	if admission != engine.AdmissionAdmitted {
+		t.Fatal("invalid evidence was not classified by the engine")
+	}
+	if result := <-aggregateCompletion; result.Code != engine.DispositionAggregateRejected || result.Reason != engine.ReasonStructural {
+		t.Fatalf("invalid evidence=%+v", result)
+	}
+
+	budgets := engine.HydrationPlanBudgets{Workers: 1, RowsPerChunk: 1, MaximumResponseBytes: 1 << 20, MaximumNormalizedRecords: 57_600, MaximumResidentRecords: 57_600}
+	_, planned := owner.AdmitHydrationPlan(context.Background(), engine.HydrationPlanInput{SchemaVersion: engine.HydrationPlanSchemaV1, BindingIdentity: binding.Identity(), Purpose: engine.HydrationFreshBootstrap, ConnectionEpoch: 1, Budgets: budgets})
+	plan := <-planned
+	token := plan.Plan.Requests()[0]
+	terminal, err := engine.NewHydrationTerminalInput(token, token.ResultID(), engine.HydrationCompletedEmpty, engine.HydrationReasonNone, 1, 1, 10, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, terminalCompletion := owner.AdmitHydrationTerminal(context.Background(), terminal)
+	terminalResult := <-terminalCompletion
+	fenceInput, err := engine.NewAggregateIngressFenceInput(terminalResult.FenceCommand, engine.AggregateIngressFenceComplete, 2, 1, *now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, fenceCompletion := owner.AdmitAggregateIngressFence(context.Background(), fenceInput)
+	fenceResult := <-fenceCompletion
+	if fenceResult.Code != engine.DispositionAccountingIntegrity || fenceResult.SuppressionDisposition != engine.SuppressionRestartRequired {
+		t.Fatalf("evaluator failure=%+v", fenceResult)
+	}
+	if capture, captureErr := runtime.CaptureSnapshot(); captureErr != nil {
+		t.Fatal(captureErr)
+	} else if _, mapErr := Map(capture); mapErr != nil {
+		view, _ := operations.InspectSnapshotCapture(capture)
+		t.Fatalf("suppressed capture did not map: %v view=%+v", mapErr, view)
+	}
+
+	handler, err := NewHandler(runtime, HandlerConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(path string) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		return response
+	}
+	if response := request("/livez"); response.Code != http.StatusOK {
+		t.Fatalf("livez=%d %s", response.Code, response.Body.String())
+	}
+	ready := request("/readyz")
+	var readiness readinessResponse
+	if ready.Code != http.StatusServiceUnavailable || json.Unmarshal(ready.Body.Bytes(), &readiness) != nil || readiness.Reason != "suppressed" || readiness.PublicationID == nil || readiness.BindingIdentity == nil {
+		t.Fatalf("readyz=%d %s", ready.Code, ready.Body.String())
+	}
+	snapshotResponse := request("/api/v1/snapshot")
+	var snapshot Snapshot
+	if snapshotResponse.Code != http.StatusOK || json.Unmarshal(snapshotResponse.Body.Bytes(), &snapshot) != nil {
+		t.Fatalf("snapshot=%d %s", snapshotResponse.Code, snapshotResponse.Body.String())
+	}
+	if snapshot.Publication.Lifecycle != "suppressed" || snapshot.Publication.LifecycleReason != "accounting_integrity" || snapshot.Publication.Suppression != "restart_required" ||
+		snapshot.Status.ReadinessReason != "suppressed" || snapshot.Ranking.Mode != "suppressed" || len(snapshot.Rows) != 0 || snapshot.Publication.BindingIdentity != binding.Identity() ||
+		snapshot.Operations.IntegrityFailure == nil || snapshot.Operations.IntegrityFailure.Category != "support_contradiction" || snapshot.Operations.IntegrityFailure.EngineSequence == "0" ||
+		snapshot.Operations.IntegrityFailure.FirstSymbol != "AAA" || snapshot.Operations.IntegrityFailure.FirstField != "support" || snapshot.Operations.IntegrityFailure.FirstReason != "no_print_with_invalid_evidence" {
+		t.Fatalf("servable suppression=%+v", snapshot)
+	}
+}
+
 func TestPC10HTTPBoundsLoopbackCancellationAndProgress(t *testing.T) {
 	var nilSource *countingCaptureSource
 	if _, err := NewHandler(nilSource, HandlerConfig{}); err == nil {
@@ -338,6 +421,49 @@ func TestPC10HTTPBoundsLoopbackCancellationAndProgress(t *testing.T) {
 	case <-handlerDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("blocked handler did not finish")
+	}
+}
+
+func TestPTQRRecoverableSuppressionKeepsAPIAndLivenessAvailable(t *testing.T) {
+	runtime, binding, now := newSnapshotRuntime(t)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := runtime.Shutdown(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	applySnapshotControl(t, runtime.Engine(), binding, engine.ConnectionAttempt, 1, 1, engine.LivePosition{}, *now)
+	admission, completion := runtime.Engine().AdmitOperationalIngressIntegrity(context.Background())
+	if admission != engine.AdmissionAdmitted || completion == nil || (<-completion).Code != engine.DispositionIngressIntegrity {
+		t.Fatal("recoverable ingress suppression was not installed")
+	}
+	if capture, captureErr := runtime.CaptureSnapshot(); captureErr != nil {
+		t.Fatal(captureErr)
+	} else if _, mapErr := Map(capture); mapErr != nil {
+		view, _ := operations.InspectSnapshotCapture(capture)
+		t.Fatalf("recoverable suppressed capture did not map: %v view=%+v", mapErr, view)
+	}
+	handler, err := NewHandler(runtime, HandlerConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(path string) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		return response
+	}
+	if live := request("/livez"); live.Code != http.StatusOK {
+		t.Fatalf("recoverable livez=%d %s", live.Code, live.Body.String())
+	}
+	if ready := request("/readyz"); ready.Code != http.StatusServiceUnavailable || !strings.Contains(ready.Body.String(), `"reason":"suppressed"`) {
+		t.Fatalf("recoverable readyz=%d %s", ready.Code, ready.Body.String())
+	}
+	snapshotResponse := request("/api/v1/snapshot")
+	var snapshot Snapshot
+	if snapshotResponse.Code != http.StatusOK || json.Unmarshal(snapshotResponse.Body.Bytes(), &snapshot) != nil ||
+		snapshot.Publication.Lifecycle != "suppressed" || snapshot.Publication.Suppression != "same_binding_recovery_allowed" || !snapshot.Status.ProcessLive || snapshot.Status.BackendReady {
+		t.Fatalf("recoverable snapshot=%d %+v body=%s", snapshotResponse.Code, snapshot, snapshotResponse.Body.String())
 	}
 }
 

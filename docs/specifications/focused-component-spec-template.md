@@ -20,7 +20,7 @@ component contract and use the same two stages:
    and record contract/reuse/test/slice-plan approval by the applicable
    authority. When this is the
    next component, detailed work ordinarily waits until the preceding component
-   passes final review unless it depends only on an already stable interface.
+   is accepted unless it depends only on an already stable interface.
 
 For C7-C11, every reference in this template to boundary or completed-contract
 approval means an orchestrator-recorded conformance decision under the V1
@@ -513,8 +513,10 @@ V1 correction loop.]
 
 ## 18. Completed-contract acceptance checklist
 
-**Independent completed-contract review:** [not triggered, with reason / exact
-consequential boundary, reviewer, result, corrections, and focused re-review]
+**Independent completed-contract review:** [normally not triggered / exact
+consequential boundary whose risk is not straightforward from primary proof and
+construction, reviewer, result, corrections, and any necessary focused
+re-review. Completion or reopening alone is not a trigger.]
 
 **Approval decision:** [owner or V1 program orchestrator; exact contract,
 whitelist, fixtures/evidence, proofs, slices, required reviews, advancement

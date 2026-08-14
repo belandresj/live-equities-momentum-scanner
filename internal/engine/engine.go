@@ -28,12 +28,15 @@ type Clock func() time.Time
 // Config contains the S1 construction parameters. Capacity and RequiredReserve
 // intentionally have no production defaults.
 type Config struct {
-	Mode                RunMode
-	Clock               Clock
-	Capacity            int
-	RequiredReserve     int
-	EvaluationDelay     *time.Duration
-	CheckpointSubmitter *checkpoint.Writer
+	Mode                   RunMode
+	Clock                  Clock
+	Capacity               int
+	RequiredReserve        int
+	EvaluationDelay        *time.Duration
+	ReplayObservationStart *time.Time
+	CheckpointSubmitter    *checkpoint.Writer
+	RecoveryBackoffInitial time.Duration
+	RecoveryBackoffMaximum time.Duration
 }
 
 // AdmissionResult is the exhaustive result of one admission call.
@@ -81,6 +84,7 @@ const (
 	DispositionConnectionControlFenced   DispositionCode = "connection_control_fenced"
 	DispositionIngressIntegrity          DispositionCode = "ingress_integrity_failure"
 	DispositionRecoveryExhausted         DispositionCode = "recovery_exhausted"
+	DispositionRecoveryScheduled         DispositionCode = "recovery_scheduled"
 	DispositionTQApplied                 DispositionCode = "tq_applied"
 	DispositionTQDuplicate               DispositionCode = "tq_exact_duplicate"
 	DispositionTQRejected                DispositionCode = "tq_rejected"
@@ -156,6 +160,7 @@ const (
 	lifecycleReasonIngressIntegrity     lifecycleReason = "ingress_integrity"
 	lifecycleReasonHydrationComplete    lifecycleReason = "hydration_complete"
 	lifecycleReasonRecoveryExhausted    lifecycleReason = "recovery_exhausted"
+	lifecycleReasonScheduledRecovery    lifecycleReason = "scheduled_recovery"
 )
 
 // SuppressionDisposition is the exhaustive recovery requirement attached to
@@ -190,6 +195,7 @@ const (
 	lifecycleEventAggregateLoss
 	lifecycleEventIngressIntegrity
 	lifecycleEventHydrationComplete
+	lifecycleEventScheduledRecovery
 )
 
 type transitionRecord struct {
@@ -230,7 +236,9 @@ const (
 	inputCheckpointTerminal
 	inputLiveCoverageFence
 	inputRecoveryExhaustion
+	inputScheduledRecovery
 	inputTQCommandResult
+	inputTQControlQuarantine
 	inputTrade
 	inputQuote
 	inputTQDrop
@@ -238,6 +246,25 @@ const (
 	inputTQPressureTick
 	inputOperationalIngressIntegrity
 )
+
+func inputKindName(kind inputKind) string {
+	switch kind {
+	case inputAggregate:
+		return "aggregate"
+	case inputTimer:
+		return "timer"
+	case inputAggregateIngressFence:
+		return "aggregate_ingress_fence"
+	case inputHydrationChunk:
+		return "hydration_chunk"
+	case inputHydrationTerminal:
+		return "hydration_terminal"
+	case inputReplayGroup:
+		return "replay_group"
+	default:
+		return "other"
+	}
+}
 
 type queueNode struct {
 	kind                   inputKind
@@ -275,7 +302,9 @@ type queueNode struct {
 	liveCoverageCompletion chan LiveCoverageFenceDisposition
 	signalLiveCoverage     bool
 	recoveryExhaustion     frozenRecoveryExhaustionInput
+	scheduledRecovery      frozenScheduledRecoveryInput
 	tqCommandResult        frozenTQCommandResultInput
+	tqControlQuarantine    frozenTQControlQuarantineInput
 	trade                  frozenTradeInput
 	quote                  frozenQuoteInput
 	tqDrop                 frozenTQDropInput
@@ -301,6 +330,7 @@ type engineState struct {
 	exposedRevision           uint64
 	evaluationRevision        uint64
 	aggregateEvaluator        aggregateEvaluatorState
+	evaluatorIntegrity        *EvaluatorIntegrityView
 	clockMonotonic            bool
 	committedT                *time.Time
 	latestTarget              *time.Time
@@ -308,6 +338,7 @@ type engineState struct {
 	suppressionDisposition    SuppressionDisposition
 	replay                    replayState
 	hydration                 hydrationState
+	scheduledRecovery         scheduledRecoveryState
 	liveCoverage              liveCoverageState
 	checkpointSequence        uint64
 	installedCheckpoint       *InstalledCheckpointFact
@@ -364,12 +395,13 @@ func (c publicationCounters) reconciles(completedTransitions uint64) bool {
 // Engine is the sole FIFO, sequence authority, mutable state owner, and private
 // publication owner. Its mutable graph never crosses the immutable read cell.
 type Engine struct {
-	mu       sync.Mutex
-	mode     RunMode
-	clock    Clock
-	capacity int
-	reserve  int
-	delay    time.Duration
+	mu                     sync.Mutex
+	mode                   RunMode
+	clock                  Clock
+	capacity               int
+	reserve                int
+	delay                  time.Duration
+	replayObservationStart *time.Time
 
 	queue     []*queueNode
 	changed   chan struct{}
@@ -400,21 +432,29 @@ type Engine struct {
 	checkpointSubmitter *checkpoint.Writer
 	tqLimits            tqRetentionLimits
 	tqPressurePolicy    tqPressurePolicy
+	recoveryPolicy      recoveryPolicy
 }
 
 // New constructs an unbound engine shell and starts its sole consumer.
 func New(config Config) (*Engine, error) {
 	if (config.Mode != RunModeLive && config.Mode != RunModeReplay) || config.Clock == nil || config.EvaluationDelay == nil || *config.EvaluationDelay < 0 ||
+		(config.Mode != RunModeReplay && config.ReplayObservationStart != nil) || (config.ReplayObservationStart != nil && (!wholeSecondUTC(*config.ReplayObservationStart))) ||
 		config.Capacity <= 1 || config.RequiredReserve < 1 || config.RequiredReserve >= config.Capacity {
 		return nil, errors.New("engine requires live/replay mode, a clock, explicit nonnegative evaluation delay, and finite 1 <= R < C")
 	}
+	recoveryPolicy := newRecoveryPolicy(config.RecoveryBackoffInitial, config.RecoveryBackoffMaximum)
+	if !recoveryPolicy.valid() {
+		return nil, errors.New("engine requires a finite recovery backoff")
+	}
 	e := &Engine{
 		mode: config.Mode, clock: config.Clock, capacity: config.Capacity, reserve: config.RequiredReserve, delay: *config.EvaluationDelay,
-		queue: make([]*queueNode, 0, config.Capacity), changed: make(chan struct{}), done: make(chan struct{}),
+		replayObservationStart: immutableTimePointer(config.ReplayObservationStart),
+		queue:                  make([]*queueNode, 0, config.Capacity), changed: make(chan struct{}), done: make(chan struct{}),
 		nextSequence: 1, state: &engineState{lifecycle: lifecycleInitializing, clockMonotonic: true},
 		checkpointSubmitter: config.CheckpointSubmitter,
 		tqLimits:            defaultTQRetentionLimits(),
 		tqPressurePolicy:    defaultTQPressurePolicy(),
+		recoveryPolicy:      recoveryPolicy,
 	}
 	e.buildCandidate = buildInstalledBinding
 	e.installInitialPublication()
@@ -802,7 +842,7 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 			(e.state.greatestIngressPosition.ConnectionEpoch == 0 || compareLive(node.aggregate.Live, e.state.greatestIngressPosition) > 0) {
 			e.state.greatestIngressPosition = node.aggregate.Live
 		}
-		if code == DispositionAggregateInserted || code == DispositionAggregateRevised || code == DispositionAggregateWithdrawn {
+		if (code == DispositionAggregateInserted || code == DispositionAggregateRevised || code == DispositionAggregateWithdrawn) && !e.completeFinalReplayRecordLocked(node) {
 			e.state.exposedRevision++
 		}
 		if node.aggregate.Source == AggregateSourceLive && (code == DispositionAggregateInserted || code == DispositionAggregateRevised) {
@@ -826,9 +866,17 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		e.mu.Lock()
 		code, reason = e.applyRecoveryExhaustionLocked(node)
 		e.mu.Unlock()
+	} else if node.kind == inputScheduledRecovery {
+		e.mu.Lock()
+		code, reason = e.applyScheduledRecoveryLocked(node)
+		e.mu.Unlock()
 	} else if node.kind == inputTQCommandResult {
 		e.mu.Lock()
 		code, reason = e.applyTQCommandResultLocked(node)
+		e.mu.Unlock()
+	} else if node.kind == inputTQControlQuarantine {
+		e.mu.Lock()
+		code, reason = e.applyTQControlQuarantineLocked(node)
 		e.mu.Unlock()
 	} else if node.kind == inputTrade {
 		e.mu.Lock()
@@ -860,10 +908,12 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 				code, reason = DispositionAccountingIntegrity, ReasonAccounting
 			} else {
 				e.state.hydration.generation.active = false
-				e.state.hydration.fenceReconciled = false
-				e.state.liveEpochActive = false
-				e.clearAggregateAcknowledgementLocked()
-				e.enterSuppressionLocked(lifecycleEventIngressIntegrity, node, lifecycleReasonIngressIntegrity)
+				if !e.routeRecoverableAggregateLossLocked(node) {
+					e.state.hydration.fenceReconciled = false
+					e.state.liveEpochActive = false
+					e.clearAggregateAcknowledgementLocked()
+					e.enterSuppressionLocked(lifecycleEventIngressIntegrity, node, lifecycleReasonIngressIntegrity)
+				}
 				code, reason = DispositionIngressIntegrity, ReasonIngressIntegrity
 			}
 		}
@@ -1024,10 +1074,10 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		hydrationFenceCommand: stagedHydrationFenceCommand}
 	disposition.checkpointProjection = stagedCheckpointProjection
 	disposition.checkpointInstall = stagedCheckpointInstall
-	if code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed || code == DispositionIngressIntegrity || code == DispositionHydrationIntegrity || code == DispositionRecoveryExhausted {
+	if e.state.lifecycle == lifecycleSuppressed && (code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed || code == DispositionIngressIntegrity || code == DispositionHydrationIntegrity || code == DispositionRecoveryExhausted) {
 		disposition.SuppressionDisposition = e.state.suppressionDisposition
 	}
-	forceUnavailable := code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed || code == DispositionIngressIntegrity || code == DispositionHydrationIntegrity || code == DispositionRecoveryExhausted
+	forceUnavailable := e.state.lifecycle == lifecycleSuppressed && (code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed || code == DispositionIngressIntegrity || code == DispositionHydrationIntegrity || code == DispositionRecoveryExhausted)
 	final := e.finishTransitionLocked(node, disposition, before, forceUnavailable)
 	if final.SuppressionDisposition == "" && final.Code != DispositionPublicationIntegrity && final.Code != DispositionAccountingIntegrity && final.Code != DispositionClockRegression {
 		e.mu.Lock()
@@ -1039,7 +1089,7 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 
 func tqPublicationInput(kind inputKind) bool {
 	switch kind {
-	case inputTimer, inputTQCommandResult, inputTrade, inputQuote, inputTQDrop, inputTQPressureResult, inputTQPressureTick:
+	case inputTimer, inputTQCommandResult, inputTQControlQuarantine, inputTrade, inputQuote, inputTQDrop, inputTQPressureResult, inputTQPressureTick:
 		return true
 	default:
 		return false

@@ -2,7 +2,6 @@ package engine
 
 import (
 	"container/heap"
-	"errors"
 	"math"
 	"time"
 
@@ -10,6 +9,72 @@ import (
 )
 
 const maximumRankingRows = 20
+
+// EvaluatorIntegrityCategory is the closed, bounded classification of a
+// terminal evaluator invariant failure. It is diagnostic evidence only; the
+// existing lifecycle reason and suppression disposition remain authoritative.
+type EvaluatorIntegrityCategory string
+
+const (
+	EvaluatorCandidateTargetMismatch EvaluatorIntegrityCategory = "candidate_target_mismatch"
+	EvaluatorSupportContradiction    EvaluatorIntegrityCategory = "support_contradiction"
+	EvaluatorPopulationAccounting    EvaluatorIntegrityCategory = "population_accounting"
+	EvaluatorQualificationAccounting EvaluatorIntegrityCategory = "qualification_accounting"
+	EvaluatorUncertaintyAccounting   EvaluatorIntegrityCategory = "uncertainty_accounting"
+	EvaluatorFeatureAccounting       EvaluatorIntegrityCategory = "feature_accounting"
+	EvaluatorRankingProjection       EvaluatorIntegrityCategory = "ranking_projection"
+	EvaluatorRankingRow              EvaluatorIntegrityCategory = "ranking_row"
+	EvaluatorTQIntent                EvaluatorIntegrityCategory = "tq_intent"
+	EvaluatorUnknownIntegrity        EvaluatorIntegrityCategory = "unknown_evaluator_integrity"
+)
+
+// EvaluatorIntegrityView contains only fixed-cardinality values safe for
+// operational output and the public optional diagnostic projection.
+type EvaluatorIntegrityView struct {
+	Category                 EvaluatorIntegrityCategory
+	InputKind                string
+	EngineSequence           uint64
+	CandidateTime            time.Time
+	ExpectedTime             time.Time
+	Lifecycle                string
+	HydrationPurpose         HydrationPurpose
+	HydrationGeneration      uint64
+	FenceEpoch               uint64
+	FenceThrough             uint64
+	FenceMarkerOrdinal       uint64
+	UniverseTotal            uint64
+	ValidPriorClose          uint64
+	InvalidOrMissingPrior    uint64
+	TrustedRankableMark      uint64
+	TrustedBelowPriceMark    uint64
+	NoPrintThroughT          uint64
+	InvalidMark              uint64
+	UnknownDueFailureOrFence uint64
+	QualificationUnresolved  uint64
+	FirstSymbol              string
+	FirstField               string
+	FirstReason              string
+}
+
+type evaluatorValidationResult struct {
+	Category    EvaluatorIntegrityCategory
+	FirstSymbol string
+	FirstField  string
+	FirstReason string
+}
+
+func (r *evaluatorValidationResult) valid() bool { return r == nil }
+
+func (r *evaluatorValidationResult) Error() string {
+	if r == nil {
+		return ""
+	}
+	return string(r.Category)
+}
+
+func invalidEvaluation(category EvaluatorIntegrityCategory, field, symbol, reason string) *evaluatorValidationResult {
+	return &evaluatorValidationResult{Category: category, FirstField: field, FirstSymbol: symbol, FirstReason: reason}
+}
 
 type rankingMode string
 
@@ -76,20 +141,33 @@ type aggregateRankingRow struct {
 }
 
 type aggregateEvaluationResult struct {
-	at                  time.Time
-	mode                rankingMode
-	reason              rankingReason
-	population          populationAccounting
-	qualification       qualificationAccounting
-	features            featureAccounting
-	uncertainty         uncertaintyAccounting
-	totalPassers        uint64
-	knownRankableCount  uint64
-	dayInvalidRankable  uint64
-	qualifiedDayInvalid uint64
-	rows                []aggregateRankingRow
-	invalidSupport      bool
-	tqIntentAvailable   bool
+	at                   time.Time
+	mode                 rankingMode
+	reason               rankingReason
+	population           populationAccounting
+	qualification        qualificationAccounting
+	features             featureAccounting
+	uncertainty          uncertaintyAccounting
+	totalPassers         uint64
+	knownRankableCount   uint64
+	dayInvalidRankable   uint64
+	qualifiedDayInvalid  uint64
+	rows                 []aggregateRankingRow
+	invalidSupport       bool
+	invalidSupportSymbol string
+	invalidSupportReason string
+	tqIntentAvailable    bool
+	applications         []aggregateSymbolApplication
+}
+
+// aggregateSymbolApplication is transient staged materialization for the sole
+// evaluator apply. It is never retained in a publication or evaluator state;
+// carrying it across the validation boundary avoids recomputing every feature
+// for the same canonical target in the deterministic apply pass.
+type aggregateSymbolApplication struct {
+	features priceRangeFeatureResult
+	activity activityFeatureResult
+	present  bool
 }
 
 type aggregateEvaluatorState struct {
@@ -162,6 +240,9 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 	if e.state.binding == nil || e.state.globalFailure {
 		return true
 	}
+	if e.completeFinalReplayRecordLocked(node) || e.replayFastForwardGroupLocked(node) {
+		return true
+	}
 	changed := (node.kind == inputTimer || node.kind == inputReplayGroup) && code == DispositionTimerApplied
 	changed = changed || (node.kind == inputAggregateIngressFence && code == DispositionAggregateIngressFenceApplied)
 	changed = changed || (node.kind == inputAggregate && (code == DispositionAggregateInserted || code == DispositionAggregateRevised ||
@@ -185,13 +266,15 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 		expected = *e.state.committedT
 	}
 	if expected.IsZero() || !staged.at.Equal(expected) {
+		e.latchEvaluatorIntegrityLocked(node, staged, expected, invalidEvaluation(EvaluatorCandidateTargetMismatch, "candidate_time", "", "candidate_does_not_match_expected_target"))
 		return false
 	}
 	if e.evaluationFault {
 		staged.population.universeTotal++
 		e.evaluationFault = false
 	}
-	if validateAggregateEvaluation(staged) != nil {
+	if validation := validateAggregateEvaluation(staged); !validation.valid() {
+		e.latchEvaluatorIntegrityLocked(node, staged, expected, validation)
 		return false
 	}
 	if !e.candidateTargetSupportedLocked(staged.at) {
@@ -199,7 +282,7 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 		// gate. It cannot apply candidate-T state and is not itself corruption.
 		return true
 	}
-	e.applyAggregateCandidateLocked(staged.at, node.admissionTime)
+	e.applyAggregateCandidateResultLocked(&staged, node.admissionTime)
 	if !aggregateEvaluationEqual(e.state.aggregateEvaluator.current, staged) {
 		e.state.aggregateEvaluator.current = cloneAggregateEvaluation(staged)
 		e.state.evaluationRevision++
@@ -208,11 +291,40 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 	return true
 }
 
+func (e *Engine) latchEvaluatorIntegrityLocked(node *queueNode, staged aggregateEvaluationResult, expected time.Time, validation *evaluatorValidationResult) {
+	if e.state.evaluatorIntegrity != nil {
+		return
+	}
+	category := validation.Category
+	if category == "" {
+		category = EvaluatorUnknownIntegrity
+	}
+	p := staged.population
+	value := EvaluatorIntegrityView{
+		Category: category, InputKind: inputKindName(node.kind), EngineSequence: node.engineSequence,
+		CandidateTime: staged.at, ExpectedTime: expected, Lifecycle: string(e.state.lifecycle),
+		HydrationPurpose: e.state.hydration.generation.purpose, HydrationGeneration: e.state.hydration.generation.generation,
+		FenceEpoch: e.state.hydration.fenceEpoch, FenceThrough: e.state.hydration.fenceThrough, FenceMarkerOrdinal: e.state.hydration.fenceMarkerOrdinal,
+		UniverseTotal: p.universeTotal, ValidPriorClose: p.validPriorClose, InvalidOrMissingPrior: p.invalidOrMissingPriorClose,
+		TrustedRankableMark: p.trustedRankableMark, TrustedBelowPriceMark: p.trustedBelowPriceMark,
+		NoPrintThroughT: p.noPrintThroughT, InvalidMark: p.invalidMark, UnknownDueFailureOrFence: p.unknownDueFailureOrFence,
+		QualificationUnresolved: staged.qualification.unresolved,
+		FirstSymbol:             validation.FirstSymbol, FirstField: validation.FirstField, FirstReason: validation.FirstReason,
+	}
+	e.state.evaluatorIntegrity = &value
+}
+
 // applyAggregateCandidateLocked is the single C3 committed-boundary apply
 // point. Candidate identity, run support, contributor predicates, bounds, and
 // accounting have already succeeded; this deterministic second pass applies
 // no new evidence and cannot reject.
 func (e *Engine) applyAggregateCandidateLocked(at, engineTime time.Time) {
+	candidate := aggregateEvaluationResult{at: at}
+	e.applyAggregateCandidateResultLocked(&candidate, engineTime)
+}
+
+func (e *Engine) applyAggregateCandidateResultLocked(candidate *aggregateEvaluationResult, engineTime time.Time) {
+	at := candidate.at
 	for index := range e.state.binding.symbols {
 		symbol := &e.state.binding.symbols[index]
 		if symbol.aggregates == nil {
@@ -223,9 +335,17 @@ func (e *Engine) applyAggregateCandidateLocked(at, engineTime time.Time) {
 		} else {
 			symbol.aggregates.committedLatest = nil
 		}
-		evaluateQualificationThrough(symbol.aggregates, e.state.binding, at, engineTime)
-		ensurePriceRangeState(symbol.aggregates).result = evaluatePriceRangeFeatures(e.state.binding, symbol, at)
-		applyActivityResult(ensureActivityState(symbol.aggregates), evaluateActivityFeatures(e.state.binding, symbol.aggregates, at))
+		if !e.completeFinalReplayQualificationPreparedLocked(symbol.aggregates, at) {
+			evaluateQualificationThrough(symbol.aggregates, e.state.binding, at, engineTime)
+		}
+		if len(candidate.applications) == len(e.state.binding.symbols) && candidate.applications[index].present {
+			application := candidate.applications[index]
+			ensurePriceRangeState(symbol.aggregates).result = application.features
+			applyActivityResult(ensureActivityState(symbol.aggregates), application.activity)
+		} else {
+			ensurePriceRangeState(symbol.aggregates).result = evaluatePriceRangeFeatures(e.state.binding, symbol, at)
+			applyActivityResult(ensureActivityState(symbol.aggregates), evaluateActivityFeatures(e.state.binding, symbol.aggregates, at))
+		}
 	}
 	if e.state.committedT == nil || at.After(*e.state.committedT) {
 		e.state.committedT = immutableTime(at)
@@ -249,6 +369,7 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 		result.invalidSupport = true
 	}
 	qualified, degraded := &rankingHeap{}, &rankingHeap{}
+	result.applications = make([]aggregateSymbolApplication, len(e.state.binding.symbols))
 	heap.Init(qualified)
 	heap.Init(degraded)
 	qualificationComplete := true
@@ -264,8 +385,27 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 		}
 		coverage, hasCoverageConsequence := e.state.aggregateEvaluator.coverage[index]
 		_, hasInvalidEvidence := e.state.aggregateEvaluator.invalidMarks[index]
+		if e.mode == RunModeReplay && e.state.replay.complete && state != nil && !hasMark && !hasCoverageConsequence && !hasInvalidEvidence &&
+			completeReplayCoverageThrough(state, e.state.binding, at) {
+			// Complete replay can have already admitted a symbol's first print
+			// after candidate T because production evaluation keeps its ordinary
+			// delay. The later print clears the current no-print consequence, but
+			// the sealed slot evidence still proves no print through this exact T.
+			coverage, hasCoverageConsequence = coverageNoPrintThroughT, true
+		}
 		if coverage == coverageNoPrintThroughT && (hasMark || hasInvalidEvidence) {
 			result.invalidSupport = true
+			if result.invalidSupportSymbol == "" {
+				result.invalidSupportSymbol = symbol.symbol
+				switch {
+				case hasMark && hasInvalidEvidence:
+					result.invalidSupportReason = "no_print_with_mark_and_invalid_evidence"
+				case hasMark:
+					result.invalidSupportReason = "no_print_with_mark"
+				default:
+					result.invalidSupportReason = "no_print_with_invalid_evidence"
+				}
+			}
 		}
 
 		features := unavailablePriceRangeResult(at)
@@ -275,9 +415,12 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 			projectionState.qualification = cloneQualificationState(state.qualification)
 			projectionSymbol := *symbol
 			projectionSymbol.aggregates = &projectionState
-			evaluateQualificationThrough(&projectionState, e.state.binding, at, engineTime)
+			if !e.completeFinalReplayQualificationPreparedLocked(state, at) {
+				evaluateQualificationThrough(&projectionState, e.state.binding, at, engineTime)
+			}
 			features = evaluatePriceRangeFeatures(e.state.binding, &projectionSymbol, at)
 			activity = evaluateActivityFeatures(e.state.binding, &projectionState, at)
+			result.applications[index] = aggregateSymbolApplication{features: features, activity: activity, present: true}
 		}
 		validPrior := symbol.prior.status == reference.PriorCloseValid && symbol.prior.close > 0 && finiteEvaluator(symbol.prior.close)
 		if !validPrior {
@@ -332,7 +475,9 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 		if state != nil {
 			projectionState := *state
 			projectionState.qualification = cloneQualificationState(state.qualification)
-			evaluateQualificationThrough(&projectionState, e.state.binding, at, engineTime)
+			if !e.completeFinalReplayQualificationPreparedLocked(state, at) {
+				evaluateQualificationThrough(&projectionState, e.state.binding, at, engineTime)
+			}
 			if projectionState.qualification != nil && projectionState.qualification.result.at.Equal(at) {
 				status = projectionState.qualification.result.status
 				origin = projectionState.qualification.result.unresolvedOrigin
@@ -451,61 +596,68 @@ func sortedRankingRows(h rankingHeap, tq bool) []aggregateRankingRow {
 	return rows
 }
 
-func validateAggregateEvaluation(r aggregateEvaluationResult) error {
+func validateAggregateEvaluation(r aggregateEvaluationResult) *evaluatorValidationResult {
 	if r.mode == "" && r.at.IsZero() && len(r.rows) == 0 {
 		return nil
 	}
 	if r.invalidSupport {
-		return errors.New("contradictory evaluator support")
+		reason := r.invalidSupportReason
+		if reason == "" {
+			reason = "contradictory_evaluator_support"
+		}
+		return invalidEvaluation(EvaluatorSupportContradiction, "support", r.invalidSupportSymbol, reason)
 	}
 	if r.mode != rankingUnavailable && r.mode != rankingQualifiedCurrent && r.mode != rankingDegradedBootstrap && r.mode != rankingStale && r.mode != rankingSuppressed {
-		return errors.New("invalid ranking mode")
+		return invalidEvaluation(EvaluatorRankingProjection, "ranking.mode", "", "invalid_mode")
 	}
-	if !r.population.reconciles() || len(r.rows) > maximumRankingRows {
-		return errors.New("invalid population accounting")
+	if !r.population.reconciles() {
+		return invalidEvaluation(EvaluatorPopulationAccounting, "accounting.population", "", "identity_mismatch")
+	}
+	if len(r.rows) > maximumRankingRows {
+		return invalidEvaluation(EvaluatorRankingProjection, "ranking.rows", "", "row_bound_exceeded")
 	}
 	seen := make(map[string]struct{}, len(r.rows))
 	for i, row := range r.rows {
 		if row.rank != uint32(i+1) || row.symbol == "" || row.last < minimumQualificationPrice || !finiteEvaluator(row.last) || !finiteEvaluator(row.dayPercent) || row.markAge < 0 {
-			return errors.New("invalid ranking row")
+			return invalidEvaluation(EvaluatorRankingRow, "ranking.row", row.symbol, "invalid_row")
 		}
 		if i > 0 && !rankingPrecedes(r.rows[i-1], row) {
-			return errors.New("unordered ranking rows")
+			return invalidEvaluation(EvaluatorRankingRow, "ranking.order", row.symbol, "unordered_row")
 		}
 		if _, ok := seen[row.symbol]; ok {
-			return errors.New("duplicate ranking row")
+			return invalidEvaluation(EvaluatorRankingRow, "ranking.symbol", row.symbol, "duplicate_row")
 		}
 		seen[row.symbol] = struct{}{}
 		if row.tqIntentEligible != (r.mode == rankingQualifiedCurrent && r.tqIntentAvailable) {
-			return errors.New("invalid TQ intent eligibility")
+			return invalidEvaluation(EvaluatorTQIntent, "ranking.tq_intent", row.symbol, "eligibility_mismatch")
 		}
 	}
 	wantQualifiedRows := minUint64(r.totalPassers, maximumRankingRows)
 	wantDegradedRows := minUint64(r.knownRankableCount, maximumRankingRows)
 	if r.mode == rankingQualifiedCurrent && (r.reason != "" || r.population.unknownDueFailureOrFence != 0 || r.qualification.unresolved != 0 || uint64(len(r.rows)) != wantQualifiedRows) {
-		return errors.New("invalid qualified projection")
+		return invalidEvaluation(EvaluatorRankingProjection, "ranking.qualified", "", "projection_mismatch")
 	}
 	qualificationTotal := r.qualification.notYetPassed + r.qualification.provisional + r.qualification.finalized + r.qualification.unresolved
 	if qualificationTotal != r.population.trustedRankableMark ||
 		r.totalPassers+r.qualifiedDayInvalid != r.qualification.provisional+r.qualification.finalized ||
 		r.knownRankableCount+r.dayInvalidRankable != r.population.trustedRankableMark ||
 		r.qualifiedDayInvalid > r.dayInvalidRankable {
-		return errors.New("invalid qualification accounting")
+		return invalidEvaluation(EvaluatorQualificationAccounting, "accounting.qualification", "", "identity_mismatch")
 	}
 	if r.uncertainty.bootstrapOrigin+r.uncertainty.postBootstrapGap+r.uncertainty.localInvalid !=
 		r.population.unknownDueFailureOrFence+r.qualification.unresolved {
-		return errors.New("invalid uncertainty-origin accounting")
+		return invalidEvaluation(EvaluatorUncertaintyAccounting, "accounting.uncertainty", "", "identity_mismatch")
 	}
 	for _, counts := range []featureDimensionAccounting{r.features.dayPercent, r.features.from4AMPercent, r.features.hodDrawdown, r.features.sessionRange, r.features.rolling30, r.features.rolling60, r.features.activity} {
 		if !counts.reconciles(r.population.universeTotal) {
-			return errors.New("invalid feature accounting")
+			return invalidEvaluation(EvaluatorFeatureAccounting, "accounting.feature", "", "identity_mismatch")
 		}
 	}
 	if r.mode == rankingDegradedBootstrap && (r.knownRankableCount == 0 || (r.population.unknownDueFailureOrFence == 0 && r.qualification.unresolved == 0) || uint64(len(r.rows)) != wantDegradedRows) {
-		return errors.New("invalid degraded projection")
+		return invalidEvaluation(EvaluatorRankingProjection, "ranking.degraded", "", "projection_mismatch")
 	}
 	if r.mode == rankingDegradedBootstrap && (r.uncertainty.postBootstrapGap != 0 || r.uncertainty.localInvalid != 0 || r.uncertainty.bootstrapOrigin == 0) {
-		return errors.New("non-bootstrap degraded projection")
+		return invalidEvaluation(EvaluatorRankingProjection, "ranking.degraded", "", "non_bootstrap_uncertainty")
 	}
 	if r.mode == rankingDegradedBootstrap {
 		wantReason := rankingReasonQualificationPending
@@ -513,20 +665,20 @@ func validateAggregateEvaluation(r aggregateEvaluationResult) error {
 			wantReason = rankingReasonIncompletePopulation
 		}
 		if r.reason != wantReason {
-			return errors.New("invalid degraded reason")
+			return invalidEvaluation(EvaluatorRankingProjection, "ranking.reason", "", "degraded_reason_mismatch")
 		}
 	}
 	if r.mode == rankingUnavailable && r.reason != rankingReasonNoCommittedWatermark && r.reason != rankingReasonNoTrustedMarks && r.reason != rankingReasonIncompletePopulation {
-		return errors.New("invalid unavailable reason")
+		return invalidEvaluation(EvaluatorRankingProjection, "ranking.reason", "", "invalid_unavailable_reason")
 	}
 	if r.mode == rankingStale && r.reason != "" {
-		return errors.New("invalid stale reason")
+		return invalidEvaluation(EvaluatorRankingProjection, "ranking.reason", "", "invalid_stale_reason")
 	}
 	if r.mode == rankingSuppressed && r.reason != rankingReasonGlobalSuppression {
-		return errors.New("invalid suppressed reason")
+		return invalidEvaluation(EvaluatorRankingProjection, "ranking.reason", "", "invalid_suppressed_reason")
 	}
 	if (r.mode == rankingUnavailable || r.mode == rankingStale || r.mode == rankingSuppressed) && len(r.rows) != 0 {
-		return errors.New("rows in noncurrent projection")
+		return invalidEvaluation(EvaluatorRankingProjection, "ranking.rows", "", "rows_in_noncurrent_projection")
 	}
 	return nil
 }
@@ -540,6 +692,7 @@ func minUint64(value uint64, limit int) uint64 {
 
 func cloneAggregateEvaluation(r aggregateEvaluationResult) aggregateEvaluationResult {
 	r.rows = append([]aggregateRankingRow(nil), r.rows...)
+	r.applications = nil
 	return r
 }
 func aggregateEvaluationEqual(a, b aggregateEvaluationResult) bool {

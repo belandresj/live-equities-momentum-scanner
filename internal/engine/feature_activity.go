@@ -315,11 +315,16 @@ func (sum activityExactSum) float64() (float64, bool) {
 	return result, finiteFeature(result)
 }
 
-func recomputeMutableActivityBlock(state *symbolAggregateState, binding *installedBinding, blockEnd time.Time) {
+func recomputeMutableActivityBlock(state *symbolAggregateState, binding *installedBinding, blockEnd, now time.Time) {
 	activity := ensureActivityState(state)
 	if activity.boundExceeded {
 		return
 	}
+	// Aggregate contribution precedes the group timer's ordinary maintenance.
+	// Rotate blocks whose correction horizon is already strictly behind now
+	// before allocating the next block, so the exact 33-block steady-state
+	// bound is not tripped by a one-transition overlap.
+	finalizeActivityMutable(activity, now)
 	key := blockEnd.Unix()
 	if _, immutable := activity.references[key]; immutable {
 		// A deep historical insert was already combined synchronously while
@@ -450,16 +455,19 @@ func evaluateActivityFeatures(binding *installedBinding, state *symbolAggregateS
 
 	floor := binding.sessionStart
 	upper := at.Add(-activityBlockDuration)
-	transactionReferences := make([]float64, 0, maximumActivityReferences)
-	expansionReferences := make([]float64, 0, maximumActivityReferences)
+	referenceEnd := binding.sessionStart
+	if upper.After(binding.sessionStart) {
+		referenceEnd = binding.sessionStart.Add((upper.Sub(binding.sessionStart) / activityBlockDuration) * activityBlockDuration)
+	}
+	if referenceEnd.After(binding.sessionStart) && !activityCoverageTrustworthy(state, binding, binding.sessionStart, referenceEnd) {
+		result.activity = aggregateFeatureField{status: featureUnavailable, reason: featureReasonHistoryIncomplete}
+		return result
+	}
+	transactionAtOrBelow, expansionAtOrBelow := 0, 0
 	for blockStart := firstAlignedActivityStart(binding, floor); blockStart.Add(activityBlockDuration).Compare(upper) <= 0; blockStart = blockStart.Add(activityBlockDuration) {
 		blockEnd := blockStart.Add(activityBlockDuration)
 		if blockEnd.After(binding.sessionEnd) {
 			break
-		}
-		if !activityCoverageTrustworthy(state, binding, blockStart, blockEnd) {
-			result.activity = aggregateFeatureField{status: featureUnavailable, reason: featureReasonHistoryIncomplete}
-			return result
 		}
 		summary := activityComponentsForBlock(state, binding, blockStart, blockEnd)
 		if summary.invalid {
@@ -475,17 +483,21 @@ func evaluateActivityFeatures(binding *installedBinding, state *symbolAggregateS
 			return result
 		}
 		if summary.transactions >= minimumActivityReferenceTx {
-			transactionReferences = append(transactionReferences, summary.transactions)
-			expansionReferences = append(expansionReferences, summary.expansionBPS)
+			result.referenceCount++
+			if summary.transactions <= target.transactions {
+				transactionAtOrBelow++
+			}
+			if summary.expansionBPS <= target.expansionBPS {
+				expansionAtOrBelow++
+			}
 		}
 	}
-	result.referenceCount = len(transactionReferences)
 	if result.referenceCount < minimumActivityReferences {
 		result.activity = aggregateFeatureField{status: featureWarming, reason: featureReasonReferenceWarmup}
 		return result
 	}
-	result.transactionPercentile = empiricalPercentile(transactionReferences, target.transactions)
-	result.expansionPercentile = empiricalPercentile(expansionReferences, target.expansionBPS)
+	result.transactionPercentile = 100 * float64(transactionAtOrBelow) / float64(result.referenceCount)
+	result.expansionPercentile = 100 * float64(expansionAtOrBelow) / float64(result.referenceCount)
 	value := math.Sqrt(result.transactionPercentile * result.expansionPercentile)
 	if !finiteFeature(value) || value < 0 || value > 100 {
 		result.activity = aggregateFeatureField{status: featureInvalid, reason: featureReasonInvalidInput}
@@ -599,7 +611,7 @@ func activityCoverageTrustworthy(state *symbolAggregateState, binding *installed
 	if state.historicalConflict != nil && bitmapHasRange(state.historicalConflict, binding, start, end) {
 		return false
 	}
-	return exactAggregateCoverage(state, binding, start, end)
+	return exactAggregateCoverageByBitmap(state, binding, start, end)
 }
 
 func firstAlignedActivityStart(binding *installedBinding, floor time.Time) time.Time {

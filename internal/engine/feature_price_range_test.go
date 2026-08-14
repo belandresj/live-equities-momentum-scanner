@@ -136,6 +136,41 @@ func TestC3FEAT01PriceRangeBoundaryTable(t *testing.T) {
 	})
 }
 
+func TestReplayCoverageBitmapEquivalence(t *testing.T) {
+	bindingValue := testBinding(t)
+	binding := &installedBinding{sessionStart: bindingValue.SessionStart(), sessionEnd: bindingValue.SessionEnd()}
+	state := &symbolAggregateState{tail: make(map[int64]*canonicalAggregate)}
+	for slot := 0; slot < 130; slot++ {
+		at := binding.sessionStart.Add(time.Duration(slot) * time.Second)
+		switch {
+		case slot%11 == 0:
+			ensureHistoricalConflict(state).set(slot)
+		case slot%7 == 0:
+			state.tail[at.Unix()] = &canonicalAggregate{identity: aggregateIdentity{start: at.Unix()}, windowStart: at, windowEnd: at.Add(time.Second)}
+		case slot%5 == 0:
+			ensurePresence(state).set(slot)
+		case slot%3 == 0:
+			ensureProvenAbsent(state).set(slot)
+		}
+	}
+	for first := 0; first <= 130; first++ {
+		for last := first; last <= 130; last++ {
+			start := binding.sessionStart.Add(time.Duration(first) * time.Second)
+			end := binding.sessionStart.Add(time.Duration(last) * time.Second)
+			if got, want := exactAggregateCoverageByBitmap(state, binding, start, end), exactAggregateCoverage(state, binding, start, end); got != want {
+				t.Fatalf("coverage [%d,%d): bitmap=%t scalar=%t", first, last, got, want)
+			}
+			wantConflict := false
+			for slot := first; slot < last; slot++ {
+				wantConflict = wantConflict || state.historicalConflict.has(slot)
+			}
+			if got := bitmapHasRange(state.historicalConflict, binding, start, end); got != wantConflict {
+				t.Fatalf("conflict [%d,%d): bitmap=%t scalar=%t", first, last, got, wantConflict)
+			}
+		}
+	}
+}
+
 // TestC3FEAT02CorrectionPermutationDifferentialTrace is the sole C3-FEAT-02
 // primary proof. It compares every accepted insert/correction and timer against
 // full canonical recomputation, then delivers the same 70-minute history in

@@ -141,6 +141,7 @@ const (
 	DeliveryTerminal              DeliveryKind = "terminal"
 	DeliveryAggregateIngressFence DeliveryKind = "aggregate_ingress_fence"
 	DeliveryLiveCoverageFence     DeliveryKind = "live_coverage_fence"
+	DeliveryTQControlQuarantine   DeliveryKind = "tq_control_quarantine"
 )
 
 type TerminalResult struct {
@@ -172,6 +173,7 @@ type AdapterDelivery struct {
 	TQAction                                 TQCommandAction
 	TQSymbols                                []string
 	tqCommand                                engine.TQCommand
+	TQQuarantine                             engine.TQControlQuarantineInput
 }
 
 type EngineDeliveryResult struct {
@@ -185,12 +187,23 @@ type EngineDeliveryResult struct {
 }
 
 type AdapterAccounting struct {
-	ConnectionAttempts                                        uint64
-	AttemptsActive, AttemptsConnected                         uint64
-	AttemptsFailed, AttemptsCanceled                          uint64
-	CommandsStarted, CommandsPendingWrite, CommandsPendingAck uint64
-	CommandsAcknowledged, CommandsFailed, CommandsAmbiguous   uint64
-	CommandsCanceledOrFenced                                  uint64
+	ConnectionAttempts                                                         uint64
+	AttemptsActive, AttemptsConnected                                          uint64
+	AttemptsFailed, AttemptsCanceled                                           uint64
+	CommandsStarted, CommandsPendingWrite, CommandsPendingAck                  uint64
+	CommandsAcknowledged, CommandsFailed, CommandsAmbiguous                    uint64
+	CommandsCanceledOrFenced                                                   uint64
+	TQCommandsStarted, TQCommandsPendingWrite, TQCommandsPendingAck            uint64
+	TQCommandsAcknowledged, TQCommandsFailed, TQCommandsAmbiguous              uint64
+	TQCommandsCanceledOrFenced                                                 uint64
+	HandshakeStatuses, TQStatuses, TQStatusesCorrelated, TQStatusesQuarantined uint64
+	UnsupportedFamilies                                                        uint64
+	FirstTQFailureClass                                                        engine.TQControlFailureClass
+	FirstTQFailurePhase                                                        StatusPhase
+	FirstTQFailureEpoch                                                        uint64
+	FirstTQFailurePosition                                                     engine.LivePosition
+	FirstTQFailureExpected, FirstTQFailureObserved                             int
+	FirstTQFailureDeadline                                                     bool
 }
 
 type TQNormalizationAccounting struct {
@@ -202,8 +215,27 @@ func (a TQNormalizationAccounting) Reconciles() bool {
 }
 
 func (a AdapterAccounting) Reconciles() bool {
+	return a.TransportReconciles() && a.TQReconciles()
+}
+
+func (a AdapterAccounting) TransportReconciles() bool {
+	if a.CommandsStarted < a.TQCommandsStarted || a.CommandsPendingWrite < a.TQCommandsPendingWrite ||
+		a.CommandsPendingAck < a.TQCommandsPendingAck || a.CommandsAcknowledged < a.TQCommandsAcknowledged ||
+		a.CommandsFailed < a.TQCommandsFailed || a.CommandsAmbiguous < a.TQCommandsAmbiguous ||
+		a.CommandsCanceledOrFenced < a.TQCommandsCanceledOrFenced {
+		return false
+	}
 	return a.ConnectionAttempts == a.AttemptsActive+a.AttemptsConnected+a.AttemptsFailed+a.AttemptsCanceled &&
-		a.CommandsStarted == a.CommandsPendingWrite+a.CommandsPendingAck+a.CommandsAcknowledged+a.CommandsFailed+a.CommandsAmbiguous+a.CommandsCanceledOrFenced
+		a.CommandsStarted-a.TQCommandsStarted == a.CommandsPendingWrite-a.TQCommandsPendingWrite+
+			a.CommandsPendingAck-a.TQCommandsPendingAck+a.CommandsAcknowledged-a.TQCommandsAcknowledged+
+			a.CommandsFailed-a.TQCommandsFailed+a.CommandsAmbiguous-a.TQCommandsAmbiguous+
+			a.CommandsCanceledOrFenced-a.TQCommandsCanceledOrFenced
+}
+
+func (a AdapterAccounting) TQReconciles() bool {
+	return a.TQCommandsStarted == a.TQCommandsPendingWrite+a.TQCommandsPendingAck+a.TQCommandsAcknowledged+
+		a.TQCommandsFailed+a.TQCommandsAmbiguous+a.TQCommandsCanceledOrFenced &&
+		a.TQStatuses == a.TQStatusesCorrelated+a.TQStatusesQuarantined
 }
 
 type liveSocket interface {
@@ -332,6 +364,9 @@ type pendingCommand struct {
 	writeDone     chan struct{}
 	accounted     bool
 	statusOutcome engine.ConnectionControlOutcome
+	successCount  int
+	observedCount int
+	lastStatus    engine.LivePosition
 	action        TQCommandAction
 	symbols       []string
 	engineCommand engine.TQCommand
@@ -410,6 +445,14 @@ func (a *LiveAttempt) accountTQ(normalized bool) {
 	a.tqAccountingMu.Unlock()
 }
 
+func (a *LiveAttempt) accountTQStatuses(correlated, quarantined uint64) {
+	a.adapter.mu.Lock()
+	a.adapter.accounting.TQStatuses += correlated + quarantined
+	a.adapter.accounting.TQStatusesCorrelated += correlated
+	a.adapter.accounting.TQStatusesQuarantined += quarantined
+	a.adapter.mu.Unlock()
+}
+
 func (a *LiveAttempt) runHandshake() {
 	deliveries, err := a.performHandshake()
 	a.mu.Lock()
@@ -458,12 +501,10 @@ func (a *LiveAttempt) performHandshake() ([]AdapterDelivery, error) {
 	deliveries := make([]AdapterDelivery, 0, 4)
 	connected, err := a.awaitHandshakeStatus(totalCtx, StatusContext{ConnectionEpoch: a.epoch, ExpectedPhase: StatusPhaseConnected, CommandKind: CommandConnection, CommandToken: strconv.FormatUint(a.openToken, 10), ExpectedCount: 1}, engine.ConnectionEstablished)
 	if err != nil {
-		if connected.Kind != "" {
-			deliveries = append(deliveries, connected)
-		}
+		deliveries = append(deliveries, connected...)
 		return deliveries, err
 	}
-	deliveries = append(deliveries, connected)
+	deliveries = append(deliveries, connected...)
 	a.accountConnected()
 
 	authPayload, _ := json.Marshal(struct {
@@ -476,12 +517,10 @@ func (a *LiveAttempt) performHandshake() ([]AdapterDelivery, error) {
 	}
 	authenticated, err := a.awaitHandshakeStatus(totalCtx, StatusContext{ConnectionEpoch: a.epoch, ExpectedPhase: StatusPhaseAuthSuccess, CommandKind: CommandAuthentication, CommandToken: strconv.FormatUint(a.openToken, 10), ExpectedCount: 1}, engine.AuthenticationResult)
 	if err != nil {
-		if authenticated.Kind != "" {
-			deliveries = append(deliveries, authenticated)
-		}
+		deliveries = append(deliveries, authenticated...)
 		return deliveries, err
 	}
-	deliveries = append(deliveries, authenticated)
+	deliveries = append(deliveries, authenticated...)
 
 	aggregatePayload, _ := json.Marshal(struct {
 		Action string `json:"action"`
@@ -497,13 +536,11 @@ func (a *LiveAttempt) performHandshake() ([]AdapterDelivery, error) {
 	deliveries = append(deliveries, controlDelivery(a.binding.Identity(), a.epoch, engine.AggregateCommandWriteResult, a.openToken, engine.ControlSucceeded, engine.LivePosition{}, a.adapter.now()))
 	acknowledged, err := a.awaitHandshakeStatus(totalCtx, StatusContext{ConnectionEpoch: a.epoch, ExpectedPhase: StatusPhaseSuccess, CommandKind: CommandAggregateSubscribe, CommandToken: strconv.FormatUint(a.openToken, 10), ExpectedCount: 1}, engine.AggregateSubscriptionResult)
 	if err != nil {
-		if acknowledged.Kind != "" {
-			deliveries = append(deliveries, acknowledged)
-		}
+		deliveries = append(deliveries, acknowledged...)
 		return deliveries, err
 	}
-	deliveries = append(deliveries, acknowledged)
-	a.accountOpenCommand(acknowledged.Control.Outcome, true)
+	deliveries = append(deliveries, acknowledged...)
+	a.accountOpenCommand(engine.ControlSucceeded, true)
 	a.mu.Lock()
 	a.handshaken = true
 	a.mu.Unlock()
@@ -650,39 +687,77 @@ func (a *LiveAttempt) write(parent context.Context, payload []byte) error {
 	return nil
 }
 
-func (a *LiveAttempt) awaitHandshakeStatus(parent context.Context, status StatusContext, kind engine.ConnectionControlKind) (AdapterDelivery, error) {
+func (a *LiveAttempt) awaitHandshakeStatus(parent context.Context, status StatusContext, kind engine.ConnectionControlKind) ([]AdapterDelivery, error) {
 	stepCtx, cancel := context.WithTimeout(parent, a.durations.HandshakeStep)
 	defer cancel()
-	frame, ok := a.queue.pop(stepCtx)
-	if !ok {
-		a.triggerTerminal(TerminalProtocol, TerminalHandshakeDeadline, 0, false)
-		return AdapterDelivery{}, errTransportFailed
+	deliveries := make([]AdapterDelivery, 0, 4)
+	for {
+		frame, ok := a.queue.pop(stepCtx)
+		if !ok {
+			a.triggerTerminal(TerminalProtocol, TerminalHandshakeDeadline, 0, false)
+			return deliveries, errTransportFailed
+		}
+		if frame.terminal {
+			return append(deliveries, a.finishTerminal(frame)), errTransportFailed
+		}
+		cursor := newLiveFrameCursor(LiveFrame{Binding: a.binding, ConnectionEpoch: a.epoch, FrameSequence: frame.sequence, ReceivedAt: frame.receivedAt, Data: frame.data}, &status, LiveNormalizationOptions{})
+		found := false
+		failed := false
+		for {
+			result, ok := cursor.Next()
+			if !ok {
+				break
+			}
+			switch result.Kind {
+			case LiveResultStatus:
+				a.adapter.mu.Lock()
+				a.adapter.accounting.HandshakeStatuses++
+				a.adapter.mu.Unlock()
+				outcome := engine.ControlSucceeded
+				if result.Status.Disposition == StatusFailed {
+					outcome = engine.ControlFailed
+				} else if result.Status.Disposition != StatusAcknowledged || found {
+					outcome = engine.ControlAmbiguous
+				}
+				deliveries = append(deliveries, controlDelivery(a.binding.Identity(), a.epoch, kind, a.openToken, outcome, result.Position, result.Status.ReceiptTime))
+				found = outcome == engine.ControlSucceeded
+				failed = outcome != engine.ControlSucceeded
+			case LiveResultAggregate:
+				deliveries = append(deliveries, AdapterDelivery{Kind: DeliveryAggregate, Position: result.Position, Aggregate: result.Aggregate})
+			case LiveResultTrade:
+				a.accountTQ(true)
+				deliveries = append(deliveries, AdapterDelivery{Kind: DeliveryTrade, Position: result.Position, Trade: result.Trade})
+			case LiveResultQuote:
+				a.accountTQ(true)
+				deliveries = append(deliveries, AdapterDelivery{Kind: DeliveryQuote, Position: result.Position, Quote: result.Quote})
+			case LiveResultRejected:
+				if result.Rejection.Family == LiveFamilyTrade || result.Rejection.Family == LiveFamilyQuote {
+					a.accountTQ(false)
+				} else if result.Rejection.Family == LiveFamilyUnsupported {
+					a.adapter.mu.Lock()
+					a.adapter.accounting.UnsupportedFamilies++
+					a.adapter.mu.Unlock()
+				}
+				deliveries = append(deliveries, AdapterDelivery{Kind: DeliveryNormalizationDrop, Position: result.Position, Rejection: result.Rejection})
+			case LiveResultAmbiguous:
+				deliveries = append(deliveries, controlDelivery(a.binding.Identity(), a.epoch, engine.IngressIntegrityFailure, 0, engine.ControlAmbiguous, result.Position, frame.receivedAt))
+				a.triggerTerminal(TerminalProtocol, TerminalIngressAmbiguity, frame.sequence, true)
+				failed = true
+			}
+		}
+		a.queue.complete(frame, false)
+		if !cursor.Accounting().Reconciles() {
+			a.triggerTerminal(TerminalProtocol, TerminalIngressAmbiguity, frame.sequence, true)
+			return deliveries, errTransportFailed
+		}
+		if failed {
+			a.triggerTerminal(TerminalProtocol, TerminalStatusAmbiguous, frame.sequence, false)
+			return deliveries, errTransportFailed
+		}
+		if found {
+			return deliveries, nil
+		}
 	}
-	if frame.terminal {
-		delivery := a.finishTerminal(frame)
-		return delivery, errTransportFailed
-	}
-	cursor := newLiveFrameCursor(LiveFrame{Binding: a.binding, ConnectionEpoch: a.epoch, FrameSequence: frame.sequence, ReceivedAt: frame.receivedAt, Data: frame.data}, &status, LiveNormalizationOptions{})
-	result, first := cursor.Next()
-	_, extra := cursor.Next()
-	a.queue.complete(frame, false)
-	if !first || extra || result.Kind != LiveResultStatus || !cursor.Accounting().Reconciles() {
-		a.triggerTerminal(TerminalProtocol, TerminalStatusAmbiguous, frame.sequence, true)
-		position := engine.LivePosition{ConnectionEpoch: a.epoch, FrameSequence: frame.sequence}
-		return controlDelivery(a.binding.Identity(), a.epoch, engine.IngressIntegrityFailure, 0, engine.ControlAmbiguous, position, frame.receivedAt), errTransportFailed
-	}
-	outcome := engine.ControlSucceeded
-	if result.Status.Disposition == StatusFailed {
-		outcome = engine.ControlFailed
-	} else if result.Status.Disposition != StatusAcknowledged {
-		outcome = engine.ControlAmbiguous
-	}
-	delivery := controlDelivery(a.binding.Identity(), a.epoch, kind, a.openToken, outcome, result.Position, result.Status.ReceiptTime)
-	if outcome != engine.ControlSucceeded {
-		a.triggerTerminal(TerminalProtocol, TerminalStatusAmbiguous, frame.sequence, true)
-		return delivery, errTransportFailed
-	}
-	return delivery, nil
 }
 
 func (a *LiveAttempt) ChangeTQ(ctx context.Context, command ChangeTQCommand) (AdapterDelivery, error) {
@@ -709,6 +784,8 @@ func (a *LiveAttempt) ChangeTQ(ctx context.Context, command ChangeTQCommand) (Ad
 	a.adapter.lastToken = command.CommandToken
 	a.adapter.accounting.CommandsStarted++
 	a.adapter.accounting.CommandsPendingWrite++
+	a.adapter.accounting.TQCommandsStarted++
+	a.adapter.accounting.TQCommandsPendingWrite++
 	a.adapter.mu.Unlock()
 	a.mu.Unlock()
 	defer a.workers.Done()
@@ -732,24 +809,30 @@ func (a *LiveAttempt) ChangeTQ(ctx context.Context, command ChangeTQCommand) (Ad
 	a.mu.Unlock()
 	a.adapter.mu.Lock()
 	a.adapter.accounting.CommandsPendingWrite--
+	a.adapter.accounting.TQCommandsPendingWrite--
 	if err != nil {
 		outcome = engine.ControlFailed
 		a.adapter.accounting.CommandsFailed++
+		a.adapter.accounting.TQCommandsFailed++
 	} else {
 		a.adapter.accounting.CommandsPendingAck++
+		a.adapter.accounting.TQCommandsPendingAck++
 	}
 	a.adapter.mu.Unlock()
-	// next may have entered an empty-queue wait before this command existed.
-	// Wake it after write accounting is settled so it can install the command
-	// deadline even when the provider sends no acknowledgement or later frame.
-	a.queue.requestRecheck()
 	delivery := controlDelivery(a.binding.Identity(), a.epoch, engineKind, command.CommandToken, outcome, engine.LivePosition{}, a.adapter.now())
 	delivery.TQAction = command.Action
 	delivery.TQSymbols = append([]string(nil), command.Symbols...)
 	delivery.tqCommand = command.engineCommand
 	if err != nil {
-		return delivery, errCommandWrite
+		a.mu.Lock()
+		pending := a.pending
+		a.mu.Unlock()
+		return a.tqQuarantineDelivery(engine.TQControlWriteFailed, StatusPhaseSuccess, pending, engine.LivePosition{}, a.adapter.now(), false), errCommandWrite
 	}
+	// next may have entered an empty-queue wait before this command existed.
+	// Wake it after write accounting is settled so it can install the command
+	// deadline even when the provider sends no acknowledgement or later frame.
+	a.queue.requestRecheck()
 	return delivery, nil
 }
 
@@ -857,14 +940,9 @@ func (a *LiveAttempt) next(ctx context.Context) (AdapterDelivery, bool) {
 			if !time.Now().Before(a.pending.deadline) {
 				pending := a.pending
 				a.mu.Unlock()
-				if !a.detachAndAccountPending(pending, engine.ControlAmbiguous) {
-					continue
-				}
-				delivery := controlDelivery(a.binding.Identity(), a.epoch, engine.TradeQuoteSubscriptionResult, pending.token, engine.ControlAmbiguous, engine.LivePosition{}, a.adapter.now())
-				delivery.ExpectedStatusCount = pending.expectedCount
-				return delivery, true
+				return a.tqQuarantineDelivery(engine.TQControlStatusDeadline, StatusPhaseSuccess, pending, engine.LivePosition{}, a.adapter.now(), true), true
 			}
-			statusContext = &StatusContext{ConnectionEpoch: a.epoch, ExpectedPhase: StatusPhaseSuccess, CommandKind: a.pending.kind, CommandToken: strconv.FormatUint(a.pending.token, 10), ExpectedCount: a.pending.expectedCount}
+			statusContext = &StatusContext{ConnectionEpoch: a.epoch, ExpectedPhase: StatusPhaseSuccess, CommandKind: a.pending.kind, CommandToken: strconv.FormatUint(a.pending.token, 10), ExpectedCount: a.pending.expectedCount - a.pending.successCount}
 		}
 		terminal := a.terminal
 		a.mu.Unlock()
@@ -907,10 +985,8 @@ func (a *LiveAttempt) next(ctx context.Context) (AdapterDelivery, bool) {
 				a.mu.Lock()
 				pending := a.pending
 				a.mu.Unlock()
-				if pending != nil && a.detachAndAccountPending(pending, engine.ControlAmbiguous) {
-					delivery := controlDelivery(a.binding.Identity(), a.epoch, engine.TradeQuoteSubscriptionResult, pending.token, engine.ControlAmbiguous, engine.LivePosition{}, a.adapter.now())
-					delivery.ExpectedStatusCount = pending.expectedCount
-					return delivery, true
+				if pending != nil {
+					return a.tqQuarantineDelivery(engine.TQControlStatusDeadline, StatusPhaseSuccess, pending, engine.LivePosition{}, a.adapter.now(), true), true
 				}
 			}
 			return AdapterDelivery{}, false
@@ -938,7 +1014,7 @@ func (a *LiveAttempt) next(ctx context.Context) (AdapterDelivery, bool) {
 		a.mu.Lock()
 		pendingNow := a.pending
 		if pendingNow != nil && frame.sequence > pendingNow.afterSequence && time.Now().Before(pendingNow.deadline) {
-			statusContext = &StatusContext{ConnectionEpoch: a.epoch, ExpectedPhase: StatusPhaseSuccess, CommandKind: pendingNow.kind, CommandToken: strconv.FormatUint(pendingNow.token, 10), ExpectedCount: pendingNow.expectedCount}
+			statusContext = &StatusContext{ConnectionEpoch: a.epoch, ExpectedPhase: StatusPhaseSuccess, CommandKind: pendingNow.kind, CommandToken: strconv.FormatUint(pendingNow.token, 10), ExpectedCount: pendingNow.expectedCount - pendingNow.successCount}
 		}
 		a.mu.Unlock()
 		a.currentFrame = &frame
@@ -983,6 +1059,10 @@ func (a *LiveAttempt) mapResult(result LiveResult, frame queuedLiveFrame) (Adapt
 	case LiveResultRejected:
 		if result.Rejection.Family == LiveFamilyTrade || result.Rejection.Family == LiveFamilyQuote {
 			a.accountTQ(false)
+		} else if result.Rejection.Family == LiveFamilyUnsupported {
+			a.adapter.mu.Lock()
+			a.adapter.accounting.UnsupportedFamilies++
+			a.adapter.mu.Unlock()
 		}
 		return AdapterDelivery{Kind: DeliveryNormalizationDrop, Position: result.Position, Rejection: result.Rejection}, true
 	case LiveResultAmbiguous:
@@ -990,37 +1070,46 @@ func (a *LiveAttempt) mapResult(result LiveResult, frame queuedLiveFrame) (Adapt
 		a.triggerTerminal(TerminalProtocol, TerminalIngressAmbiguity, frame.sequence, true)
 		return delivery, true
 	case LiveResultStatus:
-		if pending == nil {
-			delivery := controlDelivery(a.binding.Identity(), a.epoch, engine.IngressIntegrityFailure, 0, engine.ControlAmbiguous, result.Position, result.Status.ReceiptTime)
-			a.triggerTerminal(TerminalProtocol, TerminalStatusAmbiguous, frame.sequence, true)
+		if result.Status.Phase == StatusPhaseAuthFailed {
+			delivery := a.tqQuarantineDelivery(engine.TQControlStatusFailed, result.Status.Phase, pending, result.Position, result.Status.ReceiptTime, false)
+			a.triggerTerminal(TerminalProtocol, TerminalStatusAmbiguous, frame.sequence, false)
 			return delivery, true
 		}
+		if pending == nil || result.Status.CommandToken == "" || result.Status.CommandToken != strconv.FormatUint(pending.token, 10) {
+			return a.tqQuarantineDelivery(engine.TQControlStatusUnsolicited, result.Status.Phase, pending, result.Position, result.Status.ReceiptTime, false), true
+		}
 		<-pending.writeDone
-		if !pending.writeFailed {
-			switch result.Status.Disposition {
-			case StatusFailed:
-				pending.statusOutcome = engine.ControlFailed
-			case StatusAmbiguous:
-				if pending.statusOutcome != engine.ControlFailed {
-					pending.statusOutcome = engine.ControlAmbiguous
-				}
-			}
+		pending.observedCount++
+		pending.lastStatus = result.Position
+		remaining := pending.expectedCount - pending.successCount
+		failure := engine.TQControlFailureClass("")
+		switch result.Status.Disposition {
+		case StatusAcknowledged:
+			pending.successCount++
+		case StatusFailed:
+			failure = engine.TQControlStatusFailed
+		default:
+			failure = engine.TQControlStatusAmbiguous
 		}
-		if !result.Status.FinalInFrame {
+		if failure == engine.TQControlStatusAmbiguous && result.Status.ObservedCount > remaining {
+			failure = engine.TQControlStatusExtra
+		}
+		if pending.successCount > pending.expectedCount || pending.observedCount > pending.expectedCount {
+			failure = engine.TQControlStatusExtra
+		}
+		if failure != "" {
+			return a.tqQuarantineDelivery(failure, result.Status.Phase, pending, result.Position, result.Status.ReceiptTime, false), true
+		}
+		if pending.successCount < pending.expectedCount {
 			return AdapterDelivery{}, false
 		}
-		outcome := engine.ControlSucceeded
-		if pending.writeFailed {
-			outcome = engine.ControlAmbiguous
-		} else if pending.statusOutcome != "" {
-			outcome = pending.statusOutcome
-		}
-		if !a.detachAndAccountPending(pending, outcome) {
+		if !a.detachAndAccountPending(pending, engine.ControlSucceeded) {
 			return AdapterDelivery{}, false
 		}
-		delivery := controlDelivery(a.binding.Identity(), a.epoch, engine.TradeQuoteSubscriptionResult, pending.token, outcome, result.Position, result.Status.ReceiptTime)
+		a.accountTQStatuses(uint64(pending.observedCount), 0)
+		delivery := controlDelivery(a.binding.Identity(), a.epoch, engine.TradeQuoteSubscriptionResult, pending.token, engine.ControlSucceeded, result.Position, result.Status.ReceiptTime)
 		delivery.ExpectedStatusCount = pending.expectedCount
-		delivery.ObservedStatusCount = result.Status.ObservedCount
+		delivery.ObservedStatusCount = pending.observedCount
 		delivery.TQAction = pending.action
 		delivery.TQSymbols = append([]string(nil), pending.symbols...)
 		delivery.tqCommand = pending.engineCommand
@@ -1050,16 +1139,67 @@ func (a *LiveAttempt) detachAndAccountPending(pending *pendingCommand, outcome e
 	if a.adapter.accounting.CommandsPendingAck > 0 {
 		a.adapter.accounting.CommandsPendingAck--
 	}
+	if a.adapter.accounting.TQCommandsPendingAck > 0 {
+		a.adapter.accounting.TQCommandsPendingAck--
+	}
 	switch outcome {
 	case engine.ControlSucceeded:
 		a.adapter.accounting.CommandsAcknowledged++
+		a.adapter.accounting.TQCommandsAcknowledged++
 	case engine.ControlFailed:
 		a.adapter.accounting.CommandsFailed++
+		a.adapter.accounting.TQCommandsFailed++
 	default:
 		a.adapter.accounting.CommandsAmbiguous++
+		a.adapter.accounting.TQCommandsAmbiguous++
 	}
 	a.adapter.mu.Unlock()
 	return true
+}
+
+func (a *LiveAttempt) tqQuarantineDelivery(failure engine.TQControlFailureClass, phase StatusPhase, pending *pendingCommand, position engine.LivePosition, at time.Time, deadline bool) AdapterDelivery {
+	if phase == "" {
+		phase = StatusPhaseUnknown
+	}
+	expected, observed := 0, 0
+	token := uint64(0)
+	if pending != nil {
+		token, expected, observed = pending.token, pending.expectedCount, pending.observedCount
+		if position != (engine.LivePosition{}) && (failure == engine.TQControlStatusUnsolicited || observed == 0) {
+			observed++
+		}
+		_ = a.detachAndAccountPending(pending, engine.ControlAmbiguous)
+	} else if position != (engine.LivePosition{}) {
+		observed = 1
+	}
+	correlated, quarantined := uint64(0), uint64(0)
+	if pending != nil {
+		correlated = uint64(pending.observedCount)
+		if position != (engine.LivePosition{}) && pending.lastStatus == position && correlated > 0 {
+			correlated--
+		}
+	}
+	if position != (engine.LivePosition{}) {
+		quarantined = 1
+	}
+	a.accountTQStatuses(correlated, quarantined)
+	input := engine.TQControlQuarantineInput{
+		SchemaVersion: engine.TQSchemaV1, BindingIdentity: a.binding.Identity(), ConnectionEpoch: a.epoch,
+		Position: position, ReceiptTime: at.UTC(), Failure: failure, CommandToken: token,
+		ExpectedStatuses: expected, ObservedStatuses: observed, Deadline: deadline,
+	}
+	a.adapter.mu.Lock()
+	if a.adapter.accounting.FirstTQFailureClass == "" {
+		a.adapter.accounting.FirstTQFailureClass = failure
+		a.adapter.accounting.FirstTQFailurePhase = phase
+		a.adapter.accounting.FirstTQFailureEpoch = a.epoch
+		a.adapter.accounting.FirstTQFailurePosition = position
+		a.adapter.accounting.FirstTQFailureExpected = expected
+		a.adapter.accounting.FirstTQFailureObserved = observed
+		a.adapter.accounting.FirstTQFailureDeadline = deadline
+	}
+	a.adapter.mu.Unlock()
+	return AdapterDelivery{Kind: DeliveryTQControlQuarantine, Position: position, TQQuarantine: input}
 }
 
 func (a *LiveAttempt) triggerTerminal(source TerminalSource, reason TerminalReason, fenceAfter uint64, ingress bool) {
@@ -1153,10 +1293,17 @@ func (a *LiveAttempt) cleanupTerminal(cause *terminalCause) {
 	if pendingUnaccounted {
 		if a.adapter.accounting.CommandsPendingAck > 0 {
 			a.adapter.accounting.CommandsPendingAck--
+			if a.adapter.accounting.TQCommandsPendingAck > 0 {
+				a.adapter.accounting.TQCommandsPendingAck--
+			}
 		} else if a.adapter.accounting.CommandsPendingWrite > 0 {
 			a.adapter.accounting.CommandsPendingWrite--
+			if a.adapter.accounting.TQCommandsPendingWrite > 0 {
+				a.adapter.accounting.TQCommandsPendingWrite--
+			}
 		}
 		a.adapter.accounting.CommandsCanceledOrFenced++
+		a.adapter.accounting.TQCommandsCanceledOrFenced++
 	}
 	a.adapter.mu.Unlock()
 	accounting := a.queue.snapshot()
@@ -1217,6 +1364,18 @@ func DeliverToEngine(ctx context.Context, state *engine.Engine, delivery Adapter
 		return EngineDeliveryResult{}, errAttemptState
 	}
 	switch delivery.Kind {
+	case DeliveryTQControlQuarantine:
+		admission, completion := state.AdmitTQControlQuarantine(ctx, delivery.TQQuarantine)
+		result := EngineDeliveryResult{Admission: admission}
+		if admission != engine.AdmissionAdmitted || completion == nil {
+			return result, nil
+		}
+		select {
+		case <-ctx.Done():
+			return result, ctx.Err()
+		case result.TQDisposition = <-completion:
+			return result, nil
+		}
 	case DeliveryControl, DeliveryTerminal:
 		if (delivery.Control.Kind == engine.TradeQuoteSubscriptionResult ||
 			delivery.Control.Kind == engine.TradeQuoteCommandWriteResult && delivery.Control.Outcome != engine.ControlSucceeded) && len(delivery.TQSymbols) == 1 {

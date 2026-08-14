@@ -118,6 +118,9 @@ func (e *Engine) enterSuppressionLocked(event lifecycleEvent, node *queueNode, r
 		disposition = SuppressionRestartRequired
 	}
 	e.state.suppressionDisposition = disposition
+	if disposition == SuppressionSameBindingRecoveryAllowed {
+		e.scheduleRecoveryLocked(node)
+	}
 	if suppressionRequiresTermination(disposition) {
 		e.state.globalFailure = true
 		e.sealed = true
@@ -172,9 +175,13 @@ func (e *Engine) transitionLifecycleLocked(event lifecycleEvent, node *queueNode
 						next, reason = lifecycleAwaitingAggregateAck, lifecycleReasonSessionStart
 					}
 				}
-			case lifecycleAwaitingAggregateAck, lifecycleHydrating, lifecycleLive, lifecycleRecovering, lifecycleReplaying, lifecycleSuppressed:
+			case lifecycleAwaitingAggregateAck, lifecycleHydrating, lifecycleLive, lifecycleRecovering, lifecycleReplaying:
 				// A quiet timer is a legal self-transition and cannot fabricate
 				// the later evidence needed to leave any of these states.
+			case lifecycleSuppressed:
+				// Preserve the fixed first suppression reason. A timer is not a
+				// restoration event and must not replace it with an empty reason.
+				return true
 			case lifecycleInitializing:
 				return false
 			default:
@@ -258,6 +265,11 @@ func (e *Engine) transitionLifecycleLocked(event lifecycleEvent, node *queueNode
 			return false
 		}
 		next, reason = lifecycleLive, lifecycleReasonHydrationComplete
+	case lifecycleEventScheduledRecovery:
+		if e.mode != RunModeLive || previous != lifecycleSuppressed || e.state.suppressionDisposition != SuppressionSameBindingRecoveryAllowed || e.state.liveEpochActive {
+			return false
+		}
+		next, reason = lifecycleRecovering, lifecycleReasonScheduledRecovery
 	default:
 		return false
 	}

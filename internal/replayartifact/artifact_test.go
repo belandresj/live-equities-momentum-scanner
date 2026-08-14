@@ -97,6 +97,14 @@ func TestC4BoundedCandidateAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	constructionCounter := newCancelOnCheckContext(0)
+	cursor, err := handle.BeginPlaybackContext(constructionCounter)
+	if err != nil || cursor == nil {
+		t.Fatalf("opaque playback construction: cursor=%v err=%v", cursor, err)
+	}
+	if checks := constructionCounter.count(); checks > 3 {
+		t.Fatalf("playback construction performed a second scan: context checks=%d", checks)
+	}
 	handle.Close()
 	if validationCounter.count() <= candidateCounter.count() {
 		t.Fatalf("validation did not check between artifact lines: candidate=%d validation=%d", candidateCounter.count(), validationCounter.count())
@@ -298,6 +306,54 @@ func TestArtifactTrustAndPublication(t *testing.T) {
 		}
 		if handle, err := OpenValidated(partial.Path, validation); err == nil || handle != nil {
 			t.Fatal("partial artifact validated as complete")
+		}
+	})
+
+	t.Run("canonical ordering count and seal mutations fail closed", func(t *testing.T) {
+		binding, downloader, plan, closeServer := compileFixture(t, t.TempDir(), false)
+		defer closeServer()
+		result := Compile(context.Background(), plan, downloader)
+		body, err := os.ReadFile(result.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		validation := ValidationPlan{binding, plan.Start, plan.End, CompleteFinalBars, plan.Limits.MaximumArtifactBytes, plan.Limits.MaximumNormalizedRecords}
+		mutations := map[string][]byte{
+			"noncanonical number": bytes.Replace(slices.Clone(body), []byte(`"open":10`), []byte(`"open":10.0`), 1),
+			"unknown field":       bytes.Replace(slices.Clone(body), []byte(`"open":10`), []byte(`"unknown":1,"open":10`), 1),
+			"signed zero":         bytes.Replace(slices.Clone(body), []byte(`"volume":1`), []byte(`"volume":-0`), 1),
+			"wrong ordinal":       bytes.Replace(slices.Clone(body), []byte(`"ordinal":1`), []byte(`"ordinal":2`), 1),
+			"wrong count":         bytes.Replace(slices.Clone(body), []byte(`"record_count":1`), []byte(`"record_count":2`), 1),
+			"extra bytes":         append(slices.Clone(body), 'x'),
+			"digest mismatch":     bytes.Replace(slices.Clone(body), []byte(`"artifact_id":"sha256:`), []byte(`"artifact_id":"sha256:0`), 1),
+		}
+		for name, mutated := range mutations {
+			t.Run(name, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "mutated.jsonl")
+				if err := os.WriteFile(path, mutated, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if handle, err := OpenValidated(path, validation); err == nil || handle != nil {
+					t.Fatalf("%s mutation validated", name)
+				}
+			})
+		}
+
+		context := contextForBinding(CompleteFinalBars, binding, plan.Start, plan.End)
+		values := engine.AggregateValues{Open: 10, High: 11, Low: 9, Close: 10, Volume: 1, VWAP: 10, AverageTradeSize: 1, ATSProvenance: engine.ATSRESTFloorVolumeOverTrades}
+		ordered, _, err := buildCanonical(context, binding.UniverseSymbols(), []canonicalRecord{{plan.End, "AAA", plan.Start, plan.End, values}, {plan.End, "BBB", plan.Start, plan.End, values}}, 1<<20, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := bytes.Split(ordered, []byte{'\n'})
+		lines[1], lines[2] = lines[2], lines[1]
+		outOfOrder := bytes.Join(lines, []byte{'\n'})
+		path := filepath.Join(t.TempDir(), "out-of-order.jsonl")
+		if err := os.WriteFile(path, outOfOrder, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if handle, err := OpenValidated(path, ValidationPlan{binding, plan.Start, plan.End, CompleteFinalBars, 1 << 20, 2}); err == nil || handle != nil {
+			t.Fatal("out-of-order aggregate records validated")
 		}
 	})
 

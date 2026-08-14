@@ -4,17 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
-	"strings"
 	"syscall"
 	"time"
 
-	"github.com/belandresj/live-equities-momentum-scanner/internal/engine"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/reference"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/replayartifact/playback"
 )
@@ -28,9 +24,10 @@ type ValidationPlan struct {
 }
 
 type Handle struct {
-	file     *os.File
-	plan     ValidationPlan
-	metadata Metadata
+	file      *os.File
+	plan      ValidationPlan
+	metadata  Metadata
+	validated playback.ValidatedArtifact
 }
 
 func OpenValidated(path string, plan ValidationPlan) (*Handle, error) {
@@ -51,7 +48,7 @@ func OpenValidatedContext(ctx context.Context, path string, plan ValidationPlan)
 	if err != nil {
 		return nil, errors.New("open artifact")
 	}
-	metadata, err := validateOpenFile(ctx, file, plan)
+	validated, err := playback.ValidateContext(ctx, file, playbackPlan(plan, "", plan.End))
 	if err != nil {
 		file.Close()
 		return nil, err
@@ -64,7 +61,8 @@ func OpenValidatedContext(ctx context.Context, path string, plan ValidationPlan)
 		file.Close()
 		return nil, err
 	}
-	return &Handle{file: file, plan: plan, metadata: metadata}, nil
+	metadata := metadataFromValidated(validated)
+	return &Handle{file: file, plan: plan, metadata: metadata, validated: validated}, nil
 }
 
 // CandidateHeader is deliberately untrusted. It contains only the canonical
@@ -152,8 +150,9 @@ func openRegularReadOnly(path string) (*os.File, error) {
 
 func (h *Handle) Metadata() Metadata { return h.metadata }
 
-// BeginPlayback validates and rewinds the same already-open file description,
-// then returns the only producer of opaque replay success evidence.
+// BeginPlayback verifies the same-open validation evidence and rewinds the file
+// description without scanning it, then returns the only producer of opaque
+// replay success evidence.
 func (h *Handle) BeginPlayback() (*playback.Cursor, error) {
 	return h.BeginPlaybackContext(context.Background())
 }
@@ -180,13 +179,7 @@ func (h *Handle) BeginPlaybackThroughContext(ctx context.Context, requestedEnd t
 		(requestedEnd.Before(h.metadata.ReplayEnd) && h.metadata.Mode != CompleteFinalBars) {
 		return nil, errors.New("invalid requested replay end")
 	}
-	mode := string(h.plan.ExpectedMode)
-	return playback.NewContext(ctx, h.file, playback.Plan{
-		ArtifactID: h.metadata.ArtifactID,
-		BindingID:  h.plan.Binding.Identity(), UniverseID: h.plan.Binding.UniverseIdentity(), TradingDate: h.plan.Binding.TradingDate(),
-		SessionStart: h.plan.Binding.SessionStart(), SessionEnd: h.plan.Binding.SessionEnd(), Start: h.plan.Start, End: h.plan.End, RequestedEnd: requestedEnd,
-		Mode: mode, Symbols: h.plan.Binding.UniverseSymbols(), MaximumBytes: h.plan.MaximumBytes, MaximumRecords: h.plan.MaximumRecords,
-	})
+	return playback.NewContext(ctx, h.validated, playbackPlan(h.plan, h.metadata.ArtifactID, requestedEnd))
 }
 func (h *Handle) Read(destination []byte) (int, error) {
 	if h == nil || h.file == nil {
@@ -204,13 +197,15 @@ func (h *Handle) ValidateAgainContext(ctx context.Context) error {
 	if _, err := h.file.Seek(0, io.SeekStart); err != nil {
 		return errors.New("rewind artifact for validation")
 	}
-	metadata, err := validateOpenFile(ctx, h.file, h.plan)
+	validated, err := playback.ValidateContext(ctx, h.file, playbackPlan(h.plan, "", h.plan.End))
 	if err != nil {
 		return err
 	}
+	metadata := metadataFromValidated(validated)
 	if metadata != h.metadata {
 		return errors.New("artifact metadata changed between validations")
 	}
+	h.validated = validated
 	_, err = h.file.Seek(0, io.SeekStart)
 	if err == nil {
 		err = ctx.Err()
@@ -231,164 +226,17 @@ func validValidationPlan(plan ValidationPlan) bool {
 		(plan.ExpectedMode == CompleteFinalBars || plan.ExpectedMode == PartialSynthetic) && plan.MaximumBytes > 0 && plan.MaximumRecords > 0
 }
 
-func validateOpenFile(ctx context.Context, file *os.File, plan ValidationPlan) (Metadata, error) {
-	if ctx == nil {
-		return Metadata{}, errors.New("artifact validation requires a context")
-	}
-	if err := ctx.Err(); err != nil {
-		return Metadata{}, err
-	}
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > plan.MaximumBytes {
-		return Metadata{}, errors.New("artifact size or file type is invalid")
-	}
-	reader := bufio.NewReader(file)
-	readLine := func() ([]byte, error) {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		line, readErr := reader.ReadBytes('\n')
-		if readErr != nil || len(line) == 0 || line[len(line)-1] != '\n' {
-			return nil, errors.New("artifact is truncated")
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		return line, nil
-	}
-	headerBytes, err := readLine()
-	if err != nil {
-		return Metadata{}, err
-	}
-	var header headerLine
-	if err := strictCanonicalLine(headerBytes, &header); err != nil || header.Kind != "header" {
-		return Metadata{}, errors.New("invalid artifact header")
-	}
-	context, err := validateHeader(header, plan)
-	if err != nil {
-		return Metadata{}, err
-	}
-	digest := sha256.New()
-	_, _ = digest.Write(headerBytes)
-	sealedBytes := int64(len(headerBytes))
-	bodyBytes := sealedBytes
+func playbackPlan(plan ValidationPlan, artifactID string, requestedEnd time.Time) playback.Plan {
+	return playback.Plan{ArtifactID: artifactID,
+		BindingID: plan.Binding.Identity(), UniverseID: plan.Binding.UniverseIdentity(), TradingDate: plan.Binding.TradingDate(),
+		SessionStart: plan.Binding.SessionStart(), SessionEnd: plan.Binding.SessionEnd(), Start: plan.Start, End: plan.End, RequestedEnd: requestedEnd,
+		Mode: string(plan.ExpectedMode), Symbols: plan.Binding.UniverseSymbols(), MaximumBytes: plan.MaximumBytes, MaximumRecords: plan.MaximumRecords}
+}
 
-	expectedSymbols := plan.Binding.UniverseSymbols()
-	member := make(map[string]struct{}, len(expectedSymbols))
-	for _, symbol := range expectedSymbols {
-		member[symbol] = struct{}{}
-	}
-	counts := make(map[string]int64)
-	covered := make(map[string]struct{})
-	var aggregateCount int64
-	var coverageCount int64
-	var emptyCount int64
-	var priorRecord *canonicalRecord
-	var priorCoverage string
-	phase := "aggregate"
-	var summary summaryLine
-	for {
-		line, readErr := readLine()
-		if readErr != nil {
-			return Metadata{}, readErr
-		}
-		kind, kindErr := lineKind(line)
-		if kindErr != nil {
-			return Metadata{}, kindErr
-		}
-		switch kind {
-		case "aggregate":
-			if phase != "aggregate" || aggregateCount >= plan.MaximumRecords {
-				return Metadata{}, errors.New("aggregate line is out of order or over budget")
-			}
-			var value aggregateLine
-			if err := strictCanonicalAggregateLine(line, &value); err != nil || value.Ordinal != aggregateCount+1 {
-				return Metadata{}, errors.New("invalid canonical aggregate line")
-			}
-			record, err := recordFromLine(value)
-			if err != nil || !validRecord(context, record) {
-				return Metadata{}, errors.New("invalid aggregate record")
-			}
-			if _, ok := member[record.symbol]; !ok {
-				return Metadata{}, errors.New("aggregate symbol is outside binding")
-			}
-			if priorRecord != nil {
-				comparison := compareRecords(*priorRecord, record)
-				if comparison > 0 || plan.ExpectedMode == CompleteFinalBars && priorRecord.symbol == record.symbol && priorRecord.windowStart == record.windowStart {
-					return Metadata{}, errors.New("aggregate order or identity is invalid")
-				}
-			}
-			copy := record
-			priorRecord = &copy
-			counts[record.symbol]++
-			aggregateCount++
-			_, _ = digest.Write(line)
-			sealedBytes += int64(len(line))
-			bodyBytes += int64(len(line))
-		case "coverage":
-			if phase == "summary" || phase == "seal" {
-				return Metadata{}, errors.New("coverage line is out of order")
-			}
-			phase = "coverage"
-			var value coverageLine
-			if err := strictCanonicalLine(line, &value); err != nil || value.Symbol <= priorCoverage || value.RecordCount < 0 ||
-				value.Start != canonicalTime(plan.Start) || value.End != canonicalTime(plan.End) || value.RecordCount != counts[value.Symbol] {
-				return Metadata{}, errors.New("invalid coverage line")
-			}
-			if _, ok := member[value.Symbol]; !ok {
-				return Metadata{}, errors.New("coverage symbol is outside binding")
-			}
-			if plan.ExpectedMode == CompleteFinalBars && value.Class != CompleteCoverage || plan.ExpectedMode == PartialSynthetic && value.Class != PartialCoverage {
-				return Metadata{}, errors.New("coverage class does not match artifact mode")
-			}
-			priorCoverage = value.Symbol
-			covered[value.Symbol] = struct{}{}
-			coverageCount++
-			if plan.ExpectedMode == CompleteFinalBars && value.RecordCount == 0 {
-				emptyCount++
-			}
-			_, _ = digest.Write(line)
-			sealedBytes += int64(len(line))
-			bodyBytes += int64(len(line))
-		case "summary":
-			if phase != "coverage" {
-				return Metadata{}, errors.New("summary is out of order")
-			}
-			phase = "summary"
-			if err := strictCanonicalLine(line, &summary); err != nil || summary.AggregateRecords != aggregateCount ||
-				summary.CoverageEntries != coverageCount || summary.EmptySymbols != emptyCount || summary.BodyBytes != bodyBytes {
-				return Metadata{}, errors.New("artifact summary does not reconcile")
-			}
-			if plan.ExpectedMode == PartialSynthetic && summary.EmptySymbols != 0 {
-				return Metadata{}, errors.New("partial artifact cannot claim empty symbols")
-			}
-			if err := validateCoveragePopulation(plan, expectedSymbols, counts, covered, coverageCount, priorCoverage); err != nil {
-				return Metadata{}, err
-			}
-			_, _ = digest.Write(line)
-			sealedBytes += int64(len(line))
-		case "seal":
-			if phase != "summary" {
-				return Metadata{}, errors.New("seal is out of order")
-			}
-			phase = "seal"
-			var seal sealLine
-			if err := strictCanonicalLine(line, &seal); err != nil || seal.SealedBytes != sealedBytes || seal.ArtifactID != "sha256:"+hex.EncodeToString(digest.Sum(nil)) {
-				return Metadata{}, errors.New("artifact seal or digest is invalid")
-			}
-			if extra, readErr := reader.ReadByte(); readErr != io.EOF || extra != 0 {
-				return Metadata{}, errors.New("seal is not the final artifact line")
-			}
-			if err := ctx.Err(); err != nil {
-				return Metadata{}, err
-			}
-			return Metadata{plan.ExpectedMode, seal.ArtifactID, header.BindingID, header.UniverseID, header.TradingDate,
-				context.sessionStart, context.sessionEnd, context.replayStart, context.replayEnd,
-				aggregateCount, coverageCount, emptyCount, sealedBytes}, nil
-		default:
-			return Metadata{}, errors.New("unknown artifact line kind")
-		}
-	}
+func metadataFromValidated(value playback.ValidatedArtifact) Metadata {
+	return Metadata{Mode: ArtifactMode(value.Mode()), ArtifactID: value.ArtifactID(), BindingIdentity: value.BindingID(), UniverseIdentity: value.UniverseID(),
+		TradingDate: value.TradingDate(), SessionStart: value.SessionStart(), SessionEnd: value.SessionEnd(), ReplayStart: value.Start(), ReplayEnd: value.End(),
+		AggregateRecords: int64(value.TotalRecords()), CoverageEntries: int64(value.CoverageEntries()), EmptySymbols: int64(value.EmptySymbols()), SealedBytes: value.SealedBytes()}
 }
 
 func strictCanonicalLine(line []byte, destination any) error {
@@ -407,99 +255,6 @@ func strictCanonicalLine(line []byte, destination any) error {
 	reencoded, err := appendCanonicalLine(nil, destination, int64(len(line)))
 	if err != nil || !bytes.Equal(reencoded, line) {
 		return errors.New("line is not canonical")
-	}
-	return nil
-}
-
-func strictCanonicalAggregateLine(line []byte, destination *aggregateLine) error {
-	if err := strictCanonicalLine(line, destination); err != nil {
-		return err
-	}
-	normalized := *destination
-	normalized.Open = normalizeZero(normalized.Open)
-	normalized.High = normalizeZero(normalized.High)
-	normalized.Low = normalizeZero(normalized.Low)
-	normalized.Close = normalizeZero(normalized.Close)
-	normalized.Volume = normalizeZero(normalized.Volume)
-	normalized.VWAP = normalizeZero(normalized.VWAP)
-	reencoded, err := appendCanonicalLine(nil, normalized, int64(len(line)))
-	if err != nil || !bytes.Equal(reencoded, line) {
-		return errors.New("aggregate numeric encoding is not canonical")
-	}
-	return nil
-}
-
-func lineKind(line []byte) (string, error) {
-	var probe struct {
-		Kind string `json:"kind"`
-	}
-	if err := json.Unmarshal(line, &probe); err != nil || probe.Kind == "" {
-		return "", errors.New("artifact line has no kind")
-	}
-	return probe.Kind, nil
-}
-
-func validateHeader(header headerLine, plan ValidationPlan) (artifactContext, error) {
-	sessionStart, err1 := parseCanonicalTime(header.SessionStart)
-	sessionEnd, err2 := parseCanonicalTime(header.SessionEnd)
-	replayStart, err3 := parseCanonicalTime(header.ReplayStart)
-	replayEnd, err4 := parseCanonicalTime(header.ReplayEnd)
-	if err1 != nil || err2 != nil || err3 != nil || err4 != nil || header.Schema != SchemaV1 || header.CompileFormat != SchemaV1 ||
-		header.ArtifactMode != string(plan.ExpectedMode) || header.BindingID != plan.Binding.Identity() || header.UniverseID != plan.Binding.UniverseIdentity() ||
-		header.TradingDate != plan.Binding.TradingDate() || sessionStart != plan.Binding.SessionStart() || sessionEnd != plan.Binding.SessionEnd() ||
-		replayStart != plan.Start || replayEnd != plan.End {
-		return artifactContext{}, errors.New("artifact header is incompatible with binding")
-	}
-	if plan.ExpectedMode == CompleteFinalBars {
-		if header.Provider != MassiveProvider || header.Endpoint != MassiveEndpoint || header.NormalizationPolicy != MassivePolicy {
-			return artifactContext{}, errors.New("complete artifact provenance is invalid")
-		}
-	} else if header.Provider != SyntheticProvider || header.Endpoint != "" || header.NormalizationPolicy != SyntheticPolicy {
-		return artifactContext{}, errors.New("partial artifact provenance is invalid")
-	}
-	return artifactContext{plan.ExpectedMode, header.BindingID, header.UniverseID, header.TradingDate, sessionStart, sessionEnd, replayStart, replayEnd}, nil
-}
-
-func recordFromLine(value aggregateLine) (canonicalRecord, error) {
-	logical, err1 := parseCanonicalTime(value.LogicalDeliveryTime)
-	start, err2 := parseCanonicalTime(value.WindowStart)
-	end, err3 := parseCanonicalTime(value.WindowEnd)
-	if err1 != nil || err2 != nil || err3 != nil || value.Ordinal <= 0 {
-		return canonicalRecord{}, errors.New("invalid aggregate time or ordinal")
-	}
-	values := engine.AggregateValues{Open: value.Open, High: value.High, Low: value.Low, Close: value.Close, Volume: value.Volume, VWAP: value.VWAP,
-		AverageTradeSize: value.AverageTradeSize, ATSProvenance: engine.ATSProvenance(value.ATSProvenance)}
-	return canonicalRecord{logical, value.Symbol, start, end, values}, nil
-}
-
-func compareRecords(left, right canonicalRecord) int {
-	if left.logicalDeliveryTime.Before(right.logicalDeliveryTime) {
-		return -1
-	}
-	if left.logicalDeliveryTime.After(right.logicalDeliveryTime) {
-		return 1
-	}
-	if left.windowStart.Before(right.windowStart) {
-		return -1
-	}
-	if left.windowStart.After(right.windowStart) {
-		return 1
-	}
-	return strings.Compare(left.symbol, right.symbol)
-}
-
-func validateCoveragePopulation(plan ValidationPlan, bindingSymbols []string, counts map[string]int64, covered map[string]struct{}, coverageCount int64, last string) error {
-	for symbol := range counts {
-		if _, exists := covered[symbol]; !exists {
-			return errors.New("aggregate symbol lacks coverage")
-		}
-	}
-	if plan.ExpectedMode == CompleteFinalBars {
-		if coverageCount != int64(len(bindingSymbols)) || len(covered) != len(bindingSymbols) || len(counts) > len(bindingSymbols) || last != bindingSymbols[len(bindingSymbols)-1] {
-			return errors.New("complete artifact coverage is incomplete")
-		}
-	} else if coverageCount <= 0 || coverageCount > int64(len(bindingSymbols)) {
-		return errors.New("partial artifact coverage is invalid")
 	}
 	return nil
 }

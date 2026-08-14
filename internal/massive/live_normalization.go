@@ -38,10 +38,11 @@ const (
 type LiveFamily string
 
 const (
-	LiveFamilyAggregate LiveFamily = "A"
-	LiveFamilyTrade     LiveFamily = "T"
-	LiveFamilyQuote     LiveFamily = "Q"
-	LiveFamilyStatus    LiveFamily = "status"
+	LiveFamilyAggregate   LiveFamily = "A"
+	LiveFamilyTrade       LiveFamily = "T"
+	LiveFamilyQuote       LiveFamily = "Q"
+	LiveFamilyStatus      LiveFamily = "status"
+	LiveFamilyUnsupported LiveFamily = "unsupported"
 )
 
 type LiveRejectionReason string
@@ -68,6 +69,9 @@ const (
 	StatusPhaseConnected   StatusPhase = "connected"
 	StatusPhaseAuthSuccess StatusPhase = "auth_success"
 	StatusPhaseSuccess     StatusPhase = "success"
+	StatusPhaseAuthFailed  StatusPhase = "auth_failed"
+	StatusPhaseError       StatusPhase = "error"
+	StatusPhaseUnknown     StatusPhase = "unknown"
 )
 
 type StatusDisposition string
@@ -255,7 +259,7 @@ func (a LiveFrameAccounting) Reconciles() bool {
 }
 
 type liveFrameAnalysis struct {
-	arrayKnown, statusExact  bool
+	arrayKnown               bool
 	declared, ambiguityIndex int
 	statusCount              int
 	ambiguityReason          LiveRejectionReason
@@ -308,11 +312,11 @@ func analyzeLiveFrame(frame LiveFrame, statusContext *StatusContext, options Liv
 	if err != nil || opening != json.Delim('[') {
 		return liveFrameAnalysis{frameAmbiguity: true, frameAmbiguityReason: LiveRejectFrameSyntax}
 	}
-	analysis := liveFrameAnalysis{ambiguityIndex: -1, statusExact: true}
+	analysis := liveFrameAnalysis{ambiguityIndex: -1}
 	for index := 0; decoder.More(); index++ {
 		var raw json.RawMessage
 		if err := decoder.Decode(&raw); err != nil {
-			analysis.ambiguityIndex, analysis.ambiguityReason, analysis.statusExact = index, LiveRejectFrameSyntax, false
+			analysis.ambiguityIndex, analysis.ambiguityReason = index, LiveRejectFrameSyntax
 			return analysis
 		}
 		analysis.declared++
@@ -325,17 +329,17 @@ func analyzeLiveFrame(frame LiveFrame, statusContext *StatusContext, options Liv
 			analysis.statusCount++
 		}
 		if ambiguous {
-			analysis.ambiguityIndex, analysis.ambiguityReason, analysis.statusExact = index, result.Rejection.Reason, false
+			analysis.ambiguityIndex, analysis.ambiguityReason = index, result.Rejection.Reason
 		}
 	}
 	closing, err := decoder.Token()
 	if err != nil || closing != json.Delim(']') {
-		analysis.ambiguityIndex, analysis.ambiguityReason, analysis.statusExact = analysis.declared, LiveRejectFrameSyntax, false
+		analysis.ambiguityIndex, analysis.ambiguityReason = analysis.declared, LiveRejectFrameSyntax
 		return analysis
 	}
 	var trailing json.RawMessage
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		analysis.frameAmbiguity, analysis.frameAmbiguityReason, analysis.statusExact = true, LiveRejectFrameSyntax, false
+		analysis.frameAmbiguity, analysis.frameAmbiguityReason = true, LiveRejectFrameSyntax
 	}
 	analysis.arrayKnown = true
 	return analysis
@@ -391,7 +395,11 @@ func (c *liveFrameCursor) Next() (LiveResult, bool) {
 			c.statusSeen++
 			result.Status.ObservedCount = c.analysis.statusCount
 			result.Status.FinalInFrame = c.statusSeen == c.analysis.statusCount
-			if !c.analysis.statusExact || c.status == nil || c.analysis.statusCount != c.status.ExpectedCount {
+			// A command acknowledgement is an asynchronous stream, not a
+			// frame-local transaction. Only a frame that already contains more
+			// statuses than the command can still accept is contaminated here;
+			// cumulative completion is owned by the transport accumulator.
+			if c.status == nil || c.analysis.statusCount > c.status.ExpectedCount {
 				if result.Status.Disposition == StatusAcknowledged {
 					result.Status.Disposition, result.Status.Reason = StatusAmbiguous, LiveRejectStatusCorrelation
 				}
@@ -484,7 +492,10 @@ func normalizeElement(frame LiveFrame, position engine.LivePosition, raw json.Ra
 	case string(LiveFamilyStatus):
 		return normalizeStatus(frame, position, members, statusContext), false
 	default:
-		return ambiguity(position, LiveRejectEventFamily), true
+		// A valid, explicit provider family is attributable even when this
+		// adapter does not support it. Missing, duplicated, malformed, or
+		// non-string event identity remains raw ambiguity above.
+		return rejection(frame, LiveFamilyUnsupported, "", position, LiveRejectEventFamily), false
 	}
 }
 
@@ -678,7 +689,12 @@ func normalizeStatus(frame LiveFrame, position engine.LivePosition, members obje
 	switch StatusPhase(value) {
 	case StatusPhaseConnected, StatusPhaseAuthSuccess, StatusPhaseSuccess:
 		status.Phase = StatusPhase(value)
+	case StatusPhaseAuthFailed, StatusPhaseError:
+		status.Phase = StatusPhase(value)
+		status.Disposition, status.Reason = StatusFailed, ""
+		return LiveResult{Kind: LiveResultStatus, Position: position, Status: status}
 	default:
+		status.Phase = StatusPhaseUnknown
 		status.Disposition, status.Reason = StatusFailed, ""
 		return LiveResult{Kind: LiveResultStatus, Position: position, Status: status}
 	}

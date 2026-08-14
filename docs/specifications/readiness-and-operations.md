@@ -40,6 +40,8 @@ Sections 8-19 are completed here after its just-in-time V2 reconnaissance.
 | `C8-S1` runtime/lifecycle | `accepted_after_correction` | 2026-08-10 live-start evidence invalidated the use of one 60-second wall-clock deadline for both connection establishment and full-population hydration. Corrected `P-C8-RUNTIME` proves the connection deadline is handshake-only, finite C6 hydration can outlive it, the subscribed live tail is consumed concurrently, and every causal predecessor is drained through the ingress fence before readiness; affected race clean. | Complete |
 | `C8-S2` measurements/load | `accepted_after_correction` | `P-C8-LOAD`: 6,000-symbol bound population, 100 active aggregate symbols, 20 corrections, 20 duplicates, 20 rejects, and 60 normalized T/Q facts correctly fenced without acknowledged membership; 53.67 s end-to-end and exact accounting | Complete |
 | Final component review | `accepted_after_2026-08-10_correction` | Focused re-review confirmed the hydration-deadline/live-tail correction plus synchronized concurrent-terminal diagnostics and an explicit active-attempt shutdown join. No P1/P2 finding remains; uncached ordinary, focused race, vet, UI-model, and diff checks pass. Unchanged non-short load evidence is reused. | Complete |
+| TQR-S1 accounting correction | `accepted` | Operations now tests queue/non-TQ transport reconciliation separately from optional T/Q command/status/normalization identities. Only the former can route broad aggregate ingress integrity; a T/Q-only contradiction emits engine-owned quarantine and leaves aggregate lifecycle/currentness unchanged. `TestPTQRAccountingPartitionQuarantinesOnlyTQ` passes. | Complete |
+| TQR-S2 recovery/continuity correction | `accepted_after_review_correction` | Safe committed aggregate loss enters exact gap recovery; unsafe/exhausted loss waits for one engine-issued scheduled command while process/API continuity remains available. Quiet sockets are polled at a bounded 100 ms lifecycle cadence, so session end and restart-required suppression terminate and parent cancellation cannot hot-loop. Focused short/race proofs and review corrections pass. | Complete |
 
 ## 1-4. Outcome, scope, ownership, and settled boundary
 
@@ -163,7 +165,8 @@ pre-ack, post-admission, and stale-epoch facts are fenced. This realizes
 
 Current local settings are: engine capacity 8,192 with 128 required-input
 reserve; C5 queue 512 frames (the accepted C5 hard limit), 64 MiB total, 8 MiB
-per frame; four-second evaluation delay; one-second sampler cadence; two-second
+per frame; four-second evaluation cadence; 100-millisecond pressure-sample
+cadence; two-second
 readiness tolerance past the exact causal target; three recovery attempts; 60
 seconds to establish and acknowledge each connection attempt; C6's finite
 full-population hydration plan with eight workers, at most two pages and three
@@ -354,3 +357,26 @@ issue. Its uncached ordinary suite and affected race suite both passed, as did
 `git diff --check`. The unchanged non-short `P-C8-LOAD` evidence was reused;
 credentialed provider availability, market-hours validation, and an SLA remain
 explicitly unproven and deferred.
+
+### TQR-S2 aggregate-loss and process-continuity correction
+
+Possible raw aggregate loss now bypasses suppression when the engine can name
+the last committed supported boundary: the epoch closes, ranking becomes
+noncurrent, and the existing exact gap-hydration/fence path resumes the same
+canonical evaluator. If no safe boundary exists, or bounded recovery exhausts,
+the engine publishes `same_binding_recovery_allowed` and creates one opaque
+command containing the binding, failed epoch, monotonic retry ordinal, and
+earliest process time. Backoff starts at one second, doubles per scheduled
+retry, and caps at 30 seconds. `RunLive` waits for that command, admits it only
+after its deadline, and opens no socket before the engine alone transitions to
+`recovering`. Controlled stop, session end, and restart-required suppression
+retain their existing terminal behavior.
+
+`TestPTQRScheduledRecoveryIsTheOnlySameBindingContinuation` and the corrected
+bounded-retry traces prove that recoverable suppression does not return from
+the live composition, does not reconnect before the deadline, and does not
+hot-loop. Process status remains live while backend readiness is false;
+`TestPTQRRecoverableSuppressionKeepsAPIAndLivenessAvailable` proves `/livez`
+and the versioned snapshot remain servable while `/readyz` reports suppressed.
+This corrects C8's earlier terminal-exhaustion expectation without changing
+readiness meaning or granting the runtime lifecycle authority.

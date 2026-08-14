@@ -48,11 +48,12 @@ func TestPC5ClassStrictMixedFrameClassification(t *testing.T) {
 		}
 	}
 
-	t.Run("first ambiguity fences causal remainder", func(t *testing.T) {
+	t.Run("explicit unsupported family is attributable and preserves causal remainder", func(t *testing.T) {
 		frame := "[" + aggregate + `,{"ev":"mystery"},` + aggregate + "]"
 		got, counts := NormalizeLiveFrame(liveFrame(binding, 7, 12, received, frame), nil, LiveNormalizationOptions{})
-		if len(got) != 2 || got[0].Kind != LiveResultAggregate || got[1].Kind != LiveResultAmbiguous || got[1].Position.ArrayIndex != 1 || counts.FencedRemainder != 1 || !counts.Reconciles() {
-			t.Fatalf("causal ambiguity = %#v %+v", got, counts)
+		if len(got) != 3 || got[0].Kind != LiveResultAggregate || got[1].Kind != LiveResultRejected || got[1].Rejection.Family != LiveFamilyUnsupported ||
+			got[2].Kind != LiveResultAggregate || counts.FencedRemainder != 0 || !counts.Reconciles() {
+			t.Fatalf("unsupported family = %#v %+v", got, counts)
 		}
 	})
 
@@ -309,12 +310,20 @@ func TestPC5StatusNormalizationCorrelation(t *testing.T) {
 	}{
 		{"wrong_phase", `[{"ev":"status","status":"connected"}]`, base},
 		{"wrong_command_phase", `[{"ev":"status","status":"connected"}]`, func() StatusContext { value := base; value.ExpectedPhase = StatusPhaseConnected; return value }()},
-		{"partial", `[{"ev":"status","status":"success"}]`, func() StatusContext { value := base; value.ExpectedCount = 2; return value }()},
 		{"extra", `[{"ev":"status","status":"success"},{"ev":"status","status":"success"}]`, base},
 		{"wrong_epoch", `[{"ev":"status","status":"success"}]`, func() StatusContext { value := base; value.ConnectionEpoch = 6; return value }()},
 		{"duplicate_status", `[{"ev":"status","status":"success","status":"success"}]`, base},
 		{"missing_command_token", `[{"ev":"status","status":"success"}]`, func() StatusContext { value := base; value.CommandToken = ""; return value }()},
 	}
+
+	t.Run("partial frame remains correlated evidence", func(t *testing.T) {
+		partial := base
+		partial.ExpectedCount = 2
+		got, _ := NormalizeLiveFrame(liveFrame(binding, 5, 4, received, `[{"ev":"status","status":"success"}]`), &partial, LiveNormalizationOptions{})
+		if len(got) != 1 || got[0].Status.Disposition != StatusAcknowledged || got[0].Status.ObservedCount != 1 {
+			t.Fatalf("partial asynchronous status = %+v", got)
+		}
+	})
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got, _ := NormalizeLiveFrame(liveFrame(binding, 5, 2, received, test.data), &test.context, LiveNormalizationOptions{})

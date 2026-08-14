@@ -186,7 +186,8 @@ For every correctable failure:
 4. reopen only the affected accepted item and preserve unrelated clean proof;
 5. implement the correction and run the narrowest proof that distinguishes
    success from the observed failure;
-6. obtain only the risk-triggered focused review described in Section 8;
+6. obtain a focused review only if the corrected boundary meets the explicit
+   risk trigger in Section 8;
 7. update the component parent ledger with the new premise and result; and
 8. continue in component order.
 
@@ -202,7 +203,7 @@ that distinguishes the failure, and rebuild scale only after that case passes.
 Implementation remains sequential: finish C7, then C8, C9, C10, and C11. Keep
 one active implementation slice. Contract and reconnaissance work may be
 revised just in time; implementation of component N+1 waits for component N's
-accepted interface and final review.
+accepted interface and component acceptance.
 
 | Component | Minimum V1 outcome | Planned delivery shape | Deferred hardening |
 | --- | --- | --- | --- |
@@ -272,15 +273,19 @@ acceptance once after the affected implementation stabilizes.
 
 - A completed component contract receives one focused independent review only
   when it introduces or changes a consequential trust, persistence, identity,
-  concurrency, ownership, ordering, or cross-component interface boundary.
+  concurrency, ownership, ordering, or cross-component interface boundary and
+  primary proof plus construction do not make the risk straightforward.
 - An implementation slice receives a narrow independent review only for one of
   those consequential boundaries when its primary proof and construction
   argument do not make the risk straightforward.
-- Every completed component receives one final read-only review.
 - Correct findings, then request focused re-review of the finding and affected
-  boundary; do not repeat a clean broad review.
-- After C11, run one final integrated V1 RC review.
-- Never request review solely to reconfirm an unchanged primary proof.
+  boundary only when necessary to resolve that finding; do not repeat a clean
+  broad review.
+- Never request review solely because a contract, slice, component, reopened
+  boundary, correction, or milestone is complete, or solely to reconfirm green
+  deterministic verification.
+- Older component-local requirements for an automatic final component review
+  or automatic review after reopening are superseded by this section.
 
 A review finding enters the correction loop when it changes a lower-level
 premise or exposes a defect. If the preferred reviewer model is unavailable,

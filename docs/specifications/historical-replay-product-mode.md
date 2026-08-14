@@ -1,100 +1,100 @@
 # Historical replay product mode
 
-**Status:** Owner-approved implementation-ready contract. Sequential execution
-is authorized after C11 and the integrated private V1 RC are finally accepted.
+**Status:** Reopened by the owner-approved 2026-08-12 CLI event-time replay
+correction. The prior C12-S1 backend is preserved as evidence; the mandatory
+1x/API/dashboard C12 product plan and C12-S2 are superseded.
 
 **Boundary approval authority:** Owner
 
-**Boundary approval:** Approved by the owner on 2026-08-09 for the historical
-observation-window workflow recorded below
+**Boundary approval:** The 2026-08-09 historical observation-window boundary
+was replaced by the owner-approved 2026-08-12
+[`CLI event-time replay correction`](../replay-cli-event-time-correction.md).
 
 **Completed-contract approval authority:** Owner
 
-**Contract/reuse/test/slice-plan approval:** Owner-approved 2026-08-09 after
-the required independent review and focused re-reviews were clean
+**Contract/reuse/test/slice-plan approval:** The prior plan was approved on
+2026-08-09. Its conflicting 1x/API/UI delivery decisions were superseded on
+2026-08-12; the correction document is the current executable plan.
 
 **Standing program decisions:** The existing
 [Version 1 Release Program](../v1-release-program.md) controls C7-C11 only. It
 does not authorize C12 approval, implementation, credential access, or changes
-to accepted C4 acquisition semantics. The owner's 2026-08-09 C12 approval
-separately authorizes the exact C4-S6, C12-S1, and C12-S2 assignments,
-proportionate reviews, in-scope lower-level corrections, local milestone
-commits, and the retained B4 read described below. It does not authorize new
-product semantics, provider calls, credential access, public deployment,
-artifact copying, pushing, or history rewriting.
+to accepted C4 acquisition semantics. The owner's 2026-08-12 correction
+separately authorizes the exact `C12R` requirements/proofs, proportionate
+reopening and reacceptance of implicated C2-C4 mechanics, local milestone
+commits, and the retained B4 CLI read described in the correction. It does not
+authorize provider calls, credential access, public deployment, artifact
+copying, pushing, or history rewriting.
 
-**Advancement mode:** `delegated_sequential` for C4-S6, C12-S1, C12-S2, and
-their required reviews after C11/private V1 RC acceptance. One write-capable
-slice runs at a time. Routine corrections within the approved requirements,
-whitelists, trust boundaries, and deferrals are recorded and continue without
-another owner message; fixed-authority conflict, new source scope, provider or
-credential action, destructive/external action, or public deployment stops for
-the smallest owner decision.
+**Advancement mode:** `delegated_sequential` for the current `C12R` correction
+and its required C2-C4 reacceptance/reviews. One write-capable slice runs at a
+time. Routine corrections within the correction's requirements, trust
+boundaries, and deferrals are recorded and continue without another owner
+message; fixed-authority conflict, new source scope, provider or credential
+action, destructive/external action, or public deployment stops for the
+smallest owner decision.
 
 **Controlling Phase 1 requirements:** `PG-REPLAY-01`, `PG-REPLAY-02`,
-`PG-UI-01`, `PG-UI-02`, `PG-OBS-03`, `ARCH-OWN-01`, `ARCH-OWN-02`,
+`PG-OBS-01`, `PG-OBS-02`, `PG-OBS-03`, `ARCH-OWN-01`, `ARCH-OWN-02`,
 `ARCH-OWN-03`, `ARCH-OWN-04`, `ARCH-FLOW-01`, `ARCH-FLOW-02`,
-`ARCH-FLOW-04`, `DTE-CLOCK-04`, `DTE-CLOCK-05`, `DTE-CLOCK-06`,
+`ARCH-FLOW-04`, `DTE-MODEL-01`, `DTE-MODEL-02`, `DTE-MODEL-03`,
+`DTE-CLOCK-04`, `DTE-CLOCK-05`, `DTE-CLOCK-06`,
 `DTE-EVENT-04`, `DTE-TIMER-01`, `DTE-COMMIT-01`, `DTE-COMMIT-02`,
 `DTE-COMMIT-03`, `DTE-COMMIT-04`, `DTE-REPLAY-01`, `DTE-REPLAY-02`,
-`DTE-REPLAY-03`, `LIFE-INIT-01`, `LIFE-LIVE-05`, `LIFE-REPLAY-01`,
-`LIFE-REPLAY-02`, `LIFE-REPLAY-03`, `LIFE-PUBLISH-01`,
-`LIFE-PUBLISH-02`, `LIFE-END-02`, and `LIFE-END-03`
+`DTE-REPLAY-03`, `DTE-REJECT-01`, `LIFE-INIT-01`, `LIFE-REPLAY-01`,
+`LIFE-REPLAY-02`, `LIFE-REPLAY-03`, `LIFE-SUPPRESS-01`,
+`LIFE-SUPPRESS-02`, `LIFE-SUPPRESS-03`, `LIFE-END-02`, and `LIFE-END-03`
 
-**Dependencies:** Finally accepted C4 aggregate replay including accepted
-`C4-S5` prefix-validation/requested-end completion, and requiring approved queued
-`C4-S6` bounded manual-driver cancellation to be accepted before C12-S1 may start; accepted C8
-operations runtime and C10 snapshot API contracts; and the current C11 dashboard API/view-
-state boundary. C7 checkpoint continuation is an accepted future-compatible
-seam but is not exposed by the first C12 product workflow. C11 final Chrome
-acceptance remains separate. Completed-contract work may use the stable current
-C11 seam, but implementation additionally requires finally accepted C11 and an
-accepted integrated private V1 RC. The owner-approved specification-map
-revision now activates C12 immediately after those prerequisites.
+**Dependencies:** Finally accepted C4 aggregate replay, including requested-end
+completion and bounded manual-driver cancellation; accepted C2 ordered engine
+transition and C3 evaluator/publication boundaries, reopened only for the
+complete-final-bar group-coalescing claim; and Component 1 exact-date cached
+binding construction. C8, C10, C11, checkpoint continuation, and live-provider
+composition are not runtime dependencies of the corrected CLI product.
 
 ## Contract document map
 
 | Document | Exclusive normative responsibility | Requirement/proof/slice coverage | Read for | Depends on |
 | --- | --- | --- | --- | --- |
-| This parent | Complete C12 outcome, ownership, non-scope, semantic/runtime/API/UI contract, evidence ledger, proofs, assignments, and approval state | Sections 1-19; `C12-S1`, `C12-S2`; all C12 requirements and proofs | Every C12 task | C4, C8, C10, and current C11 contracts; C7 compatibility only |
+| This parent | C12 routing, sole delivery ledger, preserved historical contract/evidence, and current approval state | Prior Sections 1-19; superseded `C12-S1`/`C12-S2` evidence | Every C12 task | Accepted C2-C4 and Component 1 binding |
+| [CLI event-time replay correction](../replay-cli-event-time-correction.md) | Current finite, fully unpaced, CLI-only C12 behavior; exact superseded prior decisions, reopened mechanics, requirements, proofs, and delivery/Git bounds | `C12R-*`; `P-C12R-*`; current correction slices | Every current replay task | This parent and accepted C4; exact C2-C3 mechanics only when proof reopens them |
 | [REST feasibility benchmark](../replay-rest-feasibility-benchmark.md) | Non-authoritative provider/host/plan-specific completed evidence record and future rerun protocol | `B-C12-REST`; no product requirement or acceptance proof | REST benchmark evidence or a separately authorized future rerun | C4 downloader and this skeleton |
 
-**Layout:** Single-file C12 contract, Sections 1-19. The file exceeds the
-template's approximate parent routing target because the one observation-run
-state machine, its atomic API mapping, and its two sequential assignments must
-be reasoned about together to prevent mixed phase/market publications. The
-separate benchmark remains evidence rather than product behavior. If later
-implementation makes backend or UI work independently routable, change the
-document map only through an owner-approved C12 contract revision.
+**Layout:** Modular C12 contract. This parent preserves the prior contract and
+sole ledger; the correction document owns all current replay behavior where it
+conflicts. The separate benchmark remains evidence rather than product
+behavior.
 
-**Routing rule:** C12 owns only accepted-artifact-to-local-product composition.
+**Routing rule:** Read this parent first, then the CLI correction for all
+current replay work. The correction controls every conflict with the prior 1x,
+API-retention, dashboard, Chrome, and S2 text below; the prior text remains
+implementation history and reusable evidence only. C12 owns only accepted-artifact-to-local-product composition.
 C4 continues to own historical acquisition, normalization, artifact trust, and
 replay source/clock. Accepted `C4-S5` now validates an exact requested prefix end
 and supplies truthful `requested_end` completion while still validating/sealing
 the complete same-open source artifact. C12 consumes that opaque C4 fact but may
-not reimplement it in its wall scheduler, forge artifact-end evidence, or become
+not reimplement it in its CLI driver, forge artifact-end evidence, or become
 a second replay source/clock.
 
-**Contract-wide coverage and acceptance:** The owner approved the Sections 1-7
-boundary and, after clean completed-contract review/re-reviews, approved
-Sections 8-19, the current-code/empty-V2 whitelist, six primary proofs, two
-slices, exact assignments, delegated sequential advancement, and the retained
-B4 S2 read on 2026-08-09. This approval makes no V1 completion claim.
+**Contract-wide coverage and acceptance:** The 2026-08-09 contract/proofs are
+preserved as historical evidence. Current coverage, proofs, sequential slices,
+correction authority, and B4 CLI acceptance are owned by the 2026-08-12
+correction. C12 is reopened and makes no new completion claim.
 
 ## Authoritative delivery-state ledger
 
 | Item | State | Evidence and required review | Recorded at | Next action |
 | --- | --- | --- | --- | --- |
-| Component contract | `implementation_active` | Owner-approved boundary and delegated sequence are active. C11/private V1 RC, C4-S6, and C12-S1 are accepted in order; the retained B4 read remains restricted to the now-authorized C12-S2 assignment. | 2026-08-09 | Execute C12-S2, then final component review/conformance |
+| Component contract | `reopened` | Owner-approved CLI correction replaces mandatory 1x/API/dashboard behavior with a finite fully unpaced CLI event-time run while preserving the sole C4 source/clock and engine. | 2026-08-12 | Execute `C12R` correction sequentially and finally review C12 |
 | `B-C12-REST` | `complete` | B0-B4 completed under exact owner authorizations. B4 produced one independently reopened complete 2026-08-07 artifact: 5,691/5,691 symbols terminal-complete, 7,671,171 records, 2,584,011,150 artifact bytes; compile 12:28.835 plus reopen validation 1:32.697. REST is retained for C12; the 11.58 GB peak Go heap is a known C4 routine-use limitation, not a C12 semantic change. Licensed bytes remain ignored and uncommitted. | 2026-08-09 | Use the retained validated artifact as the first local C12 acceptance input; do not hard-code its path or identity |
 | C4 requested-end correction | `complete` | Accepted `C4-S5` supplies the C4-owned requested-end seam: exact prefix application, full same-open suffix integrity, distinct engine lifecycle disposition, and intentional-suffix accounting; focused ordinary/short/race/vet verification and clean independent re-review are recorded in the C4 parent | 2026-08-09 | Consume only through the accepted C4 boundary during future C12 contract work; do not duplicate it in C12 |
 | C4 bounded manual-driver correction | `accepted` | Commit `7d550f7` records accepted `C4-BOUNDED-CANCEL-01`, `P-C4-BOUNDED-CANCEL`, and `C4-S6`: context-bounded candidate/full validation, source-owned idempotent manual cancellation, retained terminal ordering, exact accounting, and the explicit `Run` result/error seam passed focused short/race proof and clean correction re-review. | 2026-08-09 | C12 consumes the accepted C4 boundary without editing C4 packages |
 | Completed-contract review | `clean` | Initial required read-only `gpt-5.6-sol` medium review found one P1 and two P2s; the first focused re-review closed those and found one P2 authority-placement defect. C4 now owns the approved requirement/proof/S6 correction; the same reviewer found the focused correction clean with no remaining P1/P2 issue. | 2026-08-09 | Reuse this evidence unless implementation reopens a reviewed premise |
-| Implementation | `in_progress` | Commit `3644ed1` accepted C11 and the integrated private V1 RC; commit `7d550f7` accepted C4-S6; C12-S1 is accepted below. Sequential implementation has advanced to C12-S2. | 2026-08-09 | Complete S2 and final C12 acceptance |
-| `C12-S1` backend observation composition/API | `accepted` | `P-C12-WINDOW`, `P-C12-DETERMINISM`, `P-C12-RUNTIME`, and `P-C12-CONTAINMENT` pass. Focused review found terminal-publication identity, output-shutdown, and containment-proof defects; corrections retain C4's exact terminal publication, withdraw failed sentinel capture, join every CLI/API exit, and add active-Step/source-engine/API/CLI/timeout cases. The same reviewer found no remaining P1/P2. Full short, changed-package short race, vet, and diff checks pass. | 2026-08-09 | C12-S2 is authorized; retain backend boundary unless S2 evidence reopens it |
-| `C12-S2` dashboard/real-artifact acceptance | `authorized_active` | Accepted S1 supplies the replay API. The exact assignment now authorizes opening the retained B4 artifact in place for the first local acceptance; copying, path/identity/row persistence, credentials, and provider calls remain prohibited. Chrome/B4 evidence is not yet run. | 2026-08-09 | Implement replay presentation, run `P-C12-INDEPENDENCE` and the one bounded `P-C12-B4`, then obtain focused review |
+| Implementation | `reopened` | Commit `14f420c` remains evidence for the cache-only C4-to-engine path, but its C12 1x/API retention wrapper is superseded. The current uncommitted performance patch is inspection-only evidence until selectively ported and proved in an isolated branch. | 2026-08-12 | Correct group evaluation, artifact construction, and finite CLI in the order defined by `C12R` |
+| `C12-S1` backend observation composition/API | `superseded_evidence` | Its cache-only C4-to-engine path, cancellation containment, and tests remain evidence. Mandatory 1x pacing, replay API retention, and related phase/schema behavior are not current product requirements. | 2026-08-12 | Reuse only nonconflicting evidence through `C12R`; do not advance to S2 |
+| `C12-S2` dashboard/real-artifact acceptance | `superseded` | The owner removed replay UI, Chrome, HTTP retention, and 1x playback from the product on 2026-08-12. The retained B4 artifact remains authorized only for the CLI `P-C12R-B4` acceptance, with the same privacy/provider restrictions. | 2026-08-12 | No S2 implementation; use B4 only after compact CLI proofs pass |
 
-### C12-S1 acceptance record
+### Historical C12-S1 acceptance record (superseded evidence)
 
 The cache-only replay command now fully validates one same-open C4 artifact and
 exact date/universe/prior-close binding before engine mutation, reconstructs
@@ -734,15 +734,12 @@ evidence, not predictive or executable expectancy.
 10. **Gate/review:** S2 begins only after accepted S1. The owner authorizes the
     retained B4 artifact read in place when S2 activates; that authorization
     does not permit copying, path/identity/row persistence, credentials, or
-    provider calls. The replay/API/browser
-    trust boundary requires a focused read-only review; final C12 acceptance
-    additionally requires one final component review and delegated ledger
-    acceptance.
+    provider calls. The superseding CLI correction owns current review cadence;
+    completion or reopening does not create an automatic review requirement.
 
-**Independent slice-review trigger:** Both slices are triggered. S1 crosses
-persisted artifact, order/clock, lifecycle, and atomic capture boundaries. S2
-changes the browser's fail-closed interpretation of replay versus live and uses
-licensed real input. Reviewers are read-only and edit no file.
+**Independent slice-review trigger:** Superseded. The current CLI correction
+uses repository risk-triggered review policy and does not require review merely
+because a slice or component is completed or reopened.
 
 ### 17. Implementation discretion, prohibited changes, and correction conditions
 

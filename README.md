@@ -68,6 +68,7 @@ approved requirement establishes a concrete need.
 | [`docs/c12-implementation-goal.md`](docs/c12-implementation-goal.md) | Owner-approved handoff prompt to close C11/private V1 RC, then implement C4-S6 and C12 sequentially. |
 | [`docs/market-hours-validation.md`](docs/market-hours-validation.md) | Separately authorized post-RC live-provider observation procedure; pending by default. |
 | [`docs/specifications/focused-component-spec-template.md`](docs/specifications/focused-component-spec-template.md) | Mandatory template and modular-layout rules for focused component contracts. |
+| [`docs/ui-design-decisions.md`](docs/ui-design-decisions.md) | Non-authoritative backlog for UI improvements observed during live use. |
 | [`docs/history/`](docs/history/) | Non-authoritative Phase 1 drafting and review history. |
 
 ## How work advances
@@ -127,6 +128,11 @@ Open `http://127.0.0.1:4173` in Chrome. The UI polls the versioned snapshot once
 per second with one request in flight. Restarting the dashboard does not stop
 or relink the scanner. This is a private/local configuration; it does not add
 public binding, authentication, TLS, hosting, or credentialed live validation.
+Live stdout reports change-aware warm-up/readiness lines rather than one-second
+JSON. For an explicitly authorized diagnostic run only, add
+`--diagnostic-log /absolute/private/path/scanner.ndjson`; the selected target
+must be a regular `0600` file, and full `Status + Metrics` NDJSON is otherwise
+disabled.
 
 ### Historical replay visualization
 

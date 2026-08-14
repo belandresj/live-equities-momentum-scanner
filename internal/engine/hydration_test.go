@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -1054,14 +1055,27 @@ func hydrationPopulationBinding(t *testing.T, symbols []string) reference.Bindin
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch {
 		case request.URL.Path == "/v3/reference/tickers":
-			records := make([]map[string]any, len(symbols))
-			for index, symbol := range symbols {
+			startIndex := 0
+			if raw := request.URL.Query().Get("cursor"); raw != "" {
+				if _, err := fmt.Sscanf(raw, "%d", &startIndex); err != nil {
+					http.Error(writer, "bad cursor", http.StatusBadRequest)
+					return
+				}
+			}
+			endIndex := min(startIndex+1_000, len(symbols))
+			records := make([]map[string]any, endIndex-startIndex)
+			for index, symbol := range symbols[startIndex:endIndex] {
 				records[index] = map[string]any{"ticker": symbol, "active": true, "market": "stocks", "locale": "us", "type": "CS"}
 			}
-			_ = json.NewEncoder(writer).Encode(map[string]any{"status": "OK", "count": len(records), "results": records})
+			response := map[string]any{"status": "OK", "count": len(records), "results": records}
+			if endIndex < len(symbols) {
+				response["next_url"] = fmt.Sprintf("%s/v3/reference/tickers?cursor=%d", server.URL, endIndex)
+			}
+			_ = json.NewEncoder(writer).Encode(response)
 		case strings.HasPrefix(request.URL.Path, "/v2/aggs/grouped/locale/us/market/stocks/"):
 			rows := make([]map[string]any, len(symbols))
 			for index, symbol := range symbols {

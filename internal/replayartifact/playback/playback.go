@@ -43,6 +43,35 @@ type Plan struct {
 	MaximumBytes, MaximumRecords       int64
 }
 
+// ValidatedArtifact is opaque same-open whole-artifact evidence. Its private
+// file and plan binding prevent callers from transferring validation to a
+// different descriptor or replay identity.
+type ValidatedArtifact struct {
+	file                                        *os.File
+	plan                                        Plan
+	artifactID                                  string
+	mode                                        string
+	bindingID, universeID, tradingDate          string
+	sessionStart, sessionEnd, start, end        time.Time
+	totalRecords, coverageEntries, emptySymbols uint64
+	sealedBytes, size                           int64
+	modTime                                     time.Time
+}
+
+func (v ValidatedArtifact) ArtifactID() string      { return v.artifactID }
+func (v ValidatedArtifact) Mode() string            { return v.mode }
+func (v ValidatedArtifact) BindingID() string       { return v.bindingID }
+func (v ValidatedArtifact) UniverseID() string      { return v.universeID }
+func (v ValidatedArtifact) TradingDate() string     { return v.tradingDate }
+func (v ValidatedArtifact) SessionStart() time.Time { return v.sessionStart }
+func (v ValidatedArtifact) SessionEnd() time.Time   { return v.sessionEnd }
+func (v ValidatedArtifact) Start() time.Time        { return v.start }
+func (v ValidatedArtifact) End() time.Time          { return v.end }
+func (v ValidatedArtifact) TotalRecords() uint64    { return v.totalRecords }
+func (v ValidatedArtifact) CoverageEntries() uint64 { return v.coverageEntries }
+func (v ValidatedArtifact) EmptySymbols() uint64    { return v.emptySymbols }
+func (v ValidatedArtifact) SealedBytes() int64      { return v.sealedBytes }
+
 // ErrorClass is the bounded trust boundary at which playback rejected an
 // artifact. It deliberately excludes paths, symbols, values, and wall time.
 type ErrorClass string
@@ -190,6 +219,10 @@ type Cursor struct {
 	priorRecord         *record
 	validatedSize       int64
 	validatedModTime    time.Time
+	coverageEntries     uint64
+	emptySymbols        uint64
+	sealedBytes         int64
+	canonicalBuffer     []byte
 }
 
 type hashWriter struct {
@@ -202,34 +235,39 @@ func (h *hashWriter) Sum() string {
 	return "sha256:" + hex.EncodeToString(h.value.Sum(nil))
 }
 
-// New validates the complete same-open file once without retaining records,
-// rewinds it, and returns a streaming second-pass cursor.
-func New(file *os.File, plan Plan) (*Cursor, error) {
-	return NewContext(context.Background(), file, plan)
+// Validate performs the sole pre-engine whole-artifact scan and binds its
+// result to the exact open file description.
+func Validate(file *os.File, plan Plan) (ValidatedArtifact, error) {
+	return ValidateContext(context.Background(), file, plan)
 }
 
-func NewContext(ctx context.Context, file *os.File, plan Plan) (*Cursor, error) {
+func ValidateContext(ctx context.Context, file *os.File, plan Plan) (ValidatedArtifact, error) {
 	if ctx == nil {
-		return nil, errors.New("playback requires a context")
+		return ValidatedArtifact{}, errors.New("playback validation requires a context")
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return ValidatedArtifact{}, err
 	}
-	if file == nil || !validPlan(plan) {
-		return nil, classified(ErrorArtifactValidation, "invalid playback plan")
+	if file == nil || !validValidationPlan(plan) {
+		return ValidatedArtifact{}, classified(ErrorArtifactValidation, "invalid playback validation plan")
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return nil, errors.New("rewind playback artifact")
+		return ValidatedArtifact{}, errors.New("rewind playback artifact")
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > plan.MaximumBytes {
+		return ValidatedArtifact{}, classified(ErrorArtifactValidation, "artifact size or type is invalid")
 	}
 	first := newCursor(file, plan)
+	first.validatedSize, first.validatedModTime = info.Size(), info.ModTime()
 	if _, err := first.StartContext(ctx); err != nil {
-		return nil, err
+		return ValidatedArtifact{}, err
 	}
 	for group := plan.Start; !group.After(plan.End); group = group.Add(time.Second) {
 		for {
 			record, ok, err := first.NextRecordContext(ctx, group)
 			if err != nil {
-				return nil, err
+				return ValidatedArtifact{}, err
 			}
 			if !ok {
 				break
@@ -237,27 +275,54 @@ func NewContext(ctx context.Context, file *os.File, plan Plan) (*Cursor, error) 
 			_ = record
 		}
 		if _, err := first.FinishGroupContext(ctx, group); err != nil {
-			return nil, err
+			return ValidatedArtifact{}, err
 		}
 	}
 	endEvidence, err := first.EndContext(ctx)
 	if err != nil {
+		return ValidatedArtifact{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return ValidatedArtifact{}, err
+	}
+	validatedPlan := clonePlan(plan)
+	validatedPlan.ArtifactID = endEvidence.ArtifactID()
+	return ValidatedArtifact{file: file, plan: validatedPlan, artifactID: endEvidence.ArtifactID(), mode: plan.Mode,
+		bindingID: plan.BindingID, universeID: plan.UniverseID, tradingDate: plan.TradingDate,
+		sessionStart: plan.SessionStart, sessionEnd: plan.SessionEnd, start: plan.Start, end: plan.End,
+		totalRecords: endEvidence.TotalRecords(), coverageEntries: first.coverageEntries, emptySymbols: first.emptySymbols,
+		sealedBytes: first.sealedBytes, size: info.Size(), modTime: info.ModTime()}, nil
+}
+
+// New creates the streaming validator directly from opaque same-open evidence;
+// it performs only exact plan/stat checks and a rewind, never a second
+// construction scan.
+func New(validated ValidatedArtifact, plan Plan) (*Cursor, error) {
+	return NewContext(context.Background(), validated, plan)
+}
+
+func NewContext(ctx context.Context, validated ValidatedArtifact, plan Plan) (*Cursor, error) {
+	if ctx == nil {
+		return nil, errors.New("playback requires a context")
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if endEvidence.ArtifactID() != plan.ArtifactID {
-		return nil, classified(ErrorArtifactValidation, "validated artifact identity changed")
+	file := validated.file
+	if file == nil || !validPlan(plan) || !validatedArtifactMatches(validated, file, plan) {
+		return nil, classified(ErrorArtifactValidation, "validated playback evidence does not match plan")
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() != validated.size || !info.ModTime().Equal(validated.modTime) {
+		return nil, classified(ErrorArtifactValidation, "artifact changed after validation")
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return nil, errors.New("rewind validated playback artifact")
 	}
 	second := newCursor(file, plan)
-	second.validatedArtifactID = plan.ArtifactID
-	second.expectedRecords = endEvidence.TotalRecords()
-	info, err := file.Stat()
-	if err != nil {
-		return nil, errors.New("stat validated playback artifact")
-	}
-	second.validatedSize, second.validatedModTime = info.Size(), info.ModTime()
+	second.validatedArtifactID = validated.artifactID
+	second.expectedRecords = validated.totalRecords
+	second.validatedSize, second.validatedModTime = validated.size, validated.modTime
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -265,7 +330,41 @@ func NewContext(ctx context.Context, file *os.File, plan Plan) (*Cursor, error) 
 }
 
 func newCursor(file *os.File, plan Plan) *Cursor {
-	return &Cursor{file: file, plan: plan, reader: bufio.NewReader(file), digest: hashWriter{value: sha256.New()}, recordCounts: make(map[string]int64)}
+	return &Cursor{file: file, plan: plan, reader: bufio.NewReaderSize(file, 4<<10), digest: hashWriter{value: sha256.New()}, recordCounts: make(map[string]int64)}
+}
+
+func validValidationPlan(plan Plan) bool {
+	plan.ArtifactID = "sha256:" + strings.Repeat("0", sha256.Size*2)
+	if plan.RequestedEnd.IsZero() {
+		plan.RequestedEnd = plan.End
+	}
+	return validPlan(plan)
+}
+
+func clonePlan(plan Plan) Plan {
+	plan.Symbols = append([]string(nil), plan.Symbols...)
+	return plan
+}
+
+func validatedArtifactMatches(validated ValidatedArtifact, file *os.File, plan Plan) bool {
+	base := validated.plan
+	return validated.file == file && validated.artifactID == plan.ArtifactID && base.ArtifactID == plan.ArtifactID &&
+		base.BindingID == plan.BindingID && base.UniverseID == plan.UniverseID && base.TradingDate == plan.TradingDate &&
+		base.SessionStart == plan.SessionStart && base.SessionEnd == plan.SessionEnd && base.Start == plan.Start && base.End == plan.End &&
+		base.Mode == plan.Mode && base.MaximumBytes == plan.MaximumBytes && base.MaximumRecords == plan.MaximumRecords &&
+		slicesEqual(base.Symbols, plan.Symbols)
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func validPlan(plan Plan) bool {
@@ -356,14 +455,16 @@ func (c *Cursor) NextRecordContext(ctx context.Context, group time.Time) (Record
 		return RecordEvidence{}, false, nil
 	}
 	var value aggregateLine
-	if strictAggregate(c.nextLine, &value) != nil {
+	var canonicalErr error
+	c.canonicalBuffer, canonicalErr = strictAggregate(c.nextLine, &value, c.canonicalBuffer)
+	if canonicalErr != nil {
 		return RecordEvidence{}, false, classified(ErrorSchemaCanonical, "aggregate line changed or is noncanonical")
 	}
 	record, err := recordFrom(value)
 	if err != nil || !validRecord(c.plan, record) {
 		return RecordEvidence{}, false, classified(ErrorSchemaCanonical, "playback aggregate is invalid")
 	}
-	if record.ordinal != c.ordinal+1 {
+	if record.ordinal != c.ordinal+1 || record.ordinal > uint64(c.plan.MaximumRecords) {
 		return RecordEvidence{}, false, classified(ErrorOrdinalGroup, "playback aggregate ordinal is invalid")
 	}
 	if c.priorRecord != nil {
@@ -414,7 +515,9 @@ func (c *Cursor) FinishGroupContext(ctx context.Context, group time.Time) (Group
 		return GroupEvidence{}, classified(ErrorSchemaCanonical, "playback line kind is invalid")
 	} else if kind == "aggregate" {
 		var value aggregateLine
-		if strictAggregate(c.nextLine, &value) != nil {
+		var canonicalErr error
+		c.canonicalBuffer, canonicalErr = strictAggregate(c.nextLine, &value, c.canonicalBuffer)
+		if canonicalErr != nil {
 			return GroupEvidence{}, classified(ErrorSchemaCanonical, "aggregate line changed or is noncanonical")
 		}
 		record, parseErr := recordFrom(value)
@@ -485,7 +588,9 @@ func (c *Cursor) EndContext(ctx context.Context) (EndEvidence, error) {
 			bodyBytes += int64(len(line))
 		case "summary":
 			var value summaryLine
-			if strictLine(line, &value) != nil || value.AggregateRecords != int64(c.ordinal) || value.CoverageEntries != coverageCount || value.EmptySymbols != emptyCount || value.BodyBytes != bodyBytes {
+			if strictLine(line, &value) != nil || value.AggregateRecords != int64(c.ordinal) ||
+				(c.expectedRecords != 0 && c.ordinal != c.expectedRecords) ||
+				value.CoverageEntries != coverageCount || value.EmptySymbols != emptyCount || value.BodyBytes != bodyBytes {
 				return EndEvidence{}, classified(ErrorArtifactEnd, "playback summary does not reconcile")
 			}
 			if c.plan.Mode == CompleteFinalBars && len(covered) != len(c.plan.Symbols) || c.plan.Mode == PartialSynthetic && (coverageCount == 0 || coverageCount > int64(len(c.plan.Symbols)) || emptyCount != 0) {
@@ -499,12 +604,16 @@ func (c *Cursor) EndContext(ctx context.Context) (EndEvidence, error) {
 				}
 			}
 			c.digest.Write(line)
+			c.coverageEntries = uint64(coverageCount)
+			c.emptySymbols = uint64(emptyCount)
+			c.sealedBytes = c.digest.count
 			seal, readErr := c.readLine(ctx)
 			if readErr != nil {
 				return EndEvidence{}, readErr
 			}
 			var sealValue sealLine
-			if strictLine(seal, &sealValue) != nil || sealValue.SealedBytes != c.digest.count || sealValue.ArtifactID != c.digest.Sum() {
+			if strictLine(seal, &sealValue) != nil || sealValue.SealedBytes != c.digest.count || sealValue.ArtifactID != c.digest.Sum() ||
+				(c.validatedArtifactID != "" && sealValue.ArtifactID != c.validatedArtifactID) {
 				return EndEvidence{}, classified(ErrorArtifactEnd, "playback seal or digest is invalid")
 			}
 			if extra, readErr := c.reader.ReadByte(); readErr != io.EOF || extra != 0 {
@@ -513,7 +622,7 @@ func (c *Cursor) EndContext(ctx context.Context) (EndEvidence, error) {
 			if c.validatedSize != 0 {
 				info, statErr := c.file.Stat()
 				if statErr != nil || info.Size() != c.validatedSize || !info.ModTime().Equal(c.validatedModTime) {
-					return EndEvidence{}, classified(ErrorArtifactEnd, "playback artifact changed during second pass")
+					return EndEvidence{}, classified(ErrorArtifactEnd, "playback artifact changed during streaming validation")
 				}
 			}
 			if err := ctx.Err(); err != nil {
@@ -571,7 +680,7 @@ func (c *Cursor) readLine(ctx context.Context) ([]byte, error) {
 	if ctx == nil || ctx.Err() != nil {
 		return nil, context.Canceled
 	}
-	line, err := c.reader.ReadBytes('\n')
+	line, err := c.reader.ReadSlice('\n')
 	if err != nil || len(line) == 0 || line[len(line)-1] != '\n' {
 		return nil, classified(ErrorArtifactEnd, "playback artifact is truncated")
 	}
@@ -743,13 +852,13 @@ func parseTime(s string) (time.Time, error) {
 	return t, nil
 }
 func kindOf(line []byte) (string, error) {
-	var v struct {
-		Kind string `json:"kind"`
+	for _, candidate := range [...]string{"aggregate", "coverage", "summary", "seal"} {
+		prefix := `{"kind":"` + candidate + `"`
+		if bytes.HasPrefix(line, []byte(prefix)) {
+			return candidate, nil
+		}
 	}
-	if json.Unmarshal(line, &v) != nil || v.Kind == "" {
-		return "", errors.New("line kind")
-	}
-	return v.Kind, nil
+	return "", errors.New("line kind")
 }
 func strictLine(line []byte, dst any) error {
 	if len(line) == 0 || line[len(line)-1] != '\n' {
@@ -775,20 +884,20 @@ func strictLine(line []byte, dst any) error {
 	}
 	return nil
 }
-func strictAggregate(line []byte, dst *aggregateLine) error {
+func strictAggregate(line []byte, dst *aggregateLine, scratch []byte) ([]byte, error) {
 	if len(line) == 0 || line[len(line)-1] != '\n' {
-		return errors.New("line")
+		return scratch, errors.New("line")
 	}
 	dec := json.NewDecoder(bytes.NewReader(line[:len(line)-1]))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
-		return err
+		return scratch, err
 	}
 	var x json.RawMessage
 	if dec.Decode(&x) != io.EOF {
-		return errors.New("trailing")
+		return scratch, errors.New("trailing")
 	}
-	var b []byte
+	b := scratch[:0]
 	b = append(b, `{"kind":"aggregate","ordinal":`...)
 	b = strconv.AppendInt(b, dst.Ordinal, 10)
 	for _, f := range []struct{ name, value string }{{"logical_delivery_time", dst.LogicalDeliveryTime}, {"symbol", dst.Symbol}, {"window_start", dst.WindowStart}, {"window_end", dst.WindowEnd}} {
@@ -815,15 +924,10 @@ func strictAggregate(line []byte, dst *aggregateLine) error {
 	b = appendJSONString(b, dst.ATSProvenance)
 	b = append(b, '}', '\n')
 	if !bytes.Equal(b, line) {
-		return errors.New("noncanonical aggregate")
+		return b, errors.New("noncanonical aggregate")
 	}
-	return nil
+	return b, nil
 }
 func appendJSONString(dst []byte, value string) []byte {
-	var b bytes.Buffer
-	enc := json.NewEncoder(&b)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(value)
-	encoded := b.Bytes()
-	return append(dst, encoded[:len(encoded)-1]...)
+	return strconv.AppendQuote(dst, value)
 }

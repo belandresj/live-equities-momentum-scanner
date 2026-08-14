@@ -36,6 +36,7 @@ type replayState struct {
 	validated, complete, terminal bool
 	artifactID, bindingID         string
 	start, end, requestedEnd      time.Time
+	observationStart              time.Time
 	totalRecords, nextOrdinal     uint64
 	presentSlots, absentSlots     uint64
 	nextGroup, lastGroup          time.Time
@@ -165,7 +166,14 @@ func (e *Engine) applyReplayStartLocked(node *queueNode) (DispositionCode, Dispo
 	} else if v.Authority() == playback.InstalledCheckpoint || v.Authority() == playback.FreshSession && v.Start() != e.state.binding.sessionStart {
 		return DispositionReplayFailed, ReasonReplayEvidence
 	}
-	e.state.replay = replayState{validated: true, complete: v.Complete(), artifactID: v.ArtifactID(), bindingID: v.BindingID(), start: v.Start(), end: v.End(), requestedEnd: v.RequestedEnd(), totalRecords: v.TotalRecords(), nextOrdinal: 1, nextGroup: v.Start()}
+	observationStart := time.Time{}
+	if v.Complete() && e.replayObservationStart != nil {
+		if e.replayObservationStart.Before(v.Start()) || e.replayObservationStart.After(v.RequestedEnd()) {
+			return DispositionReplayFailed, ReasonReplayEvidence
+		}
+		observationStart = *e.replayObservationStart
+	}
+	e.state.replay = replayState{validated: true, complete: v.Complete(), artifactID: v.ArtifactID(), bindingID: v.BindingID(), start: v.Start(), end: v.End(), requestedEnd: v.RequestedEnd(), observationStart: observationStart, totalRecords: v.TotalRecords(), nextOrdinal: 1, nextGroup: v.Start()}
 	e.state.replayArtifact = v.ArtifactID()
 	if v.Complete() && !checkpointContinuation {
 		if e.state.aggregateEvaluator.coverage == nil {
@@ -179,6 +187,30 @@ func (e *Engine) applyReplayStartLocked(node *queueNode) (DispositionCode, Dispo
 		return DispositionReplayFailed, ReasonLifecycle
 	}
 	return DispositionReplayStarted, ReasonNone
+}
+
+func wholeSecondUTC(value time.Time) bool {
+	return !value.IsZero() && value == value.UTC() && value.Nanosecond() == 0
+}
+
+func (e *Engine) completeFinalReplayRecordLocked(node *queueNode) bool {
+	return node != nil && node.kind == inputAggregate && node.aggregate.replayProof && e.mode == RunModeReplay && e.state.replay.complete
+}
+
+func (e *Engine) replayFastForwardGroupLocked(node *queueNode) bool {
+	return node != nil && node.kind == inputReplayGroup && e.mode == RunModeReplay && e.state.replay.complete &&
+		!e.state.replay.observationStart.IsZero() && node.admissionTime.Before(e.state.replay.observationStart)
+}
+
+func (e *Engine) completeFinalReplayObservationGroupLocked(node *queueNode) bool {
+	return node != nil && node.kind == inputReplayGroup && e.mode == RunModeReplay && e.state.replay.complete &&
+		!e.state.replay.observationStart.IsZero() && !node.admissionTime.Before(e.state.replay.observationStart)
+}
+
+func (e *Engine) completeFinalReplayQualificationPreparedLocked(state *symbolAggregateState, at time.Time) bool {
+	return e.mode == RunModeReplay && e.state.replay.complete && !e.state.replay.observationStart.IsZero() &&
+		!e.state.replay.lastGroup.Before(e.state.replay.observationStart) && state != nil && state.qualification != nil &&
+		state.qualification.result.at.Equal(at) && !state.qualification.accountedThrough.Before(at)
 }
 
 func (e *Engine) applyReplayGroupLocked(node *queueNode) (DispositionCode, DispositionReason) {

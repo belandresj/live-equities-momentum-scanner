@@ -696,34 +696,21 @@ func TestC4BOUNDEDCANCEL01ManualSource(t *testing.T) {
 		}
 	})
 
-	t.Run("first playback pass cancellation returns no cursor", func(t *testing.T) {
+	t.Run("playback construction performs no artifact scan", func(t *testing.T) {
 		countSource, countCleanup := completeSource(t, Unpaced())
 		defer countCleanup()
 		counter := newScanCancelContext(0)
 		cursor, err := countSource.handle.BeginPlaybackContext(counter)
 		if err != nil || cursor == nil {
-			t.Fatalf("count first pass = %v err=%v", cursor, err)
+			t.Fatalf("construct playback = %v err=%v", cursor, err)
 		}
-		checks := counter.count()
-		if checks < 10 {
-			t.Fatalf("first playback pass lacked scan checks: %d", checks)
+		if checks := counter.count(); checks > 3 {
+			t.Fatalf("playback construction scanned artifact: context checks=%d", checks)
 		}
-
-		for _, cancelOn := range []int{checks / 2, checks} {
-			source, cleanup := completeSource(t, Unpaced())
-			cancelScan := newScanCancelContext(cancelOn)
-			cursor, err := source.handle.BeginPlaybackContext(cancelScan)
-			if !errors.Is(err, context.Canceled) || cursor != nil {
-				cleanup()
-				t.Fatalf("canceled first pass check %d returned cursor: %v err=%v", cancelOn, cursor, err)
-			}
-			cancelContext, cancel := context.WithTimeout(context.Background(), time.Second)
-			result, cancelErr := source.Cancel(cancelContext)
-			cancel()
-			cleanup()
-			if cancelErr != nil || result.Outcome != OutcomeCanceled || result.Accounting.CanceledRuns != 1 {
-				t.Fatalf("first-pass cancellation check %d = %+v err=%v", cancelOn, result, cancelErr)
-			}
+		canceled, cancel := context.WithCancel(context.Background())
+		cancel()
+		if cursor, err := countSource.handle.BeginPlaybackContext(canceled); !errors.Is(err, context.Canceled) || cursor != nil {
+			t.Fatalf("pre-canceled construction returned cursor: %v err=%v", cursor, err)
 		}
 	})
 

@@ -35,8 +35,8 @@ deployment and separately authorized market-hours validation are not part of
 that completion claim.
 
 Implementation remains sequential in the specification-map order. Keep one
-active implementation slice. Finish and finally review component N before
-implementing N+1. Planning and contract reconnaissance may use an already
+active implementation slice. Finish and accept component N before implementing
+N+1. Planning and contract reconnaissance may use an already
 stable dependency boundary, but any later evidence may revise the lower-level
 plan without freezing or silently reinterpreting the dependency.
 
@@ -140,9 +140,10 @@ At each slice gate, record:
 - whether the next slice remains valid or needs an in-program revision.
 
 Final component acceptance requires its allocated proofs, proportionate
-verification, one final read-only review, a clean conformance walkthrough, and
-no unresolved fixed-authority conflict. It may later be reopened by integration
-evidence before final V1 acceptance.
+verification, a clean conformance walkthrough, and no unresolved fixed-authority
+conflict. Completion, reopening, or correction does not by itself require an
+independent review. It may later be reopened by integration evidence before
+final V1 acceptance.
 
 ## V1 orchestration and Git
 
@@ -273,18 +274,26 @@ Use the risk-based cadence in
 [`docs/v1-release-program.md`](docs/v1-release-program.md#8-review-cadence).
 Do not spawn a reviewer merely because a slice or contract changed.
 
-When a review is required and the model is available, use `gpt-5.6-sol` with
+Independent review is exceptional and risk-triggered. Do not invoke a reviewer
+solely because a contract, slice, component, reopened boundary, correction, or
+milestone is complete, or solely to reconfirm green deterministic verification.
+Use one only when the current change introduces or materially alters a
+consequential concurrency-linearization, persistence/atomicity, invalid-external-
+evidence, sole-owner, or cross-component authority boundary and the risk is not
+made straightforward by primary proof and construction. Older component-local
+wording that mandates a final or reopened-boundary review is superseded by this
+rule.
+
+When such a review is required and the model is available, use `gpt-5.6-sol` with
 medium reasoning. Use high reasoning only when medium leaves concrete
 uncertainty about concurrency linearization, persistence/atomicity, invalid
 external evidence reaching false success, sole-owner enforcement, or a cross-
 component authority conflict. Record any substitution.
 
-After corrections, reuse the same reviewer when practical for a focused
-re-review of the finding and affected boundary. Reviewers do not edit, approve,
-stage, commit, or expand scope. A review finding is correction input. If the
-preferred model is unavailable, record a substitution; if review capacity is
-temporarily unavailable, complete other work and retry without asking the
-owner to unblock it.
-
-One final read-only review is required per completed component, plus one final
-integrated V1 RC review after C11.
+After a review finding is corrected, reuse the same reviewer when a focused
+re-review is necessary to resolve that specific finding; do not request a broad
+re-review of unaffected work. Reviewers do not edit, approve, stage, commit, or
+expand scope. A review finding is correction input. If the preferred model is
+unavailable, record a substitution; if review capacity is temporarily
+unavailable, complete other work and retry without asking the owner to unblock
+it.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"reflect"
 	"testing"
 	"time"
 
@@ -94,6 +95,36 @@ func TestC3POP02AccountingIntegrityAndOverlap(t *testing.T) {
 		t.Fatalf("accounting mismatch escaped containment: %+v", view)
 	}
 	closeAndWait(t, runtime)
+}
+
+func TestCompleteReplayFutureFirstPrintPreservesNoPrintAtDelayedTarget(t *testing.T) {
+	at := time.Date(2026, 8, 7, 13, 29, 56, 0, time.UTC)
+	e := evaluatorProofEngine(at, []evaluatorSymbol{{"LATE", reference.PriorCloseValid, 10, 0, qualificationUnresolved}})
+	e.mode = RunModeReplay
+	e.state.lifecycle = lifecycleReplaying
+	e.state.replay = replayState{complete: true, observationStart: at.Add(4 * time.Second), lastGroup: at.Add(4 * time.Second)}
+	delete(e.state.aggregateEvaluator.coverage, 0)
+
+	symbol := &e.state.binding.symbols[0]
+	futureStart := at.Add(2 * time.Second)
+	future := canonicalAggregate{
+		identity:    aggregateIdentity{symbol: symbol.symbol, start: futureStart.Unix()},
+		windowStart: futureStart,
+		windowEnd:   futureStart.Add(time.Second),
+		values:      AggregateValues{Open: 12, High: 12, Low: 12, Close: 12, Volume: 1, VWAP: 12, AverageTradeSize: 1, ATSProvenance: ATSRESTFloorVolumeOverTrades},
+	}
+	state := &symbolAggregateState{tail: map[int64]*canonicalAggregate{futureStart.Unix(): &future}, latest: &latestAggregateMark{record: future}}
+	state.provenAbsent = &slotBitmap{}
+	for slot := 0; slot < sessionSlot(e.state.binding, at); slot++ {
+		state.provenAbsent.set(slot)
+	}
+	symbol.aggregates = state
+
+	result := e.stageAggregateEvaluationAtLocked(at, at.Add(4*time.Second))
+	if result.mode != rankingQualifiedCurrent || result.reason != "" || result.population.noPrintThroughT != 1 ||
+		result.population.unknownDueFailureOrFence != 0 || len(result.rows) != 0 {
+		t.Fatalf("delayed target lost sealed no-print evidence: %+v", result)
+	}
 }
 
 // TestC3RANK01ExactFilterOrderAndTop20 is the sole C3-RANK-01 proof.
@@ -257,6 +288,60 @@ func TestC3EVAL01AtomicStagingAndPathEquivalence(t *testing.T) {
 	bad.at = at.Add(time.Second)
 	if aggregateEvaluationEqual(corrected, bad) {
 		t.Fatal("staged T identity was ignored")
+	}
+
+	materialized := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationFinalized}})
+	recomputed := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationFinalized}})
+	materializedCandidate := materialized.stageAggregateEvaluationLocked(at)
+	_ = recomputed.stageAggregateEvaluationLocked(at) // keep stage-side initialization identical
+	materialized.applyAggregateCandidateResultLocked(&materializedCandidate, at)
+	recomputed.applyAggregateCandidateLocked(at, at)
+	if !reflect.DeepEqual(materialized.replayDeterministicViewLocked().Canonical, recomputed.replayDeterministicViewLocked().Canonical) ||
+		!materialized.state.committedT.Equal(*recomputed.state.committedT) {
+		t.Fatal("staged feature materialization changed the deterministic apply result")
+	}
+}
+
+func BenchmarkReplayObservationProjection5691(b *testing.B) {
+	const population = 5691
+	start := time.Date(2026, 8, 7, 8, 0, 0, 0, time.UTC)
+	at := start.Add(5*time.Hour + 30*time.Minute)
+	binding := &installedBinding{identity: "benchmark", tradingDate: "2026-08-07", sessionStart: start, sessionEnd: start.Add(16 * time.Hour),
+		symbols: make([]coreSymbol, population), index: make(map[string]int, population)}
+	coveredSlots := sessionSlot(binding, at)
+	for index := range binding.symbols {
+		symbol := fmt.Sprintf("S%04d", index)
+		binding.index[symbol] = index
+		absence := &slotBitmap{}
+		for slot := 0; slot < coveredSlots; slot++ {
+			absence.set(slot)
+		}
+		windowStart := at.Add(-time.Second)
+		values := AggregateValues{Open: 10, High: 10.1, Low: 9.9, Close: 10, Volume: 10_000, VWAP: 10, AverageTradeSize: 10, ATSProvenance: ATSRESTFloorVolumeOverTrades}
+		record := canonicalAggregate{identity: aggregateIdentity{symbol: symbol, start: windowStart.Unix()}, windowStart: windowStart, windowEnd: at, values: values}
+		references := make(map[int64]activityBlockSummary, coveredSlots/30)
+		for blockEnd := start.Add(activityBlockDuration); !blockEnd.After(at.Add(-activityBlockDuration)); blockEnd = blockEnd.Add(activityBlockDuration) {
+			references[blockEnd.Unix()] = activityBlockSummary{end: blockEnd.Unix(), transactions: 1_000, high: 10.1, low: 9.9, expansionBPS: 200, aggregateCount: 30}
+		}
+		qualification := &qualificationState{finalizedGateBars: make(map[int64]qualificationGateBar), proofs: make(map[int64]struct{}), dirty: make(map[int64]struct{}),
+			accountedThrough: at, finalized: true, finalProofEnd: start.Add(time.Minute), result: qualificationResult{at: at, status: qualificationFinalized, finalProofEnd: start.Add(time.Minute)}}
+		state := &symbolAggregateState{tail: map[int64]*canonicalAggregate{windowStart.Unix(): &record}, latest: &latestAggregateMark{record: record}, provenAbsent: absence,
+			qualification: qualification,
+			priceRange: &priceRangeFeatureState{firstStart: start.Unix(), firstOpen: 10, hasFirst: true,
+				sessionLows: []extremaPoint{{windowStart: windowStart.Unix(), value: 9.9}}, sessionHighs: []extremaPoint{{windowStart: windowStart.Unix(), value: 10.1}}},
+			activity: &activityFeatureState{references: references, mutable: make(map[int64]activityMutableBlock)}}
+		binding.symbols[index] = coreSymbol{symbol: symbol, prior: frozenPriorClose{symbol: symbol, status: reference.PriorCloseValid, close: 9}, aggregates: state}
+	}
+	e := &Engine{mode: RunModeReplay, replayObservationStart: immutableTime(at), state: &engineState{binding: binding, lifecycle: lifecycleReplaying,
+		replay: replayState{complete: true, observationStart: at, lastGroup: at}, aggregateEvaluator: aggregateEvaluatorState{invalidMarks: make(map[int]invalidMarkEvidence), coverage: make(map[int]aggregateCoverageConsequence)}}}
+	b.ReportMetric(population, "symbols/op")
+	b.ResetTimer()
+	for iteration := 0; iteration < b.N; iteration++ {
+		candidate := e.stageAggregateEvaluationAtLocked(at, at)
+		if validateAggregateEvaluation(candidate) != nil {
+			b.Fatal("synthetic replay projection became invalid")
+		}
+		e.applyAggregateCandidateResultLocked(&candidate, at)
 	}
 }
 

@@ -35,12 +35,14 @@ type Status struct {
 	QueueCapacity, QueueOccupancy             int
 	TQAvailable                               bool
 	AccountingValid                           bool
+	IntegrityFailure                          *engine.EvaluatorIntegrityView
 }
 
 func deriveStatus(processLive bool, binding reference.Binding, config Config, now time.Time, view engine.OperationalView) Status {
 	result := Status{ProcessLive: processLive, Lifecycle: view.Lifecycle, RankingMode: view.RankingMode, PublicationID: view.PublicationID, SampledAt: now,
 		Watermark: cloneTime(view.Watermark), QueueCapacity: view.QueueCapacity, QueueOccupancy: view.QueueOccupancy,
 		RankingCurrent: view.CurrentMarketClaim, TQAvailable: false}
+	result.IntegrityFailure = view.IntegrityFailure
 	target := now.Truncate(time.Second).Add(-config.EvaluationDelay)
 	if target.Before(binding.SessionStart()) {
 		target = binding.SessionStart()
@@ -53,12 +55,12 @@ func deriveStatus(processLive bool, binding reference.Binding, config Config, no
 	switch {
 	case !processLive:
 		result.Reason = ReasonRuntimeUnavailable
+	case view.Suppression != "":
+		result.Reason = ReasonSuppressed
 	case view.BindingIdentity != binding.Identity():
 		result.Reason = ReasonBindingMismatch
 	case view.RunMode != engine.RunModeLive:
 		result.Reason = ReasonNotLiveMode
-	case view.Suppression != "":
-		result.Reason = ReasonSuppressed
 	case view.Lifecycle != "live" && view.Lifecycle != "hydrating":
 		result.Reason = ReasonLifecycle
 	case !view.Connection.Active || !view.Connection.Acknowledged:

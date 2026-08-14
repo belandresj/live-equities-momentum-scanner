@@ -38,6 +38,8 @@ Sections 8-19 are completed here after just-in-time V2 reconnaissance.
 | `C9-S1` membership/coverage/features | `accepted_after_owner_revision` | Owner shortened Spread to a five-second weighted median with four-of-five valid-duration coverage; focused boundary/window proof, ordinary/race verification, and focused read-only review pass | Complete |
 | `C9-S2` pressure/shedding/restoration | `accepted` | `P-C9-PRESSURE`; ordinary and affected race gates; focused corrections and re-review clean | Complete |
 | Final component review | `accepted_after_owner_revision` | Original final review plus the 2026-08-09 focused read-only review found no remaining P1/P2/P3 after the Spread correction | Complete; reopen only through the V1 correction loop |
+| TQR-S1 command/coverage quarantine correction | `accepted` | A typed epoch-local T/Q-control quarantine now retires pending authority, closes coverage, marks unresolved provider membership unknown, blocks later epoch commands, and clears only after a greater aggregate-acknowledged epoch. Aggregate canonical state, watermark, evaluation, ordering, and currentness are unchanged in `TestPTQRStatusQuarantinePreservesAggregateState`. | Complete |
+| TQR-S2 early-pressure correction | `accepted` | Production samples every 100 ms; a 25%-full raw queue immediately enters `taq_degraded`, while 60% retains the two-second escalation requirement for `aggregate_only`. Paired raw-queue burst and engine-sample proofs leave 384 of 512 slots before hard capacity. | Complete |
 
 ## 1-4. Outcome, scope, ownership, and settled boundary
 
@@ -236,8 +238,8 @@ sampling.
 | State | Entry | Consequence |
 | --- | --- | --- |
 | `normal` | Default/recovered | Selected T/Q is normalized and admitted. |
-| `taq_degraded` | Any of queue >=50%, oldest >=250 ms, delivery >=2 s, heap >=512 MiB, or goroutines >=64 persists 500 ms | Close all T/Q coverage and reject T/Q elements before expensive normalization; continue classifying every mixed frame. |
-| `aggregate_only` | Queue >=80%, oldest >=1.5 s, delivery >=5 s, heap >=1.25 GiB, goroutines >=128, or **T/Q-local** decode/accounting failure immediately; or degraded pressure persists 2 s | Keep early T/Q rejection and request paired unsubscribe for every known provider member, lowest current rank first, down to zero known membership; ambiguous members remain explicitly unknown until cleanup or epoch replacement. |
+| `taq_degraded` | Any sample with queue >=25%, oldest >=250 ms, delivery >=2 s, heap >=512 MiB, or goroutines >=64 | Close all T/Q coverage and reject T/Q elements before expensive normalization; continue classifying every mixed frame. |
+| `aggregate_only` | Queue >=60%, oldest >=1.5 s, delivery >=5 s, heap >=1.25 GiB, goroutines >=128, or **T/Q-local** decode/accounting failure immediately; or degraded pressure persists 2 s | Keep early T/Q rejection and request paired unsubscribe for every known provider member, lowest current rank first, down to zero known membership; ambiguous members remain explicitly unknown until cleanup or epoch replacement. |
 
 Recovery requires queue <20%, oldest <100 ms, delivery <500 ms, heap <384 MiB,
 goroutines <48, and coherent decoder/transport accounting continuously for 30
@@ -312,7 +314,7 @@ and cumulative T/Q-local normalization accounting without changing queue
 ownership. C8 adds a separate one-second maximum delivery-delay accumulator
 that resets only when the pressure sample is admitted; its existing lifetime
 maximum remains unchanged for operator reporting. The operations timer samples
-pressure once per second, and command synchronization runs after timer and
+pressure every 100 milliseconds, and command synchronization runs after timer and
 delivery completions without a second owner.
 
 A mixed-frame or required aggregate/control classification/accounting failure
@@ -461,7 +463,7 @@ remain solely in S2; its contracted boundary remains valid.
 
 ### C9-S2 and final acceptance record
 
-The engine now owns one fixed one-second pressure-sampling authority with
+The engine now owns one fixed pressure-sampling authority with
 opaque, monotonically sequenced commands, a two-second terminal deadline, and
 bounded missing-sample progress. The first missed sample enters
 `taq_degraded`; a second enters `aggregate_only`. Timely unhealthy samples use
@@ -505,6 +507,17 @@ host saturation frontier; the conservative numeric gates remain provisional
 safety settings, and no provider credential, market-hours, capacity, or SLA
 claim is made. Component 10 may rely on the accepted C9 view and accounting
 boundary without making ranking depend on T/Q health.
+
+TQR-S2 revises only the lower-level early-shed settings. Production sampling
+is now every 100 milliseconds; a queue sample at 25% enters `taq_degraded`
+immediately, and 60% is the severe `aggregate_only` boundary. The compact
+paired `TestPTQRPressureBurstLeavesHardCapacityHeadroom` and
+`TestPTQRPressureShedsAtQuarterQueueBeforeHardCapacity` cases admit a 128-frame
+burst into the 512-slot raw queue and prove T/Q shedding is active while 384
+slots remain. Mixed-frame classification, the two-second severe-escalation
+dwell, recovery hysteresis, ranked restoration, aggregate equivalence, and hard
+queue limit are unchanged. This is deterministic safety evidence, not a host
+saturation frontier or provider SLA.
 
 Reopen S1 if a normalized shape cannot carry the stated identity/quality facts,
 paired acknowledgement cannot prove per-symbol/channel coverage, the weighted

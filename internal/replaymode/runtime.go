@@ -47,29 +47,30 @@ type schedule struct {
 }
 
 type Runtime struct {
-	handle           *replayartifact.Handle
-	source           *replay.Source
-	operations       *operations.ReplayRuntime
-	clock            *replay.SimulatedClock
-	metadata         replayartifact.Metadata
-	observationStart time.Time
-	observationEnd   time.Time
-	schedule         schedule
-	shutdownLimit    time.Duration
-	mu               sync.Mutex
-	accounting       replay.Accounting
-	window           operations.ReplayWindowAccounting
-	lastLogical      time.Time
-	lastLag          *time.Duration
-	terminal         replay.Result
-	runStarted       bool
-	reporter         func(StatusRecord) error
-	reportedPhase    operations.ReplayPhase
-	hasCapture       bool
-	afterStart       func()
-	beforeStep       func(time.Time)
-	afterStep        func(time.Time)
-	afterPublish     func(operations.ReplayPhase)
+	handle             *replayartifact.Handle
+	source             *replay.Source
+	operations         *operations.ReplayRuntime
+	clock              *replay.SimulatedClock
+	metadata           replayartifact.Metadata
+	observationStart   time.Time
+	observationEnd     time.Time
+	schedule           schedule
+	shutdownLimit      time.Duration
+	mu                 sync.Mutex
+	accounting         replay.Accounting
+	window             operations.ReplayWindowAccounting
+	lastLogical        time.Time
+	lastLag            *time.Duration
+	terminal           replay.Result
+	runStarted         bool
+	reporter           func(StatusRecord) error
+	reportedPhase      operations.ReplayPhase
+	hasCapture         bool
+	lastWarmingCapture time.Time
+	afterStart         func()
+	beforeStep         func(time.Time)
+	afterStep          func(time.Time)
+	afterPublish       func(operations.ReplayPhase)
 }
 
 func Prepare(ctx context.Context, config StartupConfig) (*Runtime, error) {
@@ -126,7 +127,7 @@ func newRuntime(ctx context.Context, binding reference.Binding, handle *replayar
 		return nil, err
 	}
 	config := operations.DefaultConfig()
-	owner, err := operations.NewReplay(ctx, binding, config, logicalClock.Now, func() time.Time { return pacing.now().UTC() })
+	owner, err := operations.NewReplay(ctx, binding, config, logicalClock.Now, func() time.Time { return pacing.now().UTC() }, observationStart)
 	if err != nil {
 		return nil, err
 	}
@@ -200,6 +201,7 @@ func (r *Runtime) run(ctx context.Context, reporter func(StatusRecord) error) (r
 	if err := r.publish(operations.ReplayWarming, "", nil, r.accounting); err != nil {
 		return r.contain(err)
 	}
+	r.lastWarmingCapture = r.schedule.now()
 	for group := r.metadata.ReplayStart; !group.After(r.observationStart); group = group.Add(time.Second) {
 		if r.beforeStep != nil {
 			r.beforeStep(group)
@@ -213,7 +215,7 @@ func (r *Runtime) run(ctx context.Context, reporter func(StatusRecord) error) (r
 			r.afterStep(group)
 		}
 		if group.Before(r.observationStart) {
-			if err := r.publish(operations.ReplayWarming, "", nil, r.accounting); err != nil {
+			if err := r.publishWarmingIfDue(); err != nil {
 				return r.contain(err)
 			}
 		}
@@ -268,6 +270,18 @@ func (r *Runtime) run(ctx context.Context, reporter func(StatusRecord) error) (r
 		return r.contain(err)
 	}
 	return result, nil
+}
+
+func (r *Runtime) publishWarmingIfDue() error {
+	now := r.schedule.now()
+	if !r.lastWarmingCapture.IsZero() && now.Sub(r.lastWarmingCapture) < time.Second {
+		return nil
+	}
+	if err := r.publish(operations.ReplayWarming, "", nil, r.accounting); err != nil {
+		return err
+	}
+	r.lastWarmingCapture = now
+	return nil
 }
 
 func (r *Runtime) completeGroup(records uint64, logical time.Time, warmup bool) {

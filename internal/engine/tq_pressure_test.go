@@ -21,8 +21,8 @@ func TestPC9PressureTransitionsExpiryAndRankedRestoration(t *testing.T) {
 	unhealthy.QueueCurrentFrames = 50
 
 	applyPressureSample(t, e, clockNanos, start, unhealthy)
-	if got := e.ObserveTQ().Pressure; got != TQPressureNormal {
-		t.Fatalf("first unhealthy sample bypassed dwell: %s", got)
+	if got := e.ObserveTQ().Pressure; got != TQPressureDegraded {
+		t.Fatalf("first 25%%+ queue sample did not shed early: %s", got)
 	}
 	applyPressureSample(t, e, clockNanos, start.Add(500*time.Millisecond), unhealthy)
 	view := e.ObserveTQ()

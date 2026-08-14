@@ -60,12 +60,24 @@ func cloneSnapshotCaptureView(value SnapshotCaptureView) SnapshotCaptureView {
 	result.Engine.Publication.Watermark = cloneTime(value.Engine.Publication.Watermark)
 	result.Engine.Operational.Watermark = cloneTime(value.Engine.Operational.Watermark)
 	result.Engine.Operational.Hydration.SupportedThrough = cloneTime(value.Engine.Operational.Hydration.SupportedThrough)
+	if value.Engine.Operational.IntegrityFailure != nil {
+		copyValue := *value.Engine.Operational.IntegrityFailure
+		result.Engine.Operational.IntegrityFailure = &copyValue
+	}
 	result.Engine.TQ.Desired = append([]string(nil), value.Engine.TQ.Desired...)
 	result.Engine.TQ.Rows = append([]engine.TQSymbolView(nil), value.Engine.TQ.Rows...)
 	result.Status.Watermark = cloneTime(value.Status.Watermark)
 	result.Status.CausalTarget = cloneTime(value.Status.CausalTarget)
+	if value.Status.IntegrityFailure != nil {
+		copyValue := *value.Status.IntegrityFailure
+		result.Status.IntegrityFailure = &copyValue
+	}
 	result.Metrics.Engine.Watermark = cloneTime(value.Metrics.Engine.Watermark)
 	result.Metrics.Engine.Hydration.SupportedThrough = cloneTime(value.Metrics.Engine.Hydration.SupportedThrough)
+	if value.Metrics.Engine.IntegrityFailure != nil {
+		copyValue := *value.Metrics.Engine.IntegrityFailure
+		result.Metrics.Engine.IntegrityFailure = &copyValue
+	}
 	if value.Replay != nil {
 		copyValue := ReplayCaptureView(cloneReplayCaptureContext(ReplayCaptureContext(*value.Replay)))
 		result.Replay = &copyValue

@@ -57,9 +57,9 @@ type tqPressurePolicy struct {
 
 func defaultTQPressurePolicy() tqPressurePolicy {
 	return tqPressurePolicy{
-		sampleCadence: time.Second, commandTimeout: 2 * time.Second, degradedDwell: 500 * time.Millisecond, aggregateDwell: 2 * time.Second,
+		sampleCadence: time.Second, commandTimeout: 2 * time.Second, degradedDwell: 0, aggregateDwell: 2 * time.Second,
 		recoveryDwell: 30 * time.Second, minimumDegraded: 15 * time.Second, restoreInterval: 5 * time.Second,
-		degradedQueuePercent: 50, aggregateQueuePercent: 80, recoveryQueuePercent: 20,
+		degradedQueuePercent: 25, aggregateQueuePercent: 60, recoveryQueuePercent: 20,
 		degradedOldest: 250 * time.Millisecond, aggregateOldest: 1500 * time.Millisecond, recoveryOldest: 100 * time.Millisecond,
 		degradedDelivery: 2 * time.Second, aggregateDelivery: 5 * time.Second, recoveryDelivery: 500 * time.Millisecond,
 		degradedHeap: 512 << 20, aggregateHeap: 1280 << 20, recoveryHeap: 384 << 20,

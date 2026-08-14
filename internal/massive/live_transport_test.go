@@ -384,7 +384,7 @@ func TestPC5TransportOneAttemptHandshakeHeartbeatAndContainment(t *testing.T) {
 		}
 	})
 
-	t.Run("later ambiguity preserves the delivered causal prefix", func(t *testing.T) {
+	t.Run("later explicit unsupported family preserves subsequent aggregates", func(t *testing.T) {
 		prefixSocket := newFakeLiveSocket()
 		enqueueHandshake(prefixSocket)
 		prefixAdapter, command := testLiveAdapter(t, prefixSocket, []string{"AAA"})
@@ -395,13 +395,12 @@ func TestPC5TransportOneAttemptHandshakeHeartbeatAndContainment(t *testing.T) {
 		if !ok || first.Kind != DeliveryAggregate || first.Position.ArrayIndex != 0 {
 			t.Fatalf("causal prefix = %+v %v", first, ok)
 		}
-		ingress, ok := prefixAttempt.nextForProof(context.Background())
-		if !ok || ingress.Control.Kind != engine.IngressIntegrityFailure || ingress.Position.ArrayIndex != 1 {
-			t.Fatalf("ingress fact = %+v %v", ingress, ok)
+		unsupported, ok := prefixAttempt.nextForProof(context.Background())
+		if !ok || unsupported.Kind != DeliveryNormalizationDrop || unsupported.Rejection.Family != LiveFamilyUnsupported || unsupported.Position.ArrayIndex != 1 {
+			t.Fatalf("unsupported fact = %+v %v", unsupported, ok)
 		}
-		terminal, ok := prefixAttempt.nextForProof(context.Background())
-		if !ok || terminal.Kind != DeliveryTerminal || !prefixAdapter.Accounting().Reconciles() || !prefixAttempt.QueueAccounting().Reconciles() {
-			t.Fatalf("prefix terminal/accounting = %+v %v adapter=%+v queue=%+v", terminal, ok, prefixAdapter.Accounting(), prefixAttempt.QueueAccounting())
+		if !prefixAdapter.Accounting().Reconciles() || !prefixAttempt.QueueAccounting().Reconciles() {
+			t.Fatalf("unsupported accounting: adapter=%+v queue=%+v", prefixAdapter.Accounting(), prefixAttempt.QueueAccounting())
 		}
 	})
 }
@@ -481,23 +480,31 @@ func TestPC5CommandWriteAcknowledgementLinearization(t *testing.T) {
 		}
 	})
 
-	t.Run("partial extra and ack-before-write-failure never complete", func(t *testing.T) {
-		for _, test := range []struct {
-			token uint64
-			data  string
-			want  int
-		}{
-			{3, `[{"ev":"status","status":"success"}]`, 1},
-			{4, `[{"ev":"status","status":"success"},{"ev":"status","status":"success"},{"ev":"status","status":"success"}]`, 3},
-		} {
-			write, err := attempt.ChangeTQ(context.Background(), ChangeTQCommand{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: test.token, Action: TQSubscribe, Symbols: []string{"AAA"}})
-			if err != nil || write.Control.Outcome != engine.ControlSucceeded {
-				t.Fatalf("write %d = %+v %v", test.token, write, err)
-			}
-			socket.send(socketMessageText, test.data)
-			ack, ok := attempt.nextForProof(context.Background())
-			if !ok || ack.Control.Outcome != engine.ControlAmbiguous || ack.ExpectedStatusCount != 2 || ack.ObservedStatusCount != test.want {
-				t.Fatalf("ambiguous count %d = %+v", test.token, ack)
+	t.Run("split success completes while extra status quarantines", func(t *testing.T) {
+		write, err := attempt.ChangeTQ(context.Background(), ChangeTQCommand{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: 3, Action: TQSubscribe, Symbols: []string{"AAA"}})
+		if err != nil || write.Control.Outcome != engine.ControlSucceeded {
+			t.Fatalf("split write = %+v %v", write, err)
+		}
+		socket.send(socketMessageText, `[{"ev":"status","status":"success"}]`)
+		socket.send(socketMessageText, `[{"ev":"status","status":"success"}]`)
+		ack, ok := attempt.nextForProof(context.Background())
+		if !ok || ack.Control.Outcome != engine.ControlSucceeded || ack.ExpectedStatusCount != 2 || ack.ObservedStatusCount != 2 {
+			t.Fatalf("split acknowledgement = %+v", ack)
+		}
+
+		write, err = attempt.ChangeTQ(context.Background(), ChangeTQCommand{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: 4, Action: TQSubscribe, Symbols: []string{"AAA"}})
+		if err != nil || write.Control.Outcome != engine.ControlSucceeded {
+			t.Fatalf("extra write = %+v %v", write, err)
+		}
+		socket.send(socketMessageText, `[{"ev":"status","status":"success"},{"ev":"status","status":"success"},{"ev":"status","status":"success"}]`)
+		quarantine, ok := attempt.nextForProof(context.Background())
+		if !ok || quarantine.Kind != DeliveryTQControlQuarantine || quarantine.TQQuarantine.Failure != engine.TQControlStatusExtra || quarantine.TQQuarantine.ExpectedStatuses != 2 {
+			t.Fatalf("extra status quarantine = %+v", quarantine)
+		}
+		for index := 0; index < 2; index++ {
+			orphan, ok := attempt.nextForProof(context.Background())
+			if !ok || orphan.Kind != DeliveryTQControlQuarantine || orphan.TQQuarantine.Failure != engine.TQControlStatusUnsolicited {
+				t.Fatalf("extra orphan %d = %+v", index, orphan)
 			}
 		}
 
@@ -516,15 +523,19 @@ func TestPC5CommandWriteAcknowledgementLinearization(t *testing.T) {
 		socket.send(socketMessageText, `[{"ev":"status","status":"success"},{"ev":"status","status":"success"}]`)
 		close(socket.writeRelease)
 		failure := <-failed
-		if !errors.Is(failure.err, errCommandWrite) || failure.delivery.Control.Outcome != engine.ControlFailed || strings.Contains(fmt.Sprint(failure.err), "CREDENTIAL") {
+		if !errors.Is(failure.err, errCommandWrite) || failure.delivery.Kind != DeliveryTQControlQuarantine || failure.delivery.TQQuarantine.Failure != engine.TQControlWriteFailed || strings.Contains(fmt.Sprint(failure.err), "CREDENTIAL") {
 			t.Fatalf("write failure = %+v", failure)
 		}
 		if accounting := adapter.Accounting(); accounting.CommandsFailed != 1 || !accounting.Reconciles() {
 			t.Fatalf("write failure accounting = %+v", accounting)
 		}
-		ack, ok := attempt.nextForProof(context.Background())
-		if !ok || ack.Control.Outcome != engine.ControlAmbiguous {
-			t.Fatalf("ack after failed write = %+v", ack)
+		late, ok := attempt.nextForProof(context.Background())
+		if !ok || late.Kind != DeliveryTQControlQuarantine || late.TQQuarantine.Failure != engine.TQControlStatusUnsolicited {
+			t.Fatalf("ack after failed write = %+v", late)
+		}
+		late, ok = attempt.nextForProof(context.Background())
+		if !ok || late.Kind != DeliveryTQControlQuarantine || late.TQQuarantine.Failure != engine.TQControlStatusUnsolicited {
+			t.Fatalf("second ack after failed write = %+v", late)
 		}
 		socket.mu.Lock()
 		socket.blockWrite = false
@@ -537,7 +548,7 @@ func TestPC5CommandWriteAcknowledgementLinearization(t *testing.T) {
 		t.Fatal(err)
 	}
 	timedOut, ok := attempt.nextForProof(context.Background())
-	if !ok || timedOut.Control.Outcome != engine.ControlAmbiguous || timedOut.Control.Position != (engine.LivePosition{}) {
+	if !ok || timedOut.Kind != DeliveryTQControlQuarantine || timedOut.TQQuarantine.Failure != engine.TQControlStatusDeadline || timedOut.Position != (engine.LivePosition{}) {
 		t.Fatalf("ack deadline fabricated success/position = %+v", timedOut)
 	}
 	attempt.durations.HandshakeStep = time.Second
@@ -607,6 +618,146 @@ func TestPC5CommandWriteAcknowledgementLinearization(t *testing.T) {
 	})
 }
 
+// TestPTQRStatusAsyncCorrelationAndContainment is the adapter half of
+// P-TQR-STATUS. Every subtest uses the same bounded fake WebSocket and differs
+// only in provider status framing.
+func TestPTQRStatusAsyncCorrelationAndContainment(t *testing.T) {
+	t.Run("handshake batches classified elements without singleton frames", func(t *testing.T) {
+		socket := newFakeLiveSocket()
+		binding := component4TestBinding(t, []string{"AAA"})
+		start := binding.SessionStart().Add(10 * time.Second)
+		socket.send(socketMessageText, `[{"ev":"future_family"},{"ev":"status","status":"connected"}]`)
+		socket.send(socketMessageText, `[{"ev":"T","sym":"AAA"},{"ev":"status","status":"auth_success"}]`)
+		socket.send(socketMessageText, "["+aggregateLiveJSON("AAA", start, `"v":1,"z":1`)+`,{"ev":"status","status":"success"},`+aggregateLiveJSON("AAA", start.Add(time.Second), `"v":2,"z":1`)+"]")
+		adapter, open := testLiveAdapterForBinding(t, socket, binding)
+		attempt, _, deliveries := startHandshake(t, adapter, open)
+		defer closeAttemptForTest(t, attempt, 90)
+		want := []DeliveryKind{DeliveryNormalizationDrop, DeliveryControl, DeliveryNormalizationDrop, DeliveryControl, DeliveryControl, DeliveryAggregate, DeliveryControl, DeliveryAggregate}
+		if len(deliveries) != len(want) {
+			t.Fatalf("batched handshake deliveries = %+v", deliveries)
+		}
+		for index := range want {
+			if deliveries[index].Kind != want[index] {
+				t.Fatalf("batched handshake %d = %+v", index, deliveries[index])
+			}
+		}
+		if deliveries[5].Position.ArrayIndex != 0 || deliveries[6].Position.ArrayIndex != 1 || deliveries[7].Position.ArrayIndex != 2 ||
+			adapter.Accounting().UnsupportedFamilies != 1 || attempt.TQNormalizationAccounting().Rejected != 1 {
+			t.Fatalf("batched causal/accounting evidence: deliveries=%+v adapter=%+v tq=%+v", deliveries, adapter.Accounting(), attempt.TQNormalizationAccounting())
+		}
+	})
+
+	for _, tc := range []struct {
+		name       string
+		frames     []string
+		want       engine.TQControlFailureClass
+		wantOK     bool
+		afterAck   bool
+		authFailed bool
+		deadline   bool
+	}{
+		{name: "paired_one_frame", frames: []string{`[{"ev":"status","status":"success"},{"ev":"status","status":"success"}]`}, wantOK: true},
+		{name: "split_frames", frames: []string{`[{"ev":"status","status":"success"}]`, `[{"ev":"status","status":"success"}]`}, wantOK: true},
+		{name: "extra", frames: []string{`[{"ev":"status","status":"success"},{"ev":"status","status":"success"},{"ev":"status","status":"success"}]`}, want: engine.TQControlStatusExtra},
+		{name: "duplicate_member", frames: []string{`[{"ev":"status","status":"success","status":"success"}]`}, want: engine.TQControlStatusAmbiguous},
+		{name: "provider_error", frames: []string{`[{"ev":"status","status":"error","message":"discarded"}]`}, want: engine.TQControlStatusFailed},
+		{name: "unknown_status", frames: []string{`[{"ev":"status","status":"new_provider_status","message":"discarded"}]`}, want: engine.TQControlStatusFailed},
+		{name: "wrong_phase", frames: []string{`[{"ev":"status","status":"connected"}]`}, want: engine.TQControlStatusAmbiguous},
+		{name: "partial_deadline", frames: []string{`[{"ev":"status","status":"success"}]`}, want: engine.TQControlStatusDeadline, deadline: true},
+		{name: "delayed_after_complete", frames: []string{`[{"ev":"status","status":"success"},{"ev":"status","status":"success"}]`, `[{"ev":"status","status":"success"}]`}, want: engine.TQControlStatusUnsolicited, afterAck: true},
+		{name: "auth_failed", frames: []string{`[{"ev":"status","status":"auth_failed"}]`}, want: engine.TQControlStatusFailed, authFailed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			socket := newFakeLiveSocket()
+			enqueueHandshake(socket)
+			adapter, open := testLiveAdapter(t, socket, []string{"AAA"})
+			attempt, _, _ := startHandshake(t, adapter, open)
+			if !tc.authFailed {
+				defer closeAttemptForTest(t, attempt, 90)
+			}
+			if tc.deadline {
+				attempt.durations.HandshakeStep = 3 * time.Millisecond
+			}
+			if _, err := attempt.ChangeTQ(context.Background(), ChangeTQCommand{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: 2, Action: TQSubscribe, Symbols: []string{"AAA"}}); err != nil {
+				t.Fatal(err)
+			}
+			for _, frame := range tc.frames {
+				socket.send(socketMessageText, frame)
+			}
+			var got AdapterDelivery
+			for index := 0; index < len(tc.frames)+3; index++ {
+				delivery, ok := attempt.nextForProof(context.Background())
+				if !ok {
+					t.Fatal("status trace ended without terminal evidence")
+				}
+				if tc.wantOK && delivery.Control.Kind == engine.TradeQuoteSubscriptionResult || !tc.wantOK && delivery.Kind == DeliveryTQControlQuarantine {
+					got = delivery
+					if !tc.afterAck || delivery.Kind == DeliveryTQControlQuarantine {
+						break
+					}
+				}
+			}
+			if tc.wantOK {
+				if got.Control.Outcome != engine.ControlSucceeded || got.ExpectedStatusCount != 2 || got.ObservedStatusCount != 2 {
+					t.Fatalf("successful correlation = %+v", got)
+				}
+			} else if got.Kind != DeliveryTQControlQuarantine || got.TQQuarantine.Failure != tc.want {
+				t.Fatalf("quarantine = %+v want=%s", got, tc.want)
+			}
+			if tc.authFailed {
+				terminal, ok := attempt.nextForProof(context.Background())
+				if !ok || terminal.Kind != DeliveryTerminal || terminal.Control.Kind != engine.ConnectionLost {
+					t.Fatalf("authentication failure did not end epoch: %+v", terminal)
+				}
+			}
+			accounting := adapter.Accounting()
+			if !accounting.TransportReconciles() || !accounting.TQReconciles() || strings.Contains(fmt.Sprint(accounting), "discarded") {
+				t.Fatalf("partitioned/redacted accounting = %+v", accounting)
+			}
+			if !tc.wantOK && (accounting.FirstTQFailureClass != tc.want || accounting.FirstTQFailurePhase == "" || accounting.FirstTQFailureEpoch != attempt.Epoch()) {
+				t.Fatalf("bounded first-cause diagnostic = %+v", accounting)
+			}
+		})
+	}
+
+	t.Run("interleaved aggregate and malformed TQ retain causal dispositions", func(t *testing.T) {
+		socket := newFakeLiveSocket()
+		enqueueHandshake(socket)
+		adapter, open := testLiveAdapter(t, socket, []string{"AAA"})
+		attempt, _, _ := startHandshake(t, adapter, open)
+		defer closeAttemptForTest(t, attempt, 90)
+		if _, err := attempt.ChangeTQ(context.Background(), ChangeTQCommand{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: 2, Action: TQSubscribe, Symbols: []string{"AAA"}}); err != nil {
+			t.Fatal(err)
+		}
+		start := adapter.binding.SessionStart().Add(10 * time.Second)
+		socket.send(socketMessageText, `[{"ev":"status","status":"success"},`+aggregateLiveJSON("AAA", start, `"v":1,"z":1`)+`]`)
+		socket.send(socketMessageText, `[{"ev":"T","sym":"AAA"},{"ev":"status","status":"success"}]`)
+		aggregate, ok := attempt.nextForProof(context.Background())
+		if !ok || aggregate.Kind != DeliveryAggregate {
+			t.Fatalf("interleaved aggregate = %+v", aggregate)
+		}
+		drop, ok := attempt.nextForProof(context.Background())
+		if !ok || drop.Kind != DeliveryNormalizationDrop || drop.Rejection.Family != LiveFamilyTrade {
+			t.Fatalf("malformed TQ = %+v", drop)
+		}
+		ack, ok := attempt.nextForProof(context.Background())
+		if !ok || ack.Control.Outcome != engine.ControlSucceeded || ack.ObservedStatusCount != 2 {
+			t.Fatalf("interleaved split acknowledgement = %+v", ack)
+		}
+	})
+}
+
+func closeAttemptForTest(t *testing.T, attempt *LiveAttempt, token uint64) {
+	t.Helper()
+	if attempt == nil {
+		return
+	}
+	_ = attempt.Close(CloseEpochCommand{BindingIdentity: attempt.binding.Identity(), ConnectionEpoch: attempt.Epoch(), CommandToken: token, Cause: CloseControlledStop})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = attempt.Wait(ctx)
+}
+
 func TestPC5CommandDeadlineWakesBlockedDequeue(t *testing.T) {
 	socket := newFakeLiveSocket()
 	enqueueHandshake(socket)
@@ -648,9 +799,9 @@ func TestPC5CommandDeadlineWakesBlockedDequeue(t *testing.T) {
 	case <-proofCtx.Done():
 		t.Fatal("blocked dequeue did not observe the pending command deadline")
 	}
-	if !completed.ok || completed.delivery.Control.Kind != engine.TradeQuoteSubscriptionResult ||
-		completed.delivery.Control.Outcome != engine.ControlAmbiguous || completed.delivery.ExpectedStatusCount != 2 ||
-		completed.delivery.ObservedStatusCount != 0 || completed.delivery.Control.Position != (engine.LivePosition{}) {
+	if !completed.ok || completed.delivery.Kind != DeliveryTQControlQuarantine ||
+		completed.delivery.TQQuarantine.Failure != engine.TQControlStatusDeadline || completed.delivery.TQQuarantine.ExpectedStatuses != 2 ||
+		completed.delivery.TQQuarantine.ObservedStatuses != 0 || completed.delivery.Position != (engine.LivePosition{}) {
 		t.Fatalf("no-response command result = %+v ok=%v", completed.delivery, completed.ok)
 	}
 	if elapsed := time.Since(started); elapsed >= 200*time.Millisecond {
@@ -1299,11 +1450,18 @@ func TestPC5LiveOfflineComponentsOneThroughFiveCanonicalPath(t *testing.T) {
 	aggregate := aggregateLiveJSON("AAA", binding.SessionStart().Add(10*time.Second), `"dv":"1000.5"`)
 	socket.send(socketMessageText, `[{"ev":"status","status":"failed","message":"ignored"},{"ev":"status","status":"failed"},`+aggregate+`]`)
 	status, ok := attempt.nextForProof(context.Background())
-	if !ok || status.Control.Kind != engine.TradeQuoteSubscriptionResult || status.Control.Outcome != engine.ControlFailed {
+	if !ok || status.Kind != DeliveryTQControlQuarantine || status.TQQuarantine.Failure != engine.TQControlStatusFailed {
 		t.Fatalf("mixed TQ status = %+v", status)
 	}
-	if result, err := DeliverToEngine(context.Background(), state, status); err != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlDeferred {
+	if result, err := DeliverToEngine(context.Background(), state, status); err != nil || result.TQDisposition.Code != engine.DispositionTQRejected {
 		t.Fatalf("mixed TQ engine = %+v err=%v", result, err)
+	}
+	duplicateStatus, ok := attempt.nextForProof(context.Background())
+	if !ok || duplicateStatus.Kind != DeliveryTQControlQuarantine || duplicateStatus.TQQuarantine.Failure != engine.TQControlStatusUnsolicited {
+		t.Fatalf("duplicate failed status = %+v", duplicateStatus)
+	}
+	if result, err := DeliverToEngine(context.Background(), state, duplicateStatus); err != nil || result.TQDisposition.Code != engine.DispositionTQRejected {
+		t.Fatalf("duplicate failed status engine = %+v err=%v", result, err)
 	}
 	liveAggregate, ok := attempt.nextForProof(context.Background())
 	if !ok || liveAggregate.Kind != DeliveryAggregate || liveAggregate.Position.ArrayIndex != 2 {

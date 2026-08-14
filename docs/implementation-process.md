@@ -70,9 +70,9 @@ time after the preceding component's interface is finally accepted. Under the
 V1 program the orchestrator may revise and record the boundary or completed
 contract without another owner message. If a completed contract introduces or
 changes a consequential trust, persistence, identity, concurrency, ownership,
-ordering, or cross-component interface boundary, it receives one focused
-independent review before implementation. Other completed contracts do not
-need a ceremonial independent review.
+ordering, or cross-component interface boundary, request a focused independent
+review only when primary proof and construction do not make the risk
+straightforward. Contract completion alone is not a review trigger.
 
 ### 2.1 Layout and routing
 
@@ -360,17 +360,20 @@ Use an independent review only for:
 
 1. one completed-contract review when a consequential trust, persistence,
    identity, concurrency, ownership, ordering, or cross-component interface
-   boundary is introduced or changed;
+   boundary is introduced or changed and primary proof plus construction do not
+   make the risk straightforward; or
 2. a narrow implementation review when one such boundary is difficult to
-   assess from primary proof and construction alone;
-3. one final read-only review per completed component; and
-4. one final integrated V1 RC review after C11.
+   assess from primary proof and construction alone.
 
 After correction, request focused re-review of the finding and affected
-boundary. Do not repeat a complete review or ask a reviewer to reconfirm an
-unchanged primary proof. A review finding is correction input. Substitute an
-available reviewer model when needed; temporarily unavailable review capacity
-delays only that review while other work continues.
+boundary only when necessary to resolve that finding. Do not repeat a complete
+review or ask a reviewer to reconfirm an unchanged primary proof. Completion,
+reopening, correction, or a green deterministic verification set is not an
+independent-review trigger. Older component-local automatic final-review or
+reopened-boundary-review requirements are superseded by this section. A review
+finding is correction input. Substitute an available reviewer model when
+needed; temporarily unavailable review capacity delays only that review while
+other work continues.
 
 Reviewer execution/model policy is in `AGENTS.md`.
 
@@ -409,16 +412,15 @@ Final validation assembles, rather than reinvents, evidence:
 4. run one compact deterministic cross-component scenario through scanner,
    checkpoint/recovery, T/Q, API, and UI, asserting only integration meanings;
 5. verify independent UI restart/deployment leaves backend processing live;
-6. run one final integrated read-only review; and
-7. record market-hours validation as `pending` unless separately executed.
+6. record market-hours validation as `pending` unless separately executed.
 
 The result is a private/local V1 RC. It is not live-provider validation, public
 deployment, production cutover, or trading-edge evidence.
 
 ## 10. Drift audit
 
-At contract completion, after each slice/correction, final component review,
-and each milestone, ask whether the work introduced:
+At contract completion, after each slice/correction and each milestone, ask
+whether the work introduced:
 
 - a new product rule;
 - another state owner, watermark, evaluator, or publication authority;

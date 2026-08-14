@@ -65,6 +65,12 @@ export function renderDashboard(document, event, options = {}) {
     statusItem(document, "T/Q", model ? `${model.tqPressure}${model.tqAggregateOnly ? " · aggregate only" : ""}${model.tqRetainedBoundHit ? " · retained bound" : ""} · ${model.tqUnknown} unknown` : "unknown", model?.tqPressure === "normal" && !model?.tqRetainedBoundHit && model?.tqUnknown === 0 ? "current" : "warning"),
     statusItem(document, "Sample", model ? `${new Date(model.sampledAt).toLocaleTimeString()} · #${model.sampleID}` : "—"));
   main.append(grid);
+  if (model?.lifecycle === "suppressed") {
+    const suppressed = element(document, "div", "message");
+    suppressed.dataset.state = "suppressed";
+    suppressed.textContent = `SCANNER SUPPRESSED · ${model.lifecycleReason || "integrity failure"} · ${model.suppression || "restart required"}${model.integrityFailure ? ` · ${model.integrityFailure.category} at engine sequence ${model.integrityFailure.engine_sequence}` : ""}`;
+    main.append(suppressed);
+  }
   if (model) main.append(buildDiagnostics(document, model, detailsOpen));
   const message = element(document, "div", "message"); message.id = "message";
   if (!model) message.textContent = "No valid scanner snapshot is available.";

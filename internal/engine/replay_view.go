@@ -269,6 +269,7 @@ func replayEvaluationView(value aggregateEvaluationResult) ReplayEvaluationView 
 	return result
 }
 
+
 func replayFeatureAccountingView(value featureDimensionAccounting) ReplayFeatureAccountingView {
 	return ReplayFeatureAccountingView{Statuses: value.statuses, Reasons: value.reasons, Pairs: value.pairs}
 }

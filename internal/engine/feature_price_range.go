@@ -2,6 +2,7 @@ package engine
 
 import (
 	"math"
+	"math/bits"
 	"sort"
 	"time"
 )
@@ -184,7 +185,20 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 			if state := e.state.binding.symbols[index].aggregates; state != nil {
 				e.compactSymbolLocked(state, e.state.binding, node.admissionTime)
 				maintainActivityState(state, e.state.binding, node.admissionTime, maintenanceAt)
+				if e.replayFastForwardGroupLocked(node) || e.completeFinalReplayObservationGroupLocked(node) {
+					// Complete-final replay has already classified every slot through
+					// this group. Advance the ordinary chronological qualification
+					// state in the same maintenance pass; only the population
+					// projection and publication are suppressed during warm-up.
+					evaluateQualificationThroughCompleteReplay(state, e.state.binding, target, node.admissionTime)
+				}
 			}
+		}
+		if e.replayFastForwardGroupLocked(node) {
+			// Warming has no observable market publication. Canonical state,
+			// coverage, compaction, Activity, qualification, and timer progress
+			// above remain ordinary; only the full projection/apply is deferred.
+			return nil
 		}
 		staged := e.stageAggregateEvaluationAtLocked(target, node.admissionTime)
 		return &staged
@@ -211,7 +225,7 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 		removeFoldedActivityTarget(activity, e.state.binding, node.aggregate.WindowStart)
 	}
 	blockEnd := activityBlockEnd(e.state.binding, node.aggregate.WindowStart)
-	recomputeMutableActivityBlock(state, e.state.binding, blockEnd)
+	recomputeMutableActivityBlock(state, e.state.binding, blockEnd, node.admissionTime)
 	boundary := node.admissionTime
 	if e.state.committedT != nil {
 		boundary = *e.state.committedT
@@ -230,10 +244,112 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 			last = *e.state.committedT
 		}
 		markQualificationProofsDirty(qualification, first, last)
+		if e.completeFinalReplayRecordLocked(node) {
+			return nil
+		}
 		staged := e.stageAggregateEvaluationAtLocked(*e.state.committedT, node.admissionTime)
 		return &staged
 	}
 	return nil
+}
+
+// evaluateQualificationThroughCompleteReplay performs the ordinary
+// chronological proof progression against a validated complete-final-bars
+// prefix. Exact replay presence supplies a necessary (never sufficient) gate:
+// fewer than 45 printed seconds cannot pass the qualification formula.
+func evaluateQualificationThroughCompleteReplay(state *symbolAggregateState, binding *installedBinding, at, engineTime time.Time) {
+	qualification := ensureQualificationState(state)
+	if !validQualificationState(qualification, binding) {
+		failQualificationState(qualification, false)
+	}
+	if qualification.finalized || qualification.boundExceeded || qualification.invalid || at.Before(binding.sessionStart) || at.After(binding.sessionEnd) || at.After(engineTime) {
+		updateCompleteReplayQualificationResult(state, binding, at)
+		return
+	}
+	revalidateDirtyQualificationProofs(state, binding)
+	first := binding.sessionStart
+	if !qualification.accountedThrough.IsZero() {
+		first = qualification.accountedThrough.Add(time.Second)
+	}
+	for proofEnd := first; !proofEnd.After(at) && !qualification.finalized; proofEnd = proofEnd.Add(time.Second) {
+		if completeReplayQualificationCandidate(state, binding, proofEnd) {
+			evaluateQualificationProof(state, binding, proofEnd, engineTime)
+		}
+		qualification.accountedThrough = proofEnd
+	}
+	finalizeQualificationProof(state, engineTime)
+	updateCompleteReplayQualificationResult(state, binding, at)
+}
+
+func updateCompleteReplayQualificationResult(state *symbolAggregateState, binding *installedBinding, at time.Time) {
+	qualification := ensureQualificationState(state)
+	result := qualificationResult{at: at, status: qualificationUnresolved, unresolvedOrigin: qualification.unresolvedOrigin, currentProofCount: len(qualification.proofs)}
+	switch {
+	case qualification.boundExceeded || qualification.invalid:
+	case qualification.finalized:
+		result.status, result.unresolvedOrigin, result.finalProofEnd = qualificationFinalized, uncertaintyNone, qualification.finalProofEnd
+	case len(qualification.proofs) > 0:
+		result.status, result.unresolvedOrigin = qualificationProvisional, uncertaintyNone
+	case !at.IsZero() && !qualification.accountedThrough.Before(at) && completeReplayCoverageThrough(state, binding, at):
+		result.status, result.unresolvedOrigin = qualificationNotYetPassed, uncertaintyNone
+	}
+	qualification.result = result
+}
+
+func completeReplayQualificationCandidate(state *symbolAggregateState, binding *installedBinding, proofEnd time.Time) bool {
+	first := proofEnd.Add(-qualificationWindow)
+	if first.Before(binding.sessionStart) {
+		first = binding.sessionStart
+	}
+	firstSlot, endSlot := sessionSlot(binding, first), sessionSlot(binding, proofEnd)
+	if firstSlot >= endSlot {
+		return false
+	}
+	printed := 0
+	for word := firstSlot / 64; word <= (endSlot-1)/64; word++ {
+		printed += bits.OnesCount64(replayBitmapWord(state.presence, word) & replaySlotRangeMask(word, firstSlot, endSlot))
+		if printed >= minimumQualificationSeconds {
+			return true
+		}
+	}
+	return false
+}
+
+func completeReplayCoverageThrough(state *symbolAggregateState, binding *installedBinding, at time.Time) bool {
+	firstSlot, endSlot := 0, sessionSlot(binding, at)
+	if endSlot <= firstSlot {
+		return true
+	}
+	for word := firstSlot / 64; word <= (endSlot-1)/64; word++ {
+		mask := replaySlotRangeMask(word, firstSlot, endSlot)
+		if replayBitmapWord(state.historicalConflict, word)&mask != 0 ||
+			(replayBitmapWord(state.presence, word)|replayBitmapWord(state.provenAbsent, word))&mask != mask {
+			return false
+		}
+	}
+	return true
+}
+
+func replayBitmapWord(bitmap *slotBitmap, word int) uint64 {
+	if bitmap == nil || word < 0 || word >= len(bitmap) {
+		return 0
+	}
+	return bitmap[word]
+}
+
+func replaySlotRangeMask(word, firstSlot, endSlot int) uint64 {
+	low, high := 0, 64
+	if word == firstSlot/64 {
+		low = firstSlot % 64
+	}
+	if word == (endSlot-1)/64 && endSlot%64 != 0 {
+		high = endSlot % 64
+	}
+	mask := ^uint64(0) << low
+	if high < 64 {
+		mask &= (uint64(1) << high) - 1
+	}
+	return mask
 }
 
 func evaluatePriceRangeFeatures(binding *installedBinding, symbol *coreSymbol, at time.Time) priceRangeFeatureResult {
@@ -397,25 +513,61 @@ func historyTrust(state *symbolAggregateState, binding *installedBinding, start,
 	if state.historicalConflict != nil && bitmapHasRange(state.historicalConflict, binding, start, end) {
 		return aggregateFeatureField{status: featureInvalid, reason: featureReasonHistoricalConflict}
 	}
-	if !exactAggregateCoverage(state, binding, start, end) {
+	if !exactAggregateCoverageByBitmap(state, binding, start, end) {
 		return aggregateFeatureField{status: featureUnavailable, reason: featureReasonHistoryIncomplete}
 	}
 	return aggregateFeatureField{status: featureCurrent}
 }
 
 func bitmapHasRange(bitmap *slotBitmap, binding *installedBinding, start, end time.Time) bool {
+	if bitmap == nil || binding == nil || start.After(end) {
+		return false
+	}
 	if start.Before(binding.sessionStart) {
 		start = binding.sessionStart
 	}
 	if end.After(binding.sessionEnd) {
 		end = binding.sessionEnd
 	}
-	for slot := sessionSlot(binding, start); slot < sessionSlot(binding, end); slot++ {
-		if bitmap.has(slot) {
+	firstSlot, endSlot := sessionSlot(binding, start), sessionSlot(binding, end)
+	if firstSlot >= endSlot {
+		return false
+	}
+	for word := firstSlot / 64; word <= (endSlot-1)/64; word++ {
+		if replayBitmapWord(bitmap, word)&replaySlotRangeMask(word, firstSlot, endSlot) != 0 {
 			return true
 		}
 	}
 	return false
+}
+
+// exactAggregateCoverageByBitmap preserves exactAggregateCoverage semantics
+// while checking already classified intervals a machine word at a time. Tail
+// records remain authoritative for live/hydration targets whose presence bits
+// have not yet been folded or replay-classified.
+func exactAggregateCoverageByBitmap(state *symbolAggregateState, binding *installedBinding, start, end time.Time) bool {
+	if state == nil || binding == nil || start != start.UTC() || end != end.UTC() || start.Nanosecond() != 0 || end.Nanosecond() != 0 ||
+		start.Before(binding.sessionStart) || end.After(binding.sessionEnd) || start.After(end) {
+		return false
+	}
+	firstSlot, endSlot := sessionSlot(binding, start), sessionSlot(binding, end)
+	if firstSlot >= endSlot {
+		return true
+	}
+	for word := firstSlot / 64; word <= (endSlot-1)/64; word++ {
+		mask := replaySlotRangeMask(word, firstSlot, endSlot)
+		if replayBitmapWord(state.historicalConflict, word)&mask != 0 {
+			return false
+		}
+		covered := (replayBitmapWord(state.presence, word) | replayBitmapWord(state.provenAbsent, word)) & mask
+		for missing := mask &^ covered; missing != 0; missing &= missing - 1 {
+			slot := word*64 + bits.TrailingZeros64(missing)
+			if !aggregatePresentAt(state, binding.sessionStart.Add(time.Duration(slot)*time.Second).Unix()) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func percentChange(value, base float64) aggregateFeatureField {

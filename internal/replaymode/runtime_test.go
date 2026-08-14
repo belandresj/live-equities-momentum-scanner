@@ -31,8 +31,8 @@ import (
 // published only after O0, later groups use cumulative one-second deadlines,
 // and successful requested-end state remains immutable until shutdown.
 func TestReplayWindowRuntime(t *testing.T) {
-	fixture := newReplayFixture(t, 6*time.Second)
-	runtime := fixture.prepare(t, 4*time.Second, 6*time.Second)
+	fixture := newReplayFixture(t, 7*time.Second)
+	runtime := fixture.prepare(t, 4*time.Second, 7*time.Second)
 	defer runtime.Close()
 	timeline := newTestTimeline(time.Unix(1_800_000_000, 0).UTC(), time.Second, 0)
 	runtime.schedule = timeline.schedule()
@@ -62,8 +62,7 @@ func TestReplayWindowRuntime(t *testing.T) {
 	if result.Outcome != replay.OutcomeComplete || result.Completion != replay.CompletionArtifactEnd {
 		t.Fatalf("result = %+v", result)
 	}
-	if got, want := phases, []operations.ReplayPhase{operations.ReplayWarming, operations.ReplayWarming, operations.ReplayWarming, operations.ReplayWarming, operations.ReplayWarming,
-		operations.ReplayObserving, operations.ReplayObserving, operations.ReplayFinalizing, operations.ReplayRetainedSuccess}; !reflect.DeepEqual(got, want) {
+	if got, want := phases, []operations.ReplayPhase{operations.ReplayWarming, operations.ReplayObserving, operations.ReplayObserving, operations.ReplayObserving, operations.ReplayFinalizing, operations.ReplayRetainedSuccess}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("phases = %v want %v", got, want)
 	}
 	if got, want := statusPhases(records), []operations.ReplayPhase{operations.ReplayWarming, operations.ReplayObserving, operations.ReplayFinalizing, operations.ReplayRetainedSuccess}; !reflect.DeepEqual(got, want) {
@@ -73,20 +72,23 @@ func TestReplayWindowRuntime(t *testing.T) {
 	if marshalErr != nil || strings.Contains(string(encoded), fixture.artifact) || strings.Contains(string(encoded), finalArtifactID(snapshots)) {
 		t.Fatalf("status records exposed private artifact data: body=%s err=%v", encoded, marshalErr)
 	}
-	if got := timeline.deadlineSnapshot(); len(got) != 2 || got[1].Sub(got[0]) != time.Second {
+	if got := timeline.deadlineSnapshot(); len(got) != 3 || got[1].Sub(got[0]) != time.Second || got[2].Sub(got[1]) != time.Second {
 		t.Fatalf("cumulative deadlines = %v", got)
 	}
-	for index, snapshot := range snapshots[:5] {
+	for index, snapshot := range snapshots[:1] {
 		if snapshot.Replay.Phase != "warming" || len(snapshot.Rows) != 0 || snapshot.Ranking.Mode != "unavailable" || snapshot.Ranking.Reason != "replay_warming" ||
 			snapshot.Replay.ScheduleLagMS != nil || snapshot.Replay.Window.ObservationBoundariesPublished != "0" {
 			t.Fatalf("warming[%d] = %+v", index, snapshot)
 		}
 	}
-	first := snapshots[5]
+	first := snapshots[1]
 	if first.Replay.Phase != "observing" || first.Replay.LogicalTime != timestamp(fixture.start.Add(4*time.Second)) ||
 		first.Publication.CommittedT == nil || *first.Publication.CommittedT != timestamp(fixture.start) || first.Replay.ScheduleLagMS == nil || *first.Replay.ScheduleLagMS != 0 ||
 		first.Replay.Window.WarmupGroupsCompleted != "5" || first.Replay.Window.ObservationSecondsCompleted != "0" || first.Replay.Window.ObservationBoundariesPublished != "1" {
 		t.Fatalf("first observation = %+v", first)
+	}
+	if got := []string{snapshots[1].Publication.ID, snapshots[2].Publication.ID, snapshots[3].Publication.ID}; got[0] == got[1] || got[1] == got[2] || got[0] == got[2] {
+		t.Fatalf("three consecutive API publications did not change: %v", got)
 	}
 	final := snapshots[len(snapshots)-1]
 	assertFinalReplaySnapshot(t, final, replay.CompletionArtifactEnd)
@@ -94,8 +96,8 @@ func TestReplayWindowRuntime(t *testing.T) {
 		t.Fatalf("terminal publication identity: final=%s prior=%s result=%d", final.Publication.ID, snapshots[len(snapshots)-2].Publication.ID, result.Status.Publication.PublicationID)
 	}
 	if final.Replay.Source.ArtifactRecords != "2" || final.Replay.Source.CompletedRecordDispositions != "2" || final.Replay.Source.UnreadRecords != "0" ||
-		final.Replay.Source.CompletedGroups != "7" || final.Replay.Source.RemainingGroups != "0" || final.Replay.Window.ObservationSecondsCompleted != "2" ||
-		final.Replay.Window.ObservationBoundariesPublished != "3" {
+		final.Replay.Source.CompletedGroups != "8" || final.Replay.Source.RemainingGroups != "0" || final.Replay.Window.ObservationSecondsCompleted != "3" ||
+		final.Replay.Window.ObservationBoundariesPublished != "4" {
 		t.Fatalf("final accounting = %+v", final.Replay)
 	}
 	terminalContext := operations.ReplayCaptureContext{Phase: operations.ReplayRetainedSuccess, ArtifactID: runtime.metadata.ArtifactID, ArtifactEnd: runtime.metadata.ReplayEnd,
@@ -151,6 +153,49 @@ func TestReplayWindowRuntime(t *testing.T) {
 	}
 	if records[len(records)-1].Phase != operations.ReplayShuttingDown {
 		t.Fatalf("final status transition = %v", statusPhases(records))
+	}
+}
+
+func TestReplayWarmingPublicationRateLimit(t *testing.T) {
+	fixture := newReplayFixture(t, 10*time.Second)
+	runtime := fixture.prepare(t, 8*time.Second, 10*time.Second)
+	defer runtime.Close()
+	timeline := newTestTimeline(time.Unix(1_807_000_000, 0).UTC(), time.Second, 0)
+	runtime.schedule = timeline.schedule()
+	runtime.beforeStep = func(time.Time) { timeline.advance(250 * time.Millisecond) }
+	type capture struct {
+		phase operations.ReplayPhase
+		at    time.Time
+	}
+	var captures []capture
+	runtime.afterPublish = func(phase operations.ReplayPhase) { captures = append(captures, capture{phase, timeline.current()}) }
+	result, err := runtime.Run(context.Background())
+	if err != nil || result.Outcome != replay.OutcomeComplete {
+		t.Fatalf("rate-limited run: %+v err=%v", result, err)
+	}
+	var warming []time.Time
+	for _, value := range captures {
+		if value.phase == operations.ReplayWarming {
+			warming = append(warming, value.at)
+		}
+	}
+	if len(warming) < 2 || captures[0].phase != operations.ReplayWarming {
+		t.Fatalf("warming captures = %+v", captures)
+	}
+	for index := 1; index < len(warming); index++ {
+		if warming[index].Sub(warming[index-1]) < time.Second {
+			t.Fatalf("warming publication exceeded 1 Hz: %v", warming)
+		}
+	}
+	observed := false
+	for _, value := range captures {
+		if value.phase == operations.ReplayObserving {
+			observed = true
+			break
+		}
+	}
+	if !observed {
+		t.Fatalf("mandatory observation-start capture missing: %+v", captures)
 	}
 }
 
@@ -246,6 +291,243 @@ func TestReplayDeterminism(t *testing.T) {
 	if len(late.lags) < 3 || late.lags[len(late.lags)-1] != 250 {
 		t.Fatalf("late schedule lags = %v", late.lags)
 	}
+}
+
+// The fast-forward path must be a projection optimization only. This fixture
+// contains a dense symbol that finalizes qualification, a quiet symbol, and a
+// complete no-print symbol across the production four-second delay.
+func TestReplayFastForwardFirstObservationEquivalence(t *testing.T) {
+	fixture, observationStart, observationEnd := newSemanticReplayFixture(t)
+	type observation struct {
+		view               engine.ReplayDeterministicView
+		status             engine.ReplayStatus
+		result             replay.Result
+		qualificationTrace [][]engine.ReplayQualificationView
+	}
+	run := func(fastForward bool) observation {
+		binding, err := cachedBinding(context.Background(), "2026-08-06", fixture.referenceDirectory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidate, err := replayartifact.ProbeCandidateHeader(context.Background(), fixture.artifact, MaximumArtifactBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		handle, err := replayartifact.OpenValidated(fixture.artifact, replayartifact.ValidationPlan{Binding: binding, Start: candidate.ReplayStart, End: candidate.ReplayEnd,
+			ExpectedMode: replayartifact.CompleteFinalBars, MaximumBytes: MaximumArtifactBytes, MaximumRecords: MaximumRecords})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer handle.Close()
+		clock, err := replay.NewSimulatedClock(candidate.ReplayStart)
+		if err != nil {
+			t.Fatal(err)
+		}
+		delay := 4 * time.Second
+		config := engine.Config{Mode: engine.RunModeReplay, Clock: clock.Now, Capacity: 256, RequiredReserve: 8, EvaluationDelay: &delay}
+		if fastForward {
+			config.ReplayObservationStart = &observationStart
+		}
+		owner, err := engine.New(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer owner.Close()
+		admission, installed := owner.AdmitBinding(context.Background(), engine.BindingInstall{SchemaVersion: engine.BindingInstallSchemaV1, BindingIdentity: binding.Identity(), Binding: binding})
+		if admission != engine.AdmissionAdmitted || (<-installed).Code != engine.DispositionBindingInstalled {
+			t.Fatal("binding install failed")
+		}
+		source, err := replay.NewSourceThrough(handle, owner, clock, replay.Unpaced(), observationEnd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := source.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		var first engine.ReplayDeterministicView
+		var firstStatus engine.ReplayStatus
+		var qualificationTrace [][]engine.ReplayQualificationView
+		for group := candidate.ReplayStart; !group.After(observationEnd); group = group.Add(time.Second) {
+			step, err := source.Step(context.Background())
+			if err != nil || step.LogicalTime != group {
+				t.Fatalf("step %s: %+v err=%v", group, step, err)
+			}
+			if !group.After(observationStart) {
+				boundary := owner.ObserveReplayDeterministic()
+				qualifications := make([]engine.ReplayQualificationView, len(boundary.Canonical))
+				for index := range boundary.Canonical {
+					qualifications[index] = boundary.Canonical[index].Qualification
+				}
+				qualificationTrace = append(qualificationTrace, qualifications)
+			}
+			if group == observationStart {
+				first, firstStatus = owner.ObserveReplayDeterministic(), owner.ObserveReplay()
+			}
+		}
+		result, err := source.Finish(context.Background())
+		if err != nil || result.Outcome != replay.OutcomeComplete {
+			t.Fatalf("finish: %+v err=%v", result, err)
+		}
+		return observation{view: first, status: firstStatus, result: result, qualificationTrace: qualificationTrace}
+	}
+
+	baseline, optimized := run(false), run(true)
+	if !reflect.DeepEqual(baseline.qualificationTrace, optimized.qualificationTrace) {
+		t.Fatalf("warm-up qualification progression diverged:\nbaseline=%+v\noptimized=%+v", baseline.qualificationTrace, optimized.qualificationTrace)
+	}
+	if !reflect.DeepEqual(baseline.view.Canonical, optimized.view.Canonical) || !reflect.DeepEqual(baseline.view.Evaluation, optimized.view.Evaluation) ||
+		!reflect.DeepEqual(baseline.view.Publication.AggregateEvaluation, optimized.view.Publication.AggregateEvaluation) ||
+		!reflect.DeepEqual(baseline.view.Publication.Watermark, optimized.view.Publication.Watermark) || baseline.status.LastLogicalTime != optimized.status.LastLogicalTime ||
+		!reflect.DeepEqual(baseline.status.CommittedT, optimized.status.CommittedT) || baseline.status.PresentSlots != optimized.status.PresentSlots || baseline.status.ProvenAbsentSlots != optimized.status.ProvenAbsentSlots {
+		t.Fatalf("first observation diverged:\nbaseline=%+v\noptimized=%+v", baseline, optimized)
+	}
+	if optimized.status.CommittedT == nil || *optimized.status.CommittedT != observationStart.Add(-4*time.Second) || optimized.status.LastLogicalTime != observationStart {
+		t.Fatalf("optimized boundary clocks = %+v", optimized.status)
+	}
+	var dense, quiet, noPrint *engine.ReplayCanonicalSymbol
+	for index := range optimized.view.Canonical {
+		symbol := &optimized.view.Canonical[index]
+		switch symbol.Symbol {
+		case "S0000":
+			dense = symbol
+		case "S0001":
+			quiet = symbol
+		case "S0002":
+			noPrint = symbol
+		}
+	}
+	if dense == nil || quiet == nil || noPrint == nil || dense.Qualification.Status != "finalized" || quiet.Qualification.Status == "finalized" || len(noPrint.Records) != 0 {
+		t.Fatalf("dense/quiet/no-print semantic fixture = dense=%+v quiet=%+v noPrint=%+v", dense, quiet, noPrint)
+	}
+	for name, result := range map[string]replay.Result{"baseline": baseline.result, "optimized": optimized.result} {
+		a := result.Accounting
+		if a.CompletedRecordDispositions+a.IntentionallyUnappliedSuffixRecords != a.ArtifactRecords || a.CompletedGroups != a.PlannedGroups || a.ActiveGroup != 0 || a.RemainingGroups != 0 {
+			t.Fatalf("%s terminal accounting = %+v", name, a)
+		}
+	}
+}
+
+// TestRetainedReplayPerformanceAcceptance is the explicitly selected local
+// acceptance tier. It opens the retained artifact in place only when both
+// private paths are supplied and reports no artifact path, identity, or rows.
+func TestRetainedReplayPerformanceAcceptance(t *testing.T) {
+	if testing.Short() {
+		t.Skip("retained artifact acceptance is not ordinary verification")
+	}
+	artifact := os.Getenv("REPLAY_B4_ARTIFACT")
+	referenceDirectory := os.Getenv("REPLAY_B4_REFERENCE_DIR")
+	if artifact == "" || referenceDirectory == "" {
+		t.Skip("retained artifact acceptance paths are not configured")
+	}
+	info, err := os.Lstat(artifact)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() != 2_584_011_150 {
+		t.Fatal("retained artifact does not match the approved file manifest")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	validationStarted := time.Now()
+	runtime, err := Prepare(ctx, StartupConfig{ArtifactPath: artifact, ReferenceDirectory: referenceDirectory, ObservationStart: "09:30:00", ObservationEnd: "09:35:00"})
+	validationDuration := time.Since(validationStarted)
+	if err != nil {
+		t.Fatalf("retained artifact validation failed: %v", err)
+	}
+	t.Logf("segment complete: validation=%s", validationDuration)
+	defer runtime.Close()
+	wantStart, startErr := observationTime("2026-08-07", "04:00:00")
+	wantEnd, endErr := observationTime("2026-08-07", "20:00:00")
+	metadata := runtime.metadata
+	if startErr != nil || endErr != nil || metadata.Mode != replayartifact.CompleteFinalBars || metadata.TradingDate != "2026-08-07" ||
+		metadata.ReplayStart != wantStart || metadata.ReplayEnd != wantEnd || metadata.AggregateRecords != 7_671_171 || metadata.CoverageEntries != 5_691 {
+		t.Fatal("retained artifact does not match the approved semantic manifest")
+	}
+
+	var runStarted, playbackReady, observingAt, finalizingAt, retainedAt time.Time
+	var hookErr error
+	var priorPublication string
+	consecutiveChanges, longestChangingRun := 0, 0
+	var maximumLagMS uint64
+	runtime.afterStart = func() {
+		playbackReady = time.Now()
+		t.Logf("segment complete: construction=%s", playbackReady.Sub(runStarted))
+	}
+	runtime.afterPublish = func(phase operations.ReplayPhase) {
+		now := time.Now()
+		switch phase {
+		case operations.ReplayObserving, operations.ReplayFinalizing:
+			capture, captureErr := runtime.CaptureSnapshot()
+			if captureErr != nil {
+				hookErr = captureErr
+				return
+			}
+			mapped, mapErr := snapshotapi.Map(capture)
+			if mapErr != nil {
+				hookErr = mapErr
+				return
+			}
+			if mapped.Replay.ScheduleLagMS != nil && *mapped.Replay.ScheduleLagMS > maximumLagMS {
+				maximumLagMS = *mapped.Replay.ScheduleLagMS
+			}
+			if phase == operations.ReplayObserving {
+				if mapped.Ranking.Mode != "qualified_current" || mapped.Ranking.Reason != "" || len(mapped.Rows) == 0 ||
+					mapped.Accounting.Population.UnresolvedPopulation != 0 {
+					hookErr = fmt.Errorf("retained observation did not expose complete ranked rows: mode=%s reason=%s rows=%d unresolved=%d",
+						mapped.Ranking.Mode, mapped.Ranking.Reason, len(mapped.Rows), mapped.Accounting.Population.UnresolvedPopulation)
+					return
+				}
+				if observingAt.IsZero() {
+					observingAt = now
+					t.Logf("segment complete: warmup=%s", observingAt.Sub(playbackReady))
+				}
+				if priorPublication == "" || mapped.Publication.ID != priorPublication {
+					consecutiveChanges++
+				} else {
+					consecutiveChanges = 1
+				}
+				if consecutiveChanges > longestChangingRun {
+					longestChangingRun = consecutiveChanges
+				}
+				priorPublication = mapped.Publication.ID
+			} else {
+				finalizingAt = now
+				t.Logf("segment complete: observation=%s", finalizingAt.Sub(observingAt))
+			}
+		case operations.ReplayRetainedSuccess:
+			retainedAt = now
+			t.Logf("segment complete: finalization=%s", retainedAt.Sub(finalizingAt))
+		}
+	}
+	runStarted = time.Now()
+	result, runErr := runtime.Run(ctx)
+	if runErr != nil || hookErr != nil || result.Outcome != replay.OutcomeComplete || result.Completion != replay.CompletionRequestedEnd {
+		t.Fatalf("retained replay failed: outcome=%s completion=%s run_error=%v capture_error=%v", result.Outcome, result.Completion, runErr, hookErr)
+	}
+	if playbackReady.IsZero() || observingAt.IsZero() || finalizingAt.IsZero() || retainedAt.IsZero() {
+		t.Fatal("retained replay did not expose every measured phase boundary")
+	}
+	constructionDuration := playbackReady.Sub(runStarted)
+	warmupDuration := observingAt.Sub(playbackReady)
+	observationDuration := finalizingAt.Sub(observingAt)
+	finalizationDuration := retainedAt.Sub(finalizingAt)
+	accounting := result.Accounting
+	if accounting.ArtifactRecords != 7_671_171 || accounting.CompletedRecordDispositions+accounting.IntentionallyUnappliedSuffixRecords != accounting.ArtifactRecords ||
+		accounting.UnreadRecords != 0 || accounting.CompletedGroups != accounting.PlannedGroups || accounting.ActiveGroup != 0 || accounting.RemainingGroups != 0 {
+		t.Fatal("retained replay terminal accounting did not reconcile")
+	}
+	if longestChangingRun < 3 {
+		t.Fatalf("retained observation had only %d consecutive changing API publications", longestChangingRun)
+	}
+	if validationDuration > 3*time.Minute || constructionDuration > 5*time.Second || warmupDuration > 3*time.Minute ||
+		observationDuration < 5*time.Minute || observationDuration > 5*time.Minute+15*time.Second || finalizationDuration > 3*time.Minute {
+		t.Fatalf("retained replay missed the acceptance envelope: validation=%s construction=%s warmup=%s observation=%s finalization=%s", validationDuration, constructionDuration, warmupDuration, observationDuration, finalizationDuration)
+	}
+	shutdown, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := runtime.Shutdown(shutdown); err != nil {
+		t.Fatalf("retained replay shutdown failed: %v", err)
+	}
+	t.Logf("retained manifest: bytes=%d records=%d symbols=%d complete_session=%s..%s", info.Size(), metadata.AggregateRecords, metadata.CoverageEntries, metadata.ReplayStart.Format(time.RFC3339), metadata.ReplayEnd.Format(time.RFC3339))
+	t.Logf("segments: validation=%s construction=%s warmup=%s observation=%s finalization=%s; longest_changing_publication_run=%d max_schedule_lag_ms=%d", validationDuration, constructionDuration, warmupDuration, observationDuration, finalizationDuration, longestChangingRun, maximumLagMS)
 }
 
 // TestReplayContainment is P-C12-CONTAINMENT. Cancellation before a paced
@@ -429,6 +711,52 @@ func newReplayFixture(t *testing.T, artifactDuration time.Duration) replayFixtur
 	return newReplayFixtureSymbols(t, artifactDuration, 1)
 }
 
+func newSemanticReplayFixture(t *testing.T) (replayFixture, time.Time, time.Time) {
+	base := newReplayFixtureSymbols(t, time.Second, 3)
+	binding, err := cachedBinding(context.Background(), "2026-08-06", base.referenceDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := binding.SessionStart()
+	observationStart := start.Add(17*time.Minute + 5*time.Second)
+	observationEnd := observationStart.Add(3 * time.Second)
+	artifactEnd := observationEnd.Add(2 * time.Second)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		parts := strings.Split(request.URL.Path, "/")
+		if len(parts) < 5 || !strings.HasPrefix(request.URL.Path, "/v2/aggs/ticker/") {
+			http.NotFound(writer, request)
+			return
+		}
+		symbol := parts[4]
+		results := make([]map[string]any, 0, 61)
+		switch symbol {
+		case "S0000":
+			for second := 0; second < 61; second++ {
+				price := 10 + float64(second)/100
+				results = append(results, map[string]any{"t": start.Add(time.Duration(second) * time.Second).UnixMilli(), "o": price, "h": price + .1, "l": price - .1, "c": price, "v": 10_000, "vw": price, "n": 1_000})
+			}
+		case "S0001":
+			for second := 0; second < 60; second += 10 {
+				results = append(results, map[string]any{"t": start.Add(time.Duration(second) * time.Second).UnixMilli(), "o": 10, "h": 10.1, "l": 9.9, "c": 10, "v": 100, "vw": 10, "n": 10})
+			}
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{"status": "OK", "ticker": symbol, "adjusted": false, "results": results})
+	}))
+	defer server.Close()
+	downloader, err := massive.NewOfflineDownloader(server.URL, func() (string, error) { return "test", nil }, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	compiled := replayartifact.Compile(context.Background(), replayartifact.CompletePlan{Binding: binding, Start: start, End: artifactEnd, Workers: 3,
+		DestinationDirectory: root, Limits: replayartifact.Limits{MaximumNormalizedRecords: 4096, MaximumResponseBytes: 1 << 20, MaximumArtifactBytes: 1 << 20,
+			MaximumTemporaryBytes: 1 << 20, MaximumTemporaryFiles: 8, MaximumInMemoryRecords: 4096}}, downloader)
+	if compiled.State != replayartifact.CompileComplete {
+		t.Fatalf("semantic compile = %+v", compiled)
+	}
+	return replayFixture{artifact: compiled.Path, referenceDirectory: base.referenceDirectory, start: start, symbols: 3}, observationStart, observationEnd
+}
+
 func newReplayFixtureSymbols(t *testing.T, artifactDuration time.Duration, symbolCount int) replayFixture {
 	t.Helper()
 	schedule, err := session.Load()
@@ -564,6 +892,18 @@ func (t *testTimeline) deadlineSnapshot() []time.Time {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return append([]time.Time(nil), t.deadlines...)
+}
+
+func (t *testTimeline) advance(value time.Duration) {
+	t.mu.Lock()
+	t.now = t.now.Add(value)
+	t.mu.Unlock()
+}
+
+func (t *testTimeline) current() time.Time {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.now
 }
 
 func assertFinalReplaySnapshot(t *testing.T, snapshot snapshotapi.Snapshot, completion replay.CompletionDisposition) {

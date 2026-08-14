@@ -75,6 +75,7 @@ func TestC12RunModeConfigurationIsMutuallyExclusive(t *testing.T) {
 		{"replay missing bounds", []string{"--run-mode=replay", "--replay-artifact=/private/missing"}, "requires artifact"},
 		{"replay trading date", []string{"--run-mode=replay", "--replay-artifact=/private/missing", "--observation-start=09:30:00", "--observation-end=09:35:00", "--trading-date=2026-08-07"}, "live-only"},
 		{"replay checkpoint", []string{"--run-mode=replay", "--replay-artifact=/private/missing", "--observation-start=09:30:00", "--observation-end=09:35:00", "--checkpoint-dir=/tmp/checkpoints"}, "live-only"},
+		{"replay diagnostic log", []string{"--run-mode=replay", "--replay-artifact=/private/missing", "--observation-start=09:30:00", "--observation-end=09:35:00", "--diagnostic-log=/tmp/scanner.ndjson"}, "live-only"},
 		{"live replay flag", []string{"--trading-date=2026-08-07", "--observation-start=09:30:00"}, "rejects replay"},
 		{"duplicate scalar", []string{"--trading-date=2026-08-07", "--trading-date=2026-08-08"}, "duplicate --trading-date"},
 		{"position", []string{"--trading-date=2026-08-07", "extra"}, "flags are invalid"},

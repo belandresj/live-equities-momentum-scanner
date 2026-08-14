@@ -59,11 +59,12 @@ type replayCaptureView struct {
 	Context ReplayCaptureContext
 }
 
-func NewReplay(ctx context.Context, binding reference.Binding, config Config, logicalClock, wallClock func() time.Time) (*ReplayRuntime, error) {
-	if ctx == nil || binding.Identity() == "" || !config.valid() || logicalClock == nil || wallClock == nil {
+func NewReplay(ctx context.Context, binding reference.Binding, config Config, logicalClock, wallClock func() time.Time, observationStart time.Time) (*ReplayRuntime, error) {
+	if ctx == nil || binding.Identity() == "" || !config.valid() || logicalClock == nil || wallClock == nil || observationStart.IsZero() ||
+		observationStart != observationStart.UTC() || observationStart.Nanosecond() != 0 || observationStart.Before(binding.SessionStart()) || observationStart.After(binding.SessionEnd()) {
 		return nil, errors.New("invalid replay runtime configuration")
 	}
-	owner, err := engine.New(engine.Config{Mode: engine.RunModeReplay, Clock: logicalClock, Capacity: config.EngineCapacity, RequiredReserve: config.RequiredReserve, EvaluationDelay: &config.EvaluationDelay})
+	owner, err := engine.New(engine.Config{Mode: engine.RunModeReplay, Clock: logicalClock, Capacity: config.EngineCapacity, RequiredReserve: config.RequiredReserve, EvaluationDelay: &config.EvaluationDelay, ReplayObservationStart: &observationStart})
 	if err != nil {
 		return nil, err
 	}
