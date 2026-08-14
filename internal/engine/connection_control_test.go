@@ -217,7 +217,7 @@ func TestPC5ENGINEConnectionControlLifecycle(t *testing.T) {
 		got := admitConnectionControl(t, e, ingress)
 		view := e.observePublication()
 		if got.Code != DispositionIngressIntegrity || got.SuppressionDisposition != SuppressionSameBindingRecoveryAllowed ||
-			e.observeTimeLifecycle().Lifecycle != lifecycleSuppressed || view.kind != publicationUnavailableSentinel ||
+			e.observeTimeLifecycle().Lifecycle != lifecycleSuppressed || view.kind != publicationNormal || view.bindingIdentity != binding.Identity() ||
 			view.lifecycleReason != lifecycleReasonIngressIntegrity || view.lastDisposition != DispositionIngressIntegrity {
 			t.Fatalf("ingress disposition=%+v publication=%+v", got, view)
 		}

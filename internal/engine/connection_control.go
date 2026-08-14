@@ -245,6 +245,7 @@ func (e *Engine) decideConnectionControlLocked(node *queueNode, input Connection
 		e.state.aggregateAcknowledged = true
 		e.state.aggregateAckPosition = input.Position
 		e.state.aggregateAckReceivedAt = input.ReceiptTime
+		e.clearTQControlQuarantineLocked(input.ConnectionEpoch)
 		return DispositionConnectionControlApplied, ReasonNone
 	case TradeQuoteCommandWriteResult, TradeQuoteSubscriptionResult:
 		return DispositionConnectionControlDeferred, controlOutcomeReason(input.Outcome)
@@ -284,6 +285,9 @@ func (e *Engine) decideConnectionControlLocked(node *queueNode, input Connection
 			}
 			e.state.hydration.generation.active = false
 		}
+		if e.routeRecoverableAggregateLossLocked(node) {
+			return DispositionIngressIntegrity, ReasonIngressIntegrity
+		}
 		e.state.hydration.fenceReconciled = false
 		e.state.liveEpochActive = false
 		e.clearAggregateAcknowledgementLocked()
@@ -309,6 +313,27 @@ func (e *Engine) applyRecoveryExhaustionLocked(node *queueNode) (DispositionCode
 	}
 	e.enterSuppressionLocked(lifecycleEventIngressIntegrity, node, lifecycleReasonRecoveryExhausted)
 	return DispositionRecoveryExhausted, ReasonRecoveryExhausted
+}
+
+// routeRecoverableAggregateLossLocked converts possible raw aggregate loss
+// into the ordinary exact-gap recovery path only when the committed boundary
+// is sufficient to name the unsupported suffix. It never fabricates a safe
+// boundary during bootstrap or after contradictory canonical evidence.
+func (e *Engine) routeRecoverableAggregateLossLocked(node *queueNode) bool {
+	if e.mode != RunModeLive || e.state.lifecycle != lifecycleLive || e.state.committedT == nil || e.state.aggregateIntegrity {
+		return false
+	}
+	e.state.hydration.supportedT = immutableTime(*e.state.committedT)
+	stale := cloneAggregateEvaluation(e.state.aggregateEvaluator.current)
+	stale.mode, stale.reason, stale.rows, stale.tqIntentAvailable = rankingStale, "", nil, false
+	e.state.aggregateEvaluator.current = stale
+	e.state.evaluationRevision++
+	e.state.exposedRevision++
+	e.state.hydration.fenceReconciled = false
+	e.state.liveEpochActive = false
+	e.clearAggregateAcknowledgementLocked()
+	e.state.suppressionDisposition = ""
+	return e.transitionLifecycleLocked(lifecycleEventAggregateLoss, node, lifecycleReasonAggregateEpochLost)
 }
 
 func (e *Engine) clearAggregateAcknowledgementLocked() {

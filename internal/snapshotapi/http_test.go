@@ -530,6 +530,49 @@ func TestPC10HTTPBoundsLoopbackCancellationAndProgress(t *testing.T) {
 	}
 }
 
+func TestPTQRRecoverableSuppressionKeepsAPIAndLivenessAvailable(t *testing.T) {
+	runtime, binding, now := newSnapshotRuntime(t)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := runtime.Shutdown(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	applySnapshotControl(t, runtime.Engine(), binding, engine.ConnectionAttempt, 1, 1, engine.LivePosition{}, *now)
+	admission, completion := runtime.Engine().AdmitOperationalIngressIntegrity(context.Background())
+	if admission != engine.AdmissionAdmitted || completion == nil || (<-completion).Code != engine.DispositionIngressIntegrity {
+		t.Fatal("recoverable ingress suppression was not installed")
+	}
+	if capture, captureErr := runtime.CaptureSnapshot(); captureErr != nil {
+		t.Fatal(captureErr)
+	} else if _, mapErr := Map(capture); mapErr != nil {
+		view, _ := operations.InspectSnapshotCapture(capture)
+		t.Fatalf("recoverable suppressed capture did not map: %v view=%+v", mapErr, view)
+	}
+	handler, err := NewHandler(runtime, HandlerConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(path string) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		return response
+	}
+	if live := request("/livez"); live.Code != http.StatusOK {
+		t.Fatalf("recoverable livez=%d %s", live.Code, live.Body.String())
+	}
+	if ready := request("/readyz"); ready.Code != http.StatusServiceUnavailable || !strings.Contains(ready.Body.String(), `"reason":"suppressed"`) {
+		t.Fatalf("recoverable readyz=%d %s", ready.Code, ready.Body.String())
+	}
+	snapshotResponse := request("/api/v1/snapshot")
+	var snapshot Snapshot
+	if snapshotResponse.Code != http.StatusOK || json.Unmarshal(snapshotResponse.Body.Bytes(), &snapshot) != nil ||
+		snapshot.Publication.Lifecycle != "suppressed" || snapshot.Publication.Suppression != "same_binding_recovery_allowed" || !snapshot.Status.ProcessLive || snapshot.Status.BackendReady {
+		t.Fatalf("recoverable snapshot=%d %+v body=%s", snapshotResponse.Code, snapshot, snapshotResponse.Body.String())
+	}
+}
+
 func assertStatusAndOneCapture(t *testing.T, handler http.Handler, source *countingCaptureSource, method, path string, status int) {
 	t.Helper()
 	before := source.calls.Load()

@@ -135,8 +135,8 @@ func TestLiveIngressRuntimeAccountingGuardCoherentMismatchAndHealthyConcurrency(
 		if !found {
 			t.Fatalf("exact failed operands absent: %+v", incident.Identities)
 		}
-		if view := run.Engine().ObserveTQ(); view.Pressure != engine.TQPressureAggregateOnly || !view.AggregateOnly {
-			t.Fatalf("runtime accounting loss did not shed/unsubscribe T/Q: %+v", view)
+		if view := run.Engine().ObserveOperational(); view.Lifecycle != "suppressed" || view.Suppression != engine.SuppressionSameBindingRecoveryAllowed {
+			t.Fatalf("broad queue accounting loss did not suppress the invalid aggregate path: %+v", view)
 		}
 	})
 }

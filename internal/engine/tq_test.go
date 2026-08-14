@@ -3,12 +3,95 @@ package engine
 import (
 	"context"
 	"math"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/belandresj/live-equities-momentum-scanner/internal/reference"
 )
+
+func TestPTQRStatusQuarantinePreservesAggregateState(t *testing.T) {
+	binding := testBinding(t)
+	now := binding.SessionStart().Add(20 * time.Minute)
+	delay := time.Duration(0)
+	e, err := New(Config{Mode: RunModeLive, Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 4, EvaluationDelay: &delay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		e.Close()
+		_ = e.Wait(context.Background())
+	}()
+	if got := awaitDisposition(t, admitValidBinding(t, e, binding)); got.Code != DispositionBindingInstalled {
+		t.Fatalf("binding = %+v", got)
+	}
+	e.mu.Lock()
+	e.state.lifecycle, e.state.liveEpoch, e.state.liveEpochActive = lifecycleLive, 1, true
+	e.state.aggregateAcknowledged = true
+	e.state.aggregateAckPosition = LivePosition{ConnectionEpoch: 1, FrameSequence: 1}
+	e.state.committedT = immutableTime(now)
+	index := e.state.binding.index["AAA"]
+	installEvaluatorMarkOnSymbol(&e.state.binding.symbols[index], now, 12, qualificationProvisional)
+	installExactCoverage(e.state.binding.symbols[index].aggregates, e.state.binding, e.state.binding.sessionStart, now, nil)
+	e.mu.Unlock()
+	applyTQTimer(t, e)
+	command := issueTQForTest(t, e)
+	before := e.ObserveReplayDeterministic()
+	input := TQControlQuarantineInput{SchemaVersion: TQSchemaV1, BindingIdentity: binding.Identity(), ConnectionEpoch: 1,
+		Position: LivePosition{ConnectionEpoch: 1, FrameSequence: 10}, ReceiptTime: now, Failure: TQControlStatusExtra,
+		CommandToken: command.CommandToken(), ExpectedStatuses: 2, ObservedStatuses: 3}
+	admission, completion := e.AdmitTQControlQuarantine(context.Background(), input)
+	if admission != AdmissionAdmitted || completion == nil || (<-completion).Code != DispositionTQRejected {
+		t.Fatalf("quarantine admission = %s", admission)
+	}
+	after := e.ObserveReplayDeterministic()
+	if !reflect.DeepEqual(before.Canonical, after.Canonical) || !reflect.DeepEqual(before.Evaluation, after.Evaluation) ||
+		before.Publication.Watermark == nil || after.Publication.Watermark == nil || *before.Publication.Watermark != *after.Publication.Watermark ||
+		after.Publication.Lifecycle != "live" || !after.Publication.CurrentMarketClaim {
+		t.Fatalf("T/Q quarantine changed aggregate state: before=%+v after=%+v", before, after)
+	}
+	view := e.ObserveTQ()
+	if !view.Quarantined || view.QuarantineReason != TQControlStatusExtra || !view.AggregateOnly || view.CommandPending ||
+		view.Commands.Issued != view.Commands.Failed || view.QuarantineExpected != 2 || view.QuarantineObserved != 3 {
+		t.Fatalf("quarantine view = %+v", view)
+	}
+	if _, err := e.IssueTQCommand(); err == nil {
+		t.Fatal("quarantined epoch issued another T/Q command")
+	}
+	for index, failure := range []TQControlFailureClass{TQControlStatusUnsolicited, TQControlStatusFailed, TQControlStatusAmbiguous,
+		TQControlStatusDeadline, TQControlWriteFailed, TQControlAccounting} {
+		variant := TQControlQuarantineInput{SchemaVersion: TQSchemaV1, BindingIdentity: binding.Identity(), ConnectionEpoch: 1,
+			Position: LivePosition{ConnectionEpoch: 1, FrameSequence: uint64(20 + index)}, ReceiptTime: now, Failure: failure}
+		admission, completion := e.AdmitTQControlQuarantine(context.Background(), variant)
+		if admission != AdmissionAdmitted || completion == nil || (<-completion).Code != DispositionTQRejected {
+			t.Fatalf("variant %s admission = %s", failure, admission)
+		}
+		variantAfter := e.ObserveReplayDeterministic()
+		if !reflect.DeepEqual(before.Canonical, variantAfter.Canonical) || !reflect.DeepEqual(before.Evaluation, variantAfter.Evaluation) ||
+			variantAfter.Publication.Watermark == nil || *variantAfter.Publication.Watermark != *before.Publication.Watermark || !variantAfter.Publication.CurrentMarketClaim {
+			t.Fatalf("variant %s changed aggregates: %+v", failure, variantAfter)
+		}
+	}
+
+	if got := admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionLost, 1, LivePosition{ConnectionEpoch: 1, FrameSequence: 11}, now, 0, ControlFailed)); got.Code != DispositionConnectionControlApplied {
+		t.Fatalf("loss = %+v", got)
+	}
+	for _, fact := range []ConnectionControlInput{
+		controlFact(binding.Identity(), ConnectionAttempt, 2, LivePosition{}, now, 20, ControlSucceeded),
+		controlFact(binding.Identity(), ConnectionEstablished, 2, LivePosition{ConnectionEpoch: 2, FrameSequence: 1}, now, 20, ControlSucceeded),
+		controlFact(binding.Identity(), AuthenticationResult, 2, LivePosition{ConnectionEpoch: 2, FrameSequence: 2}, now, 20, ControlSucceeded),
+		controlFact(binding.Identity(), AggregateCommandWriteResult, 2, LivePosition{}, now, 21, ControlSucceeded),
+		controlFact(binding.Identity(), AggregateSubscriptionResult, 2, LivePosition{ConnectionEpoch: 2, FrameSequence: 3}, now, 21, ControlSucceeded),
+	} {
+		if got := admitConnectionControl(t, e, fact); got.Code != DispositionConnectionControlApplied {
+			t.Fatalf("new epoch fact %+v = %+v", fact, got)
+		}
+	}
+	if reset := e.ObserveTQ(); reset.Quarantined || reset.Accounting.KnownPresent != 0 || reset.Accounting.Unknown != 0 {
+		t.Fatalf("greater acknowledged epoch did not reset T/Q control: %+v", reset)
+	}
+}
 
 func TestC9ReviewedTradeConditionFixture(t *testing.T) {
 	for _, test := range []struct {

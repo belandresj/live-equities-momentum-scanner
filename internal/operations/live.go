@@ -46,8 +46,17 @@ func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error 
 	}
 	var lastErr error
 	for attemptOrdinal := uint64(1); ; attemptOrdinal++ {
-		if err := terminalLiveStateError(r.engine.ObserveOperational()); err != nil {
-			return errors.Join(err, lastErr)
+		view := r.engine.ObserveOperational()
+		if view.Lifecycle == "ended" {
+			return nil
+		}
+		if view.Lifecycle == "suppressed" {
+			if view.Suppression != engine.SuppressionSameBindingRecoveryAllowed {
+				return errors.Join(errors.New("aggregate runtime requires restart"), lastErr)
+			}
+			if err := r.awaitScheduledRecovery(ctx); err != nil {
+				return errors.Join(err, lastErr)
+			}
 		}
 		establishmentCtx, cancelEstablishment := context.WithTimeout(ctx, r.config.ConnectionAttemptDeadline)
 		attempt, err := r.openAttempt(ctx, establishmentCtx, components, attemptOrdinal*100)
@@ -61,12 +70,14 @@ func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error 
 			}
 			lastErr = err
 			if r.recoveryBudgetExhausted() {
-				return r.finishRecoveryExhaustion(ctx, lastErr)
+				if err := r.finishRecoveryExhaustion(ctx, lastErr); err != nil {
+					return err
+				}
 			}
 			continue
 		}
 		r.setLiveSources(attempt, components.Adapter)
-		view := r.engine.ObserveOperational()
+		view = r.engine.ObserveOperational()
 		var purpose engine.HydrationPurpose
 		preSession := view.Lifecycle == "awaiting_session"
 		if preSession {
@@ -87,7 +98,9 @@ func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error 
 				return errors.Join(terminalErr, lastErr)
 			}
 			if r.recoveryBudgetExhausted() {
-				return r.finishRecoveryExhaustion(ctx, lastErr)
+				if err := r.finishRecoveryExhaustion(ctx, lastErr); err != nil {
+					return err
+				}
 			}
 			continue
 		}
@@ -99,7 +112,9 @@ func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error 
 				return ctx.Err()
 			}
 			if r.recoveryBudgetExhausted() {
-				return r.finishRecoveryExhaustion(ctx, lastErr)
+				if err := r.finishRecoveryExhaustion(ctx, lastErr); err != nil {
+					return err
+				}
 			}
 			continue
 		}
@@ -114,15 +129,36 @@ func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error 
 			}
 			r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseSuperseded)
 			if action == engine.HydrationPolicyExhaust {
-				return errors.New("aggregate recovery attempts exhausted")
+				lastErr = errors.New("aggregate recovery attempts exhausted")
 			}
 			continue
 		}
+		attemptClosed := false
+	deliveryLoop:
 		for {
 			started := time.Now()
-			result, ok, err := attempt.DeliverNextToEngine(ctx, r.engine)
+			deliveryCtx, cancelDelivery := context.WithTimeout(ctx, liveLifecyclePollInterval)
+			result, ok, err := attempt.DeliverNextToEngine(deliveryCtx, r.engine)
+			pollExpired := errors.Is(deliveryCtx.Err(), context.DeadlineExceeded)
+			cancelDelivery()
 			if ok {
 				r.observeDelivery(started, result)
+			}
+			view = r.engine.ObserveOperational()
+			switch {
+			case view.Lifecycle == "ended":
+				r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseSessionEnd)
+				return nil
+			case view.Lifecycle == "suppressed" && view.Suppression != engine.SuppressionSameBindingRecoveryAllowed:
+				r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
+				return errors.Join(errors.New("aggregate runtime requires restart"), lastErr)
+			case view.Lifecycle == "suppressed" || (view.Lifecycle == "recovering" && !view.Connection.Active):
+				r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
+				attemptClosed = true
+				break deliveryLoop
+			}
+			if pollExpired && ctx.Err() == nil && err == nil && !ok {
+				continue
 			}
 			if err != nil || !ok {
 				lastErr = err
@@ -136,9 +172,13 @@ func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error 
 		// A deadline can stop the caller before the adapter has emitted its
 		// terminal. Close and deliver that terminal so the engine, rather than
 		// the supervisor, owns the transition to recovery.
-		r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
+		if !attemptClosed {
+			r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
+		}
 	}
 }
+
+const liveLifecyclePollInterval = 100 * time.Millisecond
 
 // awaitHydrationAuthorization keeps the established aggregate epoch consumed
 // while the engine is legitimately waiting for the bound 04:00 session. The
@@ -225,7 +265,42 @@ func (r *Runtime) finishRecoveryExhaustion(ctx context.Context, cause error) err
 	if err := r.exhaustRecovery(ctx); err != nil {
 		return errors.Join(errors.New("aggregate recovery attempts exhausted without engine suppression"), err, cause)
 	}
-	return errors.Join(errors.New("aggregate recovery attempts exhausted"), cause)
+	return nil
+}
+
+func (r *Runtime) awaitScheduledRecovery(ctx context.Context) error {
+	command, err := r.engine.IssueScheduledRecoveryCommand()
+	if err != nil {
+		return errors.New("engine did not issue scheduled recovery")
+	}
+	delay := command.EarliestAt().Sub(command.IssuedAt())
+	if delay <= 0 || delay > r.config.RecoveryBackoffMax {
+		return errors.New("engine issued invalid recovery deadline")
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+	}
+	input, err := engine.NewScheduledRecoveryInput(command)
+	if err != nil {
+		return err
+	}
+	admission, completion := r.engine.AdmitScheduledRecovery(ctx, input)
+	if admission != engine.AdmissionAdmitted || completion == nil {
+		return errors.New("scheduled recovery was not admitted")
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case result := <-completion:
+		if result.Code != engine.DispositionRecoveryScheduled {
+			return fmt.Errorf("scheduled recovery was rejected: %s/%s", result.Code, result.Reason)
+		}
+		return nil
+	}
 }
 
 func (r *Runtime) closeAndDrain(attempt *massive.LiveAttempt, token uint64, cause massive.CloseCause) {

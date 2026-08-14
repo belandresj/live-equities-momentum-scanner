@@ -389,6 +389,8 @@ func classifyCompletedTransition(counters *transitionCounters, code DispositionC
 		counters.appliedNonmarket++
 	case DispositionHydrationPolicyApplied:
 		counters.appliedNonmarket++
+	case DispositionRecoveryScheduled:
+		counters.appliedNonmarket++
 	case DispositionAggregateExactDuplicate:
 		counters.exactDuplicate++
 	case DispositionAggregateFenced, DispositionConnectionControlFenced, DispositionHydrationFenced, DispositionAggregateIngressFenceFenced, DispositionCheckpointTerminalFenced, DispositionLiveCoverageFenceFenced:
@@ -484,7 +486,9 @@ func (e *Engine) buildPublicationLocked(id, sequence uint64, disposition transit
 // integrity state as one coherent sealed capture. If even this construction
 // cannot validate, the no-claim sentinel remains the fail-closed fallback.
 func (e *Engine) buildSuppressedPublicationLocked(node *queueNode, disposition transitionDisposition, admission admissionCounters, transitions transitionCounters, publications publicationCounters) *privatePublication {
-	if e.state.binding == nil || e.state.evaluatorIntegrity == nil || e.state.lifecycle != lifecycleSuppressed || e.lastPubID == math.MaxUint64 || node == nil || node.admissionTime.IsZero() {
+	if e.state.binding == nil || e.state.lifecycle != lifecycleSuppressed ||
+		(e.state.evaluatorIntegrity == nil && e.state.suppressionDisposition != SuppressionSameBindingRecoveryAllowed) ||
+		e.lastPubID == math.MaxUint64 || node == nil || node.admissionTime.IsZero() {
 		return nil
 	}
 	candidate, err := e.buildPublicationLocked(e.lastPubID+1, node.engineSequence, disposition, node.admissionTime.UTC(), admission, transitions, publications)

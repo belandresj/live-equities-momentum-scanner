@@ -18,17 +18,21 @@ type Config struct {
 	RecoveryAttempts                            int
 	EvaluationDelay, ReadinessTolerance         time.Duration
 	SampleCadence                               time.Duration
+	RecoveryBackoffInitial, RecoveryBackoffMax  time.Duration
 	ConnectionAttemptDeadline, ShutdownDeadline time.Duration
 }
 
 func DefaultConfig() Config {
-	return Config{EngineCapacity: 8192, RequiredReserve: 128, RecoveryAttempts: 5, EvaluationDelay: 4 * time.Second, ReadinessTolerance: 2 * time.Second, SampleCadence: time.Second, ConnectionAttemptDeadline: 60 * time.Second, ShutdownDeadline: 10 * time.Second}
+	return Config{EngineCapacity: 8192, RequiredReserve: 128, RecoveryAttempts: 5, EvaluationDelay: 4 * time.Second, ReadinessTolerance: 2 * time.Second,
+		SampleCadence: time.Second, RecoveryBackoffInitial: time.Second, RecoveryBackoffMax: 30 * time.Second,
+		ConnectionAttemptDeadline: 60 * time.Second, ShutdownDeadline: 10 * time.Second}
 }
 
 func (c Config) valid() bool {
 	return c.EngineCapacity > 1 && c.RequiredReserve > 0 && c.RequiredReserve < c.EngineCapacity && c.RecoveryAttempts > 0 && c.RecoveryAttempts <= 10 &&
 		c.EvaluationDelay >= 0 && c.ReadinessTolerance >= 0 && c.ReadinessTolerance <= 10*time.Second &&
 		c.SampleCadence > 0 && c.SampleCadence <= 10*time.Minute &&
+		c.RecoveryBackoffInitial > 0 && c.RecoveryBackoffMax >= c.RecoveryBackoffInitial && c.RecoveryBackoffMax <= 5*time.Minute &&
 		c.ConnectionAttemptDeadline > 0 && c.ConnectionAttemptDeadline <= 2*time.Minute &&
 		c.ShutdownDeadline > 0 && c.ShutdownDeadline <= time.Minute
 }
@@ -102,7 +106,8 @@ func NewWithCheckpoint(ctx context.Context, binding reference.Binding, config Co
 	if writer != nil {
 		submitter = writer
 	}
-	owner, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: clock, Capacity: config.EngineCapacity, RequiredReserve: config.RequiredReserve, EvaluationDelay: &config.EvaluationDelay, CheckpointSubmitter: submitter})
+	owner, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: clock, Capacity: config.EngineCapacity, RequiredReserve: config.RequiredReserve, EvaluationDelay: &config.EvaluationDelay,
+		CheckpointSubmitter: submitter, RecoveryBackoffInitial: config.RecoveryBackoffInitial, RecoveryBackoffMaximum: config.RecoveryBackoffMax})
 	if err != nil {
 		return nil, err
 	}
@@ -292,15 +297,40 @@ func (r *Runtime) captureAutomaticTimerObservation(disposition engine.TimerDispo
 }
 
 func (r *Runtime) syncTQPressure(ctx context.Context) {
+	metrics := r.metricsSnapshot()
+	if !metrics.LiveQueue.Reconciles() || !metrics.Adapter.TransportReconciles() {
+		failedIdentity := "adapter.transport"
+		if !metrics.LiveQueue.Reconciles() {
+			failedIdentity, _ = firstFailedIngressIdentity(metrics)
+		}
+		prior := r.engine.ObserveSnapshot().Publication
+		admission, completion := r.engine.AdmitOperationalIngressIntegrity(ctx)
+		if admission == engine.AdmissionAdmitted && completion != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-completion:
+			}
+		}
+		r.recordRuntimeAccountingIncident(failedIdentity, metrics, prior)
+		return
+	}
+	if !metrics.Adapter.TQReconciles() {
+		view := r.engine.ObserveOperational()
+		input := engine.TQControlQuarantineInput{SchemaVersion: engine.TQSchemaV1, BindingIdentity: r.binding.Identity(), ConnectionEpoch: view.Connection.Epoch,
+			ReceiptTime: r.clock().UTC(), Failure: engine.TQControlAccounting}
+		admission, completion := r.engine.AdmitTQControlQuarantine(ctx, input)
+		if admission == engine.AdmissionAdmitted && completion != nil {
+			select {
+			case <-ctx.Done():
+			case <-completion:
+			}
+		}
+		return
+	}
 	command, err := r.engine.IssueTQPressureCommand()
 	if err != nil {
 		return
-	}
-	metrics := r.metricsSnapshot()
-	failedIdentity, accountingFailed := firstFailedIngressIdentity(metrics)
-	prior := engine.ReplayPublicationView{}
-	if accountingFailed {
-		prior = r.engine.ObserveSnapshot().Publication
 	}
 	sample := r.pressureSampler(metrics)
 	tq := r.engine.ObserveTQ()
@@ -326,9 +356,6 @@ func (r *Runtime) syncTQPressure(ctx context.Context) {
 			}
 			r.deliveryWindowMu.Unlock()
 		}
-	}
-	if accountingFailed {
-		r.recordRuntimeAccountingIncident(failedIdentity, metrics, prior)
 	}
 	r.metricsMu.Lock()
 	attempt := r.attempt
@@ -464,7 +491,7 @@ func defaultTQPressureSample(metrics Metrics) engine.TQPressureSample {
 		SlotCapacityDrops: metrics.LiveQueue.FramesRejectedSlotCapacity, ByteCapacityDrops: metrics.LiveQueue.FramesRejectedByteCapacity,
 		AggregateWatermarkLag:  metrics.WatermarkLag,
 		MaxDeliveryDelayOneSec: metrics.MaxProcessingDelayOneSecond, DeliveryLatencyAttributed: attributed, HeapAllocBytes: metrics.HeapAllocBytes,
-		Goroutines: metrics.Goroutines, TQLocalAccountingHealthy: metrics.LiveQueue.Reconciles() && metrics.Adapter.Reconciles() && metrics.TQNormalization.Reconciles(),
+		Goroutines: metrics.Goroutines, TQLocalAccountingHealthy: metrics.LiveQueue.Reconciles() && metrics.Adapter.TransportReconciles() && metrics.Adapter.TQReconciles() && metrics.TQNormalization.Reconciles(),
 	}
 }
 

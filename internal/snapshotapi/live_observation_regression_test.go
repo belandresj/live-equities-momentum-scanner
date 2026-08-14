@@ -54,10 +54,10 @@ func TestLiveWarmupSnapshotIsServableAndBound(t *testing.T) {
 	}
 }
 
-// A recoverable ingress-integrity terminal retains canonical state only as
-// recovery input. It must remain a coherent bound HTTP publication while
-// exposing neither the prior current claim nor any contracted ranking rows.
-func TestIngressSuppressionSnapshotIsServableBoundAndNoncurrent(t *testing.T) {
+// Possible aggregate loss after a committed watermark routes directly to exact
+// gap recovery. The API stays coherent and bound but exposes no current claim
+// or ranking rows until the unsupported suffix has been rehydrated and fenced.
+func TestRecoverableIngressLossSnapshotIsServableBoundAndNoncurrent(t *testing.T) {
 	run, binding, now := newSnapshotRuntime(t)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -74,7 +74,7 @@ func TestIngressSuppressionSnapshotIsServableBoundAndNoncurrent(t *testing.T) {
 	}
 	_, timer := run.Engine().AdmitTimer(context.Background())
 	if timer == nil || (<-timer).Code != engine.DispositionTimerApplied {
-		t.Fatal("suppressed timer was not dispositioned")
+		t.Fatal("recovering timer was not dispositioned")
 	}
 
 	handler, err := NewHandler(run, HandlerConfig{})
@@ -85,12 +85,12 @@ func TestIngressSuppressionSnapshotIsServableBoundAndNoncurrent(t *testing.T) {
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/snapshot", nil))
 	var snapshot Snapshot
 	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &snapshot) != nil {
-		t.Fatalf("suppressed snapshot=%d %s", response.Code, response.Body.String())
+		t.Fatalf("recovering snapshot=%d %s", response.Code, response.Body.String())
 	}
-	if snapshot.Publication.BindingIdentity != binding.Identity() || snapshot.Publication.Lifecycle != "suppressed" ||
-		snapshot.Publication.LifecycleReason != "ingress_integrity" || snapshot.Publication.Suppression != string(engine.SuppressionSameBindingRecoveryAllowed) ||
-		snapshot.Status.BackendReady || snapshot.Status.RankingCurrent || snapshot.Status.ReadinessReason != "suppressed" ||
-		snapshot.Ranking.Mode != "suppressed" || snapshot.Ranking.Reason != "global_suppression" || len(snapshot.Rows) != 0 {
-		t.Fatalf("suppressed publication=%+v status=%+v ranking=%+v rows=%d", snapshot.Publication, snapshot.Status, snapshot.Ranking, len(snapshot.Rows))
+	if snapshot.Publication.BindingIdentity != binding.Identity() || snapshot.Publication.Lifecycle != "recovering" ||
+		snapshot.Publication.LifecycleReason != "aggregate_epoch_lost" || snapshot.Publication.Suppression != "" ||
+		snapshot.Status.BackendReady || snapshot.Status.RankingCurrent || snapshot.Status.ReadinessReason != "lifecycle_not_ready" ||
+		snapshot.Ranking.Mode != "unavailable" || snapshot.Ranking.Reason != "no_committed_watermark" || len(snapshot.Rows) != 0 {
+		t.Fatalf("recovering publication=%+v status=%+v ranking=%+v rows=%d", snapshot.Publication, snapshot.Status, snapshot.Ranking, len(snapshot.Rows))
 	}
 }

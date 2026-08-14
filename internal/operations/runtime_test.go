@@ -291,6 +291,8 @@ func TestRunLivePreSessionDisconnectUsesBoundedRecovery(t *testing.T) {
 	config.ConnectionAttemptDeadline = time.Second
 	config.ShutdownDeadline = 2 * time.Second
 	config.RecoveryAttempts = 1
+	config.RecoveryBackoffInitial = 5 * time.Second
+	config.RecoveryBackoffMax = 5 * time.Second
 	run, err := New(context.Background(), binding, config, clock)
 	if err != nil {
 		t.Fatal(err)
@@ -332,14 +334,15 @@ func TestRunLivePreSessionDisconnectUsesBoundedRecovery(t *testing.T) {
 		}
 	}
 	close(disconnect)
-	select {
-	case err := <-done:
-		if err == nil || !strings.Contains(err.Error(), "aggregate recovery attempts exhausted") ||
-			!strings.Contains(err.Error(), "aggregate connection ended before hydration authorization") {
-			t.Fatalf("pre-session disconnect=%v", err)
+	deadline = time.After(3 * time.Second)
+	for run.Engine().ObserveOperational().Lifecycle != "suppressed" {
+		select {
+		case err := <-done:
+			t.Fatalf("recoverable pre-session suppression ended composition: %v", err)
+		case <-deadline:
+			t.Fatalf("pre-session disconnect did not suppress: %+v", run.Engine().ObserveOperational())
+		case <-time.After(time.Millisecond):
 		}
-	case <-time.After(3 * time.Second):
-		t.Fatalf("pre-session disconnect did not terminate: %+v", run.Engine().ObserveOperational())
 	}
 	shutdown, cancel := context.WithTimeout(context.Background(), config.ShutdownDeadline)
 	defer cancel()
@@ -432,7 +435,41 @@ func TestPC9PressureRuntimeCommandAndSampling(t *testing.T) {
 	}
 }
 
-func TestPC9PressureAccountingLossImmediatelyEntersAggregateOnly(t *testing.T) {
+func TestPTQRPressureShedsBeforeQuarterQueueAndHardCapacity(t *testing.T) {
+	binding := operationsBinding(t)
+	base := binding.SessionStart().Add(15 * time.Minute)
+	clockNanos := &atomic.Int64{}
+	clockNanos.Store(base.UnixNano())
+	config := DefaultConfig()
+	config.SampleCadence = 10 * time.Minute
+	run, err := New(context.Background(), binding, config, func() time.Time { return time.Unix(0, clockNanos.Load()).UTC() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = run.Shutdown(ctx)
+	}()
+	applyControl(t, run.Engine(), binding, engine.ConnectionAttempt, 1, 1, engine.LivePosition{}, base)
+	run.pressureSampler = func(Metrics) engine.TQPressureSample {
+		return engine.TQPressureSample{WaitingFrames: 4096, FrameCapacity: massive.MaximumLiveFrameSlots, ByteCapacity: 1, TQLocalAccountingHealthy: true, Goroutines: 1}
+	}
+	for index := 0; index < 2; index++ {
+		clockNanos.Store(base.Add(time.Duration(index) * time.Second).UnixNano())
+		admission, completion := run.Engine().AdmitTQPressureTick(context.Background())
+		if admission != engine.AdmissionAdmitted || completion == nil || (<-completion).Code != engine.DispositionTQApplied {
+			t.Fatal("pressure tick")
+		}
+		run.syncTQPressure(context.Background())
+	}
+	view := run.Engine().ObserveTQ()
+	if view.Pressure != engine.TQPressureDegraded || !view.ShedTradesQuotes || view.AggregateOnly || view.PressureCause != engine.TQPressureCauseWaitingFrames {
+		t.Fatalf("12.5%% queue pressure did not shed T/Q below quarter capacity: %+v", view)
+	}
+}
+
+func TestPC9BroadQueueAccountingLossSuppressesInvalidAggregatePath(t *testing.T) {
 	binding := operationsBinding(t)
 	now := binding.SessionStart().Add(15 * time.Minute)
 	config := DefaultConfig()
@@ -458,11 +495,40 @@ func TestPC9PressureAccountingLossImmediatelyEntersAggregateOnly(t *testing.T) {
 	}
 	run.syncTQPressure(context.Background())
 	operational := run.Engine().ObserveOperational()
-	if operational.Lifecycle == "suppressed" {
-		t.Fatalf("scalar accounting loss incorrectly suppressed aggregates: %+v", operational)
+	if operational.Lifecycle != "suppressed" || operational.Suppression != engine.SuppressionSameBindingRecoveryAllowed {
+		t.Fatalf("broad queue accounting loss escaped aggregate containment: %+v", operational)
 	}
-	if view := run.Engine().ObserveTQ(); view.Pressure != engine.TQPressureAggregateOnly || !view.AggregateOnly || view.PressureCause != engine.TQPressureCauseTransportAccounting {
-		t.Fatalf("accounting loss did not remove T/Q: %+v", view)
+}
+
+func TestPTQRAccountingPartitionQuarantinesOnlyTQ(t *testing.T) {
+	binding := operationsBinding(t)
+	now := binding.SessionStart().Add(15 * time.Minute)
+	config := DefaultConfig()
+	config.SampleCadence = 10 * time.Minute
+	run, err := New(context.Background(), binding, config, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = run.Shutdown(ctx)
+	}()
+	applyControl(t, run.Engine(), binding, engine.ConnectionAttempt, 1, 1, engine.LivePosition{}, now)
+	partitioned := massive.AdapterAccounting{CommandsStarted: 1, TQCommandsStarted: 1}
+	if !partitioned.TransportReconciles() || partitioned.TQReconciles() || partitioned.Reconciles() {
+		t.Fatalf("test accounting did not isolate the T/Q partition: %+v", partitioned)
+	}
+	run.metricsSnapshot = func() Metrics { return Metrics{LiveQueue: massive.LiveQueueAccounting{}, Adapter: partitioned} }
+	admission, completion := run.Engine().AdmitTQPressureTick(context.Background())
+	if admission != engine.AdmissionAdmitted || completion == nil || (<-completion).Code != engine.DispositionTQApplied {
+		t.Fatal("pressure tick")
+	}
+	run.syncTQPressure(context.Background())
+	operational := run.Engine().ObserveOperational()
+	view := run.Engine().ObserveTQ()
+	if operational.Lifecycle == "suppressed" || !operational.Connection.Active || !view.Quarantined || view.QuarantineReason != engine.TQControlAccounting || !view.AggregateOnly {
+		t.Fatalf("T/Q accounting escaped its failure domain: operational=%+v tq=%+v", operational, view)
 	}
 }
 
@@ -565,6 +631,8 @@ func TestC8RUNTIME02MultiWorkerDisconnectDuringHydration(t *testing.T) {
 	clock := func() time.Time { return base.Add(time.Since(startedClock)).UTC() }
 	config := DefaultConfig()
 	config.RecoveryAttempts = 1
+	config.RecoveryBackoffInitial = 5 * time.Second
+	config.RecoveryBackoffMax = 5 * time.Second
 	config.ConnectionAttemptDeadline = 2 * time.Second
 	config.ShutdownDeadline = 2 * time.Second
 	config.SampleCadence = 10 * time.Minute
@@ -598,13 +666,20 @@ func TestC8RUNTIME02MultiWorkerDisconnectDuringHydration(t *testing.T) {
 	components := LiveComponents{Adapter: adapter, Hydrator: hydrator, Workers: 8, RowsPerChunk: 1, MaximumResponseBytes: 8 << 20, MaximumNormalizedRecords: int64(len(symbols)) * 57_600, MaximumResidentRecords: int64(len(symbols)) * 57_600, Durations: capacityDurations()}
 	done := make(chan error, 1)
 	go func() { done <- run.RunLive(context.Background(), components) }()
+	deadline := time.After(5 * time.Second)
+	for run.Engine().ObserveOperational().Lifecycle != "suppressed" {
+		select {
+		case err := <-done:
+			t.Fatalf("recoverable suppression ended the process: %v", err)
+		case <-deadline:
+			t.Fatalf("disconnect did not reach bounded suppression: active=%d view=%+v", active.Load(), run.Engine().ObserveOperational())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 	select {
 	case err := <-done:
-		if err == nil || !strings.Contains(err.Error(), "recovery attempts exhausted") {
-			t.Fatalf("disconnect during hydration = %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatalf("disconnect did not terminate hydration: active=%d view=%+v", active.Load(), run.Engine().ObserveOperational())
+		t.Fatalf("recoverable suppression ended before its scheduled command: %v", err)
+	default:
 	}
 	shutdown, cancelShutdown := context.WithTimeout(context.Background(), config.ShutdownDeadline)
 	defer cancelShutdown()
@@ -719,6 +794,8 @@ func TestC8RUNTIME03InitialRetryAndExhaustion(t *testing.T) {
 			clock := func() time.Time { return base.Add(time.Since(startedClock)).UTC() }
 			config := DefaultConfig()
 			config.RecoveryAttempts = 2
+			config.RecoveryBackoffInitial = 5 * time.Second
+			config.RecoveryBackoffMax = 5 * time.Second
 			config.EvaluationDelay = 20 * time.Millisecond
 			config.SampleCadence = 10 * time.Millisecond
 			config.ConnectionAttemptDeadline = 3 * time.Second
@@ -762,17 +839,23 @@ func TestC8RUNTIME03InitialRetryAndExhaustion(t *testing.T) {
 					t.Fatalf("retry connections=%d view=%+v", connections.Load(), view)
 				}
 			} else {
-				select {
-				case err := <-joined:
-					if err == nil || !strings.Contains(err.Error(), "recovery attempts exhausted") {
-						t.Fatalf("exhaustion error=%v", err)
+				for run.Engine().ObserveOperational().Lifecycle != "suppressed" {
+					select {
+					case err := <-joined:
+						t.Fatalf("recoverable exhaustion ended process: %v", err)
+					case <-deadline:
+						t.Fatalf("exhaustion did not suppress: %+v", run.Status())
+					case <-time.After(10 * time.Millisecond):
 					}
-				case <-deadline:
-					t.Fatalf("exhaustion did not terminate: %+v", run.Status())
 				}
 				view := run.Engine().ObserveOperational()
 				if connections.Load() != 2 || view.Lifecycle != "suppressed" || view.LifecycleReason != "recovery_exhausted" || view.Suppression != engine.SuppressionSameBindingRecoveryAllowed {
 					t.Fatalf("exhaustion connections=%d view=%+v", connections.Load(), view)
+				}
+				select {
+				case err := <-joined:
+					t.Fatalf("suppression stopped live composition: %v", err)
+				default:
 				}
 			}
 			shutdown, cancelShutdown := context.WithTimeout(context.Background(), config.ShutdownDeadline)
@@ -820,6 +903,8 @@ func TestC8RUNTIME04SuccessfulRecoveryResetsBudget(t *testing.T) {
 	clock := func() time.Time { return base.Add(time.Since(startedClock)).UTC() }
 	config := DefaultConfig()
 	config.RecoveryAttempts = 2
+	config.RecoveryBackoffInitial = 5 * time.Second
+	config.RecoveryBackoffMax = 5 * time.Second
 	config.EvaluationDelay = 20 * time.Millisecond
 	config.SampleCadence = 10 * time.Millisecond
 	config.ConnectionAttemptDeadline = 3 * time.Second
@@ -860,13 +945,15 @@ func TestC8RUNTIME04SuccessfulRecoveryResetsBudget(t *testing.T) {
 	}
 	failNew.Store(true)
 	disconnect <- struct{}{}
-	select {
-	case err := <-joined:
-		if err == nil || !strings.Contains(err.Error(), "recovery attempts exhausted") {
-			t.Fatalf("post-live recovery exhaustion=%v", err)
+	deadline := time.After(8 * time.Second)
+	for run.Engine().ObserveOperational().Lifecycle != "suppressed" {
+		select {
+		case err := <-joined:
+			t.Fatalf("post-live recoverable exhaustion ended process: %v", err)
+		case <-deadline:
+			t.Fatalf("post-live recovery did not suppress: %+v", run.Status())
+		case <-time.After(10 * time.Millisecond):
 		}
-	case <-time.After(8 * time.Second):
-		t.Fatalf("post-live recovery did not exhaust: %+v", run.Status())
 	}
 	view := run.Engine().ObserveOperational()
 	if connections.Load() != 5 || view.Connection.RecoveryAttempts != 2 || view.Lifecycle != "suppressed" || view.LifecycleReason != "recovery_exhausted" {
