@@ -13,6 +13,7 @@ import (
 
 	"github.com/belandresj/live-equities-momentum-scanner/internal/engine"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/massive"
+	"github.com/coder/websocket"
 )
 
 // Regression for the 2026-08-11 frame-capacity terminal. C5 maps that terminal
@@ -77,7 +78,7 @@ func TestSuppressedIngressCannotEnterReconnectHotLoop(t *testing.T) {
 	}
 }
 
-func TestPTQRScheduledRecoveryIsTheOnlySameBindingContinuation(t *testing.T) {
+func TestPHRRetryExhaustionStopsAutomaticDial(t *testing.T) {
 	binding := operationsBinding(t)
 	base := binding.SessionStart().Add(20 * time.Minute)
 	started := time.Now()
@@ -120,22 +121,22 @@ func TestPTQRScheduledRecoveryIsTheOnlySameBindingContinuation(t *testing.T) {
 		t.Fatalf("socket opened before engine deadline: attempts=%d", attempts)
 	}
 	deadline := time.After(500 * time.Millisecond)
-	for adapter.Accounting().ConnectionAttempts < 1 || run.Engine().ObserveOperational().Lifecycle != "suppressed" {
+	for run.Engine().ObserveOperational().LifecycleReason != "recovery_exhausted" {
 		select {
 		case err := <-joined:
-			t.Fatalf("recoverable scheduler ended the process: %v", err)
+			t.Fatalf("stable exhaustion ended the process: %v", err)
 		case <-deadline:
-			t.Fatalf("scheduled recovery did not make one bounded attempt: adapter=%+v view=%+v", adapter.Accounting(), run.Engine().ObserveOperational())
+			t.Fatalf("recovery did not reach stable exhaustion: adapter=%+v view=%+v", adapter.Accounting(), run.Engine().ObserveOperational())
 		case <-time.After(5 * time.Millisecond):
 		}
 	}
 	attempts := adapter.Accounting().ConnectionAttempts
-	if attempts == 0 || attempts > 2 {
-		t.Fatalf("scheduler did not remain bounded at the first deadline: attempts=%d", attempts)
+	if attempts != 0 {
+		t.Fatalf("exhausted recovery opened a socket: attempts=%d", attempts)
 	}
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 	if later := adapter.Accounting().ConnectionAttempts; later != attempts {
-		t.Fatalf("scheduler opened another socket before the next deadline: before=%d after=%d", attempts, later)
+		t.Fatalf("scheduler opened a socket after exhaustion: before=%d after=%d", attempts, later)
 	}
 	status := run.Status()
 	if !status.ProcessLive || status.BackendReady || status.Reason != ReasonSuppressed {
@@ -154,6 +155,131 @@ func TestPTQRScheduledRecoveryIsTheOnlySameBindingContinuation(t *testing.T) {
 	defer cancelShutdown()
 	if err := run.Shutdown(shutdown); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPHRRetryFailedHandshakeFactsPrecedeTerminal(t *testing.T) {
+	binding := operationsBinding(t)
+	base := binding.SessionStart().Add(20 * time.Minute)
+	// Use a real moving process clock for the engine while keeping the provider
+	// fixture deterministic and local.
+	started := time.Now()
+	clock := func() time.Time { return base.Add(time.Since(started)).UTC() }
+	run, err := New(context.Background(), binding, DefaultConfig(), clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		deadline, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = run.Shutdown(deadline)
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, acceptErr := websocket.Accept(writer, request, nil)
+		if acceptErr != nil {
+			return
+		}
+		defer connection.CloseNow()
+		ctx := request.Context()
+		_ = connection.Write(ctx, websocket.MessageText, []byte(`[{"ev":"status","status":"connected"}]`))
+		if _, _, readErr := connection.Read(ctx); readErr != nil {
+			return
+		}
+		_ = connection.Write(ctx, websocket.MessageText, []byte(`[{"ev":"status","status":"auth_failed","message":"SECRET-PROVIDER-PROSE"}]`))
+		_, _, _ = connection.Read(ctx)
+	}))
+	defer server.Close()
+	adapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{
+		Endpoint: "ws" + strings.TrimPrefix(server.URL, "http"), Credential: "SECRET-CREDENTIAL",
+		Queue: massive.LiveQueueConfig{FrameSlots: 8, MaxFrameBytes: 4096, TotalFrameBytes: 16384}, Clock: clock,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := run.openAttempt(context.Background(), context.Background(), LiveComponents{Adapter: adapter, Durations: capacityDurations()}, 100)
+	if err == nil || attempt == nil {
+		t.Fatalf("failed handshake attempt=%v err=%v", attempt, err)
+	}
+	beforeTerminal := run.Engine().ObserveOperational()
+	if beforeTerminal.Connection.Applied < 3 || !beforeTerminal.Connection.Active || beforeTerminal.Connection.Acknowledged {
+		t.Fatalf("classified handshake facts were not delivered first: %+v", beforeTerminal.Connection)
+	}
+	run.retireAttempt(attempt, 190, massive.CloseIntegrityLoss, clock())
+	outcome := run.LatestRecoveryAttempt()
+	if outcome == nil || outcome.Phase != "authentication" || outcome.Outcome != "authentication_failed" || outcome.AggregateAcknowledged {
+		t.Fatalf("redacted latest attempt=%+v", outcome)
+	}
+	if rendered := fmt.Sprintf("%+v %v", outcome, err); strings.Contains(rendered, "SECRET-") {
+		t.Fatalf("external prose or credential escaped: %s", rendered)
+	}
+}
+
+func TestPHRRetryEstablishmentDeadlinePreservesHandshakePrefix(t *testing.T) {
+	binding := operationsBinding(t)
+	base, started := binding.SessionStart().Add(20*time.Minute), time.Now()
+	clock := func() time.Time { return base.Add(time.Since(started)).UTC() }
+	run, err := New(context.Background(), binding, DefaultConfig(), clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		deadline, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = run.Shutdown(deadline)
+	})
+	authReceived := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, acceptErr := websocket.Accept(writer, request, nil)
+		if acceptErr != nil {
+			return
+		}
+		defer connection.CloseNow()
+		ctx := request.Context()
+		_ = connection.Write(ctx, websocket.MessageText, []byte(`[{"ev":"status","status":"connected"}]`))
+		if _, _, readErr := connection.Read(ctx); readErr == nil {
+			close(authReceived)
+		}
+		_, _, _ = connection.Read(ctx)
+	}))
+	defer server.Close()
+	adapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{
+		Endpoint: "ws" + strings.TrimPrefix(server.URL, "http"), Credential: "fixture",
+		Queue: massive.LiveQueueConfig{FrameSlots: 8, MaxFrameBytes: 4096, TotalFrameBytes: 16384}, Clock: clock,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	establishment, cancel := context.WithCancel(context.Background())
+	type openResult struct {
+		attempt *massive.LiveAttempt
+		err     error
+	}
+	opened := make(chan openResult, 1)
+	go func() {
+		attempt, openErr := run.openAttempt(context.Background(), establishment, LiveComponents{Adapter: adapter, Durations: capacityDurations()}, 100)
+		opened <- openResult{attempt: attempt, err: openErr}
+	}()
+	select {
+	case <-authReceived:
+		cancel()
+	case <-time.After(time.Second):
+		t.Fatal("handshake did not classify connected before deadline")
+	}
+	result := <-opened
+	attempt, err := result.attempt, result.err
+	if err == nil || attempt == nil {
+		t.Fatalf("deadline attempt=%v err=%v", attempt, err)
+	}
+	view := run.Engine().ObserveOperational()
+	// connection_attempt + connected proves the classified prefix reached the
+	// owner while the cancellation terminal is still pending retirement.
+	if view.Connection.Applied != 2 || !view.Connection.Active {
+		t.Fatalf("deadline discarded handshake prefix: %+v", view.Connection)
+	}
+	run.retireAttempt(attempt, 190, massive.CloseIntegrityLoss, clock())
+	view = run.Engine().ObserveOperational()
+	if view.Connection.Applied < 3 || view.Connection.Active {
+		t.Fatalf("deadline terminal did not follow prefix: %+v", view.Connection)
 	}
 }
 

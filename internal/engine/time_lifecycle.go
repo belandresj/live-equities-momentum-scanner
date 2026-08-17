@@ -118,7 +118,10 @@ func (e *Engine) enterSuppressionLocked(event lifecycleEvent, node *queueNode, r
 		disposition = SuppressionRestartRequired
 	}
 	e.state.suppressionDisposition = disposition
-	if disposition == SuppressionSameBindingRecoveryAllowed {
+	// Exhaustion is stable containment. It deliberately has no automatic
+	// continuation command; a future explicit operator control is separate
+	// authority.
+	if disposition == SuppressionSameBindingRecoveryAllowed && reason != lifecycleReasonRecoveryExhausted {
 		e.scheduleRecoveryLocked(node)
 	}
 	if suppressionRequiresTermination(disposition) {

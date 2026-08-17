@@ -45,6 +45,7 @@ type Runtime struct {
 	clock                      func() time.Time
 	processLive                atomic.Bool
 	joined                     atomic.Bool
+	retirementFailed           atomic.Bool
 	writer                     *checkpoint.Writer
 	checkpointResultDone       chan struct{}
 	metricsMu                  sync.Mutex
@@ -78,6 +79,7 @@ type Runtime struct {
 	automaticTimerObserverMu   sync.RWMutex
 	automaticTimerObserver     func(automaticTimerObservation)
 	ingressIncident            ingressIncidentLatch
+	recoveryAttempt            recoveryAttemptLatch
 	ingressHistory             ingressDiagnosticHistory
 	// beforeHydrationPump is a package-private diagnostic-test seam. A nil
 	// hook is the complete production behavior; tests use it only to hold the

@@ -237,7 +237,7 @@ func TestPC5TransportOneAttemptHandshakeHeartbeatAndContainment(t *testing.T) {
 			t.Fatalf("auth failure = %v %+v", err, facts)
 		}
 		terminal, ok := failedAttempt.nextForProof(context.Background())
-		if !ok || terminal.Terminal.Reason != TerminalStatusAmbiguous {
+		if !ok || terminal.Terminal.Reason != TerminalAuthenticationFailed {
 			t.Fatalf("auth terminal = %+v", terminal)
 		}
 
@@ -349,7 +349,7 @@ func TestPC5TransportOneAttemptHandshakeHeartbeatAndContainment(t *testing.T) {
 			t.Fatalf("deadline = %v", err)
 		}
 		terminal, ok = deadlineAttempt.nextForProof(context.Background())
-		if !ok || terminal.Terminal.Reason != TerminalHandshakeDeadline {
+		if !ok || terminal.Terminal.Reason != TerminalConnectedDeadline {
 			t.Fatalf("deadline terminal = %+v", terminal)
 		}
 
@@ -361,7 +361,7 @@ func TestPC5TransportOneAttemptHandshakeHeartbeatAndContainment(t *testing.T) {
 		if _, err := totalAttempt.Handshake(context.Background()); !errors.Is(err, errTransportFailed) {
 			t.Fatalf("whole-handshake deadline = %v", err)
 		}
-		if terminal, ok := totalAttempt.nextForProof(context.Background()); !ok || terminal.Terminal.Reason != TerminalHandshakeDeadline {
+		if terminal, ok := totalAttempt.nextForProof(context.Background()); !ok || terminal.Terminal.Reason != TerminalConnectedDeadline {
 			t.Fatalf("whole-handshake terminal = %+v %v", terminal, ok)
 		}
 	})

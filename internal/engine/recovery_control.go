@@ -63,11 +63,10 @@ type ScheduledRecoveryInput struct{ command ScheduledRecoveryCommand }
 type frozenScheduledRecoveryInput struct{ ScheduledRecoveryInput }
 
 type scheduledRecoveryState struct {
-	pending     *ScheduledRecoveryCommand
-	dispatched  bool
-	nextOrdinal uint64
-	completed   uint64
-	fenced      uint64
+	pending    *ScheduledRecoveryCommand
+	dispatched bool
+	completed  uint64
+	fenced     uint64
 }
 
 func validScheduledRecoveryCommand(command ScheduledRecoveryCommand) bool {
@@ -81,9 +80,6 @@ func (e *Engine) scheduleRecoveryLocked(node *queueNode) {
 	if state.pending != nil || e.state.binding == nil {
 		return
 	}
-	if state.nextOrdinal == 0 {
-		state.nextOrdinal = 1
-	}
 	issuedAt := e.lastClock
 	if node != nil && !node.admissionTime.IsZero() {
 		issuedAt = node.admissionTime
@@ -91,8 +87,10 @@ func (e *Engine) scheduleRecoveryLocked(node *queueNode) {
 	if issuedAt.IsZero() {
 		return
 	}
-	ordinal := state.nextOrdinal
-	state.nextOrdinal++
+	// The next greater epoch is the next consecutive attempt since the last
+	// reconciled hydration fence.  A successful fence resets that counter;
+	// merely scheduling or admitting this command must not.
+	ordinal := e.state.connectionControl.recoveryAttempts + 1
 	state.pending = &ScheduledRecoveryCommand{
 		bindingIdentity: e.state.binding.identity,
 		failedEpoch:     e.state.liveEpoch,
@@ -110,7 +108,9 @@ func (e *Engine) IssueScheduledRecoveryCommand() (ScheduledRecoveryCommand, erro
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	state := &e.state.scheduledRecovery
-	if e.mode != RunModeLive || e.state.lifecycle != lifecycleSuppressed || e.state.suppressionDisposition != SuppressionSameBindingRecoveryAllowed ||
+	recoverableSuppression := e.state.lifecycle == lifecycleSuppressed && e.state.suppressionDisposition == SuppressionSameBindingRecoveryAllowed
+	orderedRetry := (e.state.lifecycle == lifecycleAwaitingSession || e.state.lifecycle == lifecycleAwaitingAggregateAck || e.state.lifecycle == lifecycleRecovering) && !e.state.liveEpochActive
+	if e.mode != RunModeLive || (!recoverableSuppression && !orderedRetry) ||
 		state.pending == nil || state.dispatched || !validScheduledRecoveryCommand(*state.pending) {
 		return ScheduledRecoveryCommand{}, errors.New("scheduled recovery command is not issuable")
 	}
@@ -136,8 +136,9 @@ func (e *Engine) AdmitScheduledRecovery(ctx context.Context, input ScheduledReco
 func (e *Engine) applyScheduledRecoveryLocked(node *queueNode) (DispositionCode, DispositionReason) {
 	command := node.scheduledRecovery.command
 	state := &e.state.scheduledRecovery
-	if e.mode != RunModeLive || e.state.binding == nil || e.state.lifecycle != lifecycleSuppressed ||
-		e.state.suppressionDisposition != SuppressionSameBindingRecoveryAllowed || state.pending == nil || !state.dispatched ||
+	recoverableSuppression := e.state.lifecycle == lifecycleSuppressed && e.state.suppressionDisposition == SuppressionSameBindingRecoveryAllowed
+	orderedRetry := (e.state.lifecycle == lifecycleAwaitingSession || e.state.lifecycle == lifecycleAwaitingAggregateAck || e.state.lifecycle == lifecycleRecovering) && !e.state.liveEpochActive
+	if e.mode != RunModeLive || e.state.binding == nil || (!recoverableSuppression && !orderedRetry) || state.pending == nil || !state.dispatched ||
 		command != *state.pending || command.bindingIdentity != e.state.binding.identity || command.failedEpoch != e.state.liveEpoch {
 		state.fenced++
 		return DispositionConnectionControlFenced, ReasonHistoricalContext
@@ -148,10 +149,11 @@ func (e *Engine) applyScheduledRecoveryLocked(node *queueNode) (DispositionCode,
 	}
 	state.pending, state.dispatched = nil, false
 	state.completed++
-	e.state.connectionControl.recoveryAttempts = 0
-	if !e.transitionLifecycleLocked(lifecycleEventScheduledRecovery, node, lifecycleReasonScheduledRecovery) {
-		return DispositionConnectionControlRejected, ReasonLifecycle
+	if recoverableSuppression {
+		if !e.transitionLifecycleLocked(lifecycleEventScheduledRecovery, node, lifecycleReasonScheduledRecovery) {
+			return DispositionConnectionControlRejected, ReasonLifecycle
+		}
+		e.state.suppressionDisposition = ""
 	}
-	e.state.suppressionDisposition = ""
 	return DispositionRecoveryScheduled, ReasonNone
 }

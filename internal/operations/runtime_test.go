@@ -896,15 +896,15 @@ func TestLiveTerminalStateCannotEnterReconnectLoop(t *testing.T) {
 	}
 }
 
-func TestC8RUNTIME04SuccessfulRecoveryResetsBudget(t *testing.T) {
+func TestPHRRetrySuccessfulFenceResetsBudget(t *testing.T) {
 	binding := operationsBinding(t)
 	base := binding.SessionStart().Add(20 * time.Minute)
 	startedClock := time.Now()
 	clock := func() time.Time { return base.Add(time.Since(startedClock)).UTC() }
 	config := DefaultConfig()
 	config.RecoveryAttempts = 2
-	config.RecoveryBackoffInitial = 5 * time.Second
-	config.RecoveryBackoffMax = 5 * time.Second
+	config.RecoveryBackoffInitial = 20 * time.Millisecond
+	config.RecoveryBackoffMax = 20 * time.Millisecond
 	config.EvaluationDelay = 20 * time.Millisecond
 	config.SampleCadence = 10 * time.Millisecond
 	config.ConnectionAttemptDeadline = 3 * time.Second
@@ -958,6 +958,14 @@ func TestC8RUNTIME04SuccessfulRecoveryResetsBudget(t *testing.T) {
 	view := run.Engine().ObserveOperational()
 	if connections.Load() != 5 || view.Connection.RecoveryAttempts != 2 || view.Lifecycle != "suppressed" || view.LifecycleReason != "recovery_exhausted" {
 		t.Fatalf("post-live exhaustion connections=%d view=%+v", connections.Load(), view)
+	}
+	if outcome := run.LatestRecoveryAttempt(); outcome == nil || outcome.Lifecycle != "suppressed" || outcome.Suppression != engine.SuppressionSameBindingRecoveryAllowed ||
+		outcome.ConsecutiveAttempts != 2 || !outcome.NextEligibleAt.IsZero() {
+		t.Fatalf("latest exhausted recovery outcome=%+v", outcome)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := connections.Load(); got != 5 {
+		t.Fatalf("automatic dial after exhaustion: connections=%d", got)
 	}
 	shutdown, cancelShutdown := context.WithTimeout(context.Background(), config.ShutdownDeadline)
 	defer cancelShutdown()

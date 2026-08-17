@@ -118,6 +118,15 @@ type TerminalReason string
 
 const (
 	TerminalDialFailed                   TerminalReason = "dial_failed"
+	TerminalConnectedDeadline            TerminalReason = "connected_deadline"
+	TerminalConnectedFailed              TerminalReason = "connected_failed"
+	TerminalConnectedAmbiguous           TerminalReason = "connected_ambiguous"
+	TerminalAuthenticationDeadline       TerminalReason = "authentication_deadline"
+	TerminalAuthenticationFailed         TerminalReason = "authentication_failed"
+	TerminalAuthenticationAmbiguous      TerminalReason = "authentication_ambiguous"
+	TerminalAggregateSubscribeDeadline   TerminalReason = "aggregate_subscribe_deadline"
+	TerminalAggregateSubscribeFailed     TerminalReason = "aggregate_subscribe_failed"
+	TerminalAggregateSubscribeAmbiguous  TerminalReason = "aggregate_subscribe_ambiguous"
 	TerminalReadFailed                   TerminalReason = "read_failed"
 	TerminalUnsupportedMessage           TerminalReason = "unsupported_message"
 	TerminalHeartbeatFailureUnclassified TerminalReason = "heartbeat_failure_unclassified"
@@ -162,6 +171,7 @@ type TerminalResult struct {
 	ActiveDeliveryStartedAt    time.Time
 	ActiveDeliveryAgeAtCause   time.Duration
 	CompletedAt                time.Time
+	AggregateAcknowledged      bool
 	Source                     TerminalSource
 	Reason                     TerminalReason
 	CloseCause                 CloseCause
@@ -216,7 +226,7 @@ type ActiveDeliveryDiagnostic struct {
 
 type AdapterAccounting struct {
 	ConnectionAttempts                                                         uint64
-	AttemptsActive, AttemptsConnected                                          uint64
+	AttemptsActive, AttemptsConnected, HighAttemptsActive                      uint64
 	AttemptsFailed, AttemptsCanceled                                           uint64
 	CommandsStarted, CommandsPendingWrite, CommandsPendingAck                  uint64
 	CommandsAcknowledged, CommandsFailed, CommandsAmbiguous                    uint64
@@ -372,6 +382,9 @@ func (a *LiveAdapter) Start(ctx context.Context, command OpenAggregateEpoch) (*L
 	a.lastToken = command.CommandToken
 	a.accounting.ConnectionAttempts++
 	a.accounting.AttemptsActive++
+	if a.accounting.AttemptsActive > a.accounting.HighAttemptsActive {
+		a.accounting.HighAttemptsActive = a.accounting.AttemptsActive
+	}
 	a.accounting.CommandsStarted++
 	a.accounting.CommandsPendingWrite++
 	attempt := &LiveAttempt{
@@ -424,6 +437,7 @@ type terminalCause struct {
 	activeDeliveryKind                       DeliveryKind
 	activeDeliveryStartedAt                  time.Time
 	activeDeliveryAgeAtCause                 time.Duration
+	aggregateAcknowledged                    bool
 }
 
 type LiveAttempt struct {
@@ -553,7 +567,14 @@ func (a *LiveAttempt) Handshake(ctx context.Context) ([]AdapterDelivery, error) 
 	}
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		// Establishment cancellation retires the attempt, then joins the sole
+		// handshake producer so every already-classified prefix fact is returned
+		// before the terminal can be drained by operations.
+		a.cancel()
+		<-a.handshakeDone
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return append([]AdapterDelivery(nil), a.handshakeDeliveries...), errors.Join(ctx.Err(), a.handshakeErr)
 	case <-a.handshakeDone:
 		a.mu.Lock()
 		defer a.mu.Unlock()
@@ -597,7 +618,7 @@ func (a *LiveAttempt) performHandshake() ([]AdapterDelivery, error) {
 		Params string `json:"params"`
 	}{Action: "auth", Params: a.credential})
 	if err := a.write(totalCtx, authPayload); err != nil {
-		a.triggerTerminal(TerminalWriter, TerminalWriteFailed, 0, false)
+		a.triggerTerminal(TerminalWriter, TerminalAuthenticationFailed, 0, false)
 		return deliveries, errCommandWrite
 	}
 	authenticated, err := a.awaitHandshakeStatus(totalCtx, StatusContext{ConnectionEpoch: a.epoch, ExpectedPhase: StatusPhaseAuthSuccess, CommandKind: CommandAuthentication, CommandToken: strconv.FormatUint(a.openToken, 10), ExpectedCount: 1}, engine.AuthenticationResult)
@@ -614,7 +635,7 @@ func (a *LiveAttempt) performHandshake() ([]AdapterDelivery, error) {
 	if err := a.write(totalCtx, aggregatePayload); err != nil {
 		deliveries = append(deliveries, controlDelivery(a.binding.Identity(), a.epoch, engine.AggregateCommandWriteResult, a.openToken, engine.ControlFailed, engine.LivePosition{}, a.adapter.now()))
 		a.accountOpenCommand(engine.ControlFailed, false)
-		a.triggerTerminal(TerminalWriter, TerminalWriteFailed, 0, false)
+		a.triggerTerminal(TerminalWriter, TerminalAggregateSubscribeFailed, 0, false)
 		return deliveries, errCommandWrite
 	}
 	a.accountOpenWriteSucceeded()
@@ -795,7 +816,7 @@ func (a *LiveAttempt) awaitHandshakeStatus(parent context.Context, status Status
 	for {
 		frame, ok := a.queue.pop(stepCtx)
 		if !ok {
-			a.triggerTerminal(TerminalProtocol, TerminalHandshakeDeadline, 0, false)
+			a.triggerTerminal(TerminalProtocol, handshakeTerminalReason(status.ExpectedPhase, engine.ControlAmbiguous, true), 0, false)
 			return deliveries, errTransportFailed
 		}
 		if frame.terminal {
@@ -851,12 +872,50 @@ func (a *LiveAttempt) awaitHandshakeStatus(parent context.Context, status Status
 			return deliveries, errTransportFailed
 		}
 		if failed {
-			a.triggerTerminal(TerminalProtocol, TerminalStatusAmbiguous, frame.sequence, false)
+			outcome := engine.ControlAmbiguous
+			if len(deliveries) > 0 {
+				last := deliveries[len(deliveries)-1]
+				if last.Kind == DeliveryControl && last.Control.Kind == kind {
+					outcome = last.Control.Outcome
+				}
+			}
+			a.triggerTerminal(TerminalProtocol, handshakeTerminalReason(status.ExpectedPhase, outcome, false), frame.sequence, false)
 			return deliveries, errTransportFailed
 		}
 		if found {
 			return deliveries, nil
 		}
+	}
+}
+
+func handshakeTerminalReason(phase StatusPhase, outcome engine.ConnectionControlOutcome, deadline bool) TerminalReason {
+	if deadline {
+		switch phase {
+		case StatusPhaseConnected:
+			return TerminalConnectedDeadline
+		case StatusPhaseAuthSuccess:
+			return TerminalAuthenticationDeadline
+		default:
+			return TerminalAggregateSubscribeDeadline
+		}
+	}
+	failed := outcome == engine.ControlFailed
+	switch phase {
+	case StatusPhaseConnected:
+		if failed {
+			return TerminalConnectedFailed
+		}
+		return TerminalConnectedAmbiguous
+	case StatusPhaseAuthSuccess:
+		if failed {
+			return TerminalAuthenticationFailed
+		}
+		return TerminalAuthenticationAmbiguous
+	default:
+		if failed {
+			return TerminalAggregateSubscribeFailed
+		}
+		return TerminalAggregateSubscribeAmbiguous
 	}
 }
 
@@ -991,7 +1050,7 @@ func (a *LiveAttempt) Close(command CloseEpochCommand) error {
 	a.adapter.accounting.CommandsAcknowledged++
 	a.adapter.mu.Unlock()
 	a.closeCommand = &CloseEpochCommand{BindingIdentity: command.BindingIdentity, ConnectionEpoch: command.ConnectionEpoch, CommandToken: command.CommandToken, Cause: command.Cause}
-	cause := &terminalCause{source: TerminalEngineClose, reason: TerminalCloseRequested, closeCause: command.Cause, at: a.adapter.now()}
+	cause := &terminalCause{source: TerminalEngineClose, reason: TerminalCloseRequested, closeCause: command.Cause, at: a.adapter.now(), aggregateAcknowledged: a.handshaken}
 	a.beginTerminalLocked(cause)
 	a.mu.Unlock()
 	return nil
@@ -1375,6 +1434,7 @@ func (a *LiveAttempt) reserveTerminalCauseLocked(source TerminalSource, reason T
 	cause := &terminalCause{source: source, reason: reason, fenceAfter: fenceAfter, ingressIntegrity: ingress, at: a.adapter.now(),
 		position: position, positionApplicable: positionApplicable, arrayIndexApplicable: arrayIndexApplicable,
 		incomingFrameBytes: incomingFrameBytes, activeDeliveryKind: a.activeDeliveryKind, activeDeliveryStartedAt: a.activeDeliveryStartedAt}
+	cause.aggregateAcknowledged = a.handshaken
 	if !cause.activeDeliveryStartedAt.IsZero() {
 		cause.activeDeliveryAgeAtCause = time.Since(cause.activeDeliveryStartedAt)
 		if cause.activeDeliveryAgeAtCause < 0 {
@@ -1414,7 +1474,7 @@ func terminalResultAtCause(a *LiveAttempt, cause *terminalCause) TerminalResult 
 		QueueAtCause: cause.queueAtCause, AdapterAtCause: cause.adapterAtCause, CauseAccountingCapturedAt: cause.accountingCapturedAt,
 		IncomingFrameBytes: cause.incomingFrameBytes, ActiveDeliveryKind: cause.activeDeliveryKind,
 		ActiveDeliveryStartedAt: cause.activeDeliveryStartedAt, ActiveDeliveryAgeAtCause: cause.activeDeliveryAgeAtCause,
-		CompletedAt: cause.at, Source: cause.source, Reason: cause.reason, CloseCause: cause.closeCause}
+		CompletedAt: cause.at, AggregateAcknowledged: cause.aggregateAcknowledged, Source: cause.source, Reason: cause.reason, CloseCause: cause.closeCause}
 }
 
 func (a *LiveAttempt) beginTerminalLocked(cause *terminalCause) {
@@ -1552,6 +1612,25 @@ func (a *LiveAttempt) Wait(ctx context.Context) error {
 	case <-a.cleanupDone:
 		return nil
 	}
+}
+
+// TerminalResult returns the attempt's bounded, redacted terminal fact only
+// after cleanup has reconciled the queue, workers, socket, and adapter owner.
+func (a *LiveAttempt) TerminalResult() (TerminalResult, bool) {
+	if a == nil {
+		return TerminalResult{}, false
+	}
+	select {
+	case <-a.cleanupDone:
+	default:
+		return TerminalResult{}, false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.terminalDelivery.Terminal.Reason == "" {
+		return TerminalResult{}, false
+	}
+	return a.terminalDelivery.Terminal, true
 }
 
 func (a *LiveAdapter) Accounting() AdapterAccounting {

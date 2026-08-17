@@ -22,8 +22,8 @@ func TestIngressSuppressionReasonSurvivesTimerAndRejectedReconnect(t *testing.T)
 		t.Fatalf("ingress suppression=%+v", got)
 	}
 	command, err := e.IssueScheduledRecoveryCommand()
-	if err != nil || command.BindingIdentity() != binding.Identity() || command.FailedEpoch() != 1 || command.RetryOrdinal() != 1 ||
-		command.EarliestAt().Sub(command.IssuedAt()) != time.Second {
+	if err != nil || command.BindingIdentity() != binding.Identity() || command.FailedEpoch() != 1 || command.RetryOrdinal() != 2 ||
+		command.EarliestAt().Sub(command.IssuedAt()) != 2*time.Second {
 		t.Fatalf("scheduled recovery command=%+v err=%v", command, err)
 	}
 	_, timer := e.AdmitTimer(context.Background())
@@ -85,7 +85,7 @@ func TestPTQRRecoverableIngressLossRoutesToExactGapRecovery(t *testing.T) {
 	if retained == nil || !retained.Equal(supported) {
 		t.Fatalf("retained exact recovery boundary=%v want=%v", retained, supported)
 	}
-	if _, err := e.IssueScheduledRecoveryCommand(); err == nil {
-		t.Fatal("direct gap recovery incorrectly issued a suppression command")
+	if command, err := e.IssueScheduledRecoveryCommand(); err != nil || command.FailedEpoch() != 1 || command.RetryOrdinal() != 2 {
+		t.Fatalf("direct gap recovery omitted its individually paced command: command=%+v err=%v", command, err)
 	}
 }

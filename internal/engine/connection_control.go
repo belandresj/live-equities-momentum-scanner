@@ -277,6 +277,7 @@ func (e *Engine) decideConnectionControlLocked(node *queueNode, input Connection
 		if !e.transitionLifecycleLocked(lifecycleEventAggregateLoss, node, lifecycleReasonAggregateEpochLost) {
 			return DispositionConnectionControlRejected, ReasonLifecycle
 		}
+		e.scheduleRecoveryLocked(node)
 		return DispositionConnectionControlApplied, ReasonNone
 	case IngressIntegrityFailure:
 		if e.state.hydration.generation.active {
@@ -304,13 +305,20 @@ func (e *Engine) decideConnectionControlLocked(node *queueNode, input Connection
 func (e *Engine) applyRecoveryExhaustionLocked(node *queueNode) (DispositionCode, DispositionReason) {
 	input := node.recoveryExhaustion.RecoveryExhaustionInput
 	control := &e.state.connectionControl
-	validLifecycle := e.state.lifecycle == lifecycleAwaitingSession || e.state.lifecycle == lifecycleAwaitingAggregateAck || e.state.lifecycle == lifecycleRecovering
+	validLifecycle := e.state.lifecycle == lifecycleAwaitingSession || e.state.lifecycle == lifecycleAwaitingAggregateAck || e.state.lifecycle == lifecycleRecovering ||
+		(e.state.lifecycle == lifecycleSuppressed && e.state.suppressionDisposition == SuppressionSameBindingRecoveryAllowed)
+	suppressedIngress := e.state.lifecycle == lifecycleSuppressed && e.state.latestTransition != nil && e.state.latestTransition.Reason == lifecycleReasonIngressIntegrity
+	terminalEvidence := ((control.latestKind == ConnectionLost || control.latestKind == IngressIntegrityFailure) &&
+		(control.latestOutcome == ControlFailed || control.latestOutcome == ControlAmbiguous)) ||
+		suppressedIngress
 	if e.mode != RunModeLive || e.state.binding == nil || input.BindingIdentity != e.state.binding.identity ||
 		!validLifecycle || e.state.liveEpochActive || e.state.hydration.generation.active ||
-		control.latestKind != ConnectionLost || control.latestOutcome != ControlFailed ||
+		!terminalEvidence ||
 		control.recoveryAttempts == 0 || input.Attempts != control.recoveryAttempts {
 		return DispositionConnectionControlRejected, ReasonHistoricalContext
 	}
+	e.state.scheduledRecovery.pending = nil
+	e.state.scheduledRecovery.dispatched = false
 	e.enterSuppressionLocked(lifecycleEventIngressIntegrity, node, lifecycleReasonRecoveryExhausted)
 	return DispositionRecoveryExhausted, ReasonRecoveryExhausted
 }
@@ -333,7 +341,11 @@ func (e *Engine) routeRecoverableAggregateLossLocked(node *queueNode) bool {
 	e.state.liveEpochActive = false
 	e.clearAggregateAcknowledgementLocked()
 	e.state.suppressionDisposition = ""
-	return e.transitionLifecycleLocked(lifecycleEventAggregateLoss, node, lifecycleReasonAggregateEpochLost)
+	if !e.transitionLifecycleLocked(lifecycleEventAggregateLoss, node, lifecycleReasonAggregateEpochLost) {
+		return false
+	}
+	e.scheduleRecoveryLocked(node)
+	return true
 }
 
 func (e *Engine) clearAggregateAcknowledgementLocked() {

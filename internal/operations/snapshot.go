@@ -23,6 +23,7 @@ type SnapshotCaptureView struct {
 	Status          Status
 	Metrics         Metrics
 	IngressIncident *IngressIncident
+	RecoveryAttempt *RecoveryAttemptOutcome
 	Replay          *ReplayCaptureView
 }
 
@@ -53,6 +54,7 @@ func (r *Runtime) CaptureSnapshot() (SnapshotCapture, error) {
 		SampleID: r.captureSequence, SampledAt: sampledAt, ProcessLive: processLive,
 		Engine: view, Status: deriveStatus(processLive, r.binding, r.config, sampledAt, view.Operational), Metrics: metrics,
 		IngressIncident: r.FirstIngressIncident(),
+		RecoveryAttempt: r.LatestRecoveryAttempt(),
 	}}}, nil
 }
 
@@ -81,6 +83,10 @@ func cloneSnapshotCaptureView(value SnapshotCaptureView) SnapshotCaptureView {
 		incident.PriorEngine.IntegrityFailure = cloneIntegrityFailure(value.IngressIncident.PriorEngine.IntegrityFailure)
 		incident.LastCoherentProjection = cloneLastCoherentProjection(value.IngressIncident.LastCoherentProjection)
 		result.IngressIncident = &incident
+	}
+	if value.RecoveryAttempt != nil {
+		copyValue := *value.RecoveryAttempt
+		result.RecoveryAttempt = &copyValue
 	}
 	if value.Replay != nil {
 		copyValue := ReplayCaptureView(cloneReplayCaptureContext(ReplayCaptureContext(*value.Replay)))

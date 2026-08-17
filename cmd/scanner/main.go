@@ -276,7 +276,7 @@ func captureLiveOperatorSample(runtime *operations.Runtime) (liveOperatorSample,
 		return liveOperatorSample{}, errors.New("invalid operational snapshot")
 	}
 	evaluation := view.Engine.Publication.AggregateEvaluation
-	return liveOperatorSample{Status: view.Status, Metrics: view.Metrics, IngressIncident: view.IngressIncident, Evaluation: evaluation, Ranked: len(evaluation.Rows)}, nil
+	return liveOperatorSample{Status: view.Status, Metrics: view.Metrics, IngressIncident: view.IngressIncident, RecoveryAttempt: view.RecoveryAttempt, Evaluation: evaluation, Ranked: len(evaluation.Rows)}, nil
 }
 
 func encodeSnapshotMappingFailure(encoder *json.Encoder, failure snapshotapi.MappingFailure) error {

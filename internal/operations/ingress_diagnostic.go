@@ -16,6 +16,59 @@ const (
 	IngressOwnerEngineTransition  IngressIncidentOwner = "engine_integrity_transition"
 )
 
+// RecoveryAttemptOutcome is one replace-in-place, redacted supervisor
+// diagnostic. It is evidence about the latest socket attempt, never lifecycle
+// or retry authority.
+type RecoveryAttemptOutcome struct {
+	Epoch, RecoveryOrdinal, ConsecutiveAttempts, Budget uint64
+	Phase, Outcome, Lifecycle                           string
+	Suppression                                         engine.SuppressionDisposition
+	AttemptStartedAt, TerminalAt, CleanupCompleteAt     time.Time
+	NextEligibleAt                                      time.Time
+	AggregateAcknowledged                               bool
+}
+
+type recoveryAttemptLatch struct {
+	mu    sync.Mutex
+	value *RecoveryAttemptOutcome
+}
+
+func (l *recoveryAttemptLatch) replace(value RecoveryAttemptOutcome) {
+	l.mu.Lock()
+	copyValue := value
+	l.value = &copyValue
+	l.mu.Unlock()
+}
+
+func (l *recoveryAttemptLatch) updateNextEligible(epoch uint64, at time.Time) {
+	l.mu.Lock()
+	if l.value != nil && l.value.Epoch == epoch {
+		l.value.NextEligibleAt = at
+	}
+	l.mu.Unlock()
+}
+
+func (l *recoveryAttemptLatch) updateConsequence(view engine.OperationalView) {
+	l.mu.Lock()
+	if l.value != nil {
+		l.value.Lifecycle = view.Lifecycle
+		l.value.Suppression = view.Suppression
+		l.value.ConsecutiveAttempts = view.Connection.RecoveryAttempts
+		l.value.NextEligibleAt = time.Time{}
+	}
+	l.mu.Unlock()
+}
+
+func (l *recoveryAttemptLatch) get() *RecoveryAttemptOutcome {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.value == nil {
+		return nil
+	}
+	copyValue := *l.value
+	return &copyValue
+}
+
 const (
 	maximumIngressIdentityResults = 16
 	maximumIngressHistorySamples  = 60

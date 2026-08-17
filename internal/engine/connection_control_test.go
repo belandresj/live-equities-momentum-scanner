@@ -267,6 +267,61 @@ func TestC8RecoveryExhaustionRequiresEngineOwnedAttemptHistory(t *testing.T) {
 	}
 }
 
+func TestPHRRetryEnginePacesEveryAttemptAndPreservesFacts(t *testing.T) {
+	binding := testBinding(t)
+	now := binding.SessionStart().Add(20 * time.Second)
+	e := aggregateEngine(t, binding, RunModeLive, &now)
+	defer closeAndWait(t, e)
+
+	admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionAttempt, 1, LivePosition{}, now, 1, ControlSucceeded))
+	e.mu.Lock()
+	e.state.lifecycle = lifecycleRecovering
+	e.state.liveEpochActive = false
+	e.state.connectionControl.recoveryAttempts = 0
+	e.scheduleRecoveryLocked(nil)
+	e.mu.Unlock()
+
+	for ordinal := uint64(1); ordinal <= 5; ordinal++ {
+		command, err := e.IssueScheduledRecoveryCommand()
+		if err != nil || command.RetryOrdinal() != ordinal || command.FailedEpoch() != ordinal ||
+			command.EarliestAt().Sub(command.IssuedAt()) != newRecoveryPolicy(time.Second, 30*time.Second).delay(ordinal) {
+			t.Fatalf("ordinal %d command=%+v err=%v", ordinal, command, err)
+		}
+		now = command.EarliestAt()
+		input, err := NewScheduledRecoveryInput(command)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, completion := e.AdmitScheduledRecovery(context.Background(), input)
+		if got := <-completion; got.Code != DispositionRecoveryScheduled {
+			t.Fatalf("ordinal %d schedule=%+v", ordinal, got)
+		}
+		if got := e.ObserveOperational().Connection.RecoveryAttempts; got != ordinal-1 {
+			t.Fatalf("ordinal %d schedule reset attempts to %d", ordinal, got)
+		}
+		epoch := ordinal + 1
+		admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionAttempt, epoch, LivePosition{}, now, epoch*10, ControlSucceeded))
+		admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionEstablished, epoch, LivePosition{ConnectionEpoch: epoch, FrameSequence: 1}, now, epoch*10+1, ControlSucceeded))
+		admitConnectionControl(t, e, controlFact(binding.Identity(), AuthenticationResult, epoch, LivePosition{ConnectionEpoch: epoch, FrameSequence: 2}, now, epoch*10+2, ControlFailed))
+		admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionLost, epoch, LivePosition{ConnectionEpoch: epoch, FrameSequence: 3}, now, 0, ControlFailed))
+		if got := e.ObserveOperational().Connection.RecoveryAttempts; got != ordinal {
+			t.Fatalf("ordinal %d consecutive attempts=%d", ordinal, got)
+		}
+	}
+
+	_, exhausted := e.AdmitRecoveryExhaustion(context.Background(), RecoveryExhaustionInput{SchemaVersion: RecoveryExhaustionSchemaV1, BindingIdentity: binding.Identity(), Attempts: 5})
+	if got := <-exhausted; got.Code != DispositionRecoveryExhausted {
+		t.Fatalf("exhaustion=%+v", got)
+	}
+	if _, err := e.IssueScheduledRecoveryCommand(); err == nil {
+		t.Fatal("exhaustion retained automatic recovery authority")
+	}
+	rejected := admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionAttempt, 7, LivePosition{}, now, 100, ControlSucceeded))
+	if rejected.Code != DispositionConnectionControlRejected {
+		t.Fatalf("sixth automatic attempt=%+v", rejected)
+	}
+}
+
 func controlFact(binding string, kind ConnectionControlKind, epoch uint64, position LivePosition, at time.Time, token uint64, outcome ConnectionControlOutcome) ConnectionControlInput {
 	return ConnectionControlInput{SchemaVersion: ConnectionControlSchemaV1, BindingIdentity: binding, Kind: kind,
 		ConnectionEpoch: epoch, Position: position, ReceiptTime: at.UTC(), CommandToken: token, Outcome: outcome}

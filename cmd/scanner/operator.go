@@ -14,6 +14,7 @@ type liveOperatorSample struct {
 	Status          operations.Status
 	Metrics         operations.Metrics
 	IngressIncident *operations.IngressIncident
+	RecoveryAttempt *operations.RecoveryAttemptOutcome
 	Evaluation      engine.ReplayEvaluationView
 	Ranked          int
 }
@@ -39,7 +40,7 @@ func (r *operatorRenderer) Render(sample liveOperatorSample, force bool) error {
 	signature := strings.Join([]string{status.Lifecycle, string(status.Reason), status.RankingMode, string(owner.Suppression), owner.LifecycleReason,
 		fmt.Sprint(owner.Connection.Active), fmt.Sprint(owner.Connection.Acknowledged), string(owner.Hydration.Purpose), fmt.Sprint(owner.Hydration.Generation),
 		fmt.Sprint(owner.Hydration.Active), fmt.Sprint(owner.Hydration.Accounting.Failed), fmt.Sprint(owner.Hydration.Accounting.Canceled),
-		fmt.Sprint(owner.Hydration.Accounting.Fenced), fmt.Sprint(owner.Hydration.Rows.Integrity), fmt.Sprint(owner.Hydration.FenceReconciled)}, "|")
+		fmt.Sprint(owner.Hydration.Accounting.Fenced), fmt.Sprint(owner.Hydration.Rows.Integrity), fmt.Sprint(owner.Hydration.FenceReconciled), recoveryAttemptSignature(sample.RecoveryAttempt)}, "|")
 	changed := signature != r.lastSignature
 	interval := 10 * time.Second
 	warming := owner.Hydration.Active && owner.Hydration.Accounting.Planned > 0 && !owner.Hydration.FenceReconciled && (status.Lifecycle == "hydrating" || status.Lifecycle == "recovering")
@@ -90,6 +91,9 @@ func (r *operatorRenderer) Render(sample liveOperatorSample, force bool) error {
 		}
 		_, err := fmt.Fprintf(r.stdout, "Suppressed · %s · %s\n", owner.LifecycleReason, owner.Suppression)
 		if err == nil {
+			err = renderRecoveryAttempt(r.stdout, sample.RecoveryAttempt)
+		}
+		if err == nil {
 			evaluation := sample.Evaluation
 			if sample.IngressIncident != nil && sample.IngressIncident.LastCoherentProjection != nil {
 				evaluation = sample.IngressIncident.LastCoherentProjection.Evaluation
@@ -127,6 +131,9 @@ func (r *operatorRenderer) Render(sample liveOperatorSample, force bool) error {
 			phase = "preparing recovery"
 		}
 		_, err := fmt.Fprintf(r.stdout, "Recovery: %s\n", phase)
+		if err == nil {
+			err = renderRecoveryAttempt(r.stdout, sample.RecoveryAttempt)
+		}
 		if err == nil {
 			r.remember(signature, status.SampledAt)
 		}
@@ -177,6 +184,27 @@ func (r *operatorRenderer) Render(sample liveOperatorSample, force bool) error {
 	if err == nil {
 		r.remember(signature, status.SampledAt)
 	}
+	return err
+}
+
+func recoveryAttemptSignature(outcome *operations.RecoveryAttemptOutcome) string {
+	if outcome == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d/%d/%s/%s/%s", outcome.Epoch, outcome.RecoveryOrdinal, outcome.Phase, outcome.Outcome, outcome.NextEligibleAt)
+}
+
+func renderRecoveryAttempt(output io.Writer, outcome *operations.RecoveryAttemptOutcome) error {
+	if outcome == nil {
+		return nil
+	}
+	next := "none"
+	if !outcome.NextEligibleAt.IsZero() {
+		next = outcome.NextEligibleAt.UTC().Format(time.RFC3339Nano)
+	}
+	_, err := fmt.Fprintf(output, "Recovery attempt · epoch %d · ordinal %d/%d · %s/%s · acknowledged %t · cleanup %s · next eligible %s · consequence %s/%s\n",
+		outcome.Epoch, outcome.ConsecutiveAttempts, outcome.Budget, outcome.Phase, outcome.Outcome,
+		outcome.AggregateAcknowledged, outcome.CleanupCompleteAt.UTC().Format(time.RFC3339Nano), next, outcome.Lifecycle, outcome.Suppression)
 	return err
 }
 

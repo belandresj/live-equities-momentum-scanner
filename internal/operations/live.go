@@ -46,6 +46,9 @@ func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error 
 	}
 	var lastErr error
 	for attemptOrdinal := uint64(1); ; attemptOrdinal++ {
+		if r.retirementFailed.Load() {
+			return errors.Join(errors.New("aggregate attempt cleanup did not join; retry prohibited"), lastErr)
+		}
 		view := r.engine.ObserveOperational()
 		if view.Lifecycle == "ended" {
 			return nil
@@ -54,26 +57,35 @@ func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error 
 			if view.Suppression != engine.SuppressionSameBindingRecoveryAllowed {
 				return errors.Join(errors.New("aggregate runtime requires restart"), lastErr)
 			}
+		}
+		// Only the first process-start epoch is immediate. Every greater epoch
+		// consumes the engine's one-shot authority after the prior attempt has
+		// fully retired. Exhaustion remains a live, stable suppression.
+		if attemptOrdinal > 1 || view.Connection.Epoch > 0 {
+			if r.recoveryBudgetExhausted() {
+				if view.LifecycleReason != "recovery_exhausted" {
+					if err := r.finishRecoveryExhaustion(ctx, lastErr); err != nil {
+						return err
+					}
+				}
+				return r.awaitRecoveryExhaustion(ctx)
+			}
 			if err := r.awaitScheduledRecovery(ctx); err != nil {
 				return errors.Join(err, lastErr)
 			}
 		}
+		attemptStartedAt := r.clock().UTC()
 		establishmentCtx, cancelEstablishment := context.WithTimeout(ctx, r.config.ConnectionAttemptDeadline)
 		attempt, err := r.openAttempt(ctx, establishmentCtx, components, attemptOrdinal*100)
 		cancelEstablishment()
 		if err != nil {
 			if attempt != nil {
-				r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
+				r.retireAttempt(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss, attemptStartedAt)
 			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			lastErr = err
-			if r.recoveryBudgetExhausted() {
-				if err := r.finishRecoveryExhaustion(ctx, lastErr); err != nil {
-					return err
-				}
-			}
 			continue
 		}
 		r.setLiveSources(attempt, components.Adapter)
@@ -86,7 +98,7 @@ func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error 
 			purpose, err = hydrationPurpose(view)
 		}
 		if err != nil {
-			r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
+			r.retireAttempt(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss, attemptStartedAt)
 			if !preSession {
 				return err
 			}
@@ -97,24 +109,14 @@ func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error 
 			if terminalErr := terminalLiveStateError(r.engine.ObserveOperational()); terminalErr != nil {
 				return errors.Join(terminalErr, lastErr)
 			}
-			if r.recoveryBudgetExhausted() {
-				if err := r.finishRecoveryExhaustion(ctx, lastErr); err != nil {
-					return err
-				}
-			}
 			continue
 		}
 		fenceCommand, err := r.hydrate(ctx, components, attempt, purpose)
 		if err != nil {
 			lastErr = err
-			r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
+			r.retireAttempt(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss, attemptStartedAt)
 			if ctx.Err() != nil {
 				return ctx.Err()
-			}
-			if r.recoveryBudgetExhausted() {
-				if err := r.finishRecoveryExhaustion(ctx, lastErr); err != nil {
-					return err
-				}
 			}
 			continue
 		}
@@ -127,7 +129,7 @@ func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error 
 				r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
 				return err
 			}
-			r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseSuperseded)
+			r.retireAttempt(attempt, attemptOrdinal*100+90, massive.CloseSuperseded, attemptStartedAt)
 			if action == engine.HydrationPolicyExhaust {
 				lastErr = errors.New("aggregate recovery attempts exhausted")
 			}
@@ -147,13 +149,13 @@ func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error 
 			view = r.engine.ObserveOperational()
 			switch {
 			case view.Lifecycle == "ended":
-				r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseSessionEnd)
+				r.retireAttempt(attempt, attemptOrdinal*100+90, massive.CloseSessionEnd, attemptStartedAt)
 				return nil
 			case view.Lifecycle == "suppressed" && view.Suppression != engine.SuppressionSameBindingRecoveryAllowed:
-				r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
+				r.retireAttempt(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss, attemptStartedAt)
 				return errors.Join(errors.New("aggregate runtime requires restart"), lastErr)
 			case view.Lifecycle == "suppressed" || (view.Lifecycle == "recovering" && !view.Connection.Active):
-				r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
+				r.retireAttempt(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss, attemptStartedAt)
 				attemptClosed = true
 				break deliveryLoop
 			}
@@ -166,14 +168,14 @@ func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error 
 			}
 		}
 		if ctx.Err() != nil {
-			r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseControlledStop)
+			r.retireAttempt(attempt, attemptOrdinal*100+90, massive.CloseControlledStop, attemptStartedAt)
 			return ctx.Err()
 		}
 		// A deadline can stop the caller before the adapter has emitted its
 		// terminal. Close and deliver that terminal so the engine, rather than
 		// the supervisor, owns the transition to recovery.
 		if !attemptClosed {
-			r.closeAndDrain(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss)
+			r.retireAttempt(attempt, attemptOrdinal*100+90, massive.CloseIntegrityLoss, attemptStartedAt)
 		}
 	}
 }
@@ -253,6 +255,7 @@ func (r *Runtime) exhaustRecovery(ctx context.Context) error {
 		if result.Code != engine.DispositionRecoveryExhausted || result.SuppressionDisposition != engine.SuppressionSameBindingRecoveryAllowed {
 			return fmt.Errorf("recovery exhaustion was rejected: %s/%s", result.Code, result.Reason)
 		}
+		r.recoveryAttempt.updateConsequence(r.engine.ObserveOperational())
 		return nil
 	}
 }
@@ -273,10 +276,12 @@ func (r *Runtime) awaitScheduledRecovery(ctx context.Context) error {
 	if err != nil {
 		return errors.New("engine did not issue scheduled recovery")
 	}
-	delay := command.EarliestAt().Sub(command.IssuedAt())
+	delay := recoveryDelay(r.config.RecoveryBackoffInitial, r.config.RecoveryBackoffMax, command.RetryOrdinal())
 	if delay <= 0 || delay > r.config.RecoveryBackoffMax {
 		return errors.New("engine issued invalid recovery deadline")
 	}
+	nextEligible := r.clock().UTC().Add(delay)
+	r.recoveryAttempt.updateNextEligible(command.FailedEpoch(), nextEligible)
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
@@ -303,7 +308,36 @@ func (r *Runtime) awaitScheduledRecovery(ctx context.Context) error {
 	}
 }
 
-func (r *Runtime) closeAndDrain(attempt *massive.LiveAttempt, token uint64, cause massive.CloseCause) {
+func recoveryDelay(initial, maximum time.Duration, ordinal uint64) time.Duration {
+	delay := initial
+	for step := uint64(1); step < ordinal && delay < maximum; step++ {
+		if delay > maximum/2 {
+			return maximum
+		}
+		delay *= 2
+	}
+	if delay > maximum {
+		return maximum
+	}
+	return delay
+}
+
+func (r *Runtime) awaitRecoveryExhaustion(ctx context.Context) error {
+	ticker := time.NewTicker(liveLifecyclePollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if r.engine.ObserveOperational().Lifecycle == "ended" {
+				return nil
+			}
+		}
+	}
+}
+
+func (r *Runtime) closeAndDrain(attempt *massive.LiveAttempt, token uint64, cause massive.CloseCause) error {
 	_ = attempt.Close(massive.CloseEpochCommand{BindingIdentity: r.binding.Identity(), ConnectionEpoch: attempt.Epoch(), CommandToken: token, Cause: cause})
 	drainCtx, cancel := context.WithTimeout(context.Background(), r.config.ShutdownDeadline)
 	defer cancel()
@@ -314,9 +348,46 @@ func (r *Runtime) closeAndDrain(attempt *massive.LiveAttempt, token uint64, caus
 			r.observeDelivery(started, result)
 		}
 		if err != nil || !ok {
-			_ = attempt.Wait(drainCtx)
-			return
+			return attempt.Wait(drainCtx)
 		}
+	}
+}
+
+func (r *Runtime) retireAttempt(attempt *massive.LiveAttempt, token uint64, cause massive.CloseCause, startedAt time.Time) {
+	if err := r.closeAndDrain(attempt, token, cause); err != nil {
+		r.retirementFailed.Store(true)
+		return
+	}
+	terminal, ok := attempt.TerminalResult()
+	if !ok {
+		return
+	}
+	view := r.engine.ObserveOperational()
+	phase, outcome := recoveryAttemptClassification(terminal)
+	r.recoveryAttempt.replace(RecoveryAttemptOutcome{
+		Epoch: terminal.ConnectionEpoch, RecoveryOrdinal: view.Connection.RecoveryAttempts,
+		Phase: phase, Outcome: outcome, AttemptStartedAt: startedAt, TerminalAt: terminal.CompletedAt,
+		CleanupCompleteAt: r.clock().UTC(), AggregateAcknowledged: terminal.AggregateAcknowledged,
+		ConsecutiveAttempts: view.Connection.RecoveryAttempts, Budget: uint64(r.config.RecoveryAttempts),
+		Lifecycle: view.Lifecycle, Suppression: view.Suppression,
+	})
+}
+
+func recoveryAttemptClassification(terminal massive.TerminalResult) (string, string) {
+	reason := string(terminal.Reason)
+	switch terminal.Reason {
+	case massive.TerminalDialFailed:
+		return "dial", reason
+	case massive.TerminalConnectedDeadline, massive.TerminalConnectedFailed, massive.TerminalConnectedAmbiguous:
+		return "connected", reason
+	case massive.TerminalAuthenticationDeadline, massive.TerminalAuthenticationFailed, massive.TerminalAuthenticationAmbiguous:
+		return "authentication", reason
+	case massive.TerminalAggregateSubscribeDeadline, massive.TerminalAggregateSubscribeFailed, massive.TerminalAggregateSubscribeAmbiguous:
+		return "aggregate_subscribe", reason
+	case massive.TerminalReadFailed:
+		return "reader", "reader_closed"
+	default:
+		return string(terminal.Source), reason
 	}
 }
 
@@ -350,17 +421,31 @@ func (r *Runtime) openAttempt(lifetime, operation context.Context, components Li
 	if result, err := massive.DeliverToEngine(operation, r.engine, started); err != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
 		return attempt, errors.New("aggregate connection attempt was not installed")
 	}
-	deliveries, err := attempt.Handshake(operation)
-	if err != nil {
-		return attempt, err
-	}
+	deliveries, handshakeErr := attempt.Handshake(operation)
 	for _, delivery := range deliveries {
-		result, err := massive.DeliverToEngine(operation, r.engine, delivery)
+		deliveryCtx := operation
+		if operation.Err() != nil {
+			// The establishment deadline may retire transport I/O, but it cannot
+			// discard a prefix fact already classified by the adapter. Engine
+			// admission is local and must precede the terminal retirement.
+			deliveryCtx = context.Background()
+		}
+		result, err := massive.DeliverToEngine(deliveryCtx, r.engine, delivery)
 		if err != nil || (result.ControlDisposition.Code != engine.DispositionConnectionControlApplied && result.ControlDisposition.Code != engine.DispositionConnectionControlDeferred) {
 			return attempt, errors.New("aggregate handshake was not accepted")
 		}
 	}
+	if handshakeErr != nil {
+		return attempt, handshakeErr
+	}
 	return attempt, nil
+}
+
+func (r *Runtime) LatestRecoveryAttempt() *RecoveryAttemptOutcome {
+	if r == nil {
+		return nil
+	}
+	return r.recoveryAttempt.get()
 }
 
 func (r *Runtime) hydrate(ctx context.Context, components LiveComponents, attempt *massive.LiveAttempt, purpose engine.HydrationPurpose) (engine.HydrationFenceCommand, error) {
