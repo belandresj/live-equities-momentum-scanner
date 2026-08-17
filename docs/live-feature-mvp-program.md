@@ -459,6 +459,30 @@ the browser-native `title` tooltip is not used. Data cells no longer show
 status/reason tooltips on hover. The API fields, backend measurements, ranking,
 qualification, and existing cell accessibility metadata remain unchanged.
 
+#### 2026-08-17 live aggregate heartbeat and resubscription correction
+
+The focused
+[`live aggregate heartbeat and resubscription correction`](live-aggregate-heartbeat-and-resubscription-correction.md)
+is accepted. Aggregate recovery now retires and joins each socket before the
+next individually paced dial, preserves classified redacted handshake facts,
+uses one finite consecutive-attempt budget, and remains stably suppressed with
+no automatic dial after exhaustion. Heartbeat failure is nonterminal only when
+a supported raw frame proves inbound progress across that operation's captured
+boundary; a quiet deadline and an independent transport failure remain exact
+terminal causes under first-cause arbitration.
+
+Deterministic production-composition proofs cover temporary rejection through
+successful fenced recovery, persistent five-attempt exhaustion, a startup
+heartbeat deadline with exact old-generation cancellation and replacement
+fresh bootstrap, and post-live loss of an active gap generation followed by a
+replacement live tail and fence. The uncached ordinary repository tier,
+affected race suite, vet, and diff checking passed. Final read-only review is
+clean after correcting two missing production-proof distinctions. No
+credentialed provider request or scanner restart occurred; provider chronology
+remains an explicitly unverified observation, not an MVP acceptance gate. The
+correction changes no replay, checkpoint, API, dashboard, ranking, or market
+semantics.
+
 ### MVP-S4 — integrated live-MVP acceptance
 
 **Outcome:** The ordinary live composition builds and its deterministic

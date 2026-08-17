@@ -1,7 +1,7 @@
 # Live aggregate heartbeat and resubscription correction
 
-**Status:** Approved correction authority; HR-S1 accepted 2026-08-17; HR-S2
-pending.
+**Status:** Accepted 2026-08-17. HR-S1 and HR-S2 are complete; final focused
+review and required repository verification passed.
 
 **Requested:** 2026-08-17, after owner observation of repeated aggregate
 heartbeat termination, incomplete bootstrap hydration, and failed automatic
@@ -461,7 +461,67 @@ end retry proof. The correction joined the handshake producer and admitted its
 prefix through a non-canceled local engine context, then added the complete
 provider traversal above. Focused re-review passed with no unresolved finding.
 
-HR-S2 remains valid and is the only active implementation slice. Heartbeat
-terminal policy is still unchanged at this gate. Credentialed provider
-chronology, provider retry tolerance beyond the configured policy, and an
-operator recovery control remain unproved/out of scope.
+The coherent HR-S1 milestone is local commit `a916241`. HR-S2 remained valid
+after this gate. Credentialed provider chronology, provider retry tolerance
+beyond the configured policy, and an operator recovery control remained
+unproved/out of scope.
+
+### HR-S2 and final capability — accepted 2026-08-17
+
+The heartbeat worker now captures its process-local frame-read sequence before
+each ping. A failed heartbeat with a later supported raw frame records the
+fixed-cardinality nonterminal outcome
+`heartbeat_failure_with_inbound_progress` and leaves the epoch, hydration,
+watermark, readiness, ranking, and T/Q authority unchanged. The diagnostic
+retains only latest occurrence/start times, captured/read sequences, lifetime
+occurrences, and consecutive occurrences; a later successful ping clears only
+the consecutive count. A deadline with no later frame terminates exactly once
+as `heartbeat_deadline_without_inbound_progress`; an independent transport
+failure uses `heartbeat_transport_failure`, subject to the existing immutable
+first-cause arbitration. No provider prose, payload, credential, or URL is
+retained.
+
+`P-HR-HEARTBEAT` passed uncached in 0.928s. Its progressing-reader branch
+blocks/fails ping while an ordered aggregate reaches the canonical engine,
+keeps the epoch and hydration active, records the exact nonterminal diagnostic,
+and proves a later successful ping resets only the consecutive count. Its
+quiet-socket branch proves one deadline terminal. The existing timing-sensitive
+Massive heartbeat regression remains enabled and passed in the full suite.
+
+`P-HR-STARTUP` and `P-HR-GAP` passed together uncached in 3.335s. Startup now
+uses a real server-side no-progress heartbeat deadline, preserves that exact
+redacted first cause, cancels all four open generation-1 REST requests, and
+returns current on epoch 2 only after one replacement fresh-bootstrap
+generation and its ingress fence. The gap trace starts from a committed current
+publication, admits an epoch-2 aggregate while gap generation 2 is active,
+loses that epoch and observes the old request cancellation, admits the epoch-3
+live tail while generation 3 is explicitly unreconciled and noncurrent, and
+then requires the final publication watermark to equal generation 3's
+`SupportedThrough` only after its fence. Both canonical live records survive.
+This prevents canceled work from becoming replacement coverage and prevents an
+acknowledged replacement epoch from appearing current before reconciliation.
+
+Final primary proof evidence also includes uncached `P-HR-RETRY`: engine passed
+in 0.585s and the production operations traversal passed in 42.732s. The
+uncached ordinary repository command `go test -count=1 -short -timeout 2m
+./...` passed with `internal/operations` longest at 60.535s. The affected
+`internal/massive`, `internal/engine`, `internal/operations`, and `cmd/scanner`
+packages passed `go test -count=1 -race -short -timeout 5m` with
+`internal/operations` longest at 62.163s. `go vet ./...` and `git diff --check`
+passed.
+
+The required `gpt-5.6-sol` medium final review first found proof gaps: startup
+used a reader close instead of the corrected heartbeat terminal, and the gap
+test did not traverse active-generation loss plus replacement-tail fencing
+through production composition. Both proofs were corrected as described above.
+The same reviewer then ran them ten consecutive times in 30.787s and reported
+no unresolved finding or observed nondeterminism. The earlier HR-S1 socket
+join, recovery authority, reset/exhaustion, and redaction review also remains
+clean.
+
+No credential was accessed, no provider request was made, and the live scanner
+was not restarted. Deterministic local WebSocket/REST fixtures prove the
+implemented causal boundaries; actual provider ping/pong chronology and
+provider tolerance of the configured retry schedule remain unobserved and
+require separate exact authorization. Replay, checkpoints, API/UI behavior,
+and operator recovery controls were not changed.

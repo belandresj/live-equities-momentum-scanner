@@ -896,16 +896,16 @@ func TestLiveTerminalStateCannotEnterReconnectLoop(t *testing.T) {
 	}
 }
 
-func TestPHRRetrySuccessfulFenceResetsBudget(t *testing.T) {
+func TestPHRGapPostLiveRecoveryTraversesFence(t *testing.T) {
 	binding := operationsBinding(t)
-	base := binding.SessionStart().Add(20 * time.Minute)
-	startedClock := time.Now()
-	clock := func() time.Time { return base.Add(time.Since(startedClock)).UTC() }
+	supported := binding.SessionStart().Add(70 * time.Second)
+	clockStarted := time.Now()
+	clock := func() time.Time { return supported.Add(time.Since(clockStarted)).UTC() }
 	config := DefaultConfig()
 	config.RecoveryAttempts = 2
 	config.RecoveryBackoffInitial = 20 * time.Millisecond
 	config.RecoveryBackoffMax = 20 * time.Millisecond
-	config.EvaluationDelay = 20 * time.Millisecond
+	config.EvaluationDelay = 0
 	config.SampleCadence = 10 * time.Millisecond
 	config.ConnectionAttemptDeadline = 3 * time.Second
 	config.ShutdownDeadline = 2 * time.Second
@@ -913,16 +913,82 @@ func TestPHRRetrySuccessfulFenceResetsBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	firstLoss := make(chan struct{})
+	secondLoss := make(chan struct{})
+	secondFrameWritten := make(chan struct{})
+	replacementFrameWritten := make(chan struct{})
+	thirdHydrationActive := make(chan struct{})
 	var connections atomic.Int32
-	var failNew atomic.Bool
-	disconnect := make(chan struct{})
-	websocketServer := recoverableWebSocketServer(t, &connections, &failNew, disconnect)
+	websocketServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, err := websocket.Accept(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer connection.CloseNow()
+		epoch := connections.Add(1)
+		ctx := request.Context()
+		write := func(value string) bool { return connection.Write(ctx, websocket.MessageText, []byte(value)) == nil }
+		if !write(`[{"ev":"status","status":"connected"}]`) {
+			return
+		}
+		if _, _, err := connection.Read(ctx); err != nil || !write(`[{"ev":"status","status":"auth_success"}]`) {
+			return
+		}
+		if _, _, err := connection.Read(ctx); err != nil || !write(`[{"ev":"status","status":"success"}]`) {
+			return
+		}
+		switch epoch {
+		case 1:
+			<-firstLoss
+		case 2:
+			if !write("[" + capacityAggregateJSON("AAA", supported.Add(-2*time.Second), 12, 12) + "]") {
+				return
+			}
+			close(secondFrameWritten)
+			<-secondLoss
+		case 3:
+			select {
+			case <-thirdHydrationActive:
+			case <-ctx.Done():
+				return
+			}
+			if !write("[" + capacityAggregateJSON("AAA", supported.Add(-time.Second), 13, 13) + "]") {
+				return
+			}
+			close(replacementFrameWritten)
+			<-ctx.Done()
+		}
+	}))
 	defer websocketServer.Close()
 	adapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{Endpoint: "ws" + strings.TrimPrefix(websocketServer.URL, "http"), Credential: "fixture", Queue: massive.LiveQueueConfig{FrameSlots: 8, MaxFrameBytes: 4096, TotalFrameBytes: 16384}, Clock: clock})
 	if err != nil {
 		t.Fatal(err)
 	}
-	hydrationServer := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	secondHydrationActive := make(chan struct{})
+	secondHydrationCanceled := make(chan struct{})
+	releaseThirdHydration := make(chan struct{})
+	var releaseThirdOnce sync.Once
+	defer releaseThirdOnce.Do(func() { close(releaseThirdHydration) })
+	var requests atomic.Int32
+	hydrationServer := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch requests.Add(1) {
+		case 1:
+		case 2:
+			close(secondHydrationActive)
+			<-request.Context().Done()
+			close(secondHydrationCanceled)
+			return
+		case 3:
+			close(thirdHydrationActive)
+			select {
+			case <-releaseThirdHydration:
+			case <-request.Context().Done():
+				return
+			}
+		default:
+			http.Error(writer, "unexpected hydration generation", http.StatusInternalServerError)
+			return
+		}
 		fmt.Fprint(writer, `{"status":"OK","ticker":"AAA","adjusted":false,"results":[]}`)
 	}))
 	defer hydrationServer.Close()
@@ -934,38 +1000,61 @@ func TestPHRRetrySuccessfulFenceResetsBudget(t *testing.T) {
 	joined := make(chan error, 1)
 	go func() { joined <- run.RunLive(context.Background(), components) }()
 	waitForOperational(t, run, joined, 1, true)
-	for recoveredEpoch := int32(2); recoveredEpoch <= 3; recoveredEpoch++ {
-		disconnect <- struct{}{}
-		waitForOperational(t, run, joined, recoveredEpoch-1, false)
-		waitForOperational(t, run, joined, recoveredEpoch, true)
-		view := run.Engine().ObserveOperational()
-		if view.Connection.RecoveryAttempts != 0 || view.Lifecycle != "live" || view.Hydration.Purpose != engine.HydrationGapRecovery {
-			t.Fatalf("epoch %d did not reset consecutive budget: %+v", recoveredEpoch, view)
-		}
+	initial := run.Engine().ObserveReplayDeterministic()
+	if initial.Publication.Watermark == nil || initial.Publication.Lifecycle != "live" || !initial.Publication.CurrentMarketClaim {
+		t.Fatalf("initial committed publication=%+v", initial.Publication)
 	}
-	failNew.Store(true)
-	disconnect <- struct{}{}
-	deadline := time.After(8 * time.Second)
-	for run.Engine().ObserveOperational().Lifecycle != "suppressed" {
-		select {
-		case err := <-joined:
-			t.Fatalf("post-live recoverable exhaustion ended process: %v", err)
-		case <-deadline:
-			t.Fatalf("post-live recovery did not suppress: %+v", run.Status())
-		case <-time.After(10 * time.Millisecond):
-		}
+	close(firstLoss)
+	select {
+	case <-secondHydrationActive:
+	case err := <-joined:
+		t.Fatalf("runtime ended before first gap generation: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("first gap generation did not start")
 	}
+	select {
+	case <-secondFrameWritten:
+	case <-time.After(time.Second):
+		t.Fatal("old recovery epoch did not deliver its live aggregate")
+	}
+	waitForSlice1Coverage(t, run, joined, func() bool {
+		return run.Engine().ObserveOperational().Aggregates.Inserted == 1
+	}, "old recovery epoch aggregate")
+	close(secondLoss)
+	select {
+	case <-secondHydrationCanceled:
+	case err := <-joined:
+		t.Fatalf("runtime ended before old generation cancellation: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("old gap generation request was not canceled")
+	}
+	select {
+	case <-replacementFrameWritten:
+	case err := <-joined:
+		t.Fatalf("runtime ended before replacement live tail: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("replacement epoch did not deliver live tail during hydration")
+	}
+	waitForSlice1Coverage(t, run, joined, func() bool {
+		return run.Engine().ObserveOperational().Aggregates.Inserted == 2
+	}, "replacement live-tail aggregate")
+	duringReplacement := run.Engine().ObserveOperational()
+	if duringReplacement.Lifecycle == "live" || duringReplacement.CurrentMarketClaim || duringReplacement.Hydration.Generation != 3 ||
+		duringReplacement.Hydration.Purpose != engine.HydrationGapRecovery || duringReplacement.Hydration.FenceReconciled {
+		t.Fatalf("replacement became current before its fence: %+v", duringReplacement)
+	}
+	releaseThirdOnce.Do(func() { close(releaseThirdHydration) })
+	waitForOperational(t, run, joined, 3, true)
+	final := run.Engine().ObserveReplayDeterministic()
 	view := run.Engine().ObserveOperational()
-	if connections.Load() != 5 || view.Connection.RecoveryAttempts != 2 || view.Lifecycle != "suppressed" || view.LifecycleReason != "recovery_exhausted" {
-		t.Fatalf("post-live exhaustion connections=%d view=%+v", connections.Load(), view)
-	}
-	if outcome := run.LatestRecoveryAttempt(); outcome == nil || outcome.Lifecycle != "suppressed" || outcome.Suppression != engine.SuppressionSameBindingRecoveryAllowed ||
-		outcome.ConsecutiveAttempts != 2 || !outcome.NextEligibleAt.IsZero() {
-		t.Fatalf("latest exhausted recovery outcome=%+v", outcome)
-	}
-	time.Sleep(50 * time.Millisecond)
-	if got := connections.Load(); got != 5 {
-		t.Fatalf("automatic dial after exhaustion: connections=%d", got)
+	canonical := slice1CanonicalSymbol(t, final, "AAA")
+	if connections.Load() != 3 || requests.Load() != 3 || view.Connection.RecoveryAttempts != 0 || view.Lifecycle != "live" ||
+		view.Hydration.Generation != 3 || view.Hydration.Purpose != engine.HydrationGapRecovery || !view.Hydration.FenceReconciled ||
+		final.Publication.Watermark == nil || view.Hydration.SupportedThrough == nil || *final.Publication.Watermark != *view.Hydration.SupportedThrough || !final.Publication.CurrentMarketClaim ||
+		len(canonical.Records) != 2 || canonical.Records[0].WindowStart != supported.Add(-2*time.Second) || canonical.Records[0].Values.Close != 12 ||
+		canonical.Records[1].WindowStart != supported.Add(-time.Second) || canonical.Records[1].Values.Close != 13 {
+		t.Fatalf("gap recovery did not preserve old tail and fence replacement exactly: connections=%d requests=%d view=%+v publication=%+v canonical=%+v",
+			connections.Load(), requests.Load(), view, final.Publication, canonical)
 	}
 	shutdown, cancelShutdown := context.WithTimeout(context.Background(), config.ShutdownDeadline)
 	defer cancelShutdown()

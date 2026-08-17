@@ -30,6 +30,9 @@ type fakeLiveSocket struct {
 	blockWrite   bool
 	writeError   error
 	pingError    error
+	pingStarted  chan struct{}
+	pingRelease  chan struct{}
+	blockPing    bool
 	closeBlock   bool
 	closed       bool
 }
@@ -69,10 +72,22 @@ func (s *fakeLiveSocket) Write(ctx context.Context, _ socketMessageType, data []
 	return err
 }
 
-func (s *fakeLiveSocket) Ping(context.Context) error {
+func (s *fakeLiveSocket) Ping(ctx context.Context) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.pingError
+	err, block, started, release := s.pingError, s.blockPing, s.pingStarted, s.pingRelease
+	s.mu.Unlock()
+	if block {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-release:
+		}
+	}
+	return err
 }
 
 func (s *fakeLiveSocket) Close(ctx context.Context) error {
@@ -268,7 +283,7 @@ func TestPC5TransportOneAttemptHandshakeHeartbeatAndContainment(t *testing.T) {
 		startedAt := time.Now()
 		terminal, ok := heartbeatAttempt.nextForProof(context.Background())
 		elapsed := time.Since(startedAt)
-		if !ok || terminal.Terminal.Source != TerminalHeartbeat || terminal.Terminal.Reason != TerminalHeartbeatFailureUnclassified || elapsed > 200*time.Millisecond {
+		if !ok || terminal.Terminal.Source != TerminalHeartbeat || terminal.Terminal.Reason != TerminalHeartbeatTransportFailure || elapsed > 200*time.Millisecond {
 			t.Fatalf("heartbeat/close = %+v elapsed=%s", terminal, elapsed)
 		}
 	})
@@ -402,6 +417,104 @@ func TestPC5TransportOneAttemptHandshakeHeartbeatAndContainment(t *testing.T) {
 		}
 		if !prefixAdapter.Accounting().Reconciles() || !prefixAttempt.QueueAccounting().Reconciles() {
 			t.Fatalf("unsupported accounting: adapter=%+v queue=%+v", prefixAdapter.Accounting(), prefixAttempt.QueueAccounting())
+		}
+	})
+}
+
+func TestPHRHeartbeatInboundProgressAndQuietDeadline(t *testing.T) {
+	t.Run("failed heartbeat with inbound aggregate progress is nonterminal", func(t *testing.T) {
+		binding := component4TestBinding(t, []string{"AAA"})
+		now := binding.SessionStart().Add(20 * time.Second)
+		delay := time.Duration(0)
+		state, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 8, EvaluationDelay: &delay})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			state.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_ = state.Wait(ctx)
+		}()
+		admission, installed := state.AdmitBinding(context.Background(), engine.BindingInstall{SchemaVersion: engine.BindingInstallSchemaV1, BindingIdentity: binding.Identity(), Binding: binding})
+		if admission != engine.AdmissionAdmitted || (<-installed).Code != engine.DispositionBindingInstalled {
+			t.Fatal("binding install")
+		}
+
+		socket := newFakeLiveSocket()
+		socket.blockPing, socket.pingStarted, socket.pingRelease = true, make(chan struct{}, 1), make(chan struct{})
+		socket.pingError = errors.New("fixture ping failure")
+		enqueueHandshake(socket)
+		adapter, command := testLiveAdapter(t, socket, []string{"AAA"})
+		command.Durations.HeartbeatInterval = 20 * time.Millisecond
+		command.Durations.HeartbeatDeadline = 200 * time.Millisecond
+		attempt, started, handshake := startHandshake(t, adapter, command)
+		defer closeAttemptForTest(t, attempt, 90)
+		if result, err := DeliverToEngine(context.Background(), state, started); err != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
+			t.Fatalf("start=%+v err=%v", result, err)
+		}
+		for _, delivery := range handshake {
+			result, err := DeliverToEngine(context.Background(), state, delivery)
+			if err != nil || (result.ControlDisposition.Code != engine.DispositionConnectionControlApplied && result.ControlDisposition.Code != engine.DispositionConnectionControlDeferred) {
+				t.Fatalf("handshake=%+v err=%v", result, err)
+			}
+		}
+		planAdmission, planDone := state.AdmitHydrationPlan(context.Background(), engine.HydrationPlanInput{SchemaVersion: engine.HydrationPlanSchemaV1, BindingIdentity: binding.Identity(), Purpose: engine.HydrationFreshBootstrap, ConnectionEpoch: attempt.Epoch(), Budgets: engine.HydrationPlanBudgets{Workers: 1, RowsPerChunk: 1, MaximumResponseBytes: 1 << 20, MaximumNormalizedRecords: 57_600, MaximumResidentRecords: 57_600}})
+		if planAdmission != engine.AdmissionAdmitted || (<-planDone).Code != engine.DispositionHydrationPlanApplied {
+			t.Fatal("hydration plan")
+		}
+		select {
+		case <-socket.pingStarted:
+		case <-time.After(time.Second):
+			t.Fatal("heartbeat did not start")
+		}
+		window := now.Add(-2 * time.Second).Truncate(time.Second)
+		socket.send(socketMessageText, "["+aggregateLiveJSON("AAA", window, "")+"]")
+		deadline := time.Now().Add(time.Second)
+		for attempt.QueueAccounting().FramesRead < 4 && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		close(socket.pingRelease)
+		result, ok, err := attempt.DeliverNextToEngine(context.Background(), state)
+		if err != nil || !ok || result.AggregateDisposition.Code != engine.DispositionAggregateInserted {
+			t.Fatalf("aggregate disposition=%+v ok=%t err=%v", result, ok, err)
+		}
+		deadline = time.Now().Add(time.Second)
+		for adapter.Accounting().HeartbeatInboundProgressOccurrences != 1 && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		view, accounting := state.ObserveOperational(), adapter.Accounting()
+		if view.Lifecycle != "hydrating" || !view.Hydration.Active || !view.Connection.Active || accounting.HeartbeatCapturedFrameSequence >= accounting.HeartbeatReadFrameSequence ||
+			accounting.HeartbeatLatestOutcome != TerminalHeartbeatFailureWithProgress || accounting.HeartbeatInboundProgressOccurrences != 1 || accounting.HeartbeatInboundProgressConsecutive != 1 {
+			t.Fatalf("nonterminal heartbeat view=%+v accounting=%+v", view, accounting)
+		}
+		socket.mu.Lock()
+		socket.blockPing, socket.pingError = false, nil
+		socket.mu.Unlock()
+		deadline = time.Now().Add(time.Second)
+		for adapter.Accounting().HeartbeatInboundProgressConsecutive != 0 && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		accounting = adapter.Accounting()
+		if accounting.HeartbeatInboundProgressOccurrences != 1 || accounting.HeartbeatInboundProgressConsecutive != 0 || !state.ObserveOperational().Hydration.Active {
+			t.Fatalf("successful heartbeat reset=%+v view=%+v", accounting, state.ObserveOperational())
+		}
+	})
+
+	t.Run("quiet heartbeat deadline terminates exactly once", func(t *testing.T) {
+		socket := newFakeLiveSocket()
+		socket.blockPing, socket.pingStarted, socket.pingRelease = true, make(chan struct{}, 1), make(chan struct{})
+		enqueueHandshake(socket)
+		adapter, command := testLiveAdapter(t, socket, []string{"AAA"})
+		command.Durations.HeartbeatInterval = 2 * time.Millisecond
+		command.Durations.HeartbeatDeadline = 5 * time.Millisecond
+		attempt, _, _ := startHandshake(t, adapter, command)
+		terminal, ok := attempt.nextForProof(context.Background())
+		if !ok || terminal.Terminal.Source != TerminalHeartbeat || terminal.Terminal.Reason != TerminalHeartbeatDeadlineNoProgress {
+			t.Fatalf("quiet terminal=%+v", terminal)
+		}
+		if again, ok := attempt.nextForProof(context.Background()); ok {
+			t.Fatalf("duplicate terminal=%+v", again)
 		}
 	})
 }
@@ -1493,7 +1606,7 @@ func TestPC5ReconnectFirstCauseMarkerAndExplicitGreaterEpoch(t *testing.T) {
 	first, _, _ := startHandshake(t, adapter, open)
 	firstSocket.send(socketMessageText, `[]`)
 	waitForQueuedFrames(t, first, 1)
-	first.triggerTerminal(TerminalHeartbeat, TerminalHeartbeatFailureUnclassified, 0, false)
+	first.triggerTerminal(TerminalHeartbeat, TerminalHeartbeatTransportFailure, 0, false)
 	first.triggerTerminal(TerminalReader, TerminalReadFailed, 0, false)
 	waitCtx, waitCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	if err := first.Wait(waitCtx); err != nil {
@@ -1504,7 +1617,7 @@ func TestPC5ReconnectFirstCauseMarkerAndExplicitGreaterEpoch(t *testing.T) {
 		t.Fatalf("first cleanup did not close/fence: closed=%v accounting=%+v", firstSocket.isClosed(), first.QueueAccounting())
 	}
 	terminal, ok := first.nextForProof(context.Background())
-	if !ok || terminal.Terminal.Source != TerminalHeartbeat || terminal.Terminal.Reason != TerminalHeartbeatFailureUnclassified {
+	if !ok || terminal.Terminal.Source != TerminalHeartbeat || terminal.Terminal.Reason != TerminalHeartbeatTransportFailure {
 		t.Fatalf("first cause = %+v", terminal)
 	}
 	if _, ok := first.nextForProof(context.Background()); ok {

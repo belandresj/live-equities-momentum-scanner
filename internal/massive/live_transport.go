@@ -129,7 +129,9 @@ const (
 	TerminalAggregateSubscribeAmbiguous  TerminalReason = "aggregate_subscribe_ambiguous"
 	TerminalReadFailed                   TerminalReason = "read_failed"
 	TerminalUnsupportedMessage           TerminalReason = "unsupported_message"
-	TerminalHeartbeatFailureUnclassified TerminalReason = "heartbeat_failure_unclassified"
+	TerminalHeartbeatDeadlineNoProgress  TerminalReason = "heartbeat_deadline_without_inbound_progress"
+	TerminalHeartbeatTransportFailure    TerminalReason = "heartbeat_transport_failure"
+	TerminalHeartbeatFailureWithProgress TerminalReason = "heartbeat_failure_with_inbound_progress"
 	TerminalFrameOversize                TerminalReason = "frame_oversize"
 	TerminalFrameSlotCapacity            TerminalReason = "frame_slot_capacity"
 	TerminalFrameByteCapacity            TerminalReason = "frame_byte_capacity"
@@ -242,6 +244,11 @@ type AdapterAccounting struct {
 	FirstTQFailurePosition                                                     engine.LivePosition
 	FirstTQFailureExpected, FirstTQFailureObserved                             int
 	FirstTQFailureDeadline                                                     bool
+	HeartbeatInboundProgressAt                                                 time.Time
+	HeartbeatStartedAt                                                         time.Time
+	HeartbeatLatestOutcome                                                     TerminalReason
+	HeartbeatCapturedFrameSequence, HeartbeatReadFrameSequence                 uint64
+	HeartbeatInboundProgressOccurrences, HeartbeatInboundProgressConsecutive   uint64
 }
 
 type TQNormalizationAccounting struct {
@@ -780,19 +787,50 @@ func (a *LiveAttempt) heartbeatWorker() {
 		case <-a.ctx.Done():
 			return
 		case <-ticker.C:
+			startedAt := time.Now().UTC()
+			capturedSequence := a.queue.snapshot().FramesRead
 			pingCtx, cancel := context.WithTimeout(a.ctx, a.durations.HeartbeatDeadline)
 			err := a.connection.Ping(pingCtx)
+			deadline := errors.Is(pingCtx.Err(), context.DeadlineExceeded)
 			cancel()
 			if err != nil {
-				reason := TerminalHeartbeatFailureUnclassified
 				if a.ctx.Err() != nil {
-					reason = TerminalContextCanceled
+					a.triggerTerminal(TerminalHeartbeat, TerminalContextCanceled, 0, false)
+					return
+				}
+				readSequence := a.queue.snapshot().FramesRead
+				if readSequence > capturedSequence {
+					a.recordHeartbeatInboundProgress(time.Now().UTC(), startedAt, capturedSequence, readSequence)
+					continue
+				}
+				reason := TerminalHeartbeatTransportFailure
+				if deadline {
+					reason = TerminalHeartbeatDeadlineNoProgress
 				}
 				a.triggerTerminal(TerminalHeartbeat, reason, 0, false)
 				return
 			}
+			a.clearHeartbeatInboundProgressConsecutive()
 		}
 	}
+}
+
+func (a *LiveAttempt) recordHeartbeatInboundProgress(at, startedAt time.Time, captured, read uint64) {
+	a.adapter.mu.Lock()
+	a.adapter.accounting.HeartbeatInboundProgressAt = at
+	a.adapter.accounting.HeartbeatStartedAt = startedAt
+	a.adapter.accounting.HeartbeatLatestOutcome = TerminalHeartbeatFailureWithProgress
+	a.adapter.accounting.HeartbeatCapturedFrameSequence = captured
+	a.adapter.accounting.HeartbeatReadFrameSequence = read
+	a.adapter.accounting.HeartbeatInboundProgressOccurrences++
+	a.adapter.accounting.HeartbeatInboundProgressConsecutive++
+	a.adapter.mu.Unlock()
+}
+
+func (a *LiveAttempt) clearHeartbeatInboundProgressConsecutive() {
+	a.adapter.mu.Lock()
+	a.adapter.accounting.HeartbeatInboundProgressConsecutive = 0
+	a.adapter.mu.Unlock()
 }
 
 func (a *LiveAttempt) write(parent context.Context, payload []byte) error {
