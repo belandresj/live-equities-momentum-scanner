@@ -654,6 +654,10 @@ func (e *Engine) applyHydrationPlanLocked(node *queueNode) (DispositionCode, Dis
 		e.state.hydration.lastRequestID = requests[len(requests)-1].requestID
 	}
 	e.state.hydration.generation = candidate
+	// A newly active generation owns a new fence attempt. Retained coordinates
+	// from the prior completed generation remain diagnostic only and cannot make
+	// the new generation appear reconciled.
+	e.state.hydration.fenceReconciled = false
 	e.state.hydration.policyWaiting = false
 	e.state.hydration.revision++
 	plan := HydrationPlanResult{

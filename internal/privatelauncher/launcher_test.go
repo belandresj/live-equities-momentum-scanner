@@ -202,12 +202,12 @@ func TestTradingDateAndHydrationWorkerOverridesRejectInvalidArguments(t *testing
 	}
 }
 
-func TestLateStartWarningPrecedesCredentialAndStatesCapacityBoundary(t *testing.T) {
+func TestLateStartWarningPrecedesCredentialAndStaysConcise(t *testing.T) {
 	fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 12, 0))
 	fixture.deps.credential = func(context.Context, []string) (string, string, error) {
 		warning := fixture.stderr.String()
-		if !strings.Contains(warning, "starting after 04:00") || !strings.Contains(warning, "Full 1x") || !strings.Contains(warning, "sustained full 2x is unsupported") || !strings.Contains(warning, "no fixed completion time") {
-			return "", "", fmt.Errorf("warning was absent or inaccurate before credential acquisition: %q", warning)
+		if !strings.Contains(warning, "Warning: starting after 04:00 EST. Will start historical data fetches to ready scanner") || strings.Contains(strings.ToLower(warning), "checkpoint") || strings.Contains(warning, "2x") || strings.Contains(warning, "fixed completion") {
+			return "", "", fmt.Errorf("warning was absent or too detailed before credential acquisition: %q", warning)
 		}
 		return "late-start-secret", "simulated Keychain", nil
 	}

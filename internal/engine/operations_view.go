@@ -66,6 +66,7 @@ func (c OperationalConnection) Reconciles() bool {
 }
 
 type OperationalHydration struct {
+	Active                                       bool
 	Purpose                                      HydrationPurpose
 	Generation                                   uint64
 	Start, End                                   time.Time
@@ -100,7 +101,7 @@ func (e *Engine) ObserveOperational() OperationalView {
 			RecoveryAttempts: state.connectionControl.recoveryAttempts, Active: state.liveEpochActive, Acknowledged: state.aggregateAcknowledged,
 			Consumed: state.connectionAccounting.consumed, Applied: state.connectionAccounting.applied, Deferred: state.connectionAccounting.deferred,
 			Rejected: state.connectionAccounting.rejected, Fenced: state.connectionAccounting.fenced, Integrity: state.connectionAccounting.integrity},
-		Hydration: OperationalHydration{Purpose: state.hydration.generation.purpose, Generation: state.hydration.generation.generation, Start: state.hydration.generation.start, End: state.hydration.generation.end,
+		Hydration: OperationalHydration{Active: state.hydration.generation.active, Purpose: state.hydration.generation.purpose, Generation: state.hydration.generation.generation, Start: state.hydration.generation.start, End: state.hydration.generation.end,
 			Accounting: state.hydration.generation.accounting, Rows: state.hydration.generation.rowAccounting, FenceReconciled: state.hydration.fenceReconciled,
 			FenceEpoch: state.hydration.fenceEpoch, FenceThrough: state.hydration.fenceThrough, FenceMarkerOrdinal: state.hydration.fenceMarkerOrdinal,
 			SupportedThrough: immutableTimePointer(state.hydration.supportedThrough), PolicyWaiting: state.hydration.policyWaiting},
@@ -127,7 +128,7 @@ func operationalViewFromPublication(p *privatePublication) OperationalView {
 			RecoveryAttempts: p.connectionRecoveryAttempts, Active: p.connectionActive, Acknowledged: p.aggregateAcknowledged,
 			Consumed: p.connectionControls.consumed, Applied: p.connectionControls.applied, Deferred: p.connectionControls.deferred,
 			Rejected: p.connectionControls.rejected, Fenced: p.connectionControls.fenced, Integrity: p.connectionControls.integrity},
-		Hydration: OperationalHydration{Purpose: p.hydrationPurpose, Generation: p.hydrationGeneration, Start: p.hydrationStart, End: p.hydrationEnd,
+		Hydration: OperationalHydration{Active: p.hydrationActive, Purpose: p.hydrationPurpose, Generation: p.hydrationGeneration, Start: p.hydrationStart, End: p.hydrationEnd,
 			Accounting: p.hydrationAccounting, Rows: p.hydrationRows, FenceReconciled: p.hydrationFenceReconciled,
 			FenceEpoch: p.hydrationFenceEpoch, FenceThrough: p.hydrationFenceThrough, FenceMarkerOrdinal: p.hydrationFenceMarkerOrdinal,
 			SupportedThrough: immutableTimePointer(p.hydrationSupportedThrough), PolicyWaiting: p.hydrationPolicyWaiting},

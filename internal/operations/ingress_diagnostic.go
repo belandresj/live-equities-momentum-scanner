@@ -75,6 +75,11 @@ type IngressIncident struct {
 	ActiveDeliveryKind            massive.DeliveryKind
 	ActiveDeliveryStartedAt       time.Time
 	ActiveDeliveryAgeAtCause      time.Duration
+	MaxProcessingDelay            time.Duration
+	MaxProcessingDelayOneSecond   time.Duration
+	HeapAllocBytes                uint64
+	HeapInUseBytes                uint64
+	Goroutines                    int
 	Adapter                       massive.AdapterAccounting
 	PriorEngine                   engine.OperationalView
 	Engine                        engine.OperationalView

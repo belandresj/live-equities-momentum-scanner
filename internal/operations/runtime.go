@@ -239,6 +239,8 @@ func (r *Runtime) recordEngineDispositionIncident(code engine.DispositionCode, r
 		Owner: IngressOwnerEngineTransition, Source: "engine_transition", Reason: string(code), Binding: r.binding.Identity(),
 		Epoch: view.Connection.Epoch, Lifecycle: view.Lifecycle, LifecycleReason: view.LifecycleReason, Suppression: view.Suppression,
 		Hydration: view.Hydration, Queue: metrics.LiveQueue, QueueHighFrames: metrics.QueueHighFrames, QueueHighBytes: metrics.QueueHighBytes,
+		MaxProcessingDelay: metrics.MaxProcessingDelay, MaxProcessingDelayOneSecond: metrics.MaxProcessingDelayOneSecond,
+		HeapAllocBytes: metrics.HeapAllocBytes, HeapInUseBytes: metrics.HeapInUseBytes, Goroutines: metrics.Goroutines,
 		Adapter: metrics.Adapter, PriorEngine: metrics.Engine, Engine: view, Identities: identities, IdentityCount: count,
 		History: history, HistoryCount: historyCount, FenceTiming: r.engine.ObserveFenceTiming(),
 		LastCoherentProjection: projection, LastCoherentProjectionInvalid: projectionInvalid,
@@ -380,6 +382,8 @@ func (r *Runtime) recordRuntimeAccountingIncident(reason string, metrics Metrics
 		Binding: r.binding.Identity(), Epoch: view.Connection.Epoch, Lifecycle: view.Lifecycle,
 		LifecycleReason: view.LifecycleReason, Suppression: view.Suppression, Hydration: metrics.Engine.Hydration,
 		Queue: metrics.LiveQueue, QueueHighFrames: metrics.QueueHighFrames, QueueHighBytes: metrics.QueueHighBytes,
+		MaxProcessingDelay: metrics.MaxProcessingDelay, MaxProcessingDelayOneSecond: metrics.MaxProcessingDelayOneSecond,
+		HeapAllocBytes: metrics.HeapAllocBytes, HeapInUseBytes: metrics.HeapInUseBytes, Goroutines: metrics.Goroutines,
 		Adapter: metrics.Adapter, PriorEngine: metrics.Engine, Engine: view, Identities: identities,
 		IdentityCount: count, History: history, HistoryCount: historyCount,
 		FenceTiming: r.engine.ObserveFenceTiming(), LastCoherentProjection: projection, LastCoherentProjectionInvalid: projectionInvalid,
@@ -396,6 +400,7 @@ func (r *Runtime) recordAdapterTerminal(result massive.EngineDeliveryResult) {
 		return
 	}
 	view := r.engine.ObserveOperational()
+	processMetrics := r.Metrics()
 	metrics := Metrics{SampledAt: terminal.CauseAccountingCapturedAt, LiveQueue: terminal.QueueAtCause, Adapter: terminal.AdapterAtCause, Engine: result.PriorEngine}
 	metrics.Deliveries = r.deliveryCount.Load()
 	r.deliveryWindowMu.Lock()
@@ -412,6 +417,8 @@ func (r *Runtime) recordAdapterTerminal(result massive.EngineDeliveryResult) {
 		Hydration: result.PriorEngine.Hydration, Queue: terminal.QueueAtCause, QueueHighFrames: terminal.QueueAtCause.HighFramesQueued, QueueHighBytes: terminal.QueueAtCause.HighQueuedBytes,
 		IncomingFrameBytes: terminal.IncomingFrameBytes, ActiveDeliveryKind: terminal.ActiveDeliveryKind,
 		ActiveDeliveryStartedAt: terminal.ActiveDeliveryStartedAt, ActiveDeliveryAgeAtCause: terminal.ActiveDeliveryAgeAtCause,
+		MaxProcessingDelay: processMetrics.MaxProcessingDelay, MaxProcessingDelayOneSecond: processMetrics.MaxProcessingDelayOneSecond,
+		HeapAllocBytes: processMetrics.HeapAllocBytes, HeapInUseBytes: processMetrics.HeapInUseBytes, Goroutines: processMetrics.Goroutines,
 		Adapter: terminal.AdapterAtCause, PriorEngine: result.PriorEngine, Engine: view,
 		Identities: identities, IdentityCount: count, History: history, HistoryCount: historyCount,
 		FenceTiming: r.engine.ObserveFenceTiming(), LastCoherentProjection: projection, LastCoherentProjectionInvalid: projectionInvalid,

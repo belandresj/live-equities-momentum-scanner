@@ -86,19 +86,33 @@ also works from another directory. It builds private runtime binaries under
 the ignored `var/run-private-scanner/bin` directory and then remains in the
 foreground supervising both processes.
 
-The scanner retains at most one fixed-cardinality ingress incident per process
-and, on a typed terminal, writes a create-without-overwrite JSON record under
-`var/diagnostics` with owner-only directory/file permissions. It contains
-absolute queue/accounting operands and at most 60 one-second samples; it does
-not contain credentials, provider URLs/prose, symbols, or raw payloads.
+The launcher forwards scanner and dashboard stdout/stderr to the foreground
+terminal; it does not create or rotate a per-run stdout log. The binaries under
+`var/run-private-scanner/bin` are rebuilt in place on the next launch, so they
+are not run logs. On the first typed ingress incident, the scanner writes one
+structured JSON diagnostic under `var/diagnostics` using a timestamped,
+create-without-overwrite filename. Separate incident files therefore remain
+available across runs. These diagnostics are failure evidence, not a copy of
+stdout/stderr.
+
+The scanner retains at most one fixed-cardinality ingress incident per process.
+On the first typed incident—including one that enters recoverable gap recovery
+and later succeeds—it immediately prints the bounded source/reason and process
+evidence to stderr and writes a create-without-overwrite JSON record under
+`var/diagnostics` with owner-only directory/file permissions. The evidence
+includes connection epoch, hydration purpose/generation/activity and work
+accounting, absolute queue operands, processing-delay maxima, heap allocation/
+in-use bytes, goroutine count, and at most 60 one-second samples. It contains no
+credentials, provider URLs/prose, symbols, or raw payloads. Later incidents in
+the same process do not overwrite the first-cause record.
 
 ## URLs and status interpretation
 
-After the scanner's `/livez` succeeds, the launcher starts the dashboard and
-prints:
+After the scanner's `/livez` succeeds, the launcher starts the dashboard. The
+dashboard prints its listener once, followed by the launcher's scanner URLs:
 
 - dashboard: `http://127.0.0.1:4173`;
-- scanner snapshot: `http://127.0.0.1:8080/api/v1/snapshot`;
+- scanner snapshot: `http://127.0.0.1:8080/api/v2/snapshot`;
 - process liveness: `http://127.0.0.1:8080/livez`; and
 - authoritative readiness: `http://127.0.0.1:8080/readyz`.
 
@@ -128,17 +142,13 @@ incrementally. This avoids a large elapsed-session REST backlog; it does not
 skip any symbol, use top-N hydration, or alter qualification/ranking.
 
 From 04:00 through 20:00 New York time, the launcher prints a warning and still
-starts normally. The private launcher defaults checkpoint mode off, so an
-ordinary same-day restart hydrates the full elapsed session, consumes the
-buffered live tail, applies the exact ingress fence, and only then reports
-ready. An explicit scanner launch with `--checkpoint-mode on` may instead
-install the latest valid compatible checkpoint, fall back to the previous
-valid candidate, and hydrate `[checkpoint T0, live handoff R)`.
+starts normally. The current private path uses fresh hydration on every
+restart: it hydrates the full elapsed session, consumes the buffered live tail,
+applies the exact ingress fence, and only then reports ready.
 
-There is no promised late-start completion time. A compatible recent
-checkpoint can make recovery fast; a checkpoint-less cold start must process
-all elapsed aggregate history. The launcher refuses an invocation at or after
-20:00 New York time because historical/replay operation is a separate mode.
+There is no promised late-start completion time; a late start must process all
+elapsed aggregate history. The launcher refuses an invocation at or after 20:00
+New York time because historical/replay operation is a separate mode.
 
 ## Proven capacity boundary
 
@@ -186,16 +196,15 @@ either process stops the other and makes the launcher exit nonzero. It never
 silently restarts a failed child and never kills a process merely because a
 required port is occupied.
 
-Checkpoints are periodic coherent committed states. Shutdown does not promise
-a forced final checkpoint. On failure:
+The current private path does not write or restore checkpoints. On failure:
 
-1. preserve terminal output and the existing `var/checkpoints` contents;
-2. do not delete checkpoints or repeatedly restart the same failing state;
+1. preserve terminal output and any `var/diagnostics` incident file;
+2. do not repeatedly restart the same failing state;
 3. inspect the first scanner error plus the lifecycle, suppression, and
    readiness reasons; and
 4. retry the same launcher command only after identifying whether the issue is
    a port conflict, reference/credential problem, invalid schedule date,
-   checkpoint fallback, hydration in progress, or honest suppression.
+   hydration in progress, or honest suppression.
 
 Credentialed provider observation remains a separate activity. It requires
 explicit owner authorization for the exact trading date and validation task;

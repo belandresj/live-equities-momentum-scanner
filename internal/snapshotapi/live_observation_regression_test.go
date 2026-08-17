@@ -49,7 +49,7 @@ func TestLiveWarmupSnapshotIsServableAndBound(t *testing.T) {
 	}
 	if snapshot.Publication.BindingIdentity != binding.Identity() || snapshot.Publication.Lifecycle != "hydrating" || !snapshot.Publication.AggregateAcknowledged ||
 		snapshot.Status.BackendReady || snapshot.Status.ReadinessReason != "fence_pending" || snapshot.Ranking.Mode != "unavailable" ||
-		snapshot.Ranking.Reason != "no_committed_watermark" || snapshot.Recovery.Work.Open == "0" {
+		snapshot.Ranking.Reason != "no_committed_watermark" || !snapshot.Recovery.GenerationActive || snapshot.Recovery.Work.Open == "0" {
 		t.Fatalf("warm-up publication=%+v status=%+v ranking=%+v recovery=%+v", snapshot.Publication, snapshot.Status, snapshot.Ranking, snapshot.Recovery)
 	}
 }
@@ -90,7 +90,7 @@ func TestRecoverableIngressLossSnapshotIsServableBoundAndNoncurrent(t *testing.T
 	if snapshot.Publication.BindingIdentity != binding.Identity() || snapshot.Publication.Lifecycle != "recovering" ||
 		snapshot.Publication.LifecycleReason != "aggregate_epoch_lost" || snapshot.Publication.Suppression != "" ||
 		snapshot.Status.BackendReady || snapshot.Status.RankingCurrent || snapshot.Status.ReadinessReason != "lifecycle_not_ready" ||
-		snapshot.Ranking.Mode != "unavailable" || snapshot.Ranking.Reason != "no_committed_watermark" || len(snapshot.Rows) != 0 {
+		snapshot.Ranking.Mode != "unavailable" || snapshot.Ranking.Reason != "no_committed_watermark" || snapshot.Recovery.GenerationActive || len(snapshot.Rows) != 0 {
 		t.Fatalf("recovering publication=%+v status=%+v ranking=%+v rows=%d", snapshot.Publication, snapshot.Status, snapshot.Ranking, len(snapshot.Rows))
 	}
 }

@@ -182,7 +182,7 @@ func mapAccounting(value engine.ReplayEvaluationView) Accounting {
 
 func mapRecovery(value engine.OperationalHydration) Recovery {
 	a, rows := value.Accounting, value.Rows
-	return Recovery{Purpose: string(value.Purpose), Generation: decimal(value.Generation), Start: optionalNonzeroTime(value.Start), End: optionalNonzeroTime(value.End),
+	return Recovery{GenerationActive: value.Active, Purpose: string(value.Purpose), Generation: decimal(value.Generation), Start: optionalNonzeroTime(value.Start), End: optionalNonzeroTime(value.End),
 		SupportedThrough: optionalTime(value.SupportedThrough), FenceReconciled: value.FenceReconciled, PolicyWaiting: value.PolicyWaiting,
 		Work: RecoveryWork{Planned: decimal(a.Planned), Open: decimal(a.Open), CompletedValue: decimal(a.CompletedValue), CompletedEmpty: decimal(a.CompletedEmpty),
 			Failed: decimal(a.Failed), Canceled: decimal(a.Canceled), Fenced: decimal(a.Fenced)},
@@ -195,7 +195,11 @@ func mapTQ(value engine.TQView, normalization massive.TQNormalizationAccounting)
 	return TQ{DesiredSymbols: append([]string{}, value.Desired...), PressureMode: string(value.Pressure), PressureCause: string(value.PressureCause), AggregateOnly: value.AggregateOnly,
 		Shed: value.ShedTradesQuotes, RetainedBoundHit: value.Bounds, PressureMisses: uint64(value.PressureMisses),
 		PressureTransitions: decimal(value.PressureTransitions), PressureFenced: decimal(value.PressureFenced),
-		KnownPresent: uint64(a.KnownPresent), KnownAbsent: uint64(a.KnownAbsent), Unknown: uint64(a.Unknown), RetainedTrades: uint64(a.RetainedTrades),
+		PressureSample: TQPressureSample{Observed: value.PressureSample.Observed, WaitingFrames: value.PressureSample.WaitingFrames, FrameCapacity: value.PressureSample.FrameCapacity,
+			WaitingBytes: value.PressureSample.WaitingBytes, ByteCapacity: value.PressureSample.ByteCapacity, OldestWaitingFrameAgeMS: durationMilliseconds(value.PressureSample.OldestWaitingFrameAge),
+			AggregateWatermarkLagMS: durationMilliseconds(value.PressureSample.AggregateWatermarkLag), RecoveryHealthy: value.PressureSample.RecoveryHealthy},
+		PressureRecovery: TQPressureRecovery{HealthySamples: uint64(value.RecoveryHealthySamples), RequiredSamples: uint64(value.RecoveryRequiredSamples)},
+		KnownPresent:     uint64(a.KnownPresent), KnownAbsent: uint64(a.KnownAbsent), Unknown: uint64(a.Unknown), RetainedTrades: uint64(a.RetainedTrades),
 		RetainedQuotes: uint64(a.RetainedQuotes), RetainedFingerprints: uint64(a.RetainedFingerprints),
 		Facts: TQFacts{Consumed: decimal(a.Consumed), Applied: decimal(a.Applied), Duplicate: decimal(a.Duplicate), Rejected: decimal(a.Rejected),
 			Fenced: decimal(a.Fenced), PressureShed: decimal(a.PressureShed), Integrity: decimal(a.Integrity), NormalizedTrades: decimal(normalization.NormalizedTrades), NormalizedQuotes: decimal(normalization.NormalizedQuotes), AppliedTrades: decimal(a.AppliedTrades),
@@ -350,7 +354,7 @@ func validateSnapshot(value Snapshot) error {
 	if !oneOf(value.Publication.Lifecycle, "initializing", "awaiting_session", "awaiting_aggregate_ack", "hydrating", "live", "recovering", "replaying", "suppressed", "ended") {
 		return rejectMapping("lifecycle")
 	}
-	if !oneOf(value.Publication.LifecycleReason, "", "binding_before_session", "binding_in_session", "binding_after_session", "session_start_without_aggregate_ack", "session_end", "controlled_stop", "sequence_exhaustion", "clock_regression", "canonical_integrity", "publication_integrity", "accounting_integrity", "closed", "replay_start", "replay_end", "replay_requested_end", "replay_failure", "aggregate_acknowledged", "aggregate_acknowledged_at_session_start", "aggregate_epoch_lost", "ingress_integrity", "hydration_complete", "recovery_exhausted") {
+	if !oneOf(value.Publication.LifecycleReason, "", "binding_before_session", "binding_in_session", "binding_after_session", "session_start_without_aggregate_ack", "session_end", "controlled_stop", "sequence_exhaustion", "clock_regression", "canonical_integrity", "publication_integrity", "accounting_integrity", "closed", "replay_start", "replay_end", "replay_requested_end", "replay_failure", "aggregate_acknowledged", "aggregate_acknowledged_at_session_start", "aggregate_epoch_lost", "ingress_integrity", "hydration_complete", "recovery_exhausted", "scheduled_recovery") {
 		return rejectMapping("lifecycle_reason")
 	}
 	if !oneOf(value.Publication.Suppression, "", "same_binding_recovery_allowed", "clean_reinitialization_required", "restart_required", "terminal_replay_failure") {
@@ -375,6 +379,14 @@ func validateSnapshot(value Snapshot) error {
 	if value.TQ.PressureMode == "normal" && value.TQ.PressureCause != "" || value.TQ.PressureMode != "normal" && !oneOf(value.TQ.PressureCause,
 		"waiting_frames", "waiting_bytes", "oldest_waiting_frame", "aggregate_watermark_lag", "capacity_drop", "tq_retention_bound", "transport_accounting_loss") {
 		return rejectMapping("tq_pressure_cause")
+	}
+	ps, pr := value.TQ.PressureSample, value.TQ.PressureRecovery
+	if pr.RequiredSamples != 5 || pr.HealthySamples > pr.RequiredSamples || ps.RecoveryHealthy && !ps.Observed ||
+		value.TQ.PressureMode != "normal" && pr.HealthySamples >= pr.RequiredSamples ||
+		ps.Observed && (ps.FrameCapacity == 0 || ps.WaitingFrames > ps.FrameCapacity || ps.ByteCapacity == 0 || ps.WaitingBytes > ps.ByteCapacity) ||
+		!ps.Observed && (ps.WaitingFrames != 0 || ps.FrameCapacity != 0 || ps.WaitingBytes != 0 || ps.ByteCapacity != 0 || ps.OldestWaitingFrameAgeMS != 0 || ps.AggregateWatermarkLagMS != 0 || ps.RecoveryHealthy) ||
+		value.TQ.PressureMode != "normal" && pr.HealthySamples > 0 && !ps.RecoveryHealthy || value.TQ.PressureMode == "normal" && pr.HealthySamples != 0 {
+		return rejectMapping("tq_pressure_recovery")
 	}
 	if !validOptionalTimestamp(value.Publication.CommittedT) || !validOptionalTimestamp(value.Recovery.Start) || !validOptionalTimestamp(value.Recovery.End) ||
 		!validOptionalTimestamp(value.Recovery.SupportedThrough) || !validOptionalTimestamp(value.Publication.HydrationFence.SupportedThrough) ||
@@ -409,6 +421,9 @@ func validateSnapshot(value Snapshot) error {
 	}
 	if !sumDecimalEquals(w.Planned, w.Open, w.CompletedValue, w.CompletedEmpty, w.Failed, w.Canceled, w.Fenced) {
 		return rejectMapping("recovery_work_identity")
+	}
+	if value.Recovery.GenerationActive && (value.Recovery.Generation == "0" || value.Recovery.FenceReconciled) {
+		return rejectMapping("recovery_generation_activity")
 	}
 	if !sumDecimalEquals(hr.Consumed, hr.Inserted, hr.Duplicate, hr.ConflictOrWithdrawal, hr.Rejected, hr.Fenced, hr.Integrity) {
 		return rejectMapping("recovery_row_identity")

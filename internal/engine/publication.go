@@ -84,6 +84,7 @@ type privatePublication struct {
 	currentMarketClaim                                                      bool
 	aggregateEvaluation                                                     aggregateEvaluationResult
 	hydrationPurpose                                                        HydrationPurpose
+	hydrationActive                                                         bool
 	hydrationGeneration                                                     uint64
 	hydrationStart                                                          time.Time
 	hydrationEnd                                                            time.Time
@@ -449,6 +450,7 @@ func (e *Engine) buildPublicationLocked(id, sequence uint64, disposition transit
 		clockMonotonic:      e.state.clockMonotonic,
 		aggregateEvaluation: cloneAggregateEvaluation(e.state.aggregateEvaluator.current),
 		hydrationPurpose:    e.state.hydration.generation.purpose,
+		hydrationActive:     e.state.hydration.generation.active,
 		hydrationGeneration: e.state.hydration.generation.generation,
 		hydrationStart:      e.state.hydration.generation.start, hydrationEnd: e.state.hydration.generation.end,
 		hydrationAccounting:      e.state.hydration.generation.accounting,
@@ -532,6 +534,8 @@ func validatePublication(candidate *privatePublication) error {
 		candidate.transitions.completedExternal != candidate.admission.completedExternal ||
 		!candidate.transitions.reconciles() || !candidate.publications.reconciles(candidate.transitions.completedExternal+candidate.transitions.completedInternal) ||
 		!candidate.aggregates.reconciles() || !candidate.connectionControls.reconciles() ||
+		(candidate.hydrationActive && candidate.hydrationGeneration == 0) ||
+		(candidate.hydrationActive && candidate.hydrationFenceReconciled) ||
 		(candidate.hydrationGeneration > 0 && (!validHydrationPurpose(candidate.hydrationPurpose) ||
 			candidate.hydrationStart.After(candidate.hydrationEnd) || !candidate.hydrationAccounting.reconciles() || !candidate.hydrationRows.reconciles())) {
 		return errors.New("invalid private publication")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"time"
 
 	"github.com/belandresj/live-equities-momentum-scanner/internal/replayartifact/playback"
@@ -44,6 +45,39 @@ type replayState struct {
 	failureLogical                time.Time
 	failureOrdinal                uint64
 	completion                    ReplayCompletionDisposition
+	aggregateTouched              map[int]struct{}
+}
+
+// ConfigureReplayFastForwardThrough installs the replay-only hidden warm-up
+// boundary. It is execution policy rather than market state: all records and
+// logical groups still enter the ordinary ordered engine path. The policy is
+// active only when ReplayStart validates complete-final-bars evidence; partial
+// synthetic replay retains the ordinary projection schedule.
+func (e *Engine) ConfigureReplayFastForwardThrough(through time.Time) error {
+	if e == nil || through.IsZero() || through != through.UTC() || through.Nanosecond() != 0 {
+		return errors.New("invalid replay fast-forward boundary")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.mode != RunModeReplay || e.state.binding == nil || e.state.replay.validated || !e.replayFastForwardThrough.IsZero() ||
+		through.Before(e.state.binding.sessionStart) || through.After(e.state.binding.sessionEnd) {
+		return errors.New("replay fast-forward boundary is not configurable")
+	}
+	e.replayFastForwardThrough = through
+	return nil
+}
+
+func (e *Engine) hiddenReplayWarmupLocked(node *queueNode) bool {
+	return e.mode == RunModeReplay && e.state.replay.complete && !e.replayFastForwardThrough.IsZero() &&
+		(node.kind == inputAggregate || node.kind == inputReplayGroup) && node.admissionTime.Before(e.replayFastForwardThrough)
+}
+
+func (e *Engine) deferReplayAggregateProjectionLocked(node *queueNode) bool {
+	// Replay source records are atomically observed only after their enclosing
+	// group timer. Coalesce every record-local projection to that group boundary;
+	// this changes neither canonical mutation nor any externally observable
+	// logical-boundary result.
+	return e.mode == RunModeReplay && e.state.replay.complete && node.kind == inputAggregate && !e.replayFastForwardThrough.IsZero()
 }
 
 type ReplayCompletionDisposition string
@@ -165,7 +199,7 @@ func (e *Engine) applyReplayStartLocked(node *queueNode) (DispositionCode, Dispo
 	} else if v.Authority() == playback.InstalledCheckpoint || v.Authority() == playback.FreshSession && v.Start() != e.state.binding.sessionStart {
 		return DispositionReplayFailed, ReasonReplayEvidence
 	}
-	e.state.replay = replayState{validated: true, complete: v.Complete(), artifactID: v.ArtifactID(), bindingID: v.BindingID(), start: v.Start(), end: v.End(), requestedEnd: v.RequestedEnd(), totalRecords: v.TotalRecords(), nextOrdinal: 1, nextGroup: v.Start()}
+	e.state.replay = replayState{validated: true, complete: v.Complete(), artifactID: v.ArtifactID(), bindingID: v.BindingID(), start: v.Start(), end: v.End(), requestedEnd: v.RequestedEnd(), totalRecords: v.TotalRecords(), nextOrdinal: 1, nextGroup: v.Start(), aggregateTouched: make(map[int]struct{})}
 	e.state.replayArtifact = v.ArtifactID()
 	if v.Complete() && !checkpointContinuation {
 		if e.state.aggregateEvaluator.coverage == nil {

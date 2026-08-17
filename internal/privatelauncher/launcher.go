@@ -213,7 +213,7 @@ func run(ctx context.Context, repoRoot string, arguments []string, stdout, stder
 		return fmt.Errorf("preflight: %w", err)
 	}
 	if !now.Before(sessionStart) {
-		fmt.Fprintln(stderr, "WARNING: starting after 04:00 America/New_York. A compatible same-day checkpoint can make restart fast; without one, the scanner must hydrate elapsed aggregates. Full 1x late-start hydration passed, but sustained full 2x is unsupported and no fixed completion time is claimed.")
+		fmt.Fprintln(stderr, "Warning: starting after 04:00 EST. Will start historical data fetches to ready scanner")
 	} else {
 		fmt.Fprintln(stdout, "Starting before 04:00 America/New_York; authoritative readiness is expected only after the session begins and required hydration/fencing completes.")
 	}
@@ -262,7 +262,6 @@ func run(ctx context.Context, repoRoot string, arguments []string, stdout, stder
 		return errors.Join(err, stopChildren(scanner, dashboard, false, false, containmentSignal(ctx), deps))
 	}
 
-	fmt.Fprintf(stdout, "Dashboard: %s\n", dashboardOrigin)
 	fmt.Fprintf(stdout, "Scanner snapshot: %s/api/v2/snapshot\n", scannerOrigin)
 	fmt.Fprintf(stdout, "Scanner liveness: %s/livez\n", scannerOrigin)
 	fmt.Fprintf(stdout, "Scanner readiness: %s/readyz\n", scannerOrigin)
@@ -335,7 +334,7 @@ func supervise(ctx context.Context, scanner, dashboard childProcess, sessionEnd 
 		probeCtx, cancel := context.WithTimeout(ctx, minDuration(2*time.Second, deps.pollInterval*4))
 		defer cancel()
 		result, err := deps.probe(probeCtx, scannerOrigin+"/readyz")
-		message := "Scanner readiness: temporarily unavailable"
+		message := "Scanner readiness: unavailable"
 		if err == nil {
 			var ready struct {
 				BackendReady bool   `json:"backend_ready"`
@@ -343,13 +342,13 @@ func supervise(ctx context.Context, scanner, dashboard childProcess, sessionEnd 
 			}
 			if json.Unmarshal(result.body, &ready) == nil {
 				if result.status == http.StatusOK && ready.BackendReady {
-					message = "Scanner readiness: ready (authoritative /readyz)"
+					message = "Scanner readiness: ready"
 				} else {
 					reason := ready.Reason
 					if reason == "" {
 						reason = "runtime has not declared readiness"
 					}
-					message = "Scanner readiness: not ready (" + reason + "); process remains healthy while pre-session, hydrating, fencing, or honestly suppressed"
+					message = "Scanner readiness: not ready (" + reason + ")"
 				}
 			}
 		}

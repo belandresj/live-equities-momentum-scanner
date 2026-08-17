@@ -28,8 +28,101 @@ type ReplayCanonicalSymbol struct {
 	CommittedWindowStart  time.Time
 	PresentSlots          uint64
 	ProvenAbsentSlots     uint64
+	PresentBitmap         []uint64
+	ProvenAbsentBitmap    []uint64
+	HistoricalConflict    []uint64
+	OlderLatest           *ReplayCanonicalRecord
+	Recomputations        uint64
+	TailCoverage          ReplayTailCoverageView
 	Features              ReplayFeatureView
 	Qualification         ReplayQualificationView
+	PriceRangeState       ReplayPriceRangeStateView
+	ActivityState         ReplayActivityStateView
+	QualificationState    ReplayQualificationStateView
+	MVPState              ReplayMVPStateView
+}
+
+type ReplayTailCoverageView struct {
+	BaseWord, TailCount  int
+	Words                [16]uint64
+	Valid, Built, Usable bool
+}
+
+type ReplayExtremaPointView struct {
+	WindowStart int64
+	Value       float64
+}
+
+type ReplayPriceRangeStateView struct {
+	Present                                    bool
+	FirstStart, RollingFloor, FinalizedThrough int64
+	FirstOpen, SessionHigh, SessionLow         float64
+	HasFirst, HasSessionExtrema, BoundExceeded bool
+	Highs, Lows, SessionHighs, SessionLows     []ReplayExtremaPointView
+}
+
+type ReplayActivitySummaryView struct {
+	End                                   int64
+	TransactionSum                        [34]uint64
+	Transactions, High, Low, ExpansionBPS float64
+	AggregateCount                        uint8
+	Invalid                               bool
+}
+
+type ReplayActivityMutableView struct {
+	End             int64
+	Folded, Current ReplayActivitySummaryView
+}
+type ReplayActivityTargetView struct {
+	End                       int64
+	Transactions, Highs, Lows [30]float64
+	Present, Invalid          uint32
+}
+type ReplayActivityStateView struct {
+	Present                                                                            bool
+	References                                                                         []ReplayActivitySummaryView
+	Mutable                                                                            []ReplayActivityMutableView
+	FoldedTargets                                                                      []ReplayActivityTargetView
+	FoldedTargetContributions                                                          int
+	BoundExceeded                                                                      bool
+	ResultAt                                                                           time.Time
+	ResultActivity                                                                     ReplayFieldView
+	TargetTransactions, TargetExpansionBPS, TransactionPercentile, ExpansionPercentile float64
+	ReferenceCount                                                                     int
+	LookupAt                                                                           time.Time
+	LookupTransactions, LookupExpansions                                               []float64
+	LookupValid                                                                        bool
+}
+
+type ReplayQualificationGateBarView struct {
+	Start               int64
+	Close, Volume, VWAP float64
+	AverageTradeSize    int64
+	ATSProvenance       string
+}
+type ReplayQualificationStateView struct {
+	Present                                         bool
+	FinalizedGateBars                               []ReplayQualificationGateBarView
+	Proofs, Dirty                                   []int64
+	AccountedThrough                                time.Time
+	Finalized                                       bool
+	FinalProofEnd                                   time.Time
+	BoundExceeded, Invalid                          bool
+	UnresolvedOrigin                                string
+	Installed, Revalidated, Revoked, FinalizedCount uint64
+	MaximumProofOccupancy, MaximumDirtyOccupancy    int
+	HydrationScanPresent                            bool
+}
+
+type ReplayMVPPointView struct {
+	Start                     int64
+	Volume, Close, Cumulative float64
+}
+type ReplayMVPStateView struct {
+	Present                             bool
+	Folded                              []ReplayMVPPointView
+	At                                  time.Time
+	SessionVolume, Activity30s, Move30s ReplayFieldView
 }
 
 type ReplayCanonicalRecord struct {
@@ -274,6 +367,16 @@ func replayCanonicalSymbolView(symbol coreSymbol) ReplayCanonicalSymbol {
 	}
 	result.PresentSlots = bitmapPopulation(state.presence)
 	result.ProvenAbsentSlots = bitmapPopulation(state.provenAbsent)
+	result.PresentBitmap = replayBitmapView(state.presence)
+	result.ProvenAbsentBitmap = replayBitmapView(state.provenAbsent)
+	result.HistoricalConflict = replayBitmapView(state.historicalConflict)
+	result.Recomputations = state.recomputations
+	result.TailCoverage = ReplayTailCoverageView{BaseWord: state.tailCoverage.baseWord, TailCount: state.tailCoverage.tailCount,
+		Words: state.tailCoverage.words, Valid: state.tailCoverage.valid, Built: state.tailCoverageBuilt, Usable: state.tailCoverageUsable}
+	if state.olderLatest != nil {
+		value := replayCanonicalRecordView(*state.olderLatest)
+		result.OlderLatest = &value
+	}
 	features := unavailablePriceRangeResult(time.Time{})
 	activity := unavailableActivityResult(time.Time{})
 	if state.priceRange != nil {
@@ -292,6 +395,101 @@ func replayCanonicalSymbolView(symbol coreSymbol) ReplayCanonicalSymbol {
 		result.Qualification = ReplayQualificationView{At: qualification.at, Status: string(qualification.status),
 			UnresolvedOrigin: replayUncertaintyOrigin(qualification.unresolvedOrigin), CurrentProofCount: qualification.currentProofCount,
 			FinalProofEnd: qualification.finalProofEnd}
+	}
+	result.PriceRangeState = replayPriceRangeStateView(state.priceRange)
+	result.ActivityState = replayActivityStateView(state.activity)
+	result.QualificationState = replayQualificationStateView(state.qualification)
+	result.MVPState = replayMVPStateView(state.mvpMeasurements)
+	return result
+}
+
+func replayBitmapView(bitmap *slotBitmap) []uint64 {
+	if bitmap == nil {
+		return nil
+	}
+	return append([]uint64(nil), bitmap[:]...)
+}
+
+func replayCanonicalRecordView(record canonicalAggregate) ReplayCanonicalRecord {
+	return ReplayCanonicalRecord{WindowStart: record.windowStart, WindowEnd: record.windowEnd, Values: record.values,
+		FirstSource: record.first.source, FirstDeliveryTime: record.first.deliveryTime, FirstReplayOrdinal: record.first.replay.RecordOrdinal,
+		AuthoritySource: record.authority.source, AuthorityDeliveryTime: record.authority.deliveryTime, AuthorityReplayOrdinal: record.authority.replay.RecordOrdinal}
+}
+
+func replayExtremaPointsView(points []extremaPoint) []ReplayExtremaPointView {
+	result := make([]ReplayExtremaPointView, len(points))
+	for index, point := range points {
+		result[index] = ReplayExtremaPointView{WindowStart: point.windowStart, Value: point.value}
+	}
+	return result
+}
+
+func replayPriceRangeStateView(state *priceRangeFeatureState) ReplayPriceRangeStateView {
+	if state == nil {
+		return ReplayPriceRangeStateView{}
+	}
+	return ReplayPriceRangeStateView{Present: true, FirstStart: state.firstStart, RollingFloor: state.rollingFloor,
+		FinalizedThrough: state.finalizedThrough, FirstOpen: state.firstOpen, SessionHigh: state.sessionHigh, SessionLow: state.sessionLow,
+		HasFirst: state.hasFirst, HasSessionExtrema: state.hasSessionExtrema, BoundExceeded: state.boundExceeded,
+		Highs: replayExtremaPointsView(state.highs), Lows: replayExtremaPointsView(state.lows),
+		SessionHighs: replayExtremaPointsView(state.sessionHighs), SessionLows: replayExtremaPointsView(state.sessionLows)}
+}
+
+func replayActivitySummaryView(value activityBlockSummary) ReplayActivitySummaryView {
+	return ReplayActivitySummaryView{End: value.end, TransactionSum: value.transactionSum, Transactions: value.transactions,
+		High: value.high, Low: value.low, ExpansionBPS: value.expansionBPS, AggregateCount: value.aggregateCount, Invalid: value.invalid}
+}
+
+func replayActivityStateView(state *activityFeatureState) ReplayActivityStateView {
+	if state == nil {
+		return ReplayActivityStateView{}
+	}
+	result := ReplayActivityStateView{Present: true, FoldedTargetContributions: state.foldedTargetContributions,
+		BoundExceeded: state.boundExceeded, ResultAt: state.result.at, ResultActivity: replayFieldView(state.result.activity),
+		TargetTransactions: state.result.targetTransactions, TargetExpansionBPS: state.result.targetExpansionBPS,
+		TransactionPercentile: state.result.transactionPercentile, ExpansionPercentile: state.result.expansionPercentile,
+		ReferenceCount: state.result.referenceCount, LookupAt: state.referenceLookup.at,
+		LookupTransactions: append([]float64(nil), state.referenceLookup.transactions...),
+		LookupExpansions:   append([]float64(nil), state.referenceLookup.expansions...), LookupValid: state.referenceLookup.valid}
+	for _, end := range sortedInt64Keys(state.references) {
+		result.References = append(result.References, replayActivitySummaryView(*state.references[end]))
+	}
+	for _, end := range sortedInt64Keys(state.mutable) {
+		value := state.mutable[end]
+		result.Mutable = append(result.Mutable, ReplayActivityMutableView{End: end, Folded: replayActivitySummaryView(value.folded), Current: replayActivitySummaryView(value.current)})
+	}
+	for _, end := range sortedInt64Keys(state.foldedTargets) {
+		value := state.foldedTargets[end]
+		result.FoldedTargets = append(result.FoldedTargets, ReplayActivityTargetView{End: end, Transactions: value.transactions, Highs: value.highs, Lows: value.lows, Present: value.present, Invalid: value.invalid})
+	}
+	return result
+}
+
+func replayQualificationStateView(state *qualificationState) ReplayQualificationStateView {
+	if state == nil {
+		return ReplayQualificationStateView{}
+	}
+	result := ReplayQualificationStateView{Present: true, Proofs: sortedSetKeys(state.proofs), Dirty: sortedSetKeys(state.dirty),
+		AccountedThrough: state.accountedThrough, Finalized: state.finalized, FinalProofEnd: state.finalProofEnd,
+		BoundExceeded: state.boundExceeded, Invalid: state.invalid, UnresolvedOrigin: replayUncertaintyOrigin(state.unresolvedOrigin),
+		Installed: state.installed, Revalidated: state.revalidated, Revoked: state.revoked, FinalizedCount: state.finalizedCount,
+		MaximumProofOccupancy: state.maximumProofOccupancy, MaximumDirtyOccupancy: state.maximumDirtyOccupancy,
+		HydrationScanPresent: state.hydrationScan != nil}
+	for _, start := range sortedInt64Keys(state.finalizedGateBars) {
+		value := state.finalizedGateBars[start]
+		result.FinalizedGateBars = append(result.FinalizedGateBars, ReplayQualificationGateBarView{Start: start, Close: value.close, Volume: value.volume, VWAP: value.vwap, AverageTradeSize: value.averageTradeSize, ATSProvenance: string(value.provenance)})
+	}
+	return result
+}
+
+func replayMVPStateView(state *mvpMeasurementState) ReplayMVPStateView {
+	if state == nil {
+		return ReplayMVPStateView{}
+	}
+	result := ReplayMVPStateView{Present: true, At: state.result.at, SessionVolume: replayFieldView(state.result.sessionVolume),
+		Activity30s: replayFieldView(state.result.activity30s), Move30s: replayFieldView(state.result.move30s), Folded: make([]ReplayMVPPointView, len(state.folded))}
+	for index, value := range state.folded {
+		result.Folded[index] = ReplayMVPPointView{Start: value.start, Volume: value.volume, Close: value.close, Cumulative: value.cumulative}
 	}
 	return result
 }

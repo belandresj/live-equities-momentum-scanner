@@ -21,8 +21,8 @@ The scanner is designed to:
 - qualify symbols using the approved same-session aggregate-tape gate, then rank
   passers by Day % descending with exact-symbol tie-breaking;
 - publish at most 20 rows with independently available Float, session share
-  Volume, Last, Day %, From Open %, Day Range, Activity 30s, Move 30s, Tape 5s,
-  and Spread;
+  Volume, Last, From Close %, From Open %, Day Range, Activity 30s, Move 30s,
+  Tape Speed, and Spread;
 - retain at least 330 seconds of aggregate/coverage evidence plus the
   predecessor mark for every display-eligible symbol, independent of top-20
   membership;
@@ -138,11 +138,19 @@ public binding, authentication, TLS, hosting, or credentialed live validation.
 
 ### Retained replay tooling
 
-Historical replay code and commands remain in the repository, but their current
-runnable capability has not been verified and they are not supported by the
-live feature-set MVP. Use deterministic fixtures to develop formulas, the API,
-and the UI while the market is closed. Do not describe fixture-driven tests as
-product replay or use unknown replay behavior as an MVP acceptance gate.
+The cache-only aggregate replay path has a separately authorized local
+verification for the retained 2026-08-07 artifact. It fast-forwards to the
+CLI-declared observation start, then automatically continues at 1x through the
+same API and dashboard; there is no replay-specific frontend control. Exact
+commands and measured startup behavior are recorded in
+[`docs/replay-warmup-acceleration.md`](docs/replay-warmup-acceleration.md).
+The accelerated warm-up passes its local bound, but total preparation still
+exceeds the focused correction's target because the accepted trust path scans
+the complete artifact twice; the focused correction therefore remains short of
+full acceptance.
+
+Replay remains separate from and non-gating for the live feature-set MVP, and
+it does not reconstruct T/Q or prove live receipt chronology.
 
 ## Predecessor evidence
 

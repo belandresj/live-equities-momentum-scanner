@@ -265,7 +265,7 @@ func TestSlice2LocalUncertaintyPublishesCurrentPartialRanking(t *testing.T) {
 	replay.mode = RunModeReplay
 	replay.state.aggregateEvaluator.coverage[1] = aggregateCoverageConsequence{outcome: coverageOutcomeUnknown, origin: uncertaintyLocalInvalid}
 	replayEvaluation := replay.stageAggregateEvaluationLocked(at)
-	if replayEvaluation.mode != rankingUnavailable || replayEvaluation.reason != rankingReasonNoTrustedMarks || len(replayEvaluation.rows) != 0 {
+	if replayEvaluation.mode != rankingUnavailable || replayEvaluation.reason != rankingReasonIncompletePopulation || len(replayEvaluation.rows) != 0 {
 		t.Fatalf("live partial mode changed replay semantics: %+v", replayEvaluation)
 	}
 }

@@ -24,6 +24,7 @@ type operatorRenderer struct {
 	lastSignature                         string
 	lastPrinted                           time.Time
 	warnedFailure                         bool
+	warmupKey                             string
 	hydrationKey                          string
 	lastFailed, lastFenced, lastIntegrity uint64
 }
@@ -37,18 +38,28 @@ func (r *operatorRenderer) Render(sample liveOperatorSample, force bool) error {
 	status, owner := sample.Status, sample.Metrics.Engine
 	signature := strings.Join([]string{status.Lifecycle, string(status.Reason), status.RankingMode, string(owner.Suppression), owner.LifecycleReason,
 		fmt.Sprint(owner.Connection.Active), fmt.Sprint(owner.Connection.Acknowledged), string(owner.Hydration.Purpose), fmt.Sprint(owner.Hydration.Generation),
-		fmt.Sprint(owner.Hydration.Accounting.Failed), fmt.Sprint(owner.Hydration.Accounting.Fenced), fmt.Sprint(owner.Hydration.Rows.Integrity), fmt.Sprint(owner.Hydration.FenceReconciled)}, "|")
+		fmt.Sprint(owner.Hydration.Active), fmt.Sprint(owner.Hydration.Accounting.Failed), fmt.Sprint(owner.Hydration.Accounting.Canceled),
+		fmt.Sprint(owner.Hydration.Accounting.Fenced), fmt.Sprint(owner.Hydration.Rows.Integrity), fmt.Sprint(owner.Hydration.FenceReconciled)}, "|")
 	changed := signature != r.lastSignature
 	interval := 10 * time.Second
-	warming := owner.Hydration.Accounting.Planned > 0 && !owner.Hydration.FenceReconciled && (status.Lifecycle == "hydrating" || status.Lifecycle == "recovering")
+	warming := owner.Hydration.Active && owner.Hydration.Accounting.Planned > 0 && !owner.Hydration.FenceReconciled && (status.Lifecycle == "hydrating" || status.Lifecycle == "recovering")
 	if warming {
 		interval = 5 * time.Second
 	}
-	if incident := sample.IngressIncident; incident != nil && !r.warnedFailure && (force || status.Lifecycle == "suppressed") {
+	if incident := sample.IngressIncident; incident != nil && !r.warnedFailure {
 		r.warnedFailure = true
-		if _, err := fmt.Fprintf(r.stderr, "Ingress first cause · %s · %s/%s · epoch %d position %s · invariant %s · lifecycle %s/%s\n",
-			incident.Owner, incident.Source, incident.Reason, incident.Epoch, ingressPosition(incident),
+		if _, err := fmt.Fprintf(r.stderr, "Ingress first cause · %s · %s/%s · at %s · epoch %d position %s · invariant %s · lifecycle %s/%s\n",
+			incident.Owner, incident.Source, incident.Reason, incident.CapturedAt.UTC().Format(time.RFC3339Nano), incident.Epoch, ingressPosition(incident),
 			firstFailedIdentityName(incident), incident.Lifecycle, incident.LifecycleReason); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(r.stderr, "Ingress evidence · generation %d active %t purpose %s · work %s/%s open %s canceled %s failed %s fenced %s · queue %d/%d high %d · bytes %d/%d high %d · max delay %s recent %s · heap alloc %s in-use %s · goroutines %d\n",
+			incident.Hydration.Generation, incident.Hydration.Active, incident.Hydration.Purpose,
+			comma(incident.Hydration.Accounting.CompletedValue+incident.Hydration.Accounting.CompletedEmpty), comma(incident.Hydration.Accounting.Planned),
+			comma(incident.Hydration.Accounting.Open), comma(incident.Hydration.Accounting.Canceled), comma(incident.Hydration.Accounting.Failed), comma(incident.Hydration.Accounting.Fenced),
+			incident.Queue.FramesQueued, incident.Queue.CapacityFrames, incident.Queue.HighFramesQueued,
+			incident.Queue.QueuedBytes, incident.Queue.CapacityBytes, incident.Queue.HighQueuedBytes,
+			incident.MaxProcessingDelay, incident.MaxProcessingDelayOneSecond, comma(incident.HeapAllocBytes), comma(incident.HeapInUseBytes), incident.Goroutines); err != nil {
 			return err
 		}
 		if incident.Reason == "frame_slot_capacity" || incident.Reason == "frame_byte_capacity" {
@@ -93,48 +104,67 @@ func (r *operatorRenderer) Render(sample liveOperatorSample, force bool) error {
 	if err := r.warnHydrationFailure(sample); err != nil {
 		return err
 	}
-	if !force && !changed && !r.lastPrinted.IsZero() && status.SampledAt.Sub(r.lastPrinted) < interval {
+	if warming {
+		if !force && !changed && !r.lastPrinted.IsZero() && status.SampledAt.Sub(r.lastPrinted) < interval {
+			return nil
+		}
+	} else if status.BackendReady || status.Reason == operations.ReasonWatermarkStale {
+		// Ready and watermark-stale are state notifications, not telemetry
+		// heartbeats. Emit them when the operational state changes; the
+		// dashboard/API remain the source for continuously changing values.
+		if !force && !changed {
+			return nil
+		}
+	} else if !force && !changed && !r.lastPrinted.IsZero() && status.SampledAt.Sub(r.lastPrinted) < interval {
 		return nil
 	}
+	if status.Lifecycle == "recovering" && !owner.Hydration.Active {
+		phase := "reconnecting"
+		if owner.Connection.Active {
+			phase = "resubscribing"
+		}
+		if owner.Connection.Acknowledged {
+			phase = "preparing recovery"
+		}
+		_, err := fmt.Fprintf(r.stdout, "Recovery: %s\n", phase)
+		if err == nil {
+			r.remember(signature, status.SampledAt)
+		}
+		return err
+	}
 	if warming {
+		if err := r.renderHydrationStart(owner.Hydration, status.Lifecycle); err != nil {
+			return err
+		}
 		a := owner.Hydration.Accounting
 		terminal := a.CompletedValue + a.CompletedEmpty + a.Failed + a.Canceled + a.Fenced
-		open := uint64(0)
-		if a.Planned >= terminal {
-			open = a.Planned - terminal
-		}
 		percent := 0.0
 		if a.Planned > 0 {
 			percent = 100 * float64(terminal) / float64(a.Planned)
 		}
-		connection := "aggregate live disconnected"
-		if owner.Connection.Active {
-			connection = "aggregate live connected"
+		label := "Warm-up"
+		if status.Lifecycle == "recovering" {
+			label = "Recovery"
 		}
-		if owner.Connection.Acknowledged {
-			connection += "/acknowledged"
-		}
-		fence := "final fence pending"
-		if owner.Hydration.FenceReconciled {
-			fence = "final fence reconciled"
-		}
-		_, err := fmt.Fprintf(r.stdout, "Warm-up %s / %s · %.1f%%\nvalues %s · empty %s · open %s · failed %s · canceled %s · fenced %s\n%s · %s\n",
-			comma(terminal), comma(a.Planned), percent, comma(a.CompletedValue), comma(a.CompletedEmpty), comma(open), comma(a.Failed), comma(a.Canceled), comma(a.Fenced), connection, fence)
+		_, err := fmt.Fprintln(r.stdout, hydrationProgress(label, terminal, a.Planned, percent, a))
 		if err == nil {
 			r.remember(signature, status.SampledAt)
 		}
 		return err
 	}
 	if status.BackendReady {
-		watermark := "unavailable"
-		if status.Watermark != nil {
-			watermark = status.Watermark.In(r.location).Format("15:04:05 MST")
+		_, err := fmt.Fprintf(r.stdout, "Ready · %s · %d ranked · watermark %s · lag %dms\n", status.RankingMode, sample.Ranked, r.formatWatermark(status.Watermark), status.WatermarkLag.Milliseconds())
+		if err == nil {
+			r.remember(signature, status.SampledAt)
 		}
-		connection := "aggregate live disconnected"
-		if owner.Connection.Active {
-			connection = "aggregate live connected"
-		}
-		_, err := fmt.Fprintf(r.stdout, "Ready · %s · %d ranked · watermark %s · lag %dms · %s\n", status.RankingMode, sample.Ranked, watermark, status.WatermarkLag.Milliseconds(), connection)
+		return err
+	}
+	if status.Lifecycle == "awaiting_aggregate_ack" || status.Lifecycle == "hydrating" {
+		r.remember(signature, status.SampledAt)
+		return nil
+	}
+	if status.Reason == operations.ReasonWatermarkStale {
+		_, err := fmt.Fprintf(r.stdout, "Scanner degraded · watermark stale · watermark %s · lag %dms\n", r.formatWatermark(status.Watermark), status.WatermarkLag.Milliseconds())
 		if err == nil {
 			r.remember(signature, status.SampledAt)
 		}
@@ -148,6 +178,48 @@ func (r *operatorRenderer) Render(sample liveOperatorSample, force bool) error {
 		r.remember(signature, status.SampledAt)
 	}
 	return err
+}
+
+func (r *operatorRenderer) formatWatermark(watermark *time.Time) string {
+	if watermark == nil {
+		return "unavailable"
+	}
+	return watermark.In(r.location).Format("15:04:05 MST")
+}
+
+func (r *operatorRenderer) renderHydrationStart(h engine.OperationalHydration, lifecycle string) error {
+	key := fmt.Sprintf("%s/%d", h.Purpose, h.Generation)
+	if key == r.warmupKey || h.End.IsZero() {
+		return nil
+	}
+	label := "Warm-up"
+	if lifecycle == "recovering" {
+		label = "Recovery"
+	}
+	through := h.End.Add(-time.Second).In(r.location).Format("15:04:05 MST")
+	if _, err := fmt.Fprintf(r.stdout, "%s: fetching historical one-second aggregates through %s for %s stocks\n", label, through, comma(h.Accounting.Planned)); err != nil {
+		return err
+	}
+	r.warmupKey = key
+	return nil
+}
+
+func hydrationProgress(label string, terminal, planned uint64, percent float64, accounting engine.HydrationAccounting) string {
+	message := fmt.Sprintf("%s: %s / %s stocks (%.1f%%)", label, comma(terminal), comma(planned), percent)
+	status := make([]string, 0, 3)
+	if accounting.Failed > 0 {
+		status = append(status, fmt.Sprintf("failed %s", comma(accounting.Failed)))
+	}
+	if accounting.Canceled > 0 {
+		status = append(status, fmt.Sprintf("canceled %s", comma(accounting.Canceled)))
+	}
+	if accounting.Fenced > 0 {
+		status = append(status, fmt.Sprintf("fenced %s", comma(accounting.Fenced)))
+	}
+	if len(status) > 0 {
+		message += " · " + strings.Join(status, " · ")
+	}
+	return message
 }
 
 func ingressRate(value float64) string {
@@ -246,7 +318,17 @@ func (r *operatorRenderer) warnHydrationFailure(sample liveOperatorSample) error
 	if h.Accounting.Failed <= r.lastFailed && h.Accounting.Fenced <= r.lastFenced && h.Rows.Integrity <= r.lastIntegrity {
 		return nil
 	}
-	_, err := fmt.Fprintf(r.stderr, "Hydration failure · %s generation %d · failed %s · fenced %s · row integrity %s\n", h.Purpose, h.Generation, comma(h.Accounting.Failed), comma(h.Accounting.Fenced), comma(h.Rows.Integrity))
+	status := make([]string, 0, 3)
+	if h.Accounting.Failed > 0 {
+		status = append(status, fmt.Sprintf("failed %s", comma(h.Accounting.Failed)))
+	}
+	if h.Accounting.Fenced > 0 {
+		status = append(status, fmt.Sprintf("fenced %s", comma(h.Accounting.Fenced)))
+	}
+	if h.Rows.Integrity > 0 {
+		status = append(status, fmt.Sprintf("row integrity %s", comma(h.Rows.Integrity)))
+	}
+	_, err := fmt.Fprintf(r.stderr, "Hydration failure: %s generation %d · %s\n", h.Purpose, h.Generation, strings.Join(status, " · "))
 	if err == nil {
 		r.lastFailed, r.lastFenced, r.lastIntegrity = h.Accounting.Failed, h.Accounting.Fenced, h.Rows.Integrity
 	}

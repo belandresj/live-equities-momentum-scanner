@@ -492,6 +492,10 @@ type Engine struct {
 	publication  atomic.Pointer[privatePublication]
 	sentinels    [8]*privatePublication
 	lastPubID    uint64
+	// replayFastForwardThrough is immutable replay execution policy installed
+	// before ReplayStart. Groups before it still mutate the sole canonical
+	// state, but defer full-population projection/publication to the boundary.
+	replayFastForwardThrough time.Time
 
 	// Test-only fault/pause points are package-private and have no production
 	// constructor or exported mutation path.
@@ -966,8 +970,14 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 			// the immutable market projection is coalesced at the next accepted
 			// timer or aggregate-ingress fence.
 			e.state.aggregateProjectionPending = true
-		} else if code == DispositionAggregateInserted || code == DispositionAggregateRevised || code == DispositionAggregateWithdrawn {
+		} else if (code == DispositionAggregateInserted || code == DispositionAggregateRevised || code == DispositionAggregateWithdrawn) &&
+			!e.deferReplayAggregateProjectionLocked(node) {
 			e.state.exposedRevision++
+		}
+		if e.mode == RunModeReplay && (code == DispositionAggregateInserted || code == DispositionAggregateRevised || code == DispositionAggregateWithdrawn) {
+			if index, ok := e.state.binding.index[node.aggregate.Symbol]; ok && e.state.replay.aggregateTouched != nil {
+				e.state.replay.aggregateTouched[index] = struct{}{}
+			}
 		}
 		if node.aggregate.Source == AggregateSourceLive && (code == DispositionAggregateInserted || code == DispositionAggregateRevised) {
 			if index, ok := e.state.binding.index[node.aggregate.Symbol]; ok && e.state.aggregateEvaluator.coverage[index] == coverageNoPrintThroughT {

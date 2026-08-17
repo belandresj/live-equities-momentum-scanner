@@ -91,7 +91,7 @@ func TestPC9DiagnosticsAndQuietWindowsDoNotGatePressure(t *testing.T) {
 	policy := defaultTQPressurePolicy()
 	if policy.degradedSamples != 2 || policy.aggregateSamples != 3 || policy.watermarkSamples != 2 || policy.recoverySamples != 5 ||
 		policy.degradedQueuePercent != 10 || policy.aggregateQueuePercent != 25 || policy.recoveryQueuePercent != 1 ||
-		policy.degradedOldest != time.Second || policy.aggregateOldest != 2*time.Second || policy.recoveryOldest != 250*time.Millisecond {
+		policy.degradedOldest != time.Second || policy.aggregateOldest != 2*time.Second || policy.recoveryOldest != 750*time.Millisecond {
 		t.Fatalf("direct pressure policy = %+v", policy)
 	}
 	e, _, clockNanos, start := pressureProofEngine(t)
@@ -245,6 +245,67 @@ func TestPC9ExactWaitingPressureBoundaries(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPC9RecoveryHysteresisAndObservation(t *testing.T) {
+	e, _, clock, start := pressureProofEngine(t)
+	defer closeAndWait(t, e)
+	e.mu.Lock()
+	aggregateBefore := cloneAggregateEvaluation(e.state.aggregateEvaluator.current)
+	committedBefore := *e.state.committedT
+	e.mu.Unlock()
+
+	entry := healthyTQPressureSample()
+	entry.OldestWaitingFrameAge = time.Second
+	applyPressureSample(t, e, clock, start, entry)
+	applyPressureSample(t, e, clock, start.Add(time.Second), entry)
+	if view := e.ObserveTQ(); view.Pressure != TQPressureDegraded {
+		t.Fatalf("degraded entry = %+v", view)
+	}
+
+	recovery := healthyTQPressureSample()
+	recovery.WaitingFrames, recovery.WaitingBytes = 0, 0
+	recovery.OldestWaitingFrameAge = 749 * time.Millisecond
+	applyPressureSample(t, e, clock, start.Add(2*time.Second), recovery)
+	view := e.ObserveTQ()
+	if !view.PressureSample.Observed || !view.PressureSample.RecoveryHealthy || view.PressureSample.OldestWaitingFrameAge != 749*time.Millisecond ||
+		view.PressureSample.WaitingFrames != 0 || view.PressureSample.FrameCapacity != 100 || view.PressureSample.WaitingBytes != 0 || view.PressureSample.ByteCapacity != 1000 ||
+		view.RecoveryHealthySamples != 1 || view.RecoveryRequiredSamples != 5 {
+		t.Fatalf("first recovery observation = %+v", view)
+	}
+
+	exactBoundary := recovery
+	exactBoundary.OldestWaitingFrameAge = 750 * time.Millisecond
+	applyPressureSample(t, e, clock, start.Add(3*time.Second), exactBoundary)
+	view = e.ObserveTQ()
+	if view.Pressure != TQPressureDegraded || view.PressureSample.RecoveryHealthy || view.RecoveryHealthySamples != 0 || view.PressureSample.OldestWaitingFrameAge != 750*time.Millisecond {
+		t.Fatalf("exact recovery boundary = %+v", view)
+	}
+
+	for second := 4; second <= 7; second++ {
+		applyPressureSample(t, e, clock, start.Add(time.Duration(second)*time.Second), recovery)
+	}
+	if view = e.ObserveTQ(); view.Pressure != TQPressureDegraded || view.RecoveryHealthySamples != 4 {
+		t.Fatalf("four-sample recovery = %+v", view)
+	}
+	e.mu.Lock()
+	evaluationAtFour := cloneAggregateEvaluation(e.state.aggregateEvaluator.current)
+	e.mu.Unlock()
+	impossibleComplete := view
+	impossibleComplete.RecoveryHealthySamples = impossibleComplete.RecoveryRequiredSamples
+	if validTQPublication(impossibleComplete, impossibleComplete.PublicationID, evaluationAtFour) {
+		t.Fatal("nonnormal pressure accepted completed recovery progress")
+	}
+	applyPressureSample(t, e, clock, start.Add(8*time.Second), recovery)
+	view = e.ObserveTQ()
+	if view.Pressure != TQPressureNormal || view.PressureCause != TQPressureCauseNone || !view.PressureSample.RecoveryHealthy || view.RecoveryHealthySamples != 0 || view.RecoveryRequiredSamples != 5 {
+		t.Fatalf("five-sample recovery = %+v", view)
+	}
+	e.mu.Lock()
+	if !aggregateEvaluationEqual(aggregateBefore, e.state.aggregateEvaluator.current) || e.state.committedT == nil || !e.state.committedT.Equal(committedBefore) {
+		t.Fatalf("recovery changed aggregate state: before=%+v after=%+v", aggregateBefore, e.state.aggregateEvaluator.current)
+	}
+	e.mu.Unlock()
 }
 
 func TestPC9WatermarkLagRequiresTQWorkAndGreaterThanTwoSeconds(t *testing.T) {

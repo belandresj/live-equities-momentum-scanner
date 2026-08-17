@@ -244,6 +244,7 @@ type RecoveryRows struct {
 }
 
 type Recovery struct {
+	GenerationActive bool         `json:"generation_active"`
 	Purpose          string       `json:"purpose"`
 	Generation       string       `json:"generation"`
 	Start            *string      `json:"start"`
@@ -280,24 +281,42 @@ type TQCommands struct {
 	ResultFenced string `json:"result_fenced"`
 }
 
+type TQPressureSample struct {
+	Observed                bool   `json:"observed"`
+	WaitingFrames           uint64 `json:"waiting_frames"`
+	FrameCapacity           uint64 `json:"frame_capacity"`
+	WaitingBytes            uint64 `json:"waiting_bytes"`
+	ByteCapacity            uint64 `json:"byte_capacity"`
+	OldestWaitingFrameAgeMS uint64 `json:"oldest_waiting_frame_age_ms"`
+	AggregateWatermarkLagMS uint64 `json:"aggregate_watermark_lag_ms"`
+	RecoveryHealthy         bool   `json:"recovery_healthy"`
+}
+
+type TQPressureRecovery struct {
+	HealthySamples  uint64 `json:"healthy_samples"`
+	RequiredSamples uint64 `json:"required_samples"`
+}
+
 type TQ struct {
-	DesiredSymbols       []string   `json:"desired_symbols"`
-	PressureMode         string     `json:"pressure_mode"`
-	PressureCause        string     `json:"pressure_cause"`
-	AggregateOnly        bool       `json:"aggregate_only"`
-	Shed                 bool       `json:"shed"`
-	RetainedBoundHit     bool       `json:"retained_bound_hit"`
-	PressureMisses       uint64     `json:"pressure_misses"`
-	PressureTransitions  string     `json:"pressure_transitions"`
-	PressureFenced       string     `json:"pressure_fenced"`
-	KnownPresent         uint64     `json:"known_present"`
-	KnownAbsent          uint64     `json:"known_absent"`
-	Unknown              uint64     `json:"unknown"`
-	RetainedTrades       uint64     `json:"retained_trades"`
-	RetainedQuotes       uint64     `json:"retained_quotes"`
-	RetainedFingerprints uint64     `json:"retained_fingerprints"`
-	Facts                TQFacts    `json:"facts"`
-	Commands             TQCommands `json:"commands"`
+	DesiredSymbols       []string           `json:"desired_symbols"`
+	PressureMode         string             `json:"pressure_mode"`
+	PressureCause        string             `json:"pressure_cause"`
+	AggregateOnly        bool               `json:"aggregate_only"`
+	Shed                 bool               `json:"shed"`
+	RetainedBoundHit     bool               `json:"retained_bound_hit"`
+	PressureMisses       uint64             `json:"pressure_misses"`
+	PressureTransitions  string             `json:"pressure_transitions"`
+	PressureFenced       string             `json:"pressure_fenced"`
+	PressureSample       TQPressureSample   `json:"pressure_sample"`
+	PressureRecovery     TQPressureRecovery `json:"pressure_recovery"`
+	KnownPresent         uint64             `json:"known_present"`
+	KnownAbsent          uint64             `json:"known_absent"`
+	Unknown              uint64             `json:"unknown"`
+	RetainedTrades       uint64             `json:"retained_trades"`
+	RetainedQuotes       uint64             `json:"retained_quotes"`
+	RetainedFingerprints uint64             `json:"retained_fingerprints"`
+	Facts                TQFacts            `json:"facts"`
+	Commands             TQCommands         `json:"commands"`
 }
 
 type Checkpoint struct {

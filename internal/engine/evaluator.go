@@ -280,6 +280,9 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 	if e.state.binding == nil || e.state.globalFailure {
 		return true
 	}
+	if e.hiddenReplayWarmupLocked(node) || e.deferReplayAggregateProjectionLocked(node) {
+		return true
+	}
 	changed := (node.kind == inputTimer || node.kind == inputReplayGroup) && code == DispositionTimerApplied
 	changed = changed || (node.kind == inputAggregateIngressFence && code == DispositionAggregateIngressFenceApplied)
 	changed = changed || (node.kind == inputLiveCoverageFence && code == DispositionLiveCoverageFenceApplied)
@@ -553,6 +556,19 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 			mark, hasMark = latestMarkBefore(state, at)
 		}
 		coverage, hasCoverageConsequence := e.state.aggregateEvaluator.coverage[index]
+		// A complete fresh replay proves every symbol's presence or absence
+		// through its covered logical boundary. Delivery may already contain a
+		// mark newer than committed T, so the mutable latest-delivery consequence
+		// cannot decide population coverage at T. Derive the point-in-time
+		// consequence from the validated prefix and the mark eligible at T.
+		if e.mode == RunModeReplay && e.state.replay.validated && e.state.replay.complete && e.state.installedCheckpoint == nil &&
+			e.state.replay.coveredThrough != nil && !e.state.replay.coveredThrough.Before(at) {
+			if hasMark {
+				coverage, hasCoverageConsequence = aggregateCoverageConsequence{}, false
+			} else {
+				coverage, hasCoverageConsequence = coverageNoPrintThroughT, true
+			}
+		}
 		invalid, hasInvalidEvidence := e.state.aggregateEvaluator.invalidMarks[index]
 		invalidApplicableAtT := hasInvalidEvidence && invalid.windowStart.Before(at)
 		var invalidEvidence *invalidMarkEvidence
@@ -717,6 +733,13 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 			result.reason = rankingReasonQualificationPending
 		}
 		result.rows = sortedRankingRows(*degraded, false)
+	case e.mode == RunModeReplay && result.knownRankableCount > 0:
+		result.mode = rankingUnavailable
+		if result.population.unknownDueFailureOrFence != 0 {
+			result.reason = rankingReasonIncompletePopulation
+		} else {
+			result.reason = rankingReasonNoTrustedMarks
+		}
 	default:
 		result.mode, result.reason = rankingUnavailable, rankingReasonNoTrustedMarks
 	}

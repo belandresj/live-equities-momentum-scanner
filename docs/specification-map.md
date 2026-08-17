@@ -7,6 +7,8 @@ the current sequential delivery program.
 
 **Product feature-set revision approved:** 2026-08-14
 
+**Day-%/From-Open presentation and header-tooltip revision approved:** 2026-08-17
+
 **Live feature-set MVP program approved:** 2026-08-14
 
 **Phase 2 sequence approved:** 2026-08-05
@@ -71,8 +73,8 @@ create a shared replacement layer.
 The owner replaced the prior displayed feature set with:
 
 ```text
-SYMBOL | FLOAT | VOLUME | LAST || DAY % | FROM OPEN % | DAY RANGE ||
-ACTIVITY 30s | MOVE 30s || TAPE 5s | SPREAD
+SYMBOL | FLOAT | VOLUME | LAST || FROM CLOSE % | FROM OPEN % | DAY RANGE ||
+ACTIVITY 30s | MOVE 30s || TAPE SPEED | SPREAD
 ```
 
 The revision retains the existing aggregate qualification latch, ranks
@@ -115,6 +117,7 @@ and review records.
 | [`v1-release-follow-on-goal.md`](v1-release-follow-on-goal.md) | Historical handoff prompt for the completed former C7-C11 program; not current execution authority. |
 | [`replay-rest-feasibility-benchmark.md`](replay-rest-feasibility-benchmark.md) | Completed non-authoritative C12 acquisition evidence record and separately gated rerun protocol. It authorizes no credentials, provider request, production change, rerun, or capacity claim. |
 | [`c12-implementation-goal.md`](c12-implementation-goal.md) | Historical replay follow-on handoff. Its retained implementation is unverified and non-gating for the live feature-set MVP. |
+| [`replay-warmup-acceleration.md`](replay-warmup-acceleration.md) | Owner-authorized 2026-08-14 focused replay correction: accelerate cached 04:00-to-observation-start warm-up, preserve exact logical-boundary equivalence, then use the unchanged automatic 1x API/dashboard path. Separate from and non-gating for the live MVP. |
 
 ## Current delivery program
 
@@ -122,6 +125,10 @@ The [`Live feature-set MVP program`](live-feature-mvp-program.md) supersedes
 conflicting former-field, replay, checkpoint, and component-number delivery
 gates for this feature cutover. Implementation remains sequential with one
 active slice and final read-only review at each accepted capability boundary.
+The 2026-08-17 Day-%/From-Open value-relative presentation revision is
+authoritative in [`product/product-goals.md`](product/product-goals.md#pg-ui-03)
+and reconciled in [`specifications/independent-ui.md`](specifications/independent-ui.md#205-from-open-presentation-correction-acceptance);
+it changes no API or backend contract.
 The active order is:
 
 1. live backend measurements and Float reference enrichment;

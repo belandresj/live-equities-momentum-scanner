@@ -256,6 +256,15 @@ type TQCommandAccountingView struct {
 	Issued, Pending, Acknowledged, Failed, Fenced, ResultFenced uint64
 }
 
+type TQPressureSampleView struct {
+	Observed                     bool
+	WaitingFrames, FrameCapacity uint64
+	WaitingBytes, ByteCapacity   uint64
+	OldestWaitingFrameAge        time.Duration
+	AggregateWatermarkLag        time.Duration
+	RecoveryHealthy              bool
+}
+
 type TQView struct {
 	PublicationID                       uint64
 	Desired                             []string
@@ -270,6 +279,9 @@ type TQView struct {
 	ShedTradesQuotes                    bool
 	PressureMisses                      uint32
 	PressureTransitions, PressureFenced uint64
+	PressureSample                      TQPressureSampleView
+	RecoveryHealthySamples              uint8
+	RecoveryRequiredSamples             uint8
 	Accounting                          TQAccountingView
 	Commands                            TQCommandAccountingView
 	Quarantined                         bool
@@ -602,6 +614,8 @@ func (e *Engine) enterTQGlobalBoundLocked() {
 
 func (e *Engine) enterTQAggregateOnlyLocked() {
 	s := &e.state.tq
+	s.pressure.streaks.healthy = 0
+	s.pressure.lastSampleRecoveryHealthy = false
 	if s.pressure.mode != TQPressureAggregateOnly {
 		s.pressure.mode = TQPressureAggregateOnly
 		s.pressure.transitions++
@@ -976,6 +990,11 @@ func (e *Engine) tqViewLocked() TQView {
 	result := TQView{Desired: append([]string(nil), s.desired...), Bounds: s.globalBound, AggregateOnly: s.aggregateOnly,
 		Pressure: pressureMode, PressureCause: s.pressure.cause, ShedTradesQuotes: shedding, PressureMisses: s.pressure.consecutiveMisses,
 		PressureTransitions: s.pressure.transitions, PressureFenced: s.pressure.fenced,
+		PressureSample: TQPressureSampleView{Observed: s.pressure.sampleObserved, WaitingFrames: s.pressure.lastSample.WaitingFrames,
+			FrameCapacity: s.pressure.lastSample.FrameCapacity, WaitingBytes: s.pressure.lastSample.WaitingBytes, ByteCapacity: s.pressure.lastSample.ByteCapacity,
+			OldestWaitingFrameAge: s.pressure.lastSample.OldestWaitingFrameAge, AggregateWatermarkLag: s.pressure.lastSample.AggregateWatermarkLag,
+			RecoveryHealthy: s.pressure.lastSampleRecoveryHealthy},
+		RecoveryHealthySamples: s.pressure.streaks.healthy, RecoveryRequiredSamples: e.tqPressurePolicy.recoverySamples,
 		Quarantined: s.quarantined, QuarantineReason: s.quarantineReason, QuarantinePosition: s.quarantinePosition,
 		QuarantineExpected: s.quarantineExpected, QuarantineObserved: s.quarantineObserved,
 		QuarantineDeadline: s.quarantineDeadline, Quarantines: s.quarantines, QuarantineFenced: s.quarantineFenced}
@@ -1031,13 +1050,18 @@ func cloneTQView(value TQView) TQView {
 }
 
 func validTQPublication(value TQView, publicationID uint64, evaluation aggregateEvaluationResult) bool {
+	pressureSample := value.PressureSample
 	if value.PublicationID == 0 || value.PublicationID != publicationID || len(value.Desired) > maximumTQSymbols || len(value.Rows) != len(value.Desired) || value.Accounting.KnownPresent < 0 || value.Accounting.KnownAbsent < 0 || value.Accounting.Unknown < 0 ||
 		value.Accounting.RetainedTrades < 0 || value.Accounting.RetainedQuotes < 0 || value.Accounting.RetainedFingerprints < 0 ||
 		value.Accounting.Consumed != value.Accounting.Applied+value.Accounting.Duplicate+value.Accounting.Rejected+value.Accounting.Fenced+value.Accounting.PressureShed+value.Accounting.Integrity ||
 		value.Commands.Pending > 1 || value.Commands.Issued != value.Commands.Pending+value.Commands.Acknowledged+value.Commands.Failed+value.Commands.Fenced ||
 		value.CommandPending != (value.Commands.Pending == 1) || value.Bounds && !value.AggregateOnly || value.Quarantined && !value.AggregateOnly ||
 		value.QuarantineExpected < 0 || value.QuarantineExpected > 2*maximumTQSymbols || value.QuarantineObserved < 0 || value.QuarantineObserved > 2*maximumTQSymbols+1 ||
-		value.Quarantined != validTQControlFailure(value.QuarantineReason) {
+		value.Quarantined != validTQControlFailure(value.QuarantineReason) || value.RecoveryRequiredSamples == 0 || value.RecoveryHealthySamples > value.RecoveryRequiredSamples ||
+		value.Pressure != TQPressureNormal && value.RecoveryHealthySamples >= value.RecoveryRequiredSamples ||
+		pressureSample.OldestWaitingFrameAge < 0 || pressureSample.AggregateWatermarkLag < 0 ||
+		pressureSample.Observed && (pressureSample.FrameCapacity == 0 || pressureSample.WaitingFrames > pressureSample.FrameCapacity || pressureSample.ByteCapacity == 0 || pressureSample.WaitingBytes > pressureSample.ByteCapacity) ||
+		!pressureSample.Observed && (pressureSample.WaitingFrames != 0 || pressureSample.FrameCapacity != 0 || pressureSample.WaitingBytes != 0 || pressureSample.ByteCapacity != 0 || pressureSample.OldestWaitingFrameAge != 0 || pressureSample.AggregateWatermarkLag != 0 || pressureSample.RecoveryHealthy) {
 		return false
 	}
 	if value.Pressure != TQPressureNormal && value.Pressure != TQPressureDegraded && value.Pressure != TQPressureAggregateOnly {

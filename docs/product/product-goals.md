@@ -1,6 +1,7 @@
 # Product goals
 
-**Status:** Approved product contract; feature-set revision approved 2026-08-14.
+**Status:** Approved product contract; feature-set revision approved 2026-08-14;
+Day-%/From-Open presentation revision approved 2026-08-17.
 
 **Approved:** 2026-08-05
 
@@ -10,6 +11,13 @@ availability, recovery, and ownership model while replacing the displayed
 context/location/momentum feature set. Lower-level component contracts and the
 implementation still describe the previously accepted feature set until they
 are reconciled through the current capability sequence.
+
+**Presentation revised:** 2026-08-17 — Day % and From Open % use value-relative
+green scales computed from the exact displayed snapshot; the dashboard labels
+Day % as `FROM CLOSE %` and Tape 5s as `TAPE SPEED`, with short pointer-hover
+header descriptions and no data-cell hover tooltips. These changes affect no
+market value, qualification, ranking, API field, readiness fact, or backend
+ownership.
 
 **Current delivery profile:** The owner-approved
 [`Live feature-set MVP program`](../live-feature-mvp-program.md) makes the
@@ -243,7 +251,7 @@ The visible columns appear in this exact order and grouping:
 
 ```text
 CONTEXT                  LOCATION                     CURRENT MOMENTUM     EXECUTION
-SYMBOL FLOAT VOLUME LAST | DAY % FROM OPEN % DAY RANGE | ACTIVITY 30s MOVE 30s | TAPE 5s SPREAD
+SYMBOL FLOAT VOLUME LAST | FROM CLOSE % FROM OPEN % DAY RANGE | ACTIVITY 30s MOVE 30s | TAPE SPEED SPREAD
 ```
 
 | Field | User question answered | Ranking effect |
@@ -252,12 +260,12 @@ SYMBOL FLOAT VOLUME LAST | DAY % FROM OPEN % DAY RANGE | ACTIVITY 30s MOVE 30s |
 | Float | How constrained is the stock's effective publicly tradable share supply? | Display only. |
 | Volume | How many shares have traded during the scanner session? | Display only. |
 | Last | What is the latest trusted aggregate mark? | Required for rankability. |
-| Day % | How far is Last from the adjusted previous regular-session close? | Sole numeric ordering field after qualification. |
+| From Close % | How far is Last from the adjusted previous regular-session close? | Sole numeric ordering field after qualification. |
 | From Open % | How far is Last from the first eligible session trade represented by canonical aggregates? | Display only. |
 | Day Range | Where is Last inside the trustworthy current-session low/high range? | Display only. |
 | Activity 30s | How unusual is current 30-second share-volume participation versus the immediately preceding five-minute regime? | Display only. |
 | Move 30s | What signed price return occurred over the trailing 30 seconds? | Display only. |
-| Tape 5s | How quickly are distinct condition-qualified original trades printing now? | Display only. |
+| Tape Speed | How quickly are distinct condition-qualified original trades printing now? | Display only. |
 | Spread | What is the latest valid quoted spread for the displayed leader, and how old is that quote? | Display only. |
 
 Row order itself expresses rank. A versioned API may carry an explicit rank
@@ -605,23 +613,68 @@ approved.
 The dashboard uses color sparingly and consistently with the column groups:
 
 - Symbol, Float, Volume, and Last are predominantly neutral context.
-- Day % remains readable but subdued because row order already communicates it.
-- From Open uses modest positive/negative treatment.
+- Day % uses a readable value-relative green treatment across the exact rows in
+  the displayed snapshot. For `n` displayed rows, let `D_max` and `D_min` be
+  the maximum and minimum displayed Day-% values. When `D_max > D_min`, row
+  `i` has presentation position `c_i = (D_i-D_min)/(D_max-D_min)`. The scale is
+  value-relative, not rank-relative: a row close in value to the displayed
+  minimum remains visually close to that endpoint even when its ordinal rank
+  is high. `c=0` maps to restrained dark green `#4A965D`; `c=1` maps to neon
+  green `#2CFF05`. If all displayed values are identical, every row uses
+  `c=0.5`. Tied values always receive the same position. Fewer than 20 rows use
+  only their own extrema; empty snapshots have no scale.
+- From Open % uses the same continuous displayed-set-relative green scale as
+  Day %. For the displayed rows whose `from_open_change.status` is `current`
+  and whose `value_ratio` is finite, let `F_max` and `F_min` be the maximum and
+  minimum ratios and assign `c_i = (F_i-F_min)/(F_max-F_min)` when the range is
+  nonzero. The position is value-relative, not rank-relative or zero-relative:
+  it compares the displayed From Open values with one another. `c=0` is
+  restrained dark green `#4A965D`; `c=1` is neon green `#2CFF05`; interpolation
+  is continuous in CSS `oklab`. Fewer than 20 rows use only the eligible values
+  actually displayed, ties receive the same position, and one eligible value or
+  an identical eligible range receives `c=0.5`. Warming, unavailable, invalid,
+  and other non-current values do not participate and receive no position; an
+  empty eligible set receives no positions. A degraded, disconnected, frozen,
+  retained, or otherwise noncurrent table keeps its existing noncurrent color
+  even when a current field position exists in the view model. The displayed
+  text and underlying ratio are unchanged; this is a frontend presentation
+  transform with no API, backend, ranking, readiness, or market-measurement
+  ownership change.
 - Day Range is the strongest location cue, progressing from low/red-neutral to
   high/green.
-- Activity 30s and Tape 5s use a common gray-to-amber-to-bright-orange attention
-  scale as measured activity rises.
-- Move 30s emphasizes strong positive movement in orange and uses restrained
-  red for negative movement.
-- Spread is predominantly neutral when acceptable and reserves red for
-  meaningfully poor execution conditions.
+- Activity 30s uses a gray-to-amber-to-bright-orange attention scale as its
+  relative participation percentile rises. Tape 5s uses a separate continuous
+  absolute-rate neutral-to-orange RGB gradient: `0` and `50` trades/s map to
+  `#8F9AA3`, `100` to `#B8793E`, `250` to `#E98212`, and `500` to `#FF8A00`;
+  RGB channels are linearly interpolated between anchors, rates above `500`
+  clamp to `#FF8A00`, and the scale is not normalized against displayed rows.
+- Move 30s uses a continuous signed red-to-gray-to-green RGB gradient based on
+  the displayed 30-second return. The percentage-point anchors are `-7%`
+  `#FC0000`, `-5%` `#EF3030`, `-2%` `#C46B6B`, `0%` `#8F9AA3`, `+2%`
+  `#70B873`, `+5%` `#45E532`, and `+7%` `#2CFF05`; each RGB channel is
+  linearly interpolated between adjacent anchors, values outside the endpoints
+  clamp to the nearest endpoint, and only the numeric text is colored.
+- Spread uses a continuous absolute-bps neutral-to-neon-red RGB gradient for
+  execution friction: `0` and `10` bps map to `#8F9AA3`, `25` to `#B06F6F`,
+  `50` to `#D84A4A`, `75` to `#EE2525`, and `100` to `#FC0000`; RGB channels
+  are linearly interpolated between anchors, values above `100` bps clamp to
+  `#FC0000`, and only the numeric text is colored. Tight spreads remain
+  neutral rather than green.
 
 The visual grammar is: green means favorable location, orange means something
-is happening now, and red means execution friction or unfavorable state. A
-numeric threshold for poor Spread must come from observed target-universe data
-rather than an unevidenced product-spec guess. Color never changes ranking,
+is happening now, and red means execution friction or unfavorable state. Color never changes ranking,
 field availability, or the displayed numeric value, and every meaning remains
 available without color alone.
+
+Day-% and From-Open normalization are presentation transforms over one already
+validated, server-ordered snapshot. They must not sort, filter, backfill, or
+otherwise alter the displayed rows, and they are not added to the snapshot API.
+The client clamps only computed presentation positions to `[0,1]` for floating-
+point residue; it does not clamp, round, or rewrite the underlying ratios or
+displayed percentages. A missing or nonfinite Day % remains an invalid product
+row under the existing ranking and API contract, while a non-current From Open
+field is omitted from the From Open visual scale without losing its state,
+reason, or em-dash presentation.
 
 ## 12. Accounting and observability goals
 
@@ -745,8 +798,8 @@ Version 1 is product-complete only when reviewed evidence demonstrates that:
   through exact hydration and does not claim readiness before the ingress fence;
 - checkpoint-on operation cannot silently claim compatibility with the revised
   feature set, while checkpoint-off is the supported MVP configuration;
-- the visible dashboard contains only Symbol, Float, Volume, Last, Day %, From
-  Open %, Day Range, Activity 30s, Move 30s, Tape 5s, and Spread in the
+- the visible dashboard contains only Symbol, Float, Volume, Last, From Close %,
+  From Open %, Day Range, Activity 30s, Move 30s, Tape Speed, and Spread in the
   contracted grouping/order;
 - the dashboard's neutral/green/orange/red hierarchy communicates context,
   location, current activity, and execution friction without browser-owned

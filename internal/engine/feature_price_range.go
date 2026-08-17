@@ -223,14 +223,30 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 			maintenanceAt = *e.state.committedT
 		}
 		maintenanceStarted := e.evaluationTimingStart()
-		for index := range e.state.binding.symbols {
+		maintainSymbol := func(index int) {
 			symbol := &e.state.binding.symbols[index]
 			if state := symbol.aggregates; state != nil {
 				e.compactSymbolLocked(state, e.state.binding, symbol.symbol, node.admissionTime)
-				maintainActivityState(state, e.state.binding, node.admissionTime, maintenanceAt)
+				if !e.hiddenReplayWarmupLocked(node) {
+					maintainActivityState(state, e.state.binding, node.admissionTime, maintenanceAt)
+				}
 			}
 		}
+		if e.hiddenReplayWarmupLocked(node) {
+			for index := range e.state.replay.aggregateTouched {
+				maintainSymbol(index)
+			}
+			clear(e.state.replay.aggregateTouched)
+		} else {
+			for index := range e.state.binding.symbols {
+				maintainSymbol(index)
+			}
+			clear(e.state.replay.aggregateTouched)
+		}
 		maintenanceElapsed := e.evaluationTimingElapsed(maintenanceStarted)
+		if e.hiddenReplayWarmupLocked(node) {
+			return nil
+		}
 		started := e.evaluationTimingStart()
 		staged := e.stageAggregateEvaluationAtLocked(target, node.admissionTime)
 		stageElapsed := e.evaluationTimingElapsed(started)
@@ -301,10 +317,16 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 			applyActivityResult(state, e.state.binding, evaluateActivityFeatures(e.state.binding, &evaluationState, *e.state.committedT))
 			return nil
 		}
+		if e.deferReplayAggregateProjectionLocked(node) {
+			return nil
+		}
 		started := e.evaluationTimingStart()
 		staged := e.stageAggregateEvaluationAtLocked(*e.state.committedT, node.admissionTime)
 		e.state.evaluationTiming = EvaluationTimingView{EngineSequence: node.engineSequence, Stage: e.evaluationTimingElapsed(started)}
 		return &staged
+	}
+	if e.deferReplayAggregateProjectionLocked(node) {
+		return nil
 	}
 	return nil
 }

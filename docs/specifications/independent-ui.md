@@ -172,10 +172,12 @@ neutral gray at 50%, to green at 100%; intermediate percentages have no
 categorical cutoff or implied statistical threshold. Out-of-range numbers stay
 visible while their color uses the nearest endpoint. Activity uses continuous
 gray-to-orange intensity across its defined 0–100 percentile-derived scale.
-Tape uses the same continuous palette on an absolute linear display scale from
-0 to 30 five-second trades/second; rates above 30 retain their number and use
-the endpoint color. Spread retains bands at 0, 5, 10, 25, and 50 bps pending
-owner evaluation. Values outside a visual scale remain numerically visible.
+Tape uses the current product-approved absolute-rate gradient from 0 through
+500 five-second trades/second; rates above 500 retain their number and use the
+endpoint color. Spread uses the current product-approved continuous absolute-
+bps neutral-to-red text gradient through 100 bps; rates above 100 retain their
+number and use the endpoint color. Values outside a visual scale remain
+numerically visible.
 These presentation scales do not create
 alerts, qualification, ranking, readiness, or capacity claims.
 
@@ -218,7 +220,7 @@ inference:
 | `stale`, `suppressed`, `ended`, or `unavailable` ranking/lifecycle | Exact server mode/reason in a persistent noncurrent band; retained rows, if supplied, remain visibly noncurrent. |
 | Aggregate field `warming`, `unavailable`, or `invalid` | Per-cell status token and keyboard/focus-accessible reason; no fabricated zero. |
 | T/Q `warming`, `unavailable`, `invalid`, `pressure_shed`, or uncovered | Tape/Spread cell independently noncurrent; aggregate rank and aggregate fields remain intact. Tape detail still states coverage, timestamp basis, and lifecycle observation; Spread detail still states coverage, duration, and quality. |
-| `tq.aggregate_only`, degraded pressure, unknown membership, or retained-bound hit | Separate T/Q health band and affected cell state; never downgrade aggregate ranking unless C10 says so. |
+| `tq.aggregate_only`, degraded pressure, unknown membership, or retained-bound hit | Separate T/Q health band and affected cell state; never downgrade aggregate ranking unless C10 says so. While pressure is nonnormal, show its engine-owned cause plus the last accepted oldest-waiting age and `healthy/required` recovery progress, or explicitly say the recovery sample is unavailable. Do not recompute pressure in the browser. |
 | Recovery/checkpoint/operations facts | Bounded diagnostics in the status/details region; never inputs to browser readiness. |
 | HTTP/network failure or invalid schema | Keep the last valid render only as an explicitly frozen snapshot, mark transport disconnected, show its original `sampled_at`, and never call it current. With no valid prior snapshot, show an error state and no rows. |
 | A later valid response, same publication ID | Replace sample/status/operations display atomically while engine facts may remain equal. |
@@ -494,8 +496,9 @@ Day-% descending so it no longer visually contradicts the server-ranking
 contract. A follow-up owner revision makes Activity and five-second Tape Rate
 continuous gray-to-orange intensity scales, renders only the five-second Tape
 Rate and inline Spread bps/cents, and removes false decimal precision
-from range position and Activity. Spread retains its prior bands pending owner
-evaluation. Focused model, palette, contrast, and fixture
+from range position and Activity. Spread now uses the current continuous
+absolute-bps neutral-to-red text gradient rather than cell bands. Focused
+model, palette, contrast, and fixture
 proofs distinguish these presentation-only decisions; C10 remains the sole
 ranking and value owner.
 
@@ -579,9 +582,9 @@ exactly, and rank remains a validated server-owned ordering fact.
 | Group | Columns | Presentation meaning |
 | --- | --- | --- |
 | `CONTEXT` | `SYMBOL`, `FLOAT`, `VOLUME`, `LAST` | Predominantly neutral identity, tradable-supply context, cumulative session participation, and current aggregate mark. |
-| `LOCATION` | `DAY %`, `FROM OPEN %`, `DAY RANGE` | Where the symbol is relative to the adjusted prior close, session open, and session range. Day Range retains the red-neutral-green location scale; signed returns remain readable and subdued. |
-| `CURRENT MOMENTUM` | `ACTIVITY 30s`, `MOVE 30s` | Recent aggregate participation and price movement. Activity uses gray-to-orange attention; positive Move uses orange and negative Move restrained red. |
-| `EXECUTION` | `TAPE 5s`, `SPREAD` | Selected-row transaction activity and NBBO friction. Tape uses gray-to-orange attention; Spread is neutral unless an already evidenced presentation band marks poor friction. |
+| `LOCATION` | `FROM CLOSE %`, `FROM OPEN %`, `DAY RANGE` | Where the symbol is relative to the adjusted prior close, session open, and session range. From Close % is the presentation label for the canonical Day-% field and uses the product-approved displayed-set-relative dark-to-neon green scale; Day Range retains its red-neutral-green location scale. |
+| `CURRENT MOMENTUM` | `ACTIVITY 30s`, `MOVE 30s` | Recent aggregate participation and price movement. Activity uses gray-to-orange attention; Move uses the product-approved continuous signed red-to-gray-to-green RGB scale, with color applied only to the numeric text. |
+| `EXECUTION` | `TAPE SPEED`, `SPREAD` | Selected-row transaction activity and NBBO friction. Tape Speed is the presentation label for canonical Tape 5s and uses the product-approved continuous absolute-rate gradient from neutral gray at 0–50 trades/s through restrained/bright orange at 100/250 trades/s to `#FF8A00` at 500 trades/s and above. Spread uses the product-approved continuous absolute-bps neutral-to-neon-red gradient through `#FC0000` at 100 bps; both treatments color only numeric text. |
 
 Group labels, visible separators, scoped leaf headers, and non-color text
 meaning must make these four scanning questions apparent without adding data
@@ -592,16 +595,46 @@ horizontal-scroll nonclaim remain unchanged.
 
 Formatting is presentation-only. Reuse the existing safe formatters and
 tabular-number treatment where compatible: compact Float and Volume share
-counts; magnitude-sensitive Last USD; Day %, From Open %, and Move 30s as
-signed percentages; Day Range and Activity 30s as percentages; Tape 5s as
-trades/second; and Spread as bps/cents. Genuine numeric zero is visible.
+counts; magnitude-sensitive Last USD; From Close %, From Open %, and Move 30s
+as signed percentages; Day Range and Activity 30s as percentages; Tape Speed
+as trades/second; and Spread as bps/cents. Genuine numeric zero is visible.
 Current values render normally. Stale Float or Spread may render retained
 numeric values only when API v2 supplies their exact valid stale tuple and must
 carry an explicit stale label plus provenance/age detail. Warming,
 unavailable, invalid, and pressure-shed values never become zero. Every field
 status/reason, Float provider/effective date/retrieval/provenance, Tape coverage
 and timestamp/lifecycle qualifiers, and Spread coverage/age/quality remains
-available through pointer and keyboard focus.
+available through the existing semantic cell labels and keyboard focus; they
+are not rendered as hover tooltips on data cells.
+
+Each leaf header carries one short plain-language description in a
+pointer-hover-only custom tooltip. The renderer uses a `data-tooltip` value and
+CSS pseudo-element with an 80 ms visual transition; it does not use the browser
+native `title` tooltip, does not make headers tabbable, and does not show a
+tooltip when a data cell is hovered. The header labels are `FROM CLOSE %` for
+the canonical Day-% field and `TAPE SPEED` for canonical Tape 5s; API field
+names and measurement semantics remain unchanged.
+
+After validating one complete API v2 response, the view-model transformation
+uses one shared displayed-set-relative normalization helper over that response's
+exact `rows` array. The Day-% selector returns `row.day_change_ratio`; the From
+Open selector returns `row.from_open_change.value_ratio` only when that field's
+status is `current`, otherwise it returns `null`. The helper finds extrema only
+among finite selected values and returns one position per row, with `null` for
+excluded rows. For Day % its formula is `(D_i-D_min)/(D_max-D_min)`; for From
+Open it is `(F_i-F_min)/(F_max-F_min)`, clamped only for floating-point residue.
+The current qualified table interpolates both fields from `#4A965D` at zero to
+`#2CFF05` at one using the same continuous CSS `color-mix(in oklab, ...)`
+palette. A singleton or zero-width eligible range gives every eligible row
+`0.5`; equal values and ties share one position; fewer-than-20 snapshots use
+only their displayed eligible extrema; and no eligible From Open values produce
+no From Open positions. Warming, unavailable, invalid, and other non-current
+From Open fields retain their state, reason, text, and no-color presentation.
+The transform does not sort, filter, backfill, or recheck server order, and it
+does not retain extrema across snapshots. Noncurrent/retained table styling
+continues to take precedence over either relative-green palette. Missing or
+nonfinite Day % fails the existing whole-response validation; the numeric field
+text and underlying ratios are never altered by this presentation metadata.
 
 ### 20.2 API v2 view and transport boundary
 
@@ -625,6 +658,27 @@ details DOM/flattened view-model representation, fixtures, and headers rather
 than retaining hidden parallel representations. Field-specific reasons and
 provenance remain focus-accessible on their relevant table cells.
 
+The primary status strip contains only `BACKEND`, `RANKING`, and `T/Q`.
+Connection problems remain visible through the header's disconnected or delayed
+state; normal transport is not rendered as a separate status tile. Process
+liveness, operational sample accounting, sample identity/time, and the raw
+aggregate watermark remain available through the validated API and future
+diagnostic tooling. The dashboard renders no Operational Details disclosure.
+
+During noncurrent live recovery, the header and Backend tile use the immutable
+API lifecycle, connection acknowledgement, `recovery.generation_active`, work
+accounting, and fence facts only for presentation. They distinguish
+`RECONNECTING`, `RESUBSCRIBING`, `PREPARING RECOVERY`, `RECOVERING`,
+`RETRYING RECOVERY`, and `FINALIZING RECOVERY`. Active work shows the exact
+generation and terminal/planned progress. A retained inactive prior ledger is
+never shown as current progress, and recovery never becomes `CURRENT` until the
+ordinary backend readiness fact does. Startup uses the corresponding
+`CONNECTING`, `SUBSCRIBING`, `HYDRATING`, and `FINALIZING HYDRATION` labels.
+During an independent rolling update, a v2 response that predates
+`generation_active` is conservatively treated as inactive and presented as
+preparing rather than fabricated progress. These labels add no browser-owned
+lifecycle or readiness decision.
+
 ### 20.3 One implementation slice and primary proof
 
 MVP-S3 is one write-capable implementation slice because the accepted UI
@@ -643,8 +697,15 @@ stale Spread; hostile literal text; delayed, disconnected, and recovered
 transport; same-publication resampling; new-publication atomic replacement;
 and focus preservation when rows persist, reorder, or disappear. It asserts
 the exact four group labels, 11-column order, no Rank column, compact
-Float/Volume formatting, no client sorting or market-state calculation, and
-complete focus-accessible reasons/provenance.
+Float/Volume formatting, exact displayed-set-relative Day-% positions including
+the `100%`, `20%`, `10%` example (`1`, approximately `.11`, `0`), exact
+displayed-set-relative From-Open positions including the `100%`, `20%`, `-10%`
+example (`1`, approximately `.2727`, `0`), fewer/equal/tied cases,
+current-only participation, noncurrent precedence, no client sorting or
+market-state calculation, and complete focus-accessible reasons/provenance.
+It also asserts the renamed `FROM CLOSE %` and `TAPE SPEED` headers, all 11
+plain-language header descriptions, the pointer-hover-only custom tooltip
+behavior, and the absence of native data-cell `title` tooltips.
 
 The bounded production-Chrome proof runs through the real dashboard server and
 poller at 1440x900. It verifies one-viewport density, semantic grouped headers,
@@ -686,9 +747,11 @@ zero remains visible. Noncurrent fields render an em dash rather than zero.
 Fresh and cached Float carries provider, effective date, retrieval time, and
 provenance; a retained cached Float and stale Spread retain their numeric value
 only under the exact stale tuple and show an explicit `stale` label. Float and
-Volume use compact share formatting with unit-boundary promotion. Move uses
-the validated raw sign for positive/neutral/negative presentation, so exact
-zero is neutral. Every status-bearing cell is keyboard-focusable and exposes
+Volume use compact share formatting with unit-boundary promotion. Tape uses
+the fixed absolute-rate gradient through `#FF8A00` at 500 trades/s, Spread uses
+the fixed absolute-bps gradient through `#FC0000` at 100 bps, and Move uses the
+validated raw sign for its continuous positive/neutral/negative presentation,
+so exact zero is neutral. Every status-bearing cell is keyboard-focusable and exposes
 its reason plus applicable Float, Tape, Spread, and membership provenance.
 
 The dangerous false-current counterexample mutates a ready publication so its
@@ -737,3 +800,73 @@ It does not establish live-provider wiring, market-hours behavior, a browser
 matrix, mobile layout, a formal accessibility audit, public-network security,
 performance SLA, replay support, checkpoint compatibility, or trading edge.
 No credentials or provider requests were used. MVP-S4 has not started.
+
+### 20.5 Day-% presentation correction acceptance — 2026-08-17
+
+The dashboard now derives one continuous Day-% color position from the exact
+validated rows in each render model. The distinguishing `100%`, `20%`, `10%`
+fixture yields `1`, `1/9`, `0`; smaller populations use their actual extrema;
+singletons and equal-value sets use the common midpoint; ties share a position;
+and empty snapshots remain empty. The transformation preserves the API array
+and never sorts, filters, or writes back to the snapshot. The renderer carries
+the position only as presentation metadata, applies `#4A965D` through
+`#2CFF05` only to current cells, and leaves degraded/noncurrent rows in the
+existing retained color.
+
+Focused JavaScript verification passed all 17 model/render/visual proofs, and
+`git diff --check` passed. The ordinary repository command initially exposed a
+single timing-sensitive failure in the already active operations recovery work;
+the exact failed proof passed in isolation and the complete uncached repository
+command then passed. A real dashboard/fixture-browser check at 1440x900 rendered
+20 distinct monotonic Day-% colors with weights from `100%` to `0%`, retained
+the exact 1440x900 document extent, and changed every Day-% cell to the existing
+retained color under a degraded snapshot. No independent review was triggered:
+this correction changes no trust, persistence, identity, concurrency,
+ownership, ordering, or cross-component interface boundary.
+
+### 20.6 From Open presentation correction acceptance — 2026-08-17
+
+The dashboard now derives From Open % color positions in the same validated
+snapshot-to-view-model pass as Day %. The shared helper uses only finite rows
+with `from_open_change.status === "current"`; the `1.00`, `0.20`, `-0.10`
+fixture yields `1`, approximately `0.2727272727`, and `0`. Smaller
+populations use their own extrema, negative-only values remain value-relative,
+singletons and equal ranges use `0.5`, ties share positions, and no eligible
+values produce `null` positions. The exact API row order and displayed text are
+preserved. Warming, unavailable, and invalid fields retain their state/reason
+and em dash, while current field positions on degraded or retained tables stay
+subordinate to the existing retained color through the current-table/current-
+cell CSS guard.
+
+The renderer exposes `from-open` palette metadata and percentage weights only
+for eligible positions. It reuses the Day-% endpoint definitions and one
+continuous `color-mix(in oklab, #4A965D, #2CFF05 ...)` implementation; no API,
+backend, ranking, qualification, readiness, or publication behavior changed.
+Focused JavaScript verification passed all 21 model/render/visual proofs, and
+the requested mixed-state, no-eligible, fewer-row, singleton, equal, tie,
+negative-only, order-preservation, metadata, noncurrent-precedence, Day-%
+regression, endpoint, and WCAG-AA checks are covered. No independent review
+regression, endpoint, and WCAG-AA checks are covered. The required uncached
+`go test -count=1 -short -timeout 2m ./...` also passed. A deterministic
+Chrome check against the authoritative assets rendered 20 rows at 1440x900
+with an exact 1440x900 document extent, 20 monotonic From Open weights from
+`100%` to `0%`, unchanged Day-% endpoint weights, no browser console errors,
+and retained gray From Open cells under a degraded publication. No independent
+review was triggered because this remains a presentation-only change with no
+trust, ownership, ordering, or cross-component interface boundary change.
+
+### 20.7 Header descriptions and label correction acceptance — 2026-08-17
+
+The dashboard now uses `FROM CLOSE %` for the canonical Day-% field and
+`TAPE SPEED` for canonical Tape 5s. All 11 leaf headers carry the approved
+short descriptions. The custom CSS tooltip uses `data-tooltip`, appears after
+an 80 ms transition, and does not use the browser-native `title` mechanism;
+headers remain pointer-hover-only and are not made tabbable. Data cells no
+longer expose status/reason text through native hover tooltips, while their
+existing semantic labels and focus restoration remain intact.
+
+The focused JavaScript suite passes all 36 model/render/visual proofs. The
+local production dashboard and deterministic fixture were checked in the
+browser: the header tooltip was visible after 150 ms with the expected text,
+and a Volume data cell had no `title` attribute. No API, backend measurement,
+ranking, qualification, readiness, or cross-component interface changed.

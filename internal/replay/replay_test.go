@@ -161,6 +161,262 @@ func TestC4CORE01DeterministicAggregateCore(t *testing.T) {
 	}
 }
 
+// TestReplayFastForwardBoundaryEquivalence is RW-EQUIV. The ordinary replay
+// schedule and the hidden warm-up schedule consume the same complete artifact.
+// They must be identical at O0 and for sixty subsequent logical boundaries;
+// only publication IDs may differ because hidden intermediate publications are
+// deliberately omitted.
+func TestReplayFastForwardBoundaryEquivalence(t *testing.T) {
+	binding := replayBinding(t, []string{"CONTINUOUS", "EARLY", "EMPTY", "LATE", "RESUMES", "SPARSE"})
+	start := binding.SessionStart()
+	observationStart := start.Add(400 * time.Second)
+	end := observationStart.Add(60 * time.Second)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		parts := strings.Split(r.URL.Path, "/")
+		if len(parts) < 5 {
+			http.NotFound(w, r)
+			return
+		}
+		symbol := parts[4]
+		rows := make([]map[string]any, 0, 460)
+		for second := 0; second < 460; second++ {
+			include := symbol == "CONTINUOUS" || symbol == "EARLY" && second < 60 || symbol == "LATE" && second >= 340 ||
+				symbol == "RESUMES" && second >= 420 || symbol == "SPARSE" && (second == 0 || second%97 == 0)
+			if !include {
+				continue
+			}
+			closeValue, volume, transactions := 13.2, 1000.0, 100
+			switch symbol {
+			case "LATE":
+				closeValue = 22 + float64(second-340)/100
+			case "RESUMES":
+				closeValue = 18 + float64(second-420)/100
+			case "SPARSE":
+				closeValue, volume, transactions = 15, 100, 10
+			}
+			rows = append(rows, map[string]any{"t": start.Add(time.Duration(second) * time.Second).UnixMilli(),
+				"o": closeValue - 0.1, "h": closeValue + 0.2, "l": closeValue - 0.2, "c": closeValue,
+				"v": volume, "vw": closeValue, "n": transactions})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "OK", "ticker": symbol, "adjusted": false, "results": rows})
+	}))
+	downloader, err := massive.NewOfflineDownloader(server.URL, func() (string, error) { return "test-token", nil }, server.Client())
+	if err != nil {
+		server.Close()
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	compiled := replayartifact.Compile(context.Background(), replayartifact.CompletePlan{Binding: binding, Start: start, End: end, Workers: 4,
+		DestinationDirectory: directory, Limits: replayartifact.Limits{MaximumNormalizedRecords: 5000, MaximumResponseBytes: 1 << 20,
+			MaximumArtifactBytes: 1 << 20, MaximumTemporaryBytes: 1 << 20, MaximumTemporaryFiles: 8, MaximumInMemoryRecords: 5000}}, downloader)
+	server.Close()
+	if compiled.State != replayartifact.CompileComplete {
+		t.Fatalf("equivalence compile = %+v", compiled)
+	}
+	open := func() *replayartifact.Handle {
+		handle, openErr := replayartifact.OpenValidated(compiled.Path, replayartifact.ValidationPlan{Binding: binding, Start: start, End: end,
+			ExpectedMode: replayartifact.CompleteFinalBars, MaximumBytes: 1 << 20, MaximumRecords: 5000})
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		return handle
+	}
+	ordinaryHandle, acceleratedHandle := open(), open()
+	defer ordinaryHandle.Close()
+	defer acceleratedHandle.Close()
+	ordinary := sourceFromHandleWithDelay(t, ordinaryHandle, binding, start, Unpaced(), 4*time.Second)
+	accelerated := sourceFromHandleWithDelay(t, acceleratedHandle, binding, start, Unpaced(), 4*time.Second)
+	if err := accelerated.engine.ConfigureReplayFastForwardThrough(observationStart); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := ordinary.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := accelerated.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var observationView engine.ReplayDeterministicView
+	for group := start; !group.After(end); group = group.Add(time.Second) {
+		ordinaryGroup, ordinaryErr := ordinary.Step(ctx)
+		acceleratedGroup, acceleratedErr := accelerated.Step(ctx)
+		if ordinaryErr != nil || acceleratedErr != nil || ordinaryGroup.LogicalTime != group || acceleratedGroup.LogicalTime != group ||
+			ordinaryGroup.Records != acceleratedGroup.Records || ordinaryGroup.Timer.EngineSequence != acceleratedGroup.Timer.EngineSequence {
+			t.Fatalf("group %s ordinary=%+v/%v accelerated=%+v/%v", group, ordinaryGroup, ordinaryErr, acceleratedGroup, acceleratedErr)
+		}
+		if group.Before(observationStart) {
+			continue
+		}
+		assertReplaySourceProgressEqual(t, ordinary, accelerated, group)
+		left, right := normalizedFastForwardView(ordinary.engine.ObserveReplayDeterministic()), normalizedFastForwardView(accelerated.engine.ObserveReplayDeterministic())
+		if !reflect.DeepEqual(left, right) {
+			t.Fatalf("fast-forward diverged at %s:\nordinary=%+v\naccelerated=%+v", group, left, right)
+		}
+		if right.Evaluation.Population.UnknownDueFailureOrFence != 0 || right.Evaluation.Population.UnresolvedPopulation != 0 ||
+			right.Evaluation.Mode != "qualified_current" {
+			t.Fatalf("complete replay lost committed-T coverage at %s: %+v", group, right.Evaluation)
+		}
+		if group.Equal(observationStart) {
+			observationView = accelerated.engine.ObserveReplayDeterministic()
+		}
+	}
+	ordinaryResult, ordinaryErr := ordinary.Finish(ctx)
+	acceleratedResult, acceleratedErr := accelerated.Finish(ctx)
+	if ordinaryErr != nil || acceleratedErr != nil || ordinaryResult.Outcome != OutcomeComplete || acceleratedResult.Outcome != OutcomeComplete ||
+		ordinaryResult.Accounting != acceleratedResult.Accounting {
+		t.Fatalf("terminal equivalence ordinary=%+v/%v accelerated=%+v/%v", ordinaryResult, ordinaryErr, acceleratedResult, acceleratedErr)
+	}
+	view := accelerated.engine.ObserveReplayDeterministic()
+	canonical := make(map[string]engine.ReplayCanonicalSymbol, len(view.Canonical))
+	for _, symbol := range view.Canonical {
+		canonical[symbol.Symbol] = symbol
+	}
+	if canonical["EARLY"].Qualification.Status != "provisional" || canonical["EARLY"].Qualification.CurrentProofCount == 0 ||
+		canonical["LATE"].Qualification.Status != "provisional" || canonical["EMPTY"].ProvenAbsentSlots != 460 {
+		t.Fatalf("equivalence fixture breadth: early=%+v late=%+v empty_absent=%d", canonical["EARLY"].Qualification,
+			canonical["LATE"].Qualification, canonical["EMPTY"].ProvenAbsentSlots)
+	}
+	assertCurrentReplayMVPRow(t, observationView, "CONTINUOUS")
+	assertCurrentReplayMVPRow(t, view, "CONTINUOUS")
+}
+
+func assertCurrentReplayMVPRow(t *testing.T, view engine.ReplayDeterministicView, symbol string) {
+	t.Helper()
+	for _, row := range view.Evaluation.Rows {
+		if row.Symbol == symbol {
+			if row.Activity30s.Status != "current" || row.Move30s.Status != "current" {
+				t.Fatalf("%s MVP fields are not current at %s: activity=%+v move=%+v", symbol, view.Evaluation.At, row.Activity30s, row.Move30s)
+			}
+			return
+		}
+	}
+	t.Fatalf("%s absent from ranked rows at %s", symbol, view.Evaluation.At)
+}
+
+func TestReplayFastForwardReplacementContinuationEquivalence(t *testing.T) {
+	binding := replayBinding(t, []string{"AAA"})
+	start := binding.SessionStart()
+	observationStart := start.Add(400 * time.Second)
+	end := observationStart.Add(60 * time.Second)
+	records := make([]replayartifact.SyntheticRecord, 0, 462)
+	for second := 0; second < 460; second++ {
+		values := replayValues()
+		values.Open, values.High, values.Low, values.Close = 12.9, 13.4, 12.8, 13.2
+		values.Volume, values.AverageTradeSize = 1000, 10
+		windowStart := start.Add(time.Duration(second) * time.Second)
+		records = append(records, replayartifact.SyntheticRecord{LogicalDeliveryTime: windowStart.Add(time.Second), Symbol: "AAA",
+			WindowStart: windowStart, WindowEnd: windowStart.Add(time.Second), Values: values})
+		if second == 399 {
+			revised := records[390]
+			revised.LogicalDeliveryTime = observationStart
+			revised.Values.Open, revised.Values.High, revised.Values.Low, revised.Values.Close = 14, 14.2, 13.9, 14.1
+			revised.Values.Volume, revised.Values.VWAP = 1500, 14.1
+			records = append(records, revised, revised)
+		}
+	}
+	bytes, _, err := replayartifact.BuildPartial(replayartifact.PartialInput{Binding: binding, Start: start, End: end, DeclaredSymbols: []string{"AAA"},
+		Records: records, MaximumBytes: 1 << 20, MaximumRecords: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "fast-forward-replacement.jsonl")
+	if err := os.WriteFile(path, bytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	open := func() *replayartifact.Handle {
+		handle, openErr := replayartifact.OpenValidated(path, replayartifact.ValidationPlan{Binding: binding, Start: start, End: end,
+			ExpectedMode: replayartifact.PartialSynthetic, MaximumBytes: 1 << 20, MaximumRecords: 1000})
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		return handle
+	}
+	ordinaryHandle, acceleratedHandle := open(), open()
+	defer ordinaryHandle.Close()
+	defer acceleratedHandle.Close()
+	ordinary := sourceFromHandleWithDelay(t, ordinaryHandle, binding, start, Unpaced(), 4*time.Second)
+	accelerated := sourceFromHandleWithDelay(t, acceleratedHandle, binding, start, Unpaced(), 4*time.Second)
+	if err := accelerated.engine.ConfigureReplayFastForwardThrough(observationStart); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := ordinary.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := accelerated.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for group := start; !group.After(end); group = group.Add(time.Second) {
+		leftGroup, leftErr := ordinary.Step(ctx)
+		rightGroup, rightErr := accelerated.Step(ctx)
+		if leftErr != nil || rightErr != nil || leftGroup.LogicalTime != group || rightGroup.LogicalTime != group || leftGroup.Records != rightGroup.Records {
+			t.Fatalf("replacement group %s ordinary=%+v/%v accelerated=%+v/%v", group, leftGroup, leftErr, rightGroup, rightErr)
+		}
+		if group.Before(observationStart) {
+			continue
+		}
+		assertReplaySourceProgressEqual(t, ordinary, accelerated, group)
+		left, right := normalizedFastForwardView(ordinary.engine.ObserveReplayDeterministic()), normalizedFastForwardView(accelerated.engine.ObserveReplayDeterministic())
+		if !reflect.DeepEqual(left, right) {
+			t.Fatalf("replacement ordinary-path state diverged at %s:\nordinary=%+v\nconfigured=%+v", group, left, right)
+		}
+		if group.Equal(observationStart) && (len(right.Canonical) != 1 || len(right.Canonical[0].ActivityState.Mutable) == 0) {
+			t.Fatalf("replacement fixture does not span mutable Activity state at O0: %+v", right.Canonical)
+		}
+	}
+	status := accelerated.engine.ObserveReplay()
+	if status.AggregateInserted != 460 || status.AggregateRevised != 1 || status.AggregateExactDuplicate != 1 {
+		t.Fatalf("replacement dispositions = %+v", status)
+	}
+}
+
+func assertReplaySourceProgressEqual(t *testing.T, ordinary, accelerated *Source, at time.Time) {
+	t.Helper()
+	if ordinary.accounting != accelerated.accounting || ordinary.nextGroup != accelerated.nextGroup || ordinary.terminal != accelerated.terminal ||
+		ordinary.clock.Now() != accelerated.clock.Now() {
+		t.Fatalf("source progress diverged at %s: ordinary=%+v next=%s terminal=%v clock=%s accelerated=%+v next=%s terminal=%v clock=%s",
+			at, ordinary.accounting, ordinary.nextGroup, ordinary.terminal, ordinary.clock.Now(), accelerated.accounting, accelerated.nextGroup,
+			accelerated.terminal, accelerated.clock.Now())
+	}
+}
+
+func TestReplayFastForwardPolicyIsReplayOnlyAndImmutable(t *testing.T) {
+	clock := time.Unix(1_800_000_000, 0).UTC()
+	delay := 4 * time.Second
+	live, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return clock }, Capacity: 16, RequiredReserve: 2, EvaluationDelay: &delay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		live.Close()
+		_ = live.Wait(context.Background())
+	}()
+	if err := live.ConfigureReplayFastForwardThrough(clock); err == nil {
+		t.Fatal("live engine accepted replay fast-forward policy")
+	}
+
+	source, cleanup := completeSource(t, Unpaced())
+	defer cleanup()
+	boundary := source.handle.Metadata().ReplayStart.Add(time.Second)
+	if err := source.engine.ConfigureReplayFastForwardThrough(boundary); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.engine.ConfigureReplayFastForwardThrough(boundary.Add(time.Second)); err == nil {
+		t.Fatal("replay engine accepted a second fast-forward boundary")
+	}
+	if err := source.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.engine.ConfigureReplayFastForwardThrough(boundary); err == nil {
+		t.Fatal("active replay accepted fast-forward reconfiguration")
+	}
+}
+
+func normalizedFastForwardView(value engine.ReplayDeterministicView) engine.ReplayDeterministicView {
+	value.Publication.PublicationID = 0
+	return value
+}
+
 type coreGroupTrace struct {
 	Group GroupResult
 	View  engine.ReplayDeterministicView
@@ -1335,12 +1591,15 @@ func replayValues() engine.AggregateValues {
 }
 
 func sourceFromHandle(t *testing.T, handle *replayartifact.Handle, binding reference.Binding, start time.Time, pace Pace) *Source {
+	return sourceFromHandleWithDelay(t, handle, binding, start, pace, 0)
+}
+
+func sourceFromHandleWithDelay(t *testing.T, handle *replayartifact.Handle, binding reference.Binding, start time.Time, pace Pace, delay time.Duration) *Source {
 	t.Helper()
 	clock, err := NewSimulatedClock(start)
 	if err != nil {
 		t.Fatal(err)
 	}
-	delay := time.Duration(0)
 	owner, err := engine.New(engine.Config{Mode: engine.RunModeReplay, Clock: clock.Now, Capacity: 64, RequiredReserve: 2, EvaluationDelay: &delay})
 	if err != nil {
 		t.Fatal(err)

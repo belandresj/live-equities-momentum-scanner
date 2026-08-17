@@ -24,7 +24,7 @@ Done means the ordinary private/local **live** scanner:
 
    ```text
    CONTEXT                  LOCATION                     CURRENT MOMENTUM     EXECUTION
-   SYMBOL FLOAT VOLUME LAST | DAY % FROM OPEN % DAY RANGE | ACTIVITY 30s MOVE 30s | TAPE 5s SPREAD
+   SYMBOL FLOAT VOLUME LAST | FROM CLOSE % FROM OPEN % DAY RANGE | ACTIVITY 30s MOVE 30s | TAPE SPEED SPREAD
    ```
 
 3. retains all-symbol aggregate and coverage evidence sufficient for Activity
@@ -226,6 +226,150 @@ gaps without changing qualification or Day-%/symbol ordering.
 | `P-MVP-RANK` | Competitor price/Day-% is the sole rank-change input in the selection proof. Float freshness/provenance variants preserve qualification, symbols, ordering, and T/Q intent. |
 | `P-MVP-API` | API v2 maps the sealed engine Tape tuple for below-one-second coverage, one-through-less-than-five-second warm-up, current coverage, unavailable coverage, pressure shedding, and invalid unequal-repeat state. Exact field-specific tuple validation rejects missing or contradictory reasons, Float provenance mismatch, Tape warm-up reasons on current values, current Spread with `stale_quote`, and stale Spread without both retained numeric values; route/CORS, ordering, null, bounds, one-publication mapping, and genuine zero cases pass. |
 
+The 2026-08-17 live recovery correction adds the already engine-owned
+`scheduled_recovery` lifecycle reason to the API v2 and UI closed vocabularies.
+Its production-path regression covers `suppressed/recovery_exhausted` through
+the one-shot scheduled transition into `recovering/scheduled_recovery`, proving
+that `/readyz` remains an honest 503 while `/api/v2/snapshot` remains a valid
+HTTP 200 noncurrent publication. No recovery, ranking, readiness, or provider
+behavior changed.
+
+#### 2026-08-17 recovery observability correction
+
+**State:** `accepted_correction`. The owner-run live observation recovered
+through two aggregate epochs but exposed misleading terminal and dashboard
+states; the correction now presents those states exactly and preserves the
+first bounded cause even when recovery succeeds.
+
+**Controlling requirements:** `PG-OPS-02`, `PG-OBS-02`, `PG-OBS-03`,
+`PG-UI-01`, `PG-UI-02`, `LIFE-RECOVER-01` through `LIFE-RECOVER-06`, and
+`LIFE-PUBLISH-02` through `LIFE-PUBLISH-03`.
+
+**Observed evidence:** After an aggregate epoch loss from a ready publication,
+the first gap-recovery generation completed 5,099 of 5,522 symbol requests and
+then lost its replacement epoch. The engine correctly assigned the remaining
+423 requests `canceled`, replanned the complete population under the next
+acknowledged epoch, reconciled its fence, and returned to exact current
+ranking. Before the first recovery plan existed, the terminal mislabeled the
+completed prior bootstrap ledger as `Warm-up 5,522 / 5,522`; while either
+recovery generation was active, the dashboard exposed only generic
+`NONCURRENT/lifecycle_not_ready` even though API v2 carried the generation and
+work counters.
+
+**Boundary and non-scope:** The engine remains the sole owner of lifecycle,
+generation activity, cancellation, coverage, fence, watermark, readiness, and
+ranking. This correction exposes the already-owned active-generation fact in
+the immutable operational publication/API, uses it to distinguish reconnect,
+acknowledgement wait, active historical work, retry, and fence finalization in
+the terminal and UI, and durably records/prints the first bounded redacted
+ingress cause even when recovery succeeds. It does not change full-population
+gap replanning, assemble coverage across failed epochs, tune heartbeat
+deadlines, access credentials, change checkpoint/replay behavior, or alter any
+market calculation.
+
+**Primary proof `P-MVP-RECOVERY-OBS`:** The proof is a composed production-path
+boundary, not a claim that a browser test owns transport semantics.
+`TestC6RECOVER01SameProcessLossReackGapRetryExhaustion` supplies the
+ready-to-loss, repeated-epoch, stale-fact-fencing, retry, fence, and ordinary
+current-exit trace. The API regression proves the same engine-owned generation
+activity reaches one immutable snapshot. Operator/UI regressions prove that an
+inactive prior ledger cannot appear as 100% current work and that active retry
+and fence-finalization states show the exact generation/counters. The scanner
+coordinator regression sends one typed incident through terminal evidence,
+one transient persistence failure, bounded retry, and the actual protected
+JSON writer. Together they must preserve cancellation/retry honestly and
+return to current only after the existing readiness predicates pass. The
+dangerous counterexamples are treating retained completed accounting as active
+work, hiding a repeated epoch loss behind generic noncurrent status, logging
+credentials/provider payloads, or allowing presentation to infer currentness.
+The proof establishes deterministic observability and containment, not the
+cause of the live heartbeat failure or a transport SLA.
+
+**Acceptance evidence:** No-cache focused short tests passed for `cmd/scanner`,
+`internal/engine`, `internal/operations`, and `internal/snapshotapi`; all UI
+model/render tests passed; the same four affected Go packages passed the race
+tier; focused `go vet` and `git diff --check` passed. The required independent
+read-only review found two P2 proof/durability gaps, both were corrected, and
+focused re-review found no remaining issue. A full-repository short-tier
+attempt also exposed the unchanged timing-sensitive massive transport test
+`TestPC5TransportOneAttemptHandshakeHeartbeatAndContainment` subtest
+`start_owns_progress_even_when_handshake_is_never_awaited`; it failed
+repeatedly in isolation while no `internal/massive` source was changed here.
+The one concurrent recovery-budget failure from that full run passed 10
+consecutive isolated runs. Those failures do not invalidate this correction's
+focused or race evidence, but the repository-wide ordinary tier is not
+recorded as green.
+
+#### 2026-08-17 T/Q recovery hysteresis and observability correction
+
+**State:** `accepted_correction`. An owner-run market-hours observation of
+the ordinary checkpoint-off scanner invalidated the claim that the accepted
+T/Q recovery gate reliably restores normal selected-row coverage after a
+transient host slowdown.
+
+**Controlling requirements:** `PG-AVAIL-01`, `PG-AVAIL-03`, `PG-TAQ-01`,
+`PG-TAQ-02`, `PG-OBS-03`, `LIFE-TQ-02`, and `LIFE-TQ-03`.
+
+**Observed evidence:** The fresh process acknowledged provider membership for
+all 20 desired symbols and applied 59,097 trades plus 26,025 quotes before
+entering `taq_degraded` from two accepted `oldest_waiting_frame` samples at or
+above the unchanged one-second entry boundary. Queue high-water was only
+503/32,768 frames (1.54%), accounting remained coherent, pressure samples were
+not missed, and aggregate ranking remained current. During a later bounded
+20-sample observation the waiting queue was empty in six snapshots and never
+exceeded 234 frames, yet pressure transitions remained exactly one and no T/Q
+restoration command became eligible. This proves neither a host capacity SLA
+nor the exact accepted-sample age distribution, but it does distinguish a
+recovery lockout from provider subscription failure, queue-capacity loss, or a
+stopped pressure sampler.
+
+**Corrected boundary:** Keep transient degradation at oldest waiting age at
+least one second for two consecutive accepted samples, severe escalation at
+two seconds for three samples, the existing occupancy/watermark/loss gates,
+and exact consecutive recovery. Change only the recovery oldest-waiting
+predicate from below 250 ms to below 750 ms for five consecutive accepted
+one-second samples. The 250-ms gap below entry retains hysteresis while
+allowing a queue that repeatedly catches up after a transient stall to restore
+fresh T/Q coverage. A sample at exactly 750 ms is unhealthy and resets the
+recovery streak; intermittent healthy samples do not accumulate across renewed
+pressure.
+
+The engine additionally publishes the exact last accepted pressure sample
+needed to explain recovery: waiting frames/capacity, waiting bytes/capacity,
+oldest waiting age, aggregate watermark lag, whether that sample satisfied
+every recovery predicate, the consecutive healthy count, and the required
+count. API v2 carries those bounded scalars without re-evaluation. The UI T/Q
+status reports the original pressure cause, accepted oldest-waiting age, and
+`healthy/required` recovery progress while pressure is nonnormal. The browser
+does not infer recovery or change aggregate currentness.
+
+**Primary proof `P-MVP-TQ-RECOVERY`:** One engine trace proves below-750-ms
+samples advance recovery, the exact 750-ms boundary resets it, five consecutive
+healthy samples restore normal mode, and aggregate evaluation/watermark remain
+unchanged. API mutation tests reject impossible sample/capacity/progress tuples,
+and the UI model/render proof shows the exact engine-owned cause, age, and
+progress without treating T/Q as a ranking gate. Focused engine, operations,
+snapshot API, and UI tests plus ordinary verification are required. This
+correction adds no queue, goroutine, mutable owner, T/Q-to-ranking dependency,
+CPU/heap/delivery-latency gate, provider request, process restart, replay, or
+checkpoint work.
+
+**Acceptance evidence:** The exact 749-ms/750-ms engine boundary, consecutive
+reset, missing-sample reset, five-sample normal transition, impossible
+nonnormal `5/5`, aggregate-independence, API mapping/mutation, and dashboard
+status proofs pass. Focused engine, operations, and snapshot API short tests;
+all 31 UI model/visual tests; affected engine/operations/snapshot API race;
+focused vet; and `git diff --check` pass. The first ordinary repository run
+had one unrelated timing-sensitive private-launcher bootstrap test failure; its
+exact isolated rerun passed, and the final uncached ordinary repository run
+passed completely. Independent review found one P2 because engine/API/UI
+validators initially admitted impossible nonnormal `5/5` progress. All three
+validators and exact mutation proofs were corrected; focused re-review found
+no remaining P1/P2. No post-change provider observation or host-capacity claim
+is made, and the already-running scanner binary was not restarted.
+
+#### Earlier MVP-S2/S3 acceptance evidence
+
 Verification passed with no cached test results: focused affected packages under
 the two-minute short tier; the full repository with
 `go test -count=1 -short -timeout 2m ./...`; and the affected race tier with
@@ -263,8 +407,57 @@ behavior.
 
 Primary proof `P-MVP-UI` covers exact/fewer/empty rows, current/noncurrent
 publication, independent field states, compact Float/Volume formatting,
-positive/negative Move, Activity/Tape attention treatment, Spread friction,
+continuous signed Move, relative Activity attention, absolute Tape-rate and
+Spread execution-warning gradients,
 keyboard/focus preservation, and no-color-only meaning.
+
+#### 2026-08-17 Day-% value-relative presentation revision
+
+The owner revised `PG-UI-03` so the current dashboard colors Day % by its
+relative value within the exact displayed snapshot, not by ordinal rank. This
+is a presentation-only correction in the existing API-v2-to-view-model layer:
+the backend continues to own Day %, qualification, ordering, top-20 membership,
+and immutable publication, while API v2 remains unchanged. `P-MVP-UI` adds the
+`100%`, `20%`, `10%` distinguishing example, fewer-than-20, ties, zero-width,
+empty, invalid-input, endpoint, noncurrent, and unchanged-order cases. The low
+endpoint is contrast-safe dark green `#4A965D`, the high endpoint is neon green
+`#2CFF05`, and a zero-width displayed range uses the common midpoint.
+
+#### 2026-08-17 From Open value-relative presentation revision
+
+The owner extended the same presentation-only displayed-set-relative green
+scale to From Open %. MVP-S3 computes `(F_i-F_min)/(F_max-F_min)` in the
+validated API-v2-to-view-model transformation using only finite rows whose
+From Open status is `current`; it uses `0.5` for a singleton or zero-width
+eligible range, preserves ties, uses actual extrema for fewer-than-20 rows, and
+omits warming/unavailable/invalid values. The value is compared with other
+displayed From Open values rather than with zero or row rank. The renderer
+reuses the existing `#4A965D`/`#2CFF05` continuous CSS `oklab` palette, while
+noncurrent/retained table styling remains authoritative. The row array, text,
+ratio, field state/reason, API schema, backend ownership, ranking, readiness,
+and publication behavior are unchanged.
+
+`P-MVP-UI` covers the `1.00`, `0.20`, `-0.10` example (`1`, approximately
+`.2727`, `0`), negative-only values, fewer rows, singleton/equal/tied/empty
+sets, mixed field states, exact row order/text preservation, renderer weights,
+noncurrent precedence, shared endpoint/accessibility checks, and the existing
+Day-% regression. Focused JavaScript verification passed all 21 model/render/
+visual proofs; the uncached ordinary repository command passed; and the
+deterministic Chrome dashboard check rendered 20 rows at 1440x900 with an
+exact 1440x900 document extent, monotonic From Open weights from `100%` to
+`0%`, unchanged Day-% endpoints, and retained styling for degraded data. This
+correction does not trigger independent review because it changes no trust,
+persistence, identity, concurrency, ownership, ordering, or cross-component
+interface boundary.
+
+#### 2026-08-17 header description revision
+
+The dashboard now presents the canonical Day-% field as `FROM CLOSE %` and the
+canonical five-second Tape field as `TAPE SPEED`. Each leaf header carries a
+short pointer-hover description rendered by the UI's custom tooltip treatment;
+the browser-native `title` tooltip is not used. Data cells no longer show
+status/reason tooltips on hover. The API fields, backend measurements, ranking,
+qualification, and existing cell accessibility metadata remain unchanged.
 
 ### MVP-S4 — integrated live-MVP acceptance
 

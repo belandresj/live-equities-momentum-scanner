@@ -41,8 +41,9 @@ Sections 8-19 are completed here after just-in-time V2 reconnaissance.
 | `C9-S2-H/L/P` prior host/probe gates | `superseded` | Heap, goroutine, generic delivery latency, attribution, empty-window, and top-one gates are invalidated by the latest owner direction and are retained below only as historical correction evidence | No executable code, configuration, or current proof depends on them |
 | `C9-S2-D` direct-pressure/latest-quote correction | `superseded_pressure_definition` | Owner-directed product correction and checkpoint-off evidence: acknowledged rank-1 T/Q produced Tape Rate, then false pressure shed it despite negligible queue depth | Preserved as evidence; D8/W owns current pressure semantics |
 | `C9-S2-W` waiting-pressure/frame-local correction | `accepted` | Owner evidence proved normal top-20 delivery with 43/32,768 queue high-water and the active frame as the sole false pressure cause; exact focused/ordinary/race/vet/diff proofs pass | Complete locally; live/provider capacity remains unclaimed |
-| Live T/Q protocol resilience correction | `accepted_on_clean_main` | [`live-tq-resilience-correction.md`](../live-tq-resilience-correction.md) adds epoch-local T/Q quarantine, fresh-epoch reset, and typed command/status diagnostics while proving canonical aggregate/evaluation/watermark equivalence. D8/W retains authority over the 32,768-frame, one-second, 10%/25% pressure policy. | Complete deterministically; owner-run live confirmation pending |
-| Final correction review decision | `not_triggered` | The correction changes bounded scalar policy, projection semantics, and diagnostics but adds no mutable owner, concurrency linearization, persistence/atomicity, or external-success authority; distinguishing construction/proofs make the boundary straightforward under the V1 risk cadence | Complete; reopen only through the V1 correction loop |
+| `C9-S2-R` recovery hysteresis/observability correction | `accepted_after_review` | Owner evidence distinguished successful T/Q subscription and low occupancy from a below-250-ms recovery lockout; exact 749/750-ms, consecutive reset, engine/API/UI coherence, ordinary/race/vet/diff proofs pass; focused re-review clean | Complete deterministically; restart and post-change owner observation remain pending |
+| Live T/Q protocol resilience correction | `accepted_on_clean_main` | [`live-tq-resilience-correction.md`](../live-tq-resilience-correction.md) adds epoch-local T/Q quarantine, fresh-epoch reset, and typed command/status diagnostics while proving canonical aggregate/evaluation/watermark equivalence. D8/W/R retains authority over the 32,768-frame, one-second, 10%/25% entry/escalation and below-750-ms recovery policy. | Complete deterministically; owner-run live confirmation pending |
+| `C9-S2-W` final correction review decision | `not_triggered` | The correction changes bounded scalar policy, projection semantics, and diagnostics but adds no mutable owner, concurrency linearization, persistence/atomicity, or external-success authority; distinguishing construction/proofs make the boundary straightforward under the V1 risk cadence | Complete; reopened only by C9-S2-R owner evidence |
 
 ## 1-4. Outcome, scope, ownership, and settled boundary
 
@@ -234,7 +235,7 @@ watermark evidence says otherwise.
 | `aggregate_only` | Any one of oldest waiting age >=2 seconds, waiting frames >=25%, or waiting bytes >=25% persists for three consecutive one-second samples; aggregate watermark lag is >2 seconds for two consecutive samples while T/Q work/membership exists; or a new slot/byte capacity drop, queue/adapter/transport/T/Q accounting loss, or global retention bound occurs immediately | Keep early T/Q rejection and request paired unsubscribe for every known provider member, lowest current rank first, down to zero known membership; ambiguous members remain explicitly unknown until cleanup or epoch replacement. |
 
 Recovery requires exactly five consecutive accepted one-second samples with
-waiting frames and bytes each below 1% capacity, oldest waiting age below 250
+waiting frames and bytes each below 1% capacity, oldest waiting age below 750
 ms, aggregate watermark lag <=1 second, no new capacity drops, coherent
 queue/adapter/transport/T/Q accounting, and no global retention bound.
 Active-frame age does not reset recovery. A result admitted after its two-second
@@ -613,6 +614,52 @@ triggered: the correction reuses the sole FIFO cursor, queue, engine owner, and
 ordered drop admission, and its concurrency/order consequence is explicit by
 construction and primary proof. D8 is accepted locally with live/provider
 behavior still unclaimed.
+
+### C9-S2-R T/Q recovery hysteresis/observability correction — 2026-08-17
+
+The owner-run fresh process acknowledged all 20 desired provider memberships
+and applied 59,097 trades plus 26,025 quotes before direct oldest-waiting-frame
+evidence entered `taq_degraded`. The one-second/two-sample entry remains valid:
+the correction does not reinterpret that transition as false or use CPU, heap,
+generic delivery latency, or empty API polling windows as pressure evidence.
+However, the later queue repeatedly drained, stayed far below occupancy
+thresholds, missed no pressure samples, and never recovered. The accepted
+below-250-ms recovery claim is therefore reopened as too strict for the
+observed burst/serial-evaluation composition.
+
+Recovery now requires five consecutive accepted one-second samples below 1%
+waiting frames and bytes, below 750 ms oldest waiting age, at most one-second
+aggregate watermark lag, no new capacity loss, coherent accounting, and no
+global retention bound. Exactly 750 ms remains unhealthy and resets the
+streak. This preserves a 250-ms hysteresis gap below the unchanged one-second
+degraded entry and does not permit intermittent healthy samples to accumulate
+across renewed pressure.
+
+The engine remains the sole pressure owner and retains the last accepted
+fixed-cardinality pressure sample plus whether it satisfied the complete
+recovery predicate and the current healthy streak. API v2 exposes waiting
+frames/bytes with capacities, oldest waiting age, aggregate watermark lag,
+recovery-sample health, and `healthy/required` counts. The dashboard presents
+those facts only while pressure is nonnormal. Neither mapper nor browser may
+recompute pressure, recover T/Q, or downgrade aggregate readiness.
+
+`P-MVP-TQ-RECOVERY` owns the exact 749-ms/750-ms boundary, consecutive-streak,
+normal restoration, unchanged aggregate state, API invalid-tuple, and UI
+explanation proofs. The correction adds no queue, goroutine, state owner,
+membership rule, provider request, live restart, capacity claim, replay work,
+or checkpoint dependency.
+
+The focused engine/runtime/API and 31 UI proofs pass. A first ordinary
+repository run had one unrelated timing-sensitive private-launcher bootstrap
+failure; its exact isolated rerun and the final complete ordinary run pass.
+Affected engine, operations, and snapshot API race verification, focused vet,
+and `git diff --check` pass. Independent review found one P2 impossible-state
+gap: the first engine/API/UI validators admitted `taq_degraded` or
+`aggregate_only` at `5/5`, although the fifth healthy sample must already
+restore normal and clear the streak. All three boundaries now reject
+nonnormal progress at or above the required count, exact mutation regressions
+pass, and focused re-review reports no remaining P1/P2. No post-change live
+provider observation or host-capacity claim is made.
 
 ### Historical, superseded C9-S2-H current-host heap-gate correction — 2026-08-13
 

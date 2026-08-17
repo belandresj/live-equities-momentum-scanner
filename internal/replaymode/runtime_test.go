@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	runtimepkg "runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -62,8 +63,8 @@ func TestReplayWindowRuntime(t *testing.T) {
 	if result.Outcome != replay.OutcomeComplete || result.Completion != replay.CompletionArtifactEnd {
 		t.Fatalf("result = %+v", result)
 	}
-	if got, want := phases, []operations.ReplayPhase{operations.ReplayWarming, operations.ReplayWarming, operations.ReplayWarming, operations.ReplayWarming, operations.ReplayWarming,
-		operations.ReplayObserving, operations.ReplayObserving, operations.ReplayFinalizing, operations.ReplayRetainedSuccess}; !reflect.DeepEqual(got, want) {
+	if got, want := phases, []operations.ReplayPhase{operations.ReplayWarming, operations.ReplayObserving, operations.ReplayObserving,
+		operations.ReplayFinalizing, operations.ReplayRetainedSuccess}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("phases = %v want %v", got, want)
 	}
 	if got, want := statusPhases(records), []operations.ReplayPhase{operations.ReplayWarming, operations.ReplayObserving, operations.ReplayFinalizing, operations.ReplayRetainedSuccess}; !reflect.DeepEqual(got, want) {
@@ -76,13 +77,13 @@ func TestReplayWindowRuntime(t *testing.T) {
 	if got := timeline.deadlineSnapshot(); len(got) != 2 || got[1].Sub(got[0]) != time.Second {
 		t.Fatalf("cumulative deadlines = %v", got)
 	}
-	for index, snapshot := range snapshots[:5] {
+	for index, snapshot := range snapshots[:1] {
 		if snapshot.Replay.Phase != "warming" || len(snapshot.Rows) != 0 || snapshot.Ranking.Mode != "unavailable" || snapshot.Ranking.Reason != "replay_warming" ||
 			snapshot.Replay.ScheduleLagMS != nil || snapshot.Replay.Window.ObservationBoundariesPublished != "0" {
 			t.Fatalf("warming[%d] = %+v", index, snapshot)
 		}
 	}
-	first := snapshots[5]
+	first := snapshots[1]
 	if first.Replay.Phase != "observing" || first.Replay.LogicalTime != timestamp(fixture.start.Add(4*time.Second)) ||
 		first.Publication.CommittedT == nil || *first.Publication.CommittedT != timestamp(fixture.start) || first.Replay.ScheduleLagMS == nil || *first.Replay.ScheduleLagMS != 0 ||
 		first.Replay.Window.WarmupGroupsCompleted != "5" || first.Replay.Window.ObservationSecondsCompleted != "0" || first.Replay.Window.ObservationBoundariesPublished != "1" {
@@ -152,6 +153,60 @@ func TestReplayWindowRuntime(t *testing.T) {
 	if records[len(records)-1].Phase != operations.ReplayShuttingDown {
 		t.Fatalf("final status transition = %v", statusPhases(records))
 	}
+}
+
+// TestRetainedArtifactWarmupScale is the explicit RW-SCALE timing rung. It is
+// cache-only and opt-in because it reads the retained multi-gigabyte artifact.
+func TestRetainedArtifactWarmupScale(t *testing.T) {
+	if testing.Short() {
+		t.Skip("retained-artifact replay scale is explicit")
+	}
+	artifact, referenceDirectory := os.Getenv("REPLAY_WARMUP_ARTIFACT"), os.Getenv("REPLAY_WARMUP_REFERENCE_DIR")
+	if artifact == "" || referenceDirectory == "" {
+		t.Skip("set REPLAY_WARMUP_ARTIFACT and REPLAY_WARMUP_REFERENCE_DIR")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := time.Now()
+	runtime, err := Prepare(ctx, StartupConfig{ArtifactPath: artifact, ReferenceDirectory: referenceDirectory, ObservationStart: "09:25:00", ObservationEnd: "09:25:01"})
+	prepareDuration := time.Since(started)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	var playbackReady, observingAt time.Time
+	var beforeWarm, afterWarm runtimepkg.MemStats
+	runtime.afterStart = func() {
+		playbackReady = time.Now()
+		runtimepkg.ReadMemStats(&beforeWarm)
+	}
+	runtime.afterPublish = func(phase operations.ReplayPhase) {
+		if phase == operations.ReplayObserving {
+			observingAt = time.Now()
+			runtimepkg.ReadMemStats(&afterWarm)
+			cancel()
+		}
+	}
+	runStarted := time.Now()
+	_, runErr := runtime.Run(ctx)
+	if playbackReady.IsZero() || observingAt.IsZero() || !errors.Is(runErr, context.Canceled) {
+		t.Fatalf("scale run did not cancel after O0: playback_ready=%t observing=%t err=%v", !playbackReady.IsZero(), !observingAt.IsZero(), runErr)
+	}
+	warmDuration := observingAt.Sub(playbackReady)
+	totalPreparation := observingAt.Sub(started)
+	playbackValidation := playbackReady.Sub(runStarted)
+	status := runtime.operations.Engine().ObserveReplay()
+	if status.LastLogicalTime != runtime.observationStart || status.CommittedT == nil || *status.CommittedT != runtime.observationStart.Add(-4*time.Second) ||
+		status.AggregateInserted == 0 || runtime.accounting.CompletedGroups != runtime.window.WarmupGroupsPlanned {
+		t.Fatalf("scale boundary status=%+v source=%+v window=%+v", status, runtime.accounting, runtime.window)
+	}
+	if warmDuration > 30*time.Second {
+		t.Fatalf("warm-up exceeded 30s local acceptance bound: %s", warmDuration)
+	}
+	t.Logf("RW_SCALE prepare_validation=%s playback_revalidation=%s warmup=%s total_preparation=%s warmup_groups=%d records=%d groups_per_second=%.1f records_per_second=%.1f warmup_allocated_bytes=%d publications=%d",
+		prepareDuration, playbackValidation, warmDuration, totalPreparation, runtime.window.WarmupGroupsCompleted, runtime.accounting.CompletedRecordDispositions,
+		float64(runtime.window.WarmupGroupsCompleted)/warmDuration.Seconds(), float64(runtime.accounting.CompletedRecordDispositions)/warmDuration.Seconds(),
+		afterWarm.TotalAlloc-beforeWarm.TotalAlloc, status.Publication.PublicationID)
 }
 
 // O0=S and O1<R are the two window edges most likely to acquire an accidental

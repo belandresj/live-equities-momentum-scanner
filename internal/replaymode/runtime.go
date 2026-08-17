@@ -130,6 +130,12 @@ func newRuntime(ctx context.Context, binding reference.Binding, handle *replayar
 	if err != nil {
 		return nil, err
 	}
+	if err := owner.Engine().ConfigureReplayFastForwardThrough(observationStart); err != nil {
+		shutdown, cancel := context.WithTimeout(context.Background(), config.ShutdownDeadline)
+		defer cancel()
+		_ = owner.Shutdown(shutdown)
+		return nil, err
+	}
 	source, err := replay.NewSourceThrough(handle, owner.Engine(), logicalClock, replay.Unpaced(), observationEnd)
 	if err != nil {
 		shutdown, cancel := context.WithTimeout(context.Background(), config.ShutdownDeadline)
@@ -211,11 +217,6 @@ func (r *Runtime) run(ctx context.Context, reporter func(StatusRecord) error) (r
 		r.completeGroup(step.Records, group, true)
 		if r.afterStep != nil {
 			r.afterStep(group)
-		}
-		if group.Before(r.observationStart) {
-			if err := r.publish(operations.ReplayWarming, "", nil, r.accounting); err != nil {
-				return r.contain(err)
-			}
 		}
 	}
 	anchor := r.schedule.now()

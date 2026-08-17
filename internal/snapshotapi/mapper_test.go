@@ -35,7 +35,7 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 		t.Fatal(err)
 	}
 	hash := sha256.Sum256(body)
-	const goldenSHA256 = "4b159bf0f371d8faa795844ac6692ee0918a55f3182b92d760aceb73ea790a89"
+	const goldenSHA256 = "d579d426c499d0349909436c3f630ce46425e61e985d3f013cc03bab5941914e"
 	if got := hex.EncodeToString(hash[:]); got != goldenSHA256 {
 		t.Fatalf("snapshot golden SHA-256 = %s", got)
 	}
@@ -45,6 +45,10 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 	}
 	if snapshot.Accounting.PopulationTransitionDiagnostic != (PopulationTransitionDiagnostic{BootstrapUnknown: 1, TrustedByLaterLiveMark: 1}) {
 		t.Fatalf("population-transition diagnostic mapping = %+v", snapshot.Accounting.PopulationTransitionDiagnostic)
+	}
+	if snapshot.TQ.PressureSample != (TQPressureSample{Observed: true, WaitingFrames: 2, FrameCapacity: 512, WaitingBytes: 100, ByteCapacity: 64 << 20, OldestWaitingFrameAgeMS: 500, RecoveryHealthy: true}) ||
+		snapshot.TQ.PressureRecovery != (TQPressureRecovery{RequiredSamples: 5}) {
+		t.Fatalf("T/Q recovery diagnostics = sample=%+v recovery=%+v", snapshot.TQ.PressureSample, snapshot.TQ.PressureRecovery)
 	}
 	latency := snapshot.Operations.DeliveryLatencyAttribution
 	if !sumDecimalEquals(snapshot.Operations.Deliveries, latency.Aggregate, latency.TQ, latency.Control, latency.HydrationFence, latency.Checkpoint, latency.Timer, latency.Unknown) ||
@@ -153,6 +157,41 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 	badPressureCause.Engine.TQ.PressureCause = engine.TQPressureCauseWaitingFrames
 	if _, err := mapCaptureView(badPressureCause); mappingInvariant(err) != "tq_pressure_cause" {
 		t.Fatalf("normal pressure accepted nonempty cause: %v", err)
+	}
+	badPressureCapacity := snapshot
+	badPressureCapacity.TQ.PressureSample.FrameCapacity = 0
+	if err := validateSnapshot(badPressureCapacity); mappingInvariant(err) != "tq_pressure_recovery" {
+		t.Fatalf("observed pressure sample accepted zero capacity: %v", err)
+	}
+	badPressureProgress := snapshot
+	badPressureProgress.TQ.PressureRecovery.HealthySamples = 6
+	if err := validateSnapshot(badPressureProgress); mappingInvariant(err) != "tq_pressure_recovery" {
+		t.Fatalf("pressure recovery accepted excess progress: %v", err)
+	}
+	missResetPressure := snapshot
+	missResetPressure.Rows = append([]Row(nil), snapshot.Rows...)
+	missResetPressure.Status.TQPressureMode, missResetPressure.Status.TQShed = "taq_degraded", true
+	missResetPressure.TQ.PressureMode, missResetPressure.TQ.PressureCause, missResetPressure.TQ.Shed = "taq_degraded", "oldest_waiting_frame", true
+	missResetPressure.Rows[0].Tape5s = Tape5s{Status: "pressure_shed", Reason: "pressure"}
+	missResetPressure.Rows[0].Spread = Spread{Status: "pressure_shed", Reason: "pressure"}
+	if err := validateSnapshot(missResetPressure); err != nil {
+		t.Fatalf("missing sample could not reset progress after a healthy accepted sample: %v", err)
+	}
+	badCompletedProgress := missResetPressure
+	badCompletedProgress.TQ.PressureRecovery.HealthySamples = 5
+	if err := validateSnapshot(badCompletedProgress); mappingInvariant(err) != "tq_pressure_recovery" {
+		t.Fatalf("nonnormal pressure accepted completed recovery progress: %v", err)
+	}
+	badPositiveProgress := missResetPressure
+	badPositiveProgress.TQ.PressureSample.RecoveryHealthy = false
+	badPositiveProgress.TQ.PressureRecovery.HealthySamples = 1
+	if err := validateSnapshot(badPositiveProgress); mappingInvariant(err) != "tq_pressure_recovery" {
+		t.Fatalf("positive recovery progress accepted unhealthy last sample: %v", err)
+	}
+	badUnobservedPressure := snapshot
+	badUnobservedPressure.TQ.PressureSample.Observed = false
+	if err := validateSnapshot(badUnobservedPressure); mappingInvariant(err) != "tq_pressure_recovery" {
+		t.Fatalf("unobserved pressure sample retained values: %v", err)
 	}
 
 	changedFence := schemaCapture()
@@ -465,6 +504,8 @@ func TestPC10SchemaPublicationStateCorpus(t *testing.T) {
 			v.Engine.TQ.Pressure = engine.TQPressureDegraded
 			v.Engine.TQ.PressureCause = engine.TQPressureCauseWaitingFrames
 			v.Engine.TQ.ShedTradesQuotes = true
+			v.Engine.TQ.PressureSample.WaitingFrames = 52
+			v.Engine.TQ.PressureSample.RecoveryHealthy = false
 			v.Engine.TQ.Rows[0].Tape = engine.TapeRateView{Status: engine.TQPressureShed, Reason: "pressure", OneSecondStatus: engine.TQPressureShed, OneSecondReason: "pressure", FiveSecondStatus: engine.TQPressureShed, FiveSecondReason: "pressure"}
 			v.Engine.TQ.Rows[0].Spread = engine.SpreadView{Status: engine.TQPressureShed, Reason: "pressure"}
 		}, "qualified_current", 1},
@@ -672,6 +713,8 @@ func schemaCapture() operations.SnapshotCaptureView {
 		Tape: engine.TapeRateView{Status: engine.TQCurrent, Reason: "qualifying_original_prints", OneSecondStatus: engine.TQCurrent, OneSecondReason: "qualifying_original_prints",
 			FiveSecondStatus: engine.TQCurrent, FiveSecondReason: "qualifying_original_prints", TimestampBasis: "none"},
 		Spread: engine.SpreadView{Status: engine.TQCurrent, QuoteAge: time.Second, Quality: "reviewed_ordinary"}}}, Pressure: engine.TQPressureNormal,
+		PressureSample: engine.TQPressureSampleView{Observed: true, WaitingFrames: 2, FrameCapacity: 512, WaitingBytes: 100, ByteCapacity: 64 << 20,
+			OldestWaitingFrameAge: 500 * time.Millisecond, RecoveryHealthy: true}, RecoveryRequiredSamples: 5,
 		Accounting: engine.TQAccountingView{Consumed: 2, Applied: 1, Duplicate: 1, KnownPresent: 1}, Commands: engine.TQCommandAccountingView{Issued: 1, Acknowledged: 1}}
 	publication := engine.ReplayPublicationView{SchemaVersion: "engine-private-publication-v1", PublicationID: operational.PublicationID, BindingIdentity: operational.BindingIdentity,
 		TradingDate: operational.TradingDate, RunMode: engine.RunModeLive, Lifecycle: "live", LastEngineSequence: operational.LastEngineSequence,

@@ -675,6 +675,31 @@ func TestPTQRRecoverableSuppressionKeepsAPIAndLivenessAvailable(t *testing.T) {
 		snapshot.Publication.Lifecycle != "suppressed" || snapshot.Publication.Suppression != "same_binding_recovery_allowed" || !snapshot.Status.ProcessLive || snapshot.Status.BackendReady {
 		t.Fatalf("recoverable snapshot=%d %+v body=%s", snapshotResponse.Code, snapshot, snapshotResponse.Body.String())
 	}
+
+	command, err := runtime.Engine().IssueScheduledRecoveryCommand()
+	if err != nil {
+		t.Fatal(err)
+	}
+	*now = command.EarliestAt()
+	input, err := engine.NewScheduledRecoveryInput(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, completion = runtime.Engine().AdmitScheduledRecovery(context.Background(), input)
+	if admission != engine.AdmissionAdmitted || completion == nil || (<-completion).Code != engine.DispositionRecoveryScheduled {
+		t.Fatal("scheduled recovery was not applied")
+	}
+	ready := request("/readyz")
+	if ready.Code != http.StatusServiceUnavailable || !strings.Contains(ready.Body.String(), `"reason":"lifecycle_not_ready"`) {
+		t.Fatalf("scheduled recovery readyz=%d %s", ready.Code, ready.Body.String())
+	}
+	snapshotResponse = request("/api/v2/snapshot")
+	snapshot = Snapshot{}
+	if snapshotResponse.Code != http.StatusOK || json.Unmarshal(snapshotResponse.Body.Bytes(), &snapshot) != nil ||
+		snapshot.Publication.Lifecycle != "recovering" || snapshot.Publication.LifecycleReason != "scheduled_recovery" || snapshot.Publication.Suppression != "" ||
+		!snapshot.Status.ProcessLive || snapshot.Status.BackendReady {
+		t.Fatalf("scheduled recovery snapshot=%d %+v body=%s", snapshotResponse.Code, snapshot, snapshotResponse.Body.String())
+	}
 }
 
 func assertStatusAndOneCapture(t *testing.T, handler http.Handler, source *countingCaptureSource, method, path string, status int) {

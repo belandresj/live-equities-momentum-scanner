@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -26,6 +27,42 @@ import (
 const defaultCheckpointMode = "off"
 
 const liveHydrationResponseByteBudget = int64(4 << 30)
+
+type ingressDiagnosticRecorder struct {
+	attempts  int
+	persisted bool
+	lastErr   error
+}
+
+func (r *ingressDiagnosticRecorder) record(directory string, incident *operations.IngressIncident, output io.Writer, final bool, persist func(string, *operations.IngressIncident) (string, error)) error {
+	if incident == nil || r.persisted {
+		return nil
+	}
+	limit := 2
+	if final {
+		limit = 3
+	}
+	if r.attempts >= limit {
+		if final {
+			return r.lastErr
+		}
+		return nil
+	}
+	r.attempts++
+	path, err := persist(directory, incident)
+	if err != nil {
+		r.lastErr = err
+		fmt.Fprintf(output, "Ingress diagnostic persistence failed · attempt %d/%d · %v\n", r.attempts, limit, err)
+		if final {
+			return err
+		}
+		return nil
+	}
+	r.persisted = true
+	r.lastErr = nil
+	fmt.Fprintf(output, "Ingress diagnostic persisted · %s\n", path)
+	return nil
+}
 
 func productionLiveQueueConfig() massive.LiveQueueConfig {
 	return massive.LiveQueueConfig{FrameSlots: massive.MaximumLiveFrameSlots, MaxFrameBytes: 8 << 20, TotalFrameBytes: massive.MaximumLiveQueueBytes}
@@ -168,13 +205,13 @@ func run(ctx context.Context, arguments []string) error {
 	}
 	diagnosticEncoder := json.NewEncoder(os.Stderr)
 	mappingFailures := api.MappingFailures()
+	diagnosticRecorder := ingressDiagnosticRecorder{}
 	for {
 		select {
 		case <-runCtx.Done():
-			if err := joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, false); err != nil {
-				return err
-			}
-			return runCtx.Err()
+			diagnosticErr := diagnosticRecorder.record(*diagnosticDirectory, runtime.FirstIngressIncident(), os.Stderr, true, persistIngressIncident)
+			shutdownErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, false)
+			return errors.Join(runCtx.Err(), diagnosticErr, shutdownErr)
 		case err := <-done:
 			var diagnosticErr error
 			incident := runtime.FirstIngressIncident()
@@ -182,26 +219,20 @@ func run(ctx context.Context, arguments []string) error {
 				_ = operator.Render(sample, true)
 				incident = sample.IngressIncident
 			}
-			if incident != nil {
-				path, persistErr := persistIngressIncident(*diagnosticDirectory, incident)
-				if persistErr != nil {
-					diagnosticErr = persistErr
-				} else {
-					fmt.Fprintf(os.Stderr, "Ingress diagnostic persisted · %s\n", path)
-				}
-			}
+			diagnosticErr = diagnosticRecorder.record(*diagnosticDirectory, incident, os.Stderr, true, persistIngressIncident)
 			if shutdownErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, true, false); shutdownErr != nil {
 				return shutdownErr
 			}
 			return errors.Join(err, diagnosticErr)
 		case err := <-apiDone:
+			diagnosticErr := diagnosticRecorder.record(*diagnosticDirectory, runtime.FirstIngressIncident(), os.Stderr, true, persistIngressIncident)
 			if shutdownErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, true); shutdownErr != nil {
-				return shutdownErr
+				return errors.Join(shutdownErr, diagnosticErr)
 			}
 			if err == nil {
-				return errors.New("snapshot API stopped unexpectedly")
+				return errors.Join(errors.New("snapshot API stopped unexpectedly"), diagnosticErr)
 			}
-			return fmt.Errorf("snapshot API: %w", err)
+			return errors.Join(fmt.Errorf("snapshot API: %w", err), diagnosticErr)
 		case failure := <-mappingFailures:
 			if err := encodeSnapshotMappingFailure(diagnosticEncoder, failure); err != nil {
 				if stopErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, false); stopErr != nil {
@@ -217,6 +248,7 @@ func run(ctx context.Context, arguments []string) error {
 				}
 				return errors.New("capture operational status")
 			}
+			_ = diagnosticRecorder.record(*diagnosticDirectory, sample.IngressIncident, os.Stderr, false, persistIngressIncident)
 			if err := operator.Render(sample, false); err != nil {
 				if stopErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, false); stopErr != nil {
 					return stopErr

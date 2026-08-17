@@ -15,7 +15,7 @@ const SPREAD_QUALITY = new Set(["", "reviewed_ordinary", "known_special", "uncla
 const PRESSURE_CAUSE = new Set(["", "waiting_frames", "waiting_bytes", "oldest_waiting_frame", "aggregate_watermark_lag", "capacity_drop", "tq_retention_bound", "transport_accounting_loss"]);
 const EVALUATOR_INTEGRITY_CATEGORY = new Set(["candidate_target_mismatch", "support_contradiction", "population_accounting", "qualification_accounting", "uncertainty_accounting", "feature_accounting", "ranking_projection", "ranking_row", "tq_intent", "unknown_evaluator_integrity"]);
 const LIFECYCLE = new Set(["initializing", "awaiting_session", "awaiting_aggregate_ack", "hydrating", "live", "recovering", "replaying", "suppressed", "ended"]);
-const LIFECYCLE_REASON = new Set(["", "binding_before_session", "binding_in_session", "binding_after_session", "session_start_without_aggregate_ack", "session_end", "controlled_stop", "sequence_exhaustion", "clock_regression", "canonical_integrity", "publication_integrity", "accounting_integrity", "closed", "replay_start", "replay_end", "replay_requested_end", "replay_failure", "aggregate_acknowledged", "aggregate_acknowledged_at_session_start", "aggregate_epoch_lost", "ingress_integrity", "hydration_complete", "recovery_exhausted"]);
+const LIFECYCLE_REASON = new Set(["", "binding_before_session", "binding_in_session", "binding_after_session", "session_start_without_aggregate_ack", "session_end", "controlled_stop", "sequence_exhaustion", "clock_regression", "canonical_integrity", "publication_integrity", "accounting_integrity", "closed", "replay_start", "replay_end", "replay_requested_end", "replay_failure", "aggregate_acknowledged", "aggregate_acknowledged_at_session_start", "aggregate_epoch_lost", "ingress_integrity", "hydration_complete", "recovery_exhausted", "scheduled_recovery"]);
 const SUPPRESSION = new Set(["", "same_binding_recovery_allowed", "clean_reinitialization_required", "restart_required", "terminal_replay_failure"]);
 const READINESS_REASON = new Set(["", "runtime_unavailable", "binding_mismatch", "not_live_mode", "lifecycle_not_ready", "suppressed", "aggregate_unacknowledged", "fence_pending", "ranking_noncurrent", "watermark_missing", "watermark_stale", "accounting_invalid"]);
 const RANKING_MODE = new Set(["unavailable", "qualified_current", "degraded_bootstrap", "degraded_current", "stale", "suppressed"]);
@@ -67,7 +67,7 @@ function validateMeasurement(value, name, field) {
   string(value.status, `${name}.status`); string(value.reason, `${name}.reason`);
   if (value.value_ratio !== null) finite(value.value_ratio, `${name}.value_ratio`);
   const reasons = {
-    from_open: { warming: [], unavailable: ["before_first_print", "history_incomplete"] },
+    from_open: { warming: ["before_first_print"], unavailable: ["history_incomplete"] },
     day_range: { warming: [], unavailable: ["before_first_print", "history_incomplete", "zero_width"] },
     activity_30s: { warming: ["reference_warmup"], unavailable: ["history_incomplete"] },
     move_30s: { warming: ["before_first_print", "rolling_warmup"], unavailable: ["history_incomplete", "no_aggregate_in_target"] },
@@ -222,20 +222,32 @@ export function validateSnapshot(snapshot) {
 
   const recovery = snapshot.recovery;
   fields(recovery, ["purpose", "generation", "start", "end", "supported_through", "fence_reconciled", "policy_waiting", "work", "rows"], "recovery");
+  if (recovery.generation_active !== undefined) bool(recovery.generation_active, "recovery.generation_active");
   string(recovery.purpose, "recovery.purpose"); decimal(recovery.generation, "recovery.generation"); optionalTimestamp(recovery.start, "recovery.start"); optionalTimestamp(recovery.end, "recovery.end"); optionalTimestamp(recovery.supported_through, "recovery.supported_through"); bool(recovery.fence_reconciled, "recovery.fence_reconciled"); bool(recovery.policy_waiting, "recovery.policy_waiting");
   if (!new Set(["", "fresh_bootstrap", "checkpoint_catchup", "gap_recovery"]).has(recovery.purpose)) fail("unknown recovery purpose");
   fields(recovery.work, WORK_FIELDS, "recovery.work"); WORK_FIELDS.forEach(name => decimal(recovery.work[name], `recovery.work.${name}`));
   if (!sumDecimal(recovery.work.planned, recovery.work.open, recovery.work.completed_value, recovery.work.completed_empty, recovery.work.failed, recovery.work.canceled, recovery.work.fenced)) fail("recovery work conflict");
+  if (recovery.generation_active && (recovery.generation === "0" || recovery.fence_reconciled)) fail("recovery generation activity conflict");
   fields(recovery.rows, RECOVERY_ROW_FIELDS, "recovery.rows"); RECOVERY_ROW_FIELDS.forEach(name => decimal(recovery.rows[name], `recovery.rows.${name}`));
   if (!sumDecimal(recovery.rows.consumed, recovery.rows.inserted, recovery.rows.duplicate, recovery.rows.conflict_or_withdrawal, recovery.rows.rejected, recovery.rows.fenced, recovery.rows.integrity)) fail("recovery row conflict");
 
   const tq = snapshot.tq;
-  fields(tq, ["desired_symbols", "pressure_mode", "pressure_cause", "aggregate_only", "shed", "retained_bound_hit", "pressure_misses", "pressure_transitions", "pressure_fenced", "known_present", "known_absent", "unknown", "retained_trades", "retained_quotes", "retained_fingerprints", "facts", "commands"], "tq");
+  fields(tq, ["desired_symbols", "pressure_mode", "pressure_cause", "aggregate_only", "shed", "retained_bound_hit", "pressure_misses", "pressure_transitions", "pressure_fenced", "pressure_sample", "pressure_recovery", "known_present", "known_absent", "unknown", "retained_trades", "retained_quotes", "retained_fingerprints", "facts", "commands"], "tq");
   if (!Array.isArray(tq.desired_symbols) || tq.desired_symbols.length > 20) fail("invalid desired symbols");
   const desired = new Set(); for (const symbol of tq.desired_symbols) { string(symbol, "tq.desired_symbols[]"); if (symbol === "" || desired.has(symbol)) fail("invalid desired symbol"); desired.add(symbol); }
   string(tq.pressure_mode, "tq.pressure_mode"); string(tq.pressure_cause, "tq.pressure_cause"); for (const name of ["aggregate_only", "shed", "retained_bound_hit"]) bool(tq[name], `tq.${name}`);
   for (const name of ["pressure_misses", "known_present", "known_absent", "unknown", "retained_trades", "retained_quotes", "retained_fingerprints"]) uint(tq[name], `tq.${name}`);
   decimal(tq.pressure_transitions, "tq.pressure_transitions"); decimal(tq.pressure_fenced, "tq.pressure_fenced");
+  const pressureSample = tq.pressure_sample, pressureRecovery = tq.pressure_recovery;
+  fields(pressureSample, ["observed", "waiting_frames", "frame_capacity", "waiting_bytes", "byte_capacity", "oldest_waiting_frame_age_ms", "aggregate_watermark_lag_ms", "recovery_healthy"], "tq.pressure_sample");
+  for (const name of ["observed", "recovery_healthy"]) bool(pressureSample[name], `tq.pressure_sample.${name}`);
+  for (const name of ["waiting_frames", "frame_capacity", "waiting_bytes", "byte_capacity", "oldest_waiting_frame_age_ms", "aggregate_watermark_lag_ms"]) uint(pressureSample[name], `tq.pressure_sample.${name}`);
+  fields(pressureRecovery, ["healthy_samples", "required_samples"], "tq.pressure_recovery"); uint(pressureRecovery.healthy_samples, "tq.pressure_recovery.healthy_samples"); uint(pressureRecovery.required_samples, "tq.pressure_recovery.required_samples");
+  if (pressureRecovery.required_samples !== 5 || pressureRecovery.healthy_samples > pressureRecovery.required_samples || pressureSample.recovery_healthy && !pressureSample.observed ||
+      tq.pressure_mode !== "normal" && pressureRecovery.healthy_samples >= pressureRecovery.required_samples ||
+      pressureSample.observed && (pressureSample.frame_capacity === 0 || pressureSample.waiting_frames > pressureSample.frame_capacity || pressureSample.byte_capacity === 0 || pressureSample.waiting_bytes > pressureSample.byte_capacity) ||
+      !pressureSample.observed && (pressureSample.waiting_frames !== 0 || pressureSample.frame_capacity !== 0 || pressureSample.waiting_bytes !== 0 || pressureSample.byte_capacity !== 0 || pressureSample.oldest_waiting_frame_age_ms !== 0 || pressureSample.aggregate_watermark_lag_ms !== 0 || pressureSample.recovery_healthy) ||
+      tq.pressure_mode !== "normal" && pressureRecovery.healthy_samples > 0 && !pressureSample.recovery_healthy || tq.pressure_mode === "normal" && pressureRecovery.healthy_samples !== 0) fail("TQ pressure recovery conflict");
   fields(tq.facts, FACT_FIELDS, "tq.facts"); FACT_FIELDS.forEach(name => decimal(tq.facts[name], `tq.facts.${name}`));
   if (!sumDecimal(tq.facts.consumed, tq.facts.applied, tq.facts.duplicate, tq.facts.rejected, tq.facts.fenced, tq.facts.pressure_shed, tq.facts.integrity)) fail("TQ fact conflict");
   if (BigInt(tq.facts.applied_trades) + BigInt(tq.facts.applied_quotes) > BigInt(tq.facts.applied) || BigInt(tq.facts.pressure_shed_trades) + BigInt(tq.facts.pressure_shed_quotes) !== BigInt(tq.facts.pressure_shed)) fail("TQ family fact conflict");
@@ -296,6 +308,59 @@ export function formatShares(value) {
   }
   return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 }
+export function volumeTurnoverIntensity(sessionShareVolume, floatShares) {
+  if (typeof sessionShareVolume !== "number" || !Number.isFinite(sessionShareVolume) || sessionShareVolume < 0) return null;
+  if (typeof floatShares !== "number" || !Number.isFinite(floatShares) || floatShares <= 0) return null;
+  const turnover = sessionShareVolume / floatShares;
+  if (!Number.isFinite(turnover) || turnover < 0) return null;
+  if (turnover >= 5) return 1;
+  if (turnover >= 2) return .8;
+  if (turnover >= 1) return .6;
+  if (turnover >= .5) return .4;
+  if (turnover >= .25) return .2;
+  return 0;
+}
+export function floatCyanIntensity(field) {
+  if (!field || field.status !== "current" || field.reason !== "" || typeof field.value_shares !== "number" || !Number.isFinite(field.value_shares) || field.value_shares <= 0) return null;
+  if (field.value_shares < 2_000_000) return 1;
+  if (field.value_shares < 5_000_000) return .85;
+  if (field.value_shares < 10_000_000) return .65;
+  if (field.value_shares < 20_000_000) return .45;
+  if (field.value_shares < 50_000_000) return .2;
+  return 0;
+}
+const DAY_RANGE_COLOR_STOPS = [
+  [0, "#FC0000"], [.25, "#FF5A5A"], [.5, "#8F9AA3"], [.75, "#73FF63"], [1, "#2CFF05"],
+];
+const ACTIVITY_COLOR_STOPS = [
+  [0, "#8F9AA3"], [.5, "#8F9AA3"], [.75, "#C87932"], [.9, "#E98212"], [.97, "#F98A05"], [1, "#FF8A00"],
+];
+const MOVE_COLOR_STOPS = [
+  [-.07, "#FC0000"], [-.05, "#EF3030"], [-.02, "#C46B6B"], [0, "#8F9AA3"], [.02, "#70B873"], [.05, "#45E532"], [.07, "#2CFF05"],
+];
+const TAPE_COLOR_STOPS = [
+  [0, "#8F9AA3"], [50, "#8F9AA3"], [100, "#B8793E"], [250, "#E98212"], [500, "#FF8A00"],
+];
+const SPREAD_COLOR_STOPS = [
+  [0, "#8F9AA3"], [10, "#8F9AA3"], [25, "#B06F6F"], [50, "#D84A4A"], [75, "#EE2525"], [100, "#FC0000"],
+];
+function rgbFromHex(hex) { return [1, 3, 5].map(index => Number.parseInt(hex.slice(index, index + 2), 16)); }
+export function interpolateRGBGradient(value, stops) {
+  if (typeof value !== "number" || !Number.isFinite(value) || !Array.isArray(stops) || stops.length === 0) return null;
+  const clamped = Math.max(stops[0][0], Math.min(stops.at(-1)[0], value));
+  let upperIndex = 1;
+  while (upperIndex < stops.length && clamped > stops[upperIndex][0]) upperIndex++;
+  if (upperIndex === stops.length) return stops.at(-1)[1].toUpperCase();
+  const [lowerPosition, lowerColor] = stops[upperIndex - 1], [upperPosition, upperColor] = stops[upperIndex], span = upperPosition - lowerPosition;
+  const weight = span === 0 ? 0 : (clamped - lowerPosition) / span;
+  const lowerRGB = rgbFromHex(lowerColor), upperRGB = rgbFromHex(upperColor);
+  return `#${lowerRGB.map((channel, index) => Math.round(channel + (upperRGB[index] - channel) * weight).toString(16).padStart(2, "0")).join("")}`.toUpperCase();
+}
+export function dayRangeColor(value) { return interpolateRGBGradient(value, DAY_RANGE_COLOR_STOPS); }
+export function activityColor(value) { return interpolateRGBGradient(value, ACTIVITY_COLOR_STOPS); }
+export function moveColor(value) { return interpolateRGBGradient(value, MOVE_COLOR_STOPS); }
+export function tapeColor(value) { return interpolateRGBGradient(value, TAPE_COLOR_STOPS); }
+export function spreadColor(value) { return interpolateRGBGradient(value, SPREAD_COLOR_STOPS); }
 function band(value, stops) { const magnitude = Math.abs(value); let result = 0; for (let index = 1; index < stops.length; index++) if (magnitude >= stops[index]) result = index; return result; }
 function fieldView(field, label, stops = null, digits = 2, signed = false) {
   const state = KNOWN_FIELD_STATUS.has(field.status) && KNOWN_FIELD_REASON.has(field.reason) ? field.status : "unknown";
@@ -303,8 +368,9 @@ function fieldView(field, label, stops = null, digits = 2, signed = false) {
     ? { state: "current", text: signed ? formatSignedPercent(field.value_ratio, digits) : formatPercent(field.value_ratio, digits), detail: `${label}: status current; reason none`, band: stops ? band(field.value_ratio * 100, stops) : 0 }
     : { state, text: "—", detail: `${label}: status ${state}; reason ${field.reason || field.status || "unknown"}`, band: 0 };
 }
-function rangeFieldView(field) { const view = fieldView(field, "Day Range", null, 0); view.position = view.state === "current" ? field.value_ratio * 100 : null; return view; }
-function activityFieldView(field) { const view = fieldView(field, "Activity 30s", null, 0); view.position = view.state === "current" ? field.value_ratio * 100 : null; return view; }
+function rangeFieldView(field) { const view = fieldView(field, "Day Range", null, 0); view.position = view.state === "current" ? field.value_ratio * 100 : null; view.textColor = view.state === "current" ? dayRangeColor(field.value_ratio) : null; return view; }
+function activityFieldView(field) { const view = fieldView(field, "Activity 30s", null, 0); view.position = view.state === "current" ? field.value_ratio * 100 : null; view.textColor = view.state === "current" ? activityColor(field.value_ratio) : null; return view; }
+function moveFieldView(field) { const view = fieldView(field, "Move 30s", null, 2, true); view.textColor = view.state === "current" ? moveColor(field.value_ratio) : null; return view; }
 function groupedDecimal(value) { return value.replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
 function hydrationView(recovery) {
   const work = recovery.work;
@@ -318,44 +384,84 @@ function hydrationView(recovery) {
   return { planned, open, issues, progress, issueText };
 }
 
+function operationalPhase(snapshot, hydration) {
+  const lifecycle = snapshot.publication.lifecycle;
+  if (lifecycle !== "hydrating" && lifecycle !== "recovering") return "";
+  if (!snapshot.publication.connection_active) return lifecycle === "recovering" ? "reconnecting" : "connecting";
+  if (!snapshot.publication.aggregate_acknowledged) return lifecycle === "recovering" ? "resubscribing" : "subscribing";
+  if (snapshot.recovery.policy_waiting) return "retrying";
+  if (!snapshot.recovery.generation_active) return lifecycle === "recovering" ? "preparing_recovery" : "preparing_hydration";
+  if (hydration.planned > 0n && hydration.open === 0n) return lifecycle === "recovering" ? "finalizing_recovery" : "finalizing_hydration";
+  return lifecycle === "recovering" ? "recovering" : "hydrating";
+}
+
+export function relativeColorPositions(rows, valueForRow) {
+  const values = rows.map(row => {
+    const value = valueForRow(row);
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  });
+  const eligible = values.filter(value => value !== null);
+  if (eligible.length === 0) return values;
+  let minimum = eligible[0], maximum = minimum;
+  for (let index = 1; index < eligible.length; index++) {
+    minimum = Math.min(minimum, eligible[index]);
+    maximum = Math.max(maximum, eligible[index]);
+  }
+  const spread = maximum - minimum;
+  if (spread === 0) return values.map(value => value === null ? null : .5);
+  return values.map(value => value === null ? null : Math.max(0, Math.min(1, (value - minimum) / spread)));
+}
+
 export function buildViewModel(input, transport = "connected") {
   const snapshot = validateSnapshot(input);
   const current = snapshot.status.backend_ready && snapshot.ranking.mode === "qualified_current" && transport === "connected";
   const partial = snapshot.status.backend_ready && snapshot.ranking.mode === "degraded_current" && transport === "connected";
   const replay = snapshot.publication.run_mode === "replay";
   const rowsCurrent = current || replay && snapshot.status.ranking_current && snapshot.ranking.mode === "qualified_current" && transport === "connected";
-  const rows = snapshot.rows.map(row => {
+  const dayColors = relativeColorPositions(snapshot.rows, row => row.day_change_ratio);
+  const fromOpenColors = relativeColorPositions(snapshot.rows, row => row.from_open_change.status === "current" ? row.from_open_change.value_ratio : null);
+  const rows = snapshot.rows.map((row, index) => {
     const floatAvailable = row.float.status === "current" || row.float.status === "stale";
     const tapeCurrent = knownCurrentTQ(row.tape_5s.status, row.tape_5s.reason);
     const spreadCurrent = knownCurrentTQ(row.spread.status, row.spread.reason) || row.spread.status === "stale" && row.spread.reason === "stale_quote";
     const floatState = KNOWN_FLOAT_STATUS.has(row.float.status) ? row.float.status : "unknown";
     const floatText = floatAvailable ? `${formatShares(row.float.value_shares)}${row.float.status === "stale" ? " · stale" : ""}` : "—";
+    const floatIntensity = floatCyanIntensity(row.float);
     const floatDetail = `Float: status ${floatState}; reason ${row.float.reason || "none"}; provider ${row.float.provider || "none"}; effective date ${row.float.effective_date || "unknown"}; retrieved ${row.float.retrieved_at || "unknown"}; provenance ${row.float.provenance || "none"}${row.float.percent_ratio === null ? "" : `; percent ${formatPercent(row.float.percent_ratio)}`}`;
     const volumeCurrent = row.volume.status === "current";
     const volumeState = KNOWN_FIELD_STATUS.has(row.volume.status) ? row.volume.status : "unknown";
+    const volumeColorIntensity = volumeCurrent && row.float.status === "current"
+      ? volumeTurnoverIntensity(row.volume.value_shares, row.float.value_shares)
+      : null;
     const tapeText = tapeCurrent ? `${row.tape_5s.trades_per_second.toFixed(1)}/s` : "—";
+    const tapeTextColor = tapeCurrent ? tapeColor(row.tape_5s.trades_per_second) : null;
+    const spreadTextColor = row.spread.status === "current" ? spreadColor(row.spread.basis_points) : null;
     return {
-    rank: row.rank, symbol: row.symbol, last: formatUSD(row.last_usd), day: formatSignedPercent(row.day_change_ratio), dayBand: 0, markAgeMS: row.mark_age_ms,
-    float: { state: floatState, text: floatText, detail: floatDetail },
-    volume: { state: volumeState, text: volumeCurrent ? formatShares(row.volume.value_shares) : "—", detail: `Volume: status ${volumeState}; reason ${row.volume.reason || "none"}` },
-    fromOpen: fieldView(row.from_open_change, "From Open", null, 2, true), dayRange: rangeFieldView(row.day_range_position), activity: activityFieldView(row.activity_30s), move: { ...fieldView(row.move_30s, "Move 30s", null, 2, true), palette: row.move_30s.status !== "current" || row.move_30s.value_ratio === 0 ? "" : row.move_30s.value_ratio < 0 ? "move-negative" : "move-positive" },
-    tape: { state: tqState(row.tape_5s.status, row.tape_5s.reason), position: tapeCurrent ? row.tape_5s.trades_per_second / 30 * 100 : null, primary: tapeText, detail: `Tape 5s: status ${row.tape_5s.status}; reason ${row.tape_5s.reason || "none"}; coverage ${row.tape_5s.trade_coverage ? "yes" : "no"}; timestamp ${row.tape_5s.timestamp_basis || "none"}; lifecycle records ${row.tape_5s.lifecycle_records_observed ? "observed" : "not observed"}; membership desired ${row.tq_membership.desired ? "yes" : "no"}, provider ${row.tq_membership.provider_present ? "present" : "absent"}, unknown ${row.tq_membership.provider_membership_unknown ? "yes" : "no"}` },
-    spread: { state: tqState(row.spread.status, row.spread.reason), band: spreadCurrent ? band(row.spread.basis_points, [0, 5, 10, 25, 50]) : 0, primary: spreadCurrent ? `${row.spread.basis_points.toFixed(1)} bps / ${row.spread.cents.toFixed(2)}¢${row.spread.status === "stale" ? " · stale" : ""}` : "—", detail: `Spread: status ${row.spread.status}; reason ${row.spread.reason || "none"}; coverage ${row.spread.quote_coverage ? "yes" : "no"}; quote age ${row.spread.quote_age_ms} ms; quality ${row.spread.quality || "none"}; membership desired ${row.tq_membership.desired ? "yes" : "no"}, provider ${row.tq_membership.provider_present ? "present" : "absent"}, unknown ${row.tq_membership.provider_membership_unknown ? "yes" : "no"}` },
+    rank: row.rank, symbol: row.symbol, last: formatUSD(row.last_usd), day: formatSignedPercent(row.day_change_ratio), dayColor: dayColors[index], markAgeMS: row.mark_age_ms,
+    float: { state: floatState, text: floatText, detail: floatDetail, cyanIntensity: floatIntensity },
+    volume: { state: volumeState, text: volumeCurrent ? formatShares(row.volume.value_shares) : "—", colorIntensity: volumeColorIntensity, detail: `Volume: status ${volumeState}; reason ${row.volume.reason || "none"}` },
+    fromOpen: { ...fieldView(row.from_open_change, "From Open", null, 2, true), colorPosition: fromOpenColors[index] }, dayRange: rangeFieldView(row.day_range_position), activity: activityFieldView(row.activity_30s), move: moveFieldView(row.move_30s),
+    tape: { state: tqState(row.tape_5s.status, row.tape_5s.reason), primary: tapeText, textColor: tapeTextColor, detail: `Tape speed: status ${row.tape_5s.status}; reason ${row.tape_5s.reason || "none"}; coverage ${row.tape_5s.trade_coverage ? "yes" : "no"}; timestamp ${row.tape_5s.timestamp_basis || "none"}; lifecycle records ${row.tape_5s.lifecycle_records_observed ? "observed" : "not observed"}; membership desired ${row.tq_membership.desired ? "yes" : "no"}, provider ${row.tq_membership.provider_present ? "present" : "absent"}, unknown ${row.tq_membership.provider_membership_unknown ? "yes" : "no"}` },
+    spread: { state: tqState(row.spread.status, row.spread.reason), primary: spreadCurrent ? `${row.spread.basis_points.toFixed(1)} bps / ${row.spread.cents.toFixed(2)}¢${row.spread.status === "stale" ? " · stale" : ""}` : "—", textColor: spreadTextColor, detail: `Spread: status ${row.spread.status}; reason ${row.spread.reason || "none"}; coverage ${row.spread.quote_coverage ? "yes" : "no"}; quote age ${row.spread.quote_age_ms} ms; quality ${row.spread.quality || "none"}; membership desired ${row.tq_membership.desired ? "yes" : "no"}, provider ${row.tq_membership.provider_present ? "present" : "absent"}, unknown ${row.tq_membership.provider_membership_unknown ? "yes" : "no"}` },
   }; });
   const hydration = hydrationView(snapshot.recovery);
-  const warming = !replay && snapshot.status.process_live && !snapshot.status.backend_ready && snapshot.publication.lifecycle === "hydrating" && !snapshot.recovery.fence_reconciled;
-  const finalizing = warming && hydration.planned > 0n && hydration.open === 0n;
+  const phase = replay || !snapshot.status.process_live || snapshot.status.backend_ready ? "" : operationalPhase(snapshot, hydration);
+  const warming = phase === "hydrating" || phase === "preparing_hydration";
+  const recovering = ["reconnecting", "resubscribing", "preparing_recovery", "recovering", "retrying", "finalizing_recovery"].includes(phase);
+  const finalizing = phase === "finalizing_hydration" || phase === "finalizing_recovery";
   return {
     schemaVersion: snapshot.schema_version, sampleID: snapshot.sample.id, sampledAt: snapshot.sample.sampled_at, publicationID: snapshot.publication.id,
     transport, current, partial, rowsCurrent, replay, replayLogicalTime: replay ? snapshot.replay.logical_time : null,
     processLive: snapshot.status.process_live, backendReady: snapshot.status.backend_ready, readinessReason: snapshot.status.readiness_reason,
     lifecycle: snapshot.publication.lifecycle, rankingMode: snapshot.ranking.mode, rankingReason: snapshot.ranking.reason, committedT: snapshot.publication.committed_t,
-    watermarkLagMS: snapshot.status.watermark_lag_ms, accountingValid: snapshot.status.accounting_valid, sampleAccountingValid: snapshot.operations.sample_accounting_valid, tqPressure: snapshot.tq.pressure_mode, tqAggregateOnly: snapshot.tq.aggregate_only,
+    watermarkLagMS: snapshot.status.watermark_lag_ms, accountingValid: snapshot.status.accounting_valid, sampleAccountingValid: snapshot.operations.sample_accounting_valid, tqPressure: snapshot.tq.pressure_mode, tqPressureCause: snapshot.tq.pressure_cause, tqAggregateOnly: snapshot.tq.aggregate_only,
+    tqPressureSampleObserved: snapshot.tq.pressure_sample.observed, tqOldestWaitingFrameAgeMS: snapshot.tq.pressure_sample.oldest_waiting_frame_age_ms, tqRecoveryHealthySamples: snapshot.tq.pressure_recovery.healthy_samples, tqRecoveryRequiredSamples: snapshot.tq.pressure_recovery.required_samples,
     tqUnknown: snapshot.tq.unknown, tqRetainedBoundHit: snapshot.tq.retained_bound_hit, tqKnownPresent: snapshot.tq.known_present, tqKnownAbsent: snapshot.tq.known_absent,
-    recoveryPurpose: snapshot.recovery.purpose, recoveryGeneration: snapshot.recovery.generation, rows,
+    connectionActive: snapshot.publication.connection_active, aggregateAcknowledged: snapshot.publication.aggregate_acknowledged,
+    recoveryPurpose: snapshot.recovery.purpose, recoveryGeneration: snapshot.recovery.generation, recoveryGenerationActive: snapshot.recovery.generation_active === true, recoveryPolicyWaiting: snapshot.recovery.policy_waiting, rows,
     suppression: snapshot.publication.suppression, lifecycleReason: snapshot.publication.lifecycle_reason, integrityFailure: snapshot.operations.integrity_failure || null,
     hydrationProgress: hydration.progress, hydrationIssueText: hydration.issueText, hydrationIssues: hydration.issues !== 0n,
-    warming, finalizing,
+    phase, warming, recovering, finalizing,
   };
 }
 

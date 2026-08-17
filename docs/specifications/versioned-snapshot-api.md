@@ -148,10 +148,12 @@ emitted, and every array is present even when empty.
 | `accounting.qualification` | `not_yet_passed:u`; `provisional:u`; `finalized:u`; `unresolved:u` |
 | `accounting.uncertainty` | `bootstrap_origin:u`; `post_bootstrap_gap:u`; `local_invalid:u` |
 | `accounting.population_transition_diagnostic` | `bootstrap_unknown:u`; `trusted_by_later_live_mark:u`; `no_later_eligible_mark:u`; `latest_mark_not_live_authority:u`; `no_strictly_older_localized_conflict:u`; `conflict_at_or_after_mark:u`; `invalid_at_or_after_mark:u`; `incomplete_post_mark_coverage:u`. The first property is the denominator; the remaining seven properties are mutually exclusive reason bins. |
-| `recovery` | `purpose:string enum or ""`; `generation:d`; `start:t?`; `end:t?`; `supported_through:t?`; `fence_reconciled:bool`; `policy_waiting:bool`; `work:object`; `rows:object` |
+| `recovery` | `generation_active:bool`; `purpose:string enum or ""`; `generation:d`; `start:t?`; `end:t?`; `supported_through:t?`; `fence_reconciled:bool`; `policy_waiting:bool`; `work:object`; `rows:object`. `generation_active` is the engine-owned fact that the displayed ledger is the current generation; retained completed or canceled accounting remains observable with `false` and must not be presented as current work. An active generation has a positive generation and cannot already have a reconciled fence. |
 | `recovery.work` | `planned:d`; `open:d`; `completed_value:d`; `completed_empty:d`; `failed:d`; `canceled:d`; `fenced:d` |
 | `recovery.rows` | `consumed:d`; `inserted:d`; `duplicate:d`; `conflict_or_withdrawal:d`; `rejected:d`; `fenced:d`; `integrity:d` |
-| `tq` | `desired_symbols:array<string>` (0..20, rank order); `pressure_mode:string enum`; `pressure_cause:string enum or ""`; `aggregate_only:bool`; `shed:bool`; `retained_bound_hit:bool`; `pressure_misses:u`; `pressure_transitions:d`; `pressure_fenced:d`; `known_present:u`; `known_absent:u`; `unknown:u`; `retained_trades:u`; `retained_quotes:u`; `retained_fingerprints:u`; `facts:object`; `commands:object` |
+| `tq` | `desired_symbols:array<string>` (0..20, rank order); `pressure_mode:string enum`; `pressure_cause:string enum or ""`; `aggregate_only:bool`; `shed:bool`; `retained_bound_hit:bool`; `pressure_misses:u`; `pressure_transitions:d`; `pressure_fenced:d`; `pressure_sample:object`; `pressure_recovery:object`; `known_present:u`; `known_absent:u`; `unknown:u`; `retained_trades:u`; `retained_quotes:u`; `retained_fingerprints:u`; `facts:object`; `commands:object` |
+| `tq.pressure_sample` | `observed:bool`; `waiting_frames:u`; `frame_capacity:u`; `waiting_bytes:u`; `byte_capacity:u`; `oldest_waiting_frame_age_ms:u`; `aggregate_watermark_lag_ms:u`; `recovery_healthy:bool`. This is the last engine-accepted pressure sample, not an API-time queue estimate. When unobserved, all scalars are zero and `recovery_healthy=false`; when observed, both capacities are positive and each occupancy is within capacity. |
+| `tq.pressure_recovery` | `healthy_samples:u`; `required_samples:u=5`. Nonnormal pressure has at most four healthy samples because the fifth transitions to normal; normal mode has zero retained progress. Positive progress requires a recovery-healthy last accepted sample. A later missing sample may reset progress to zero while the last accepted sample remains observable as healthy. The mapper copies this engine-owned decision and does not recompute thresholds. |
 | `tq.facts` | `consumed:d`; `applied:d`; `duplicate:d`; `rejected:d`; `fenced:d`; `pressure_shed:d`; `integrity:d`; separate `normalized_trades:d`; `normalized_quotes:d`; `applied_trades:d`; `applied_quotes:d`; `pressure_shed_trades:d`; `pressure_shed_quotes:d` diagnostics |
 | `tq.commands` | `issued:d`; `pending:d`; `acknowledged:d`; `failed:d`; `fenced:d`; `result_fenced:d` |
 | `checkpoint` | `installed:bool`; projection eligibility/defer/start, bounded `projection_in_progress:d` (`0|1`), project/reject and submit-reject counters; `submitted/outstanding/in_progress/pending/completed/failed/canceled/superseded`; last attempted/projected/submitted/successful `T0`; usable age; projection total/max-owner-hold; artifact bytes; write/encode/reopen duration; fixed last failure step. Exact projection identity is `projection_started = projection_in_progress + projected + projection_rejected`. |
@@ -186,7 +188,8 @@ sequence_exhaustion|clock_regression|canonical_integrity|
 publication_integrity|accounting_integrity|closed|replay_start|replay_end|
 replay_failure|aggregate_acknowledged|aggregate_acknowledged_at_session_start|
 aggregate_epoch_lost|ingress_integrity|hydration_complete|
-recovery_exhausted`. The mapper copies enum values without translation.
+recovery_exhausted|scheduled_recovery`. The mapper copies enum values without
+translation.
 
 The primary identities are asserted in every encoded snapshot:
 

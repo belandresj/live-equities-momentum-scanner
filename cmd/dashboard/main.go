@@ -35,7 +35,7 @@ func run(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("dashboard listening on http://%s\n", server.Address())
+	fmt.Printf("Scanner dashboard listening on http://%s\n", server.Address())
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)

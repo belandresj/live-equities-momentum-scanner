@@ -77,7 +77,7 @@ func defaultTQPressurePolicy() tqPressurePolicy {
 	return tqPressurePolicy{
 		sampleCadence: time.Second, commandTimeout: 2 * time.Second,
 		degradedQueuePercent: 10, aggregateQueuePercent: 25, recoveryQueuePercent: 1,
-		degradedOldest: time.Second, aggregateOldest: 2 * time.Second, recoveryOldest: 250 * time.Millisecond,
+		degradedOldest: time.Second, aggregateOldest: 2 * time.Second, recoveryOldest: 750 * time.Millisecond,
 		degradedSamples: 2, aggregateSamples: 3, watermarkSamples: 2, recoverySamples: 5,
 	}
 }
@@ -102,6 +102,9 @@ type tqPressureState struct {
 	cause                        TQPressureCause
 	lastSlotDrops, lastByteDrops uint64
 	capacityObserved             bool
+	lastSample                   TQPressureSample
+	sampleObserved               bool
+	lastSampleRecoveryHealthy    bool
 }
 
 func (e *Engine) AdmitTQPressureTick(ctx context.Context) (AdmissionResult, <-chan Disposition) {
@@ -218,6 +221,7 @@ func (e *Engine) applyTQPressureResultLocked(node *queueNode) (DispositionCode, 
 
 func (e *Engine) applyTQPressureSampleLocked(sample TQPressureSample, now time.Time) {
 	p, policy := &e.state.tq.pressure, e.tqPressurePolicy
+	p.lastSample, p.sampleObserved, p.lastSampleRecoveryHealthy = sample, true, false
 	capacityDrop := !p.capacityObserved && (sample.SlotCapacityDrops > 0 || sample.ByteCapacityDrops > 0) ||
 		p.capacityObserved && (sample.SlotCapacityDrops > p.lastSlotDrops || sample.ByteCapacityDrops > p.lastByteDrops)
 	if !p.capacityObserved || sample.SlotCapacityDrops >= p.lastSlotDrops && sample.ByteCapacityDrops >= p.lastByteDrops {
@@ -248,7 +252,8 @@ func (e *Engine) applyTQPressureSampleLocked(sample TQPressureSample, now time.T
 	s.watermark = nextPressureStreak(s.watermark, sample.TQWorkPresent && sample.AggregateWatermarkLag > 2*time.Second)
 	healthy := pressureBelow(sample.WaitingFrames, sample.FrameCapacity, policy.recoveryQueuePercent) &&
 		pressureBelow(sample.WaitingBytes, sample.ByteCapacity, policy.recoveryQueuePercent) &&
-		sample.OldestWaitingFrameAge < policy.recoveryOldest && sample.AggregateWatermarkLag <= time.Second
+		sample.OldestWaitingFrameAge < policy.recoveryOldest && sample.AggregateWatermarkLag <= time.Second && !e.state.tq.globalBound
+	p.lastSampleRecoveryHealthy = healthy
 	if p.mode == TQPressureNormal {
 		s.healthy = 0
 	} else {

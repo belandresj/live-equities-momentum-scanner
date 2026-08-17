@@ -20,7 +20,7 @@ func TestLiveOperatorWarmupArithmeticAndRateLimit(t *testing.T) {
 	if err := renderer.Render(sample, false); err != nil {
 		t.Fatal(err)
 	}
-	want := "Warm-up 3,481 / 5,540 · 62.8%\nvalues 1,064 · empty 2,417 · open 2,059 · failed 0 · canceled 0 · fenced 0\naggregate live connected/acknowledged · final fence pending\n"
+	want := "Warm-up: fetching historical one-second aggregates through 04:00:59 EDT for 5,540 stocks\nWarm-up: 3,481 / 5,540 stocks (62.8%)\n"
 	if stdout.String() != want || stderr.Len() != 0 {
 		t.Fatalf("operator output=%q stderr=%q", stdout.String(), stderr.String())
 	}
@@ -29,8 +29,33 @@ func TestLiveOperatorWarmupArithmeticAndRateLimit(t *testing.T) {
 		t.Fatalf("rate limit err=%v output=%q", err, stdout.String())
 	}
 	sample.Status.SampledAt = at.Add(5 * time.Second)
-	if err := renderer.Render(sample, false); err != nil || strings.Count(stdout.String(), "Warm-up") != 2 {
+	if err := renderer.Render(sample, false); err != nil || strings.Count(stdout.String(), "Warm-up: fetching") != 1 || strings.Count(stdout.String(), "Warm-up: 3,481 / 5,540 stocks") != 2 {
 		t.Fatalf("five-second output err=%v output=%q", err, stdout.String())
+	}
+}
+
+func TestLiveOperatorWarmupOnlyShowsNonzeroTerminalProblems(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	renderer := newOperatorRenderer(&stdout, &stderr)
+	sample := warmupOperatorSample(time.Date(2026, 8, 11, 8, 0, 0, 0, time.UTC))
+	sample.Metrics.Engine.Hydration.Accounting = engine.HydrationAccounting{Planned: 10, CompletedValue: 6, CompletedEmpty: 1, Failed: 1, Canceled: 2}
+	if err := renderer.Render(sample, true); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "Warm-up: 10 / 10 stocks (100.0%) · failed 1 · canceled 2") || strings.Contains(stdout.String(), "fenced 0") || !strings.Contains(stderr.String(), "Hydration failure: fresh_bootstrap generation 1 · failed 1") {
+		t.Fatalf("warm-up terminal output=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestLiveOperatorDoesNotPrintRoutineAggregateAckWait(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	renderer := newOperatorRenderer(&stdout, &stderr)
+	sample := liveOperatorSample{Status: operations.Status{Lifecycle: "awaiting_aggregate_ack", Reason: operations.ReasonLifecycle, SampledAt: time.Now().UTC()}}
+	if err := renderer.Render(sample, true); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("routine aggregate-ack wait output=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }
 
@@ -41,7 +66,7 @@ func TestLiveOperatorReadyAndIntegrityOutput(t *testing.T) {
 	watermark := at.Add(-4 * time.Second)
 	sample := liveOperatorSample{Status: operations.Status{BackendReady: true, Lifecycle: "live", RankingMode: "qualified_current", SampledAt: at, Watermark: &watermark, WatermarkLag: 125 * time.Millisecond}, Ranked: 17}
 	sample.Metrics.Engine.Connection.Active = true
-	if err := renderer.Render(sample, false); err != nil || stdout.String() != "Ready · qualified_current · 17 ranked · watermark 09:30:56 EDT · lag 125ms · aggregate live connected\n" {
+	if err := renderer.Render(sample, false); err != nil || stdout.String() != "Ready · qualified_current · 17 ranked · watermark 09:30:56 EDT · lag 125ms\n" {
 		t.Fatalf("ready err=%v output=%q", err, stdout.String())
 	}
 	failure := &engine.EvaluatorIntegrityView{Category: engine.EvaluatorSupportContradiction, EngineSequence: 81, CandidateTime: at.Add(-time.Minute)}
@@ -53,6 +78,58 @@ func TestLiveOperatorReadyAndIntegrityOutput(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "Integrity failure · support_contradiction · accounting_integrity · engine sequence 81 · candidate/fence 2026-08-11T13:30:00Z · restart required") || !strings.Contains(stdout.String(), "Suppressed · accounting_integrity · restart_required") {
 		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestLiveOperatorPrintsReadyAndWatermarkStaleOnlyOnTransitions(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	renderer := newOperatorRenderer(&stdout, &stderr)
+	at := time.Date(2026, 8, 11, 13, 31, 0, 0, time.UTC)
+	readyWatermark := at.Add(-4 * time.Second)
+	sample := liveOperatorSample{Status: operations.Status{BackendReady: true, Lifecycle: "live", RankingMode: "qualified_current", SampledAt: at, Watermark: &readyWatermark, WatermarkLag: time.Second}, Ranked: 20}
+	sample.Metrics.Engine.Connection.Active = true
+	if err := renderer.Render(sample, false); err != nil {
+		t.Fatal(err)
+	}
+	initial := stdout.String()
+	if initial != "Ready · qualified_current · 20 ranked · watermark 09:30:56 EDT · lag 1000ms\n" {
+		t.Fatalf("initial ready output=%q", initial)
+	}
+
+	sample.Status.SampledAt = at.Add(30 * time.Second)
+	if err := renderer.Render(sample, false); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != initial {
+		t.Fatalf("stable ready state emitted a heartbeat: %q", stdout.String())
+	}
+
+	staleWatermark := at.Add(-5 * time.Second)
+	sample.Status = operations.Status{Lifecycle: "live", Reason: operations.ReasonWatermarkStale, RankingMode: "qualified_current", SampledAt: at.Add(31 * time.Second), Watermark: &staleWatermark, WatermarkLag: 2500 * time.Millisecond}
+	if err := renderer.Render(sample, false); err != nil {
+		t.Fatal(err)
+	}
+	stale := "Scanner degraded · watermark stale · watermark 09:30:55 EDT · lag 2500ms\n"
+	if stdout.String() != initial+stale {
+		t.Fatalf("stale transition output=%q", stdout.String())
+	}
+
+	sample.Status.SampledAt = at.Add(61 * time.Second)
+	if err := renderer.Render(sample, false); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != initial+stale {
+		t.Fatalf("stable stale state emitted a heartbeat: %q", stdout.String())
+	}
+
+	recoveredWatermark := at.Add(-3 * time.Second)
+	sample.Status = operations.Status{BackendReady: true, Lifecycle: "live", RankingMode: "qualified_current", SampledAt: at.Add(62 * time.Second), Watermark: &recoveredWatermark, WatermarkLag: time.Second}
+	if err := renderer.Render(sample, false); err != nil {
+		t.Fatal(err)
+	}
+	want := initial + stale + "Ready · qualified_current · 20 ranked · watermark 09:30:57 EDT · lag 1000ms\n"
+	if stdout.String() != want || stderr.Len() != 0 {
+		t.Fatalf("recovery output=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }
 
@@ -113,7 +190,8 @@ func TestLiveOperatorRendersTypedIngressFirstCause(t *testing.T) {
 	if err := renderer.Render(sample, true); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stderr.String(), "Ingress first cause · adapter_terminal · protocol/ingress_ambiguity · epoch 3 position (3,41,2) · invariant not_applicable · lifecycle suppressed/ingress_integrity") ||
+	if !strings.Contains(stderr.String(), "Ingress first cause · adapter_terminal · protocol/ingress_ambiguity · at 0001-01-01T00:00:00Z · epoch 3 position (3,41,2) · invariant not_applicable · lifecycle suppressed/ingress_integrity") ||
+		!strings.Contains(stderr.String(), "Ingress evidence · generation 0 active false") ||
 		!strings.Contains(stdout.String(), "Suppressed · ingress_integrity · same_binding_recovery_allowed") {
 		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
@@ -173,9 +251,41 @@ func warmupOperatorSample(at time.Time) liveOperatorSample {
 	result.Metrics.Engine.Connection.Active = true
 	result.Metrics.Engine.Connection.Acknowledged = true
 	result.Metrics.Engine.Hydration.Purpose = engine.HydrationFreshBootstrap
+	result.Metrics.Engine.Hydration.Active = true
 	result.Metrics.Engine.Hydration.Generation = 1
+	result.Metrics.Engine.Hydration.Start = at.Add(-time.Minute)
+	result.Metrics.Engine.Hydration.End = at.Add(time.Minute)
 	result.Metrics.Engine.Hydration.Accounting = engine.HydrationAccounting{Planned: 5540, CompletedValue: 1064, CompletedEmpty: 2417}
 	return result
+}
+
+func TestLiveOperatorDistinguishesInactivePriorGenerationAndRecoveryRetry(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	renderer := newOperatorRenderer(&stdout, &stderr)
+	at := time.Date(2026, 8, 17, 15, 33, 30, 0, time.UTC)
+	sample := liveOperatorSample{Status: operations.Status{Lifecycle: "recovering", Reason: operations.ReasonLifecycle, SampledAt: at}}
+	sample.Metrics.Engine.Connection.Epoch = 2
+	sample.Metrics.Engine.Hydration = engine.OperationalHydration{Purpose: engine.HydrationFreshBootstrap, Generation: 1,
+		Accounting: engine.HydrationAccounting{Planned: 5522, CompletedValue: 5390, CompletedEmpty: 132}}
+	if err := renderer.Render(sample, false); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stdout.String(), "5,522 / 5,522") || !strings.Contains(stdout.String(), "Recovery: reconnecting") {
+		t.Fatalf("inactive generation rendered as active work: %q", stdout.String())
+	}
+
+	stdout.Reset()
+	sample.Status.SampledAt = at.Add(time.Second)
+	sample.Metrics.Engine.Connection = engine.OperationalConnection{Epoch: 3, Active: true, Acknowledged: true}
+	sample.Metrics.Engine.Hydration = engine.OperationalHydration{Active: true, Purpose: engine.HydrationGapRecovery, Generation: 3,
+		Start: at.Add(-time.Minute), End: at.Add(time.Minute),
+		Accounting: engine.HydrationAccounting{Planned: 5522, Open: 423, CompletedValue: 909, CompletedEmpty: 4190}}
+	if err := renderer.Render(sample, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "Recovery: fetching historical one-second aggregates") || !strings.Contains(stdout.String(), "Recovery: 5,099 / 5,522 stocks (92.3%)") || strings.Contains(stdout.String(), "open 423") {
+		t.Fatalf("active retry progress missing: %q", stdout.String())
+	}
 }
 
 type failingWriter struct{}
