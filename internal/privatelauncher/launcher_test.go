@@ -67,23 +67,41 @@ func (child *fakeChild) signalCount() int {
 }
 
 type launcherFixture struct {
-	deps           dependencies
-	starts         []processSpec
-	children       []*fakeChild
-	preflights     int
-	credentials    int
-	opens          int
-	stdout, stderr bytes.Buffer
-	cancel         context.CancelFunc
-	mu             sync.Mutex
+	deps             dependencies
+	starts           []processSpec
+	children         []*fakeChild
+	preflights       int
+	credentials      int
+	environmentReads int
+	opens            int
+	stdout, stderr   bytes.Buffer
+	cancel           context.CancelFunc
+	mu               sync.Mutex
 }
 
 func newLauncherFixture(t *testing.T, at time.Time) *launcherFixture {
 	t.Helper()
 	fixture := &launcherFixture{}
+	var clockMu sync.Mutex
+	current := at
 	fixture.deps = dependencies{
-		now: func() time.Time { return at },
-		environment: func() []string {
+		now: func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return current },
+		after: func(delay time.Duration) <-chan time.Time {
+			clockMu.Lock()
+			current = current.Add(delay)
+			firedAt := current
+			clockMu.Unlock()
+			ready := make(chan time.Time, 1)
+			ready <- firedAt
+			return ready
+		},
+		baseEnvironment: func() []string {
+			return []string{"PATH=/usr/bin", "HOME=/private/test"}
+		},
+		credentialEnvironment: func() []string {
+			fixture.mu.Lock()
+			fixture.environmentReads++
+			fixture.mu.Unlock()
 			return []string{"PATH=/usr/bin", "MASSIVE_API_KEY=exported-test-key", "HOME=/private/test"}
 		},
 		preflight: func(_ context.Context, root string, _, _ io.Writer) (launchPaths, error) {
@@ -135,6 +153,8 @@ func newLauncherFixture(t *testing.T, at time.Time) *launcherFixture {
 			fixture.mu.Unlock()
 			return nil
 		},
+		available:      func(string) error { return nil },
+		standbyRecheck: 24 * time.Hour,
 		scannerStartup: 20 * time.Millisecond, dashboardStartup: 20 * time.Millisecond, pollInterval: time.Millisecond,
 		scannerShutdown: 20 * time.Millisecond, dashboardShutdown: 20 * time.Millisecond,
 	}
@@ -180,10 +200,10 @@ func TestDailyDefaultsDeriveNewYorkDateAndIsolateCredential(t *testing.T) {
 
 func TestTradingDateAndHydrationWorkerOverridesRejectInvalidArguments(t *testing.T) {
 	fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 3, 55))
-	if err := fixture.run(t, "--trading-date", "2026-08-11", "--hydration-workers", "4"); err != nil {
+	if err := fixture.run(t, "--trading-date", "2026-08-10", "--hydration-workers", "4"); err != nil {
 		t.Fatal(err)
 	}
-	if got := argumentValue(fixture.starts[0].arguments, "--trading-date"); got != "2026-08-11" {
+	if got := argumentValue(fixture.starts[0].arguments, "--trading-date"); got != "2026-08-10" {
 		t.Fatalf("trading date=%q", got)
 	}
 	if got := argumentValue(fixture.starts[0].arguments, "--hydration-workers"); got != "4" {
@@ -244,7 +264,7 @@ func TestHelpAndPreflightFailuresDoNotAcquireCredentialOrStartChildren(t *testin
 func TestSimulatedKeychainSecretIsNeverPrintedOrPassedToDashboard(t *testing.T) {
 	const secret = "simulated-keychain-secret-value"
 	fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 3, 55))
-	fixture.deps.environment = func() []string { return []string{"PATH=/usr/bin", "HOME=/private/test"} }
+	fixture.deps.credentialEnvironment = func() []string { return []string{"PATH=/usr/bin", "HOME=/private/test"} }
 	fixture.deps.credential = func(context.Context, []string) (string, string, error) { return secret, "simulated Keychain", nil }
 	if err := fixture.run(t); err != nil {
 		t.Fatal(err)
@@ -257,6 +277,15 @@ func TestSimulatedKeychainSecretIsNeverPrintedOrPassedToDashboard(t *testing.T) 
 	}
 	if _, ok := environmentValue(fixture.starts[1].environment, "MASSIVE_API_KEY"); ok {
 		t.Fatal("dashboard received simulated credential")
+	}
+}
+
+func TestProductionBaseEnvironmentDoesNotReadOrCopyMassiveCredential(t *testing.T) {
+	t.Setenv("MASSIVE_API_KEY", "standby-secret")
+	for _, entry := range productionBaseEnvironment() {
+		if strings.HasPrefix(entry, "MASSIVE_API_KEY=") || strings.Contains(entry, "standby-secret") {
+			t.Fatalf("base environment contains credential: %q", entry)
+		}
 	}
 }
 
@@ -424,13 +453,252 @@ func TestOpenFailureIsNonfatalAfterBothServicesAreHealthy(t *testing.T) {
 	}
 }
 
-func TestAfterSessionFailsBeforePreflightOrCredential(t *testing.T) {
+func TestAfterSessionEntersNextTradingSessionStandby(t *testing.T) {
 	fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 20, 0))
-	if err := fixture.run(t); err == nil || !strings.Contains(err.Error(), "session ended") {
-		t.Fatalf("after-session error=%v", err)
+	if err := fixture.run(t); err != nil {
+		t.Fatal(err)
 	}
-	if fixture.preflights != 0 || fixture.credentials != 0 || len(fixture.starts) != 0 {
-		t.Fatal("after-session path crossed startup boundary")
+	if got := processNames(fixture.starts); !reflect.DeepEqual(got, []string{"dashboard", "scanner"}) {
+		t.Fatalf("startup order=%v", got)
+	}
+	if got := argumentValue(fixture.starts[1].arguments, "--trading-date"); got != "2026-08-11" {
+		t.Fatalf("scanner trading date=%q", got)
+	}
+	if !strings.Contains(fixture.stdout.String(), "Overnight standby for trading session 2026-08-11") {
+		t.Fatalf("standby output=%q", fixture.stdout.String())
+	}
+}
+
+func TestOvernightStandbyDefersCredentialAndUsesExchangeCalendar(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		at   time.Time
+		wake time.Time
+		want string
+	}{
+		{"weekend", nyTime(t, 2026, 8, 22, 10, 0), nyTime(t, 2026, 8, 24, 3, 55), "2026-08-24"},
+		{"exchange holiday", nyTime(t, 2026, 9, 7, 10, 0), nyTime(t, 2026, 9, 8, 3, 55), "2026-09-08"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newLauncherFixture(t, test.at)
+			var clockMu sync.Mutex
+			current := test.at
+			fixture.deps.now = func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return current }
+			release := make(chan time.Time, 1)
+			fixture.deps.after = func(time.Duration) <-chan time.Time { return release }
+			ctx, cancel := context.WithCancel(context.Background())
+			fixture.cancel = cancel
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- run(ctx, "/repo", nil, &fixture.stdout, &fixture.stderr, fixture.deps) }()
+
+			deadline := time.Now().Add(time.Second)
+			for {
+				fixture.mu.Lock()
+				starts, credentials, environmentReads := len(fixture.starts), fixture.credentials, fixture.environmentReads
+				fixture.mu.Unlock()
+				if starts == 1 {
+					if credentials != 0 || environmentReads != 0 || fixture.starts[0].name != "dashboard" {
+						t.Fatalf("standby starts=%v credentials=%d environment_reads=%d", processNames(fixture.starts), credentials, environmentReads)
+					}
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("dashboard did not enter standby")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			clockMu.Lock()
+			current = test.wake
+			clockMu.Unlock()
+			release <- test.wake
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			if got := processNames(fixture.starts); !reflect.DeepEqual(got, []string{"dashboard", "scanner"}) {
+				t.Fatalf("startup order=%v", got)
+			}
+			if got := argumentValue(fixture.starts[1].arguments, "--trading-date"); got != test.want {
+				t.Fatalf("trading date=%q, want %s", got, test.want)
+			}
+		})
+	}
+}
+
+func TestExplicitExpiredOrUnsupportedDateDoesNotRollForward(t *testing.T) {
+	for _, date := range []string{"2026-08-10", "2026-08-08"} {
+		fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 20, 0))
+		err := fixture.run(t, "--trading-date", date)
+		if err == nil {
+			t.Fatalf("explicit date %s unexpectedly succeeded", date)
+		}
+		if fixture.preflights != 0 || fixture.credentials != 0 || len(fixture.starts) != 0 {
+			t.Fatalf("explicit date %s crossed startup boundary", date)
+		}
+	}
+}
+
+func TestDelayedWakeRevalidatesSessionBeforeCredential(t *testing.T) {
+	t.Run("implicit missed session rolls forward and waits again", func(t *testing.T) {
+		fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 21, 0))
+		var clockMu sync.Mutex
+		current := nyTime(t, 2026, 8, 10, 21, 0)
+		fixture.deps.now = func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return current }
+		release := make(chan time.Time, 2)
+		waiting := make(chan struct{}, 2)
+		fixture.deps.after = func(time.Duration) <-chan time.Time { waiting <- struct{}{}; return release }
+		ctx, cancel := context.WithCancel(context.Background())
+		fixture.cancel = cancel
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- run(ctx, "/repo", nil, &fixture.stdout, &fixture.stderr, fixture.deps) }()
+		waitForStarts(t, fixture, 1)
+		<-waiting
+
+		clockMu.Lock()
+		current = nyTime(t, 2026, 8, 12, 21, 0)
+		clockMu.Unlock()
+		release <- current
+		<-waiting
+		fixture.mu.Lock()
+		starts, credentials, environmentReads := len(fixture.starts), fixture.credentials, fixture.environmentReads
+		fixture.mu.Unlock()
+		if starts != 1 || credentials != 0 || environmentReads != 0 {
+			t.Fatalf("starts=%d credentials=%d environment_reads=%d", starts, credentials, environmentReads)
+		}
+
+		clockMu.Lock()
+		current = nyTime(t, 2026, 8, 13, 3, 55)
+		clockMu.Unlock()
+		release <- current
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(fixture.stdout.String(), "Standby continues for trading session 2026-08-13") {
+			t.Fatalf("roll-forward output=%q", fixture.stdout.String())
+		}
+		if got := argumentValue(fixture.starts[1].arguments, "--trading-date"); got != "2026-08-13" {
+			t.Fatalf("scanner trading date=%q", got)
+		}
+	})
+
+	t.Run("explicit missed session fails exactly", func(t *testing.T) {
+		fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 21, 0))
+		var clockMu sync.Mutex
+		current := nyTime(t, 2026, 8, 10, 21, 0)
+		fixture.deps.now = func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return current }
+		release := make(chan time.Time, 1)
+		fixture.deps.after = func(time.Duration) <-chan time.Time { return release }
+		fixture.cancel = nil
+		done := make(chan error, 1)
+		go func() {
+			done <- run(context.Background(), "/repo", []string{"--trading-date", "2026-08-11"}, &fixture.stdout, &fixture.stderr, fixture.deps)
+		}()
+		waitForStarts(t, fixture, 1)
+		clockMu.Lock()
+		current = nyTime(t, 2026, 8, 11, 20, 1)
+		clockMu.Unlock()
+		release <- current
+		err := <-done
+		if err == nil || !strings.Contains(err.Error(), "explicit 2026-08-11 scanner session ended") {
+			t.Fatalf("explicit delayed-wake error=%v", err)
+		}
+		if fixture.credentials != 0 || fixture.environmentReads != 0 || len(fixture.starts) != 1 || fixture.children[0].signalCount() != 1 {
+			t.Fatalf("starts=%v credentials=%d environment_reads=%d dashboard_signals=%d", processNames(fixture.starts), fixture.credentials, fixture.environmentReads, fixture.children[0].signalCount())
+		}
+	})
+}
+
+func TestStandbyWaitCapsMonotonicTimerAndReturnsToWallClockLoop(t *testing.T) {
+	now := nyTime(t, 2026, 8, 10, 21, 0)
+	observed := time.Duration(0)
+	deps := dependencies{
+		now:            func() time.Time { return now },
+		standbyRecheck: 30 * time.Second,
+		after: func(delay time.Duration) <-chan time.Time {
+			observed = delay
+			ready := make(chan time.Time, 1)
+			ready <- now.Add(delay)
+			return ready
+		},
+	}
+	dashboardDone, err := waitForPreconnect(context.Background(), newFakeChild(), now.Add(8*time.Hour), deps)
+	if err != nil || dashboardDone || observed != 30*time.Second {
+		t.Fatalf("dashboard_done=%t delay=%s err=%v", dashboardDone, observed, err)
+	}
+}
+
+func TestStandbyShutdownAndWakePortConflictContainDashboard(t *testing.T) {
+	t.Run("dashboard exit", func(t *testing.T) {
+		fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 21, 0))
+		fixture.deps.after = func(time.Duration) <-chan time.Time { return make(chan time.Time) }
+		fixture.cancel = nil
+		fixture.deps.start = func(spec processSpec) (childProcess, error) {
+			child := newFakeChild()
+			fixture.starts = append(fixture.starts, spec)
+			fixture.children = append(fixture.children, child)
+			if spec.name == "dashboard" {
+				go func() {
+					time.Sleep(2 * time.Millisecond)
+					child.exit(errors.New("dashboard failed"))
+				}()
+			}
+			return child, nil
+		}
+		err := run(context.Background(), "/repo", nil, &fixture.stdout, &fixture.stderr, fixture.deps)
+		if err == nil || !strings.Contains(err.Error(), "dashboard exited during overnight standby") {
+			t.Fatalf("dashboard exit error=%v", err)
+		}
+		if fixture.credentials != 0 || len(fixture.starts) != 1 {
+			t.Fatalf("starts=%v credentials=%d", processNames(fixture.starts), fixture.credentials)
+		}
+	})
+
+	t.Run("operator shutdown", func(t *testing.T) {
+		fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 21, 0))
+		fixture.deps.after = func(time.Duration) <-chan time.Time { return make(chan time.Time) }
+		ctx, cancel := context.WithCancel(context.Background())
+		fixture.cancel = nil
+		done := make(chan error, 1)
+		go func() { done <- run(ctx, "/repo", nil, &fixture.stdout, &fixture.stderr, fixture.deps) }()
+		waitForStarts(t, fixture, 1)
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("shutdown error=%v", err)
+		}
+		if fixture.credentials != 0 || fixture.children[0].signalCount() != 1 {
+			t.Fatalf("credentials=%d dashboard signals=%d", fixture.credentials, fixture.children[0].signalCount())
+		}
+	})
+
+	t.Run("scanner port occupied at wake", func(t *testing.T) {
+		fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 21, 0))
+		fixture.cancel = nil
+		fixture.deps.available = func(string) error { return errors.New("occupied") }
+		err := run(context.Background(), "/repo", nil, &fixture.stdout, &fixture.stderr, fixture.deps)
+		if err == nil || !strings.Contains(err.Error(), "became occupied") {
+			t.Fatalf("wake error=%v", err)
+		}
+		if fixture.credentials != 0 || len(fixture.starts) != 1 || fixture.children[0].signalCount() != 1 {
+			t.Fatalf("starts=%v credentials=%d signals=%d", processNames(fixture.starts), fixture.credentials, fixture.children[0].signalCount())
+		}
+	})
+}
+
+func waitForStarts(t *testing.T, fixture *launcherFixture, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		fixture.mu.Lock()
+		got := len(fixture.starts)
+		fixture.mu.Unlock()
+		if got >= want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("starts=%d, want at least %d", got, want)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

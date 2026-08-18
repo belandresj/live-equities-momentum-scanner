@@ -160,6 +160,34 @@ func (s *Schedule) ForTradingDate(date string) (Facts, error) {
 	}, nil
 }
 
+// TradingDateOnOrAfter returns the first declared exchange trading date on or
+// after the supplied New York civil date. The result comes only from the
+// validated embedded schedule; callers do not infer weekends or holidays.
+func (s *Schedule) TradingDateOnOrAfter(date string) (string, error) {
+	if _, err := parseDate(date, s.location); err != nil {
+		return "", fmt.Errorf("invalid date %q: %w", date, err)
+	}
+	if date < s.coverageStart || date > s.coverageEnd {
+		return "", fmt.Errorf("date %s is outside schedule coverage %s..%s", date, s.coverageStart, s.coverageEnd)
+	}
+	index, _ := slices.BinarySearchFunc(s.entries, date, func(entry scheduleEntry, target string) int {
+		if entry.date < target {
+			return -1
+		}
+		if entry.date > target {
+			return 1
+		}
+		return 0
+	})
+	if index >= len(s.entries) {
+		return "", fmt.Errorf("no declared trading date on or after %s within schedule coverage", date)
+	}
+	if index == 0 {
+		return "", fmt.Errorf("prior completed session for %s is outside schedule coverage", s.entries[index].date)
+	}
+	return s.entries[index].date, nil
+}
+
 func loadSchedule(
 	artifact []byte,
 	provenance []byte,

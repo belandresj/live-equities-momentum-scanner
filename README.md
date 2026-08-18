@@ -113,9 +113,12 @@ workflow documented in the
 ./scripts/run-private-scanner
 ```
 
-Start it at approximately 03:55 America/New_York. It builds and supervises the
-existing scanner and dashboard and reports authoritative liveness and readiness
-without moving market-state ownership into the launcher. For the current MVP,
+It may be started at any time. Before the 03:55 America/New_York preconnect
+boundary it runs the dashboard in calendar-aware standby, then starts the
+ordinary scanner for the current or next exchange-declared trading session.
+Starting at approximately 03:55 remains the shortest path. It builds and
+supervises the existing scanner and dashboard and reports authoritative
+liveness and readiness without moving market-state ownership into the launcher. For the current MVP,
 checkpoint mode stays off and restart uses fresh hydration. Hydration defaults
 to eight workers;
 `--hydration-workers 1|2|4|8` selects a lower supported concurrency when

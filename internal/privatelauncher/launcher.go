@@ -17,6 +17,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/belandresj/live-equities-momentum-scanner/internal/session"
 )
 
 const (
@@ -26,6 +28,7 @@ const (
 	dashboardOrigin  = "http://" + dashboardAddress
 	keychainAccount  = "joshuabelandres"
 	keychainService  = "momentum-scanner-massive-api"
+	preconnectLead   = 5 * time.Minute
 )
 
 // Run starts the private daily scanner workflow rooted at repoRoot. The
@@ -165,18 +168,22 @@ type probeResult struct {
 }
 
 type dependencies struct {
-	now               func() time.Time
-	environment       func() []string
-	preflight         func(context.Context, string, io.Writer, io.Writer) (launchPaths, error)
-	credential        func(context.Context, []string) (string, string, error)
-	start             func(processSpec) (childProcess, error)
-	probe             func(context.Context, string) (probeResult, error)
-	open              func(context.Context, string, []string, io.Writer, io.Writer) error
-	scannerStartup    time.Duration
-	dashboardStartup  time.Duration
-	pollInterval      time.Duration
-	scannerShutdown   time.Duration
-	dashboardShutdown time.Duration
+	now                   func() time.Time
+	after                 func(time.Duration) <-chan time.Time
+	baseEnvironment       func() []string
+	credentialEnvironment func() []string
+	preflight             func(context.Context, string, io.Writer, io.Writer) (launchPaths, error)
+	credential            func(context.Context, []string) (string, string, error)
+	start                 func(processSpec) (childProcess, error)
+	probe                 func(context.Context, string) (probeResult, error)
+	open                  func(context.Context, string, []string, io.Writer, io.Writer) error
+	available             func(string) error
+	standbyRecheck        time.Duration
+	scannerStartup        time.Duration
+	dashboardStartup      time.Duration
+	pollInterval          time.Duration
+	scannerShutdown       time.Duration
+	dashboardShutdown     time.Duration
 }
 
 func run(ctx context.Context, repoRoot string, arguments []string, stdout, stderr io.Writer, deps dependencies) error {
@@ -197,36 +204,94 @@ func run(ctx context.Context, repoRoot string, arguments []string, stdout, stder
 		return errors.New("load America/New_York timezone")
 	}
 	now := deps.now().In(location)
-	tradingDate := parsed.tradingDate
-	if tradingDate == "" {
-		tradingDate = now.Format("2006-01-02")
+	schedule, err := session.Load()
+	if err != nil {
+		return errors.New("load accepted exchange schedule")
 	}
-	date, _ := time.ParseInLocation("2006-01-02", tradingDate, location)
-	sessionStart := time.Date(date.Year(), date.Month(), date.Day(), 4, 0, 0, 0, location)
-	sessionEnd := time.Date(date.Year(), date.Month(), date.Day(), 20, 0, 0, 0, location)
-	if !now.Before(sessionEnd) {
-		return fmt.Errorf("the %s scanner session ended at 20:00 America/New_York; this launcher does not run historical or after-session workflows", tradingDate)
+	facts, err := resolveLaunchSession(schedule, now, parsed.tradingDate)
+	if err != nil {
+		return err
 	}
+	tradingDate := facts.TradingDate
+	sessionStart, sessionEnd := facts.SessionStart.In(location), facts.SessionEnd.In(location)
+	preconnectAt := sessionStart.Add(-preconnectLead)
+	standby := now.Before(preconnectAt)
 
 	paths, err := deps.preflight(ctx, repoRoot, stdout, stderr)
 	if err != nil {
 		return fmt.Errorf("preflight: %w", err)
 	}
-	if !now.Before(sessionStart) {
+	baseEnvironment := deps.baseEnvironment()
+	dashboardArguments := []string{
+		"--address", dashboardAddress,
+		"--api-origin", scannerOrigin,
+		"--assets", filepath.Join(repoRoot, "ui"),
+	}
+	var scanner, dashboard childProcess
+	if standby {
+		fmt.Fprintf(stdout, "Overnight standby for trading session %s. Dashboard starts now; scanner credential, reference, and provider work begin at %s.\n", tradingDate, preconnectAt.Format("2006-01-02 15:04 MST"))
+		dashboard, err = deps.start(processSpec{name: "dashboard", path: paths.dashboardBinary, arguments: dashboardArguments,
+			environment: append([]string(nil), baseEnvironment...), workingDirectory: repoRoot, stdout: stdout, stderr: stderr})
+		if err != nil {
+			return fmt.Errorf("start dashboard: %w", err)
+		}
+		if err := waitForDashboard(ctx, dashboard, dashboardOrigin+"/", deps); err != nil {
+			return errors.Join(err, stopChildren(nil, dashboard, false, false, containmentSignal(ctx), deps))
+		}
+		fmt.Fprintf(stdout, "Scanner dashboard: %s (scanner disconnected during standby)\n", dashboardOrigin)
+		if parsed.open {
+			if err := deps.open(ctx, dashboardOrigin, baseEnvironment, stdout, stderr); err != nil {
+				fmt.Fprintf(stderr, "WARNING: could not open the dashboard browser: %v; standby remains active.\n", err)
+			}
+		}
+		for {
+			priorTradingDate, priorPreconnectAt := tradingDate, preconnectAt
+			dashboardDone, waitErr := waitForPreconnect(ctx, dashboard, preconnectAt, deps)
+			if waitErr != nil {
+				stopErr := stopChildren(nil, dashboard, false, dashboardDone, containmentSignal(ctx), deps)
+				if errors.Is(waitErr, context.Canceled) {
+					return stopErr
+				}
+				return errors.Join(waitErr, stopErr)
+			}
+			wakeNow := deps.now().In(location)
+			refreshed, refreshErr := resolveLaunchSession(schedule, wakeNow, parsed.tradingDate)
+			if refreshErr != nil {
+				return errors.Join(refreshErr, stopChildren(nil, dashboard, false, false, syscall.SIGTERM, deps))
+			}
+			facts = refreshed
+			tradingDate = facts.TradingDate
+			sessionStart, sessionEnd = facts.SessionStart.In(location), facts.SessionEnd.In(location)
+			preconnectAt = sessionStart.Add(-preconnectLead)
+			if wakeNow.Before(preconnectAt) {
+				if tradingDate != priorTradingDate || !preconnectAt.Equal(priorPreconnectAt) {
+					fmt.Fprintf(stdout, "Standby continues for trading session %s; scanner work is scheduled for %s.\n", tradingDate, preconnectAt.Format("2006-01-02 15:04 MST"))
+				}
+				continue
+			}
+			break
+		}
+		if err := deps.available(scannerAddress); err != nil {
+			return errors.Join(fmt.Errorf("local port %s became occupied during standby", scannerAddress), stopChildren(nil, dashboard, false, false, syscall.SIGTERM, deps))
+		}
+		fmt.Fprintf(stdout, "Standby complete; starting scanner for %s.\n", tradingDate)
+	} else if !now.Before(sessionStart) {
 		fmt.Fprintln(stderr, "Warning: starting after 04:00 EST. Will start historical data fetches to ready scanner")
 	} else {
 		fmt.Fprintln(stdout, "Starting before 04:00 America/New_York; authoritative readiness is expected only after the session begins and required hydration/fencing completes.")
 	}
 
-	environment := deps.environment()
+	environment := deps.credentialEnvironment()
 	credential, source, err := deps.credential(ctx, environment)
 	if err != nil {
-		return errors.New("Massive credential unavailable; export MASSIVE_API_KEY or create the macOS Keychain generic-password item for account joshuabelandres and service momentum-scanner-massive-api")
+		credentialErr := errors.New("Massive credential unavailable; export MASSIVE_API_KEY or create the macOS Keychain generic-password item for account joshuabelandres and service momentum-scanner-massive-api")
+		if dashboard != nil {
+			return errors.Join(credentialErr, stopChildren(nil, dashboard, false, false, syscall.SIGTERM, deps))
+		}
+		return credentialErr
 	}
 	defer zeroString(&credential)
 	fmt.Fprintf(stdout, "Credential loaded from %s; it will be passed only in the scanner child environment.\n", source)
-
-	baseEnvironment := removeEnvironment(removeEnvironment(environment, "MASSIVE_API_KEY"), "PRIVATE_SCANNER_REPO_ROOT")
 	scannerArguments := []string{
 		"--run-mode", "live",
 		"--trading-date", tradingDate,
@@ -237,40 +302,91 @@ func run(ctx context.Context, repoRoot string, arguments []string, stdout, stder
 		"--api-address", scannerAddress,
 		"--allow-origin", dashboardOrigin,
 	}
-	dashboardArguments := []string{
-		"--address", dashboardAddress,
-		"--api-origin", scannerOrigin,
-		"--assets", filepath.Join(repoRoot, "ui"),
-	}
-
-	scanner, err := deps.start(processSpec{name: "scanner", path: paths.scannerBinary, arguments: scannerArguments,
+	scanner, err = deps.start(processSpec{name: "scanner", path: paths.scannerBinary, arguments: scannerArguments,
 		environment: append(append([]string(nil), baseEnvironment...), "MASSIVE_API_KEY="+credential), workingDirectory: repoRoot, stdout: stdout, stderr: stderr})
-	if err != nil {
-		return fmt.Errorf("start scanner: %w", err)
-	}
 	credential = ""
-	if err := waitForLive(ctx, scanner, scannerOrigin+"/livez", deps); err != nil {
-		return errors.Join(err, stopChildren(scanner, nil, false, false, containmentSignal(ctx), deps))
-	}
-
-	dashboard, err := deps.start(processSpec{name: "dashboard", path: paths.dashboardBinary, arguments: dashboardArguments,
-		environment: append([]string(nil), baseEnvironment...), workingDirectory: repoRoot, stdout: stdout, stderr: stderr})
 	if err != nil {
-		return errors.Join(fmt.Errorf("start dashboard: %w", err), stopChildren(scanner, nil, false, false, syscall.SIGTERM, deps))
+		return errors.Join(fmt.Errorf("start scanner: %w", err), stopChildren(nil, dashboard, false, false, syscall.SIGTERM, deps))
 	}
-	if err := waitForDashboard(ctx, dashboard, dashboardOrigin+"/", deps); err != nil {
+	if err := waitForLive(ctx, scanner, scannerOrigin+"/livez", deps); err != nil {
 		return errors.Join(err, stopChildren(scanner, dashboard, false, false, containmentSignal(ctx), deps))
+	}
+	if dashboard == nil {
+		dashboard, err = deps.start(processSpec{name: "dashboard", path: paths.dashboardBinary, arguments: dashboardArguments,
+			environment: append([]string(nil), baseEnvironment...), workingDirectory: repoRoot, stdout: stdout, stderr: stderr})
+		if err != nil {
+			return errors.Join(fmt.Errorf("start dashboard: %w", err), stopChildren(scanner, nil, false, false, syscall.SIGTERM, deps))
+		}
+		if err := waitForDashboard(ctx, dashboard, dashboardOrigin+"/", deps); err != nil {
+			return errors.Join(err, stopChildren(scanner, dashboard, false, false, containmentSignal(ctx), deps))
+		}
 	}
 
 	fmt.Fprintf(stdout, "Scanner snapshot: %s/api/v2/snapshot\n", scannerOrigin)
 	fmt.Fprintf(stdout, "Scanner liveness: %s/livez\n", scannerOrigin)
 	fmt.Fprintf(stdout, "Scanner readiness: %s/readyz\n", scannerOrigin)
-	if parsed.open {
+	if parsed.open && !standby {
 		if err := deps.open(ctx, dashboardOrigin, baseEnvironment, stdout, stderr); err != nil {
 			fmt.Fprintf(stderr, "WARNING: could not open the dashboard browser: %v; services remain running.\n", err)
 		}
 	}
 	return supervise(ctx, scanner, dashboard, sessionEnd, stdout, deps)
+}
+
+func resolveLaunchSession(schedule *session.Schedule, now time.Time, explicit string) (session.Facts, error) {
+	if schedule == nil {
+		return session.Facts{}, errors.New("accepted exchange schedule is required")
+	}
+	if explicit != "" {
+		facts, err := schedule.ForTradingDate(explicit)
+		if err != nil {
+			return session.Facts{}, fmt.Errorf("unsupported trading date %s", explicit)
+		}
+		if !now.Before(facts.SessionEnd) {
+			return session.Facts{}, fmt.Errorf("the explicit %s scanner session ended at 20:00 America/New_York; historical and replay workflows are separate", explicit)
+		}
+		return facts, nil
+	}
+	today := now.Format("2006-01-02")
+	if facts, err := schedule.ForTradingDate(today); err == nil && now.Before(facts.SessionEnd) {
+		return facts, nil
+	}
+	candidate := today
+	if facts, err := schedule.ForTradingDate(today); err == nil && !now.Before(facts.SessionEnd) {
+		candidate = now.AddDate(0, 0, 1).Format("2006-01-02")
+	}
+	tradingDate, err := schedule.TradingDateOnOrAfter(candidate)
+	if err != nil {
+		return session.Facts{}, fmt.Errorf("resolve next trading date: %w", err)
+	}
+	facts, err := schedule.ForTradingDate(tradingDate)
+	if err != nil {
+		return session.Facts{}, errors.New("resolve declared trading session")
+	}
+	return facts, nil
+}
+
+func waitForPreconnect(ctx context.Context, dashboard childProcess, target time.Time, deps dependencies) (bool, error) {
+	delay := target.Sub(deps.now())
+	if delay <= 0 {
+		return false, nil
+	}
+	if deps.standbyRecheck > 0 && delay > deps.standbyRecheck {
+		delay = deps.standbyRecheck
+	}
+	select {
+	case err := <-dashboard.Done():
+		return true, fmt.Errorf("dashboard exited during overnight standby: %w", normalizeExit(err))
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case <-deps.after(delay):
+		select {
+		case err := <-dashboard.Done():
+			return true, fmt.Errorf("dashboard exited during overnight standby: %w", normalizeExit(err))
+		default:
+			return false, nil
+		}
+	}
 }
 
 func waitForLive(ctx context.Context, child childProcess, url string, deps dependencies) error {
@@ -475,18 +591,22 @@ func (process *commandProcess) Done() <-chan error { return process.done }
 
 func productionDependencies() dependencies {
 	return dependencies{
-		now:               time.Now,
-		environment:       os.Environ,
-		preflight:         productionPreflight,
-		credential:        productionCredential,
-		start:             startCommand,
-		probe:             probeHTTP,
-		open:              openBrowser,
-		scannerStartup:    5 * time.Minute,
-		dashboardStartup:  30 * time.Second,
-		pollInterval:      time.Second,
-		scannerShutdown:   15 * time.Second,
-		dashboardShutdown: 5 * time.Second,
+		now:                   time.Now,
+		after:                 time.After,
+		baseEnvironment:       productionBaseEnvironment,
+		credentialEnvironment: os.Environ,
+		preflight:             productionPreflight,
+		credential:            productionCredential,
+		start:                 startCommand,
+		probe:                 probeHTTP,
+		open:                  openBrowser,
+		available:             requireAvailablePort,
+		standbyRecheck:        30 * time.Second,
+		scannerStartup:        5 * time.Minute,
+		dashboardStartup:      30 * time.Second,
+		pollInterval:          time.Second,
+		scannerShutdown:       15 * time.Second,
+		dashboardShutdown:     5 * time.Second,
 	}
 }
 
@@ -524,7 +644,7 @@ func productionPreflight(ctx context.Context, repoRoot string, _ io.Writer, stde
 	}
 	paths.scannerBinary = filepath.Join(paths.runtimeDirectory, "bin", "scanner")
 	paths.dashboardBinary = filepath.Join(paths.runtimeDirectory, "bin", "dashboard")
-	buildEnvironment := removeEnvironment(os.Environ(), "MASSIVE_API_KEY")
+	buildEnvironment := productionBaseEnvironment()
 	for _, build := range []struct{ output, target string }{{paths.scannerBinary, "./cmd/scanner"}, {paths.dashboardBinary, "./cmd/dashboard"}} {
 		command := exec.CommandContext(ctx, goBinary, "build", "-trimpath", "-o", build.output, build.target)
 		command.Dir, command.Env, command.Stdout, command.Stderr = root, buildEnvironment, stderr, stderr
@@ -533,6 +653,25 @@ func productionPreflight(ctx context.Context, repoRoot string, _ io.Writer, stde
 		}
 	}
 	return paths, nil
+}
+
+// productionBaseEnvironment deliberately reads only non-secret process
+// settings needed by local builds, the dashboard, and the browser opener. In
+// particular it never reads MASSIVE_API_KEY during overnight standby.
+func productionBaseEnvironment() []string {
+	names := []string{
+		"HOME", "PATH", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ",
+		"GOROOT", "GOPATH", "GOCACHE", "GOMODCACHE", "GOENV", "GOFLAGS", "GOPROXY",
+		"GONOPROXY", "GONOSUMDB", "GOPRIVATE", "GOSUMDB", "GOTOOLCHAIN", "CGO_ENABLED",
+		"CC", "CXX", "SDKROOT", "DEVELOPER_DIR",
+	}
+	result := make([]string, 0, len(names))
+	for _, name := range names {
+		if value, ok := os.LookupEnv(name); ok {
+			result = append(result, name+"="+value)
+		}
+	}
+	return result
 }
 
 func requireAvailablePort(address string) error {

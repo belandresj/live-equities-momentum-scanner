@@ -483,6 +483,57 @@ remains an explicitly unverified observation, not an MVP acceptance gate. The
 correction changes no replay, checkpoint, API, dashboard, ranking, or market
 semantics.
 
+#### 2026-08-17 private-launcher overnight standby correction
+
+**State:** `accepted_deterministically`. This correction changes only the
+private/local launcher's choice and timing of the next live session. It is
+controlled by `PG-OPS-01`, `PG-UI-01`, `DTE-SESSION-01`, `DTE-SESSION-02`,
+`LIFE-MODEL-01`, `LIFE-INIT-02` through `LIFE-INIT-05`, and
+`LIFE-END-01` through `LIFE-END-03`.
+
+With no explicit trading date, an invocation after the current scanner session
+or on a weekend/holiday resolves the next trading day from the same validated,
+embedded exchange schedule used by the scanner. The launcher starts the
+independent loopback dashboard immediately, where the existing polling UI
+honestly reports a disconnected scanner, but it does not acquire a credential,
+resolve reference data, start the scanner, or connect to Massive until 03:55
+America/New_York for that session. At the standby boundary it starts exactly
+one ordinary fresh live scanner for the resolved date and thereafter uses the
+unchanged liveness, readiness, supervision, and session-end behavior.
+
+An explicit `--trading-date` remains exact: an unsupported or already-ended
+date fails rather than rolling forward, while a valid future date uses the same
+standby behavior. The launcher does not synthesize a snapshot or readiness
+state, retain market state across dates, restart a failed scanner, change the
+04:00-20:00 session, or make any provider request during deterministic proof.
+
+Standby never relies on one overnight monotonic timer. It rechecks New York
+wall time and the selected schedule facts at least every 30 seconds and after
+every wake. If sleep, process suspension, or a clock change misses an implicit
+session, it rolls to the next declared session and waits again; if an explicit
+session is missed, it fails without acquiring a credential or starting the
+scanner.
+
+Primary proof `P-MVP-OVERNIGHT` covers a post-20:00 weekday, weekend and
+exchange closure, explicit future and expired dates, dashboard failure and
+operator shutdown during standby, delayed wake beyond session end, clock
+movement, delayed credential-environment access, occupied scanner port at
+wake-up, and the single transition into the existing ordinary scanner
+supervision path. The dangerous counterexamples are binding the ended date,
+inventing weekdays instead of using the schedule, relying on a sleep-sensitive
+overnight timer, spending provider retries overnight, exposing a credential to
+the dashboard, fabricating backend readiness, or leaving the dashboard
+orphaned.
+
+Focused session/launcher short and race suites pass, including public wrapper,
+calendar, delayed-wake, credential-boundary, port-race, and child-containment
+cases. The uncached ordinary repository tier passes; focused vet, shell syntax,
+and diff checking pass. Final independent read-only review initially found a
+stale-session wake false-success path, premature credential-environment access,
+and a sleep-sensitive long timer. The corrections above close all three, and
+focused re-review is clean. No provider credential was accessed and no live
+request was made.
+
 ### MVP-S4 — integrated live-MVP acceptance
 
 **Outcome:** The ordinary live composition builds and its deterministic

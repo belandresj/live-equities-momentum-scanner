@@ -1,26 +1,31 @@
 # Private Live Scanner Operational Finalization
 
-Status: complete and accepted locally after final read-only review, 2026-08-10
+Status: complete and accepted locally after final read-only review, 2026-08-10;
+owner-revised 2026-08-17 for calendar-aware overnight standby
 Scope: private/local daily operation of the existing scanner and dashboard
 Primary worktree: `/Users/joshuabelandres/Dev/live-equities-momentum-scanner-live`
 
 ## 1. Decision and intended operating model
 
 Finalize the current scanner for a simple daily workflow in which the operator
-starts it shortly before 04:00 America/New_York with one command and leaves it
-running through the desired session. The launcher starts and supervises the
+starts it at any time with one command and leaves it running through the
+desired session. The launcher starts and supervises the
 existing scanner backend and independently runnable dashboard; it does not
 merge their ownership or introduce another market-state path.
 
 The supported daily path is:
 
-1. From the repository root, run `./scripts/run-private-scanner` at about 03:55
-   America/New_York.
-2. The launcher derives the New York trading date, loads the Massive credential
-   without displaying it, uses the persistent reference and checkpoint
-   directories, and starts the scanner.
-3. Once the scanner HTTP service is live, the launcher starts the dashboard and
-   prints both local URLs.
+1. From the repository root, run `./scripts/run-private-scanner` at any time.
+   Starting at about 03:55 America/New_York remains the shortest path.
+2. The launcher resolves the current or next valid trading date from the
+   repository's validated exchange schedule. Before the 03:55 preconnect
+   boundary, it starts the dashboard immediately but defers the credential,
+   reference acquisition, scanner process, and provider connection. At 03:55
+   it loads the Massive credential without displaying it, uses the persistent
+   reference and checkpoint directories, and starts the scanner.
+3. In immediate mode, the dashboard starts after the scanner HTTP service is
+   live. In standby mode, the dashboard is already running and polling; once
+   the scanner becomes live, the launcher prints its local status URLs.
 4. Before 04:00, ranking readiness is expected to remain false. At 04:00 the
    existing runtime begins the session, continuously incorporates aggregates,
    and writes coherent checkpoints on its existing cadence.
@@ -134,9 +139,9 @@ Do not implement any of the following as part of this task:
 - UI redesign beyond the documentation or minimal status text required to make
   existing lifecycle state intelligible.
 
-An automatic scheduled start may be considered later. V1 daily operation is an
-explicit one-command foreground launch so failures remain visible to the
-operator.
+An unattended OS-scheduled or daemon start may be considered later. V1 daily
+operation remains an explicit one-command foreground launch so standby and
+failures remain visible to the operator.
 
 ## 6. Existing behavior to reuse
 
@@ -197,8 +202,8 @@ incidental CLI defaults:
 | Setting | Daily value |
 | --- | --- |
 | Scanner run mode | `live` |
-| Trading date | Current date in `America/New_York`, unless explicitly overridden |
-| REST hydration workers | `2` |
+| Trading date | Current non-ended trading date, otherwise the next schedule-declared date; exact explicit override |
+| REST hydration workers | `8` |
 | Reference directory | `<repo>/var/reference` |
 | Checkpoint directory | `<repo>/var/checkpoints` |
 | Scanner API address | `127.0.0.1:8080` |
@@ -228,12 +233,14 @@ local timezone.
   checkpoint can make restart fast, while a checkpoint-less cold start must
   hydrate elapsed aggregates and is proved only to the accepted full 1x
   workload.
-- After the controlling session end: fail by default with an explanation that
-  this command is for the live session. A future explicit historical or replay
-  workflow is outside this launcher.
-- On weekends, holidays, or invalid schedule dates: let the scanner's
-  authoritative schedule validation reject the date. The launcher must surface
-  the error and stop the dashboard; it must not invent a trading calendar.
+- After the controlling session end, or on a weekend or exchange holiday when
+  no date was supplied: select the next declared trading day from the same
+  validated schedule used by the scanner, start the independent dashboard, and
+  remain in standby until 03:55 America/New_York for that session. Do not read a
+  credential or start reference/provider work during standby.
+- For an explicit date: reject unsupported dates and dates whose scanner
+  session has ended. A valid future date enters the same standby path and never
+  authorizes historical or replay operation.
 
 `--trading-date` exists for an explicit operator correction and deterministic
 testing. It does not change New York session semantics or authorize replaying a
@@ -278,18 +285,23 @@ directory and execute the resulting binaries directly. Do not use a `go run`
 process tree if it prevents reliable signal forwarding, exit-status
 attribution, or child cleanup.
 
-Startup order is:
+Immediate startup order is:
 
 1. start the scanner with the fixed daily settings;
 2. wait up to 5 minutes for `/livez` to succeed, while also watching for early
    scanner exit; the scanner resolves the reference binding before opening the
    API, so this bound must not assume an instant cached startup;
 3. if `/livez` does not succeed, stop and report a scanner startup failure;
-4. start the dashboard;
-5. confirm that the dashboard HTTP listener is live within 30 seconds;
-6. print the dashboard URL, scanner snapshot URL, `/livez`, and `/readyz` URLs;
-7. continue to report the transition of `/readyz` without treating pre-session
-   or in-progress hydration as a launcher failure.
+4. start the dashboard and confirm its listener within 30 seconds; and
+5. print the URLs and continue reporting `/readyz` transitions without treating
+   pre-session or in-progress hydration as a launcher failure.
+
+Before the 03:55 preconnect boundary, reverse only the process-start portion:
+start and verify the dashboard, optionally open it, and wait while it honestly
+shows a disconnected scanner. At 03:55, recheck the scanner port, acquire the
+credential, and follow the ordinary scanner `/livez` and supervision path. A
+dashboard exit, signal, credential failure, port conflict, or scanner startup
+failure contains every child already started and exits nonzero.
 
 The launcher may optionally open the dashboard only when `--open` is supplied.
 Opening a browser is never required for scanner correctness and its failure

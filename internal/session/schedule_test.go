@@ -168,6 +168,28 @@ func TestSessionSelection(t *testing.T) {
 	}
 }
 
+func TestTradingDateOnOrAfterUsesDeclaredSchedule(t *testing.T) {
+	schedule, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ input, want string }{
+		{"2026-08-17", "2026-08-17"},
+		{"2026-08-22", "2026-08-24"},
+		{"2026-09-07", "2026-09-08"},
+	} {
+		got, err := schedule.TradingDateOnOrAfter(test.input)
+		if err != nil || got != test.want {
+			t.Fatalf("TradingDateOnOrAfter(%s) = %q, %v; want %s", test.input, got, err, test.want)
+		}
+	}
+	for _, input := range []string{"2026-02-30", "2028-01-01"} {
+		if _, err := schedule.TradingDateOnOrAfter(input); err == nil {
+			t.Fatalf("TradingDateOnOrAfter(%s) unexpectedly succeeded", input)
+		}
+	}
+}
+
 func rewriteSchedule(t *testing.T, mutate func(*scheduleDocument)) []byte {
 	t.Helper()
 	var document scheduleDocument

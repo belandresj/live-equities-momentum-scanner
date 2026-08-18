@@ -1,17 +1,24 @@
 # Private live scanner runbook
 
 This is the supported private/local daily workflow. Start the foreground
-launcher at approximately 03:55 America/New_York from the repository root:
+launcher at any time from the repository root:
 
 ```text
 ./scripts/run-private-scanner
 ```
 
-Starting several minutes before 04:00 gives preflight and compilation time to
-finish before the scanner session begins. It is an operational recommendation,
-not a different ranking mode: the same full-universe aggregate qualification,
-Day-% ranking, hydration, and engine-owned readiness rules apply at every start
-time.
+Starting several minutes before 04:00 remains the shortest path and gives
+preflight and compilation time to finish before the scanner session begins.
+An earlier invocation enters calendar-aware overnight standby: the dashboard
+runs immediately, while credential acquisition, reference requests, the
+scanner process, and provider connections wait until 03:55 for the current or
+next exchange-declared trading day. This is an operational timing difference,
+not a different ranking mode.
+
+The standby loop rechecks New York wall time and the exchange schedule every
+30 seconds. Sleeping or pausing the Mac through a selected session therefore
+cannot start that stale date: an implicit launch rolls to the next declared
+session, while an explicit missed `--trading-date` exits with an error.
 
 ## Prerequisites
 
@@ -43,11 +50,13 @@ The public command shape is:
 ./scripts/run-private-scanner [--trading-date YYYY-MM-DD] [--hydration-workers 1|2|4|8] [--open]
 ```
 
-`--open` asks macOS to open the dashboard after both listeners are healthy. A
-browser-open failure is nonfatal. `--trading-date` is for an explicit date
-correction; it does not authorize historical replay through the live provider
-path. The scanner remains the trading-calendar authority and rejects weekends,
-holidays, and unsupported dates. Hydration defaults to eight workers. The
+`--open` asks macOS to open the dashboard once its listener is healthy; during
+standby the scanner listener is intentionally absent. A browser-open failure is
+nonfatal. `--trading-date` is for an exact date correction; it does not
+authorize historical replay through the live provider path. The launcher and
+scanner use the same validated exchange schedule. Automatic selection skips
+weekends and holidays; an explicit weekend, holiday, unsupported, or ended date
+is rejected. Hydration defaults to eight workers. The
 worker override changes only bounded REST hydration concurrency; it does not
 change the universe, interval, merge rules, ranking, readiness, or T/Q path.
 
@@ -108,8 +117,11 @@ the same process do not overwrite the first-cause record.
 
 ## URLs and status interpretation
 
-After the scanner's `/livez` succeeds, the launcher starts the dashboard. The
-dashboard prints its listener once, followed by the launcher's scanner URLs:
+In immediate mode the launcher starts the dashboard after scanner `/livez`
+succeeds. In overnight standby the dashboard starts first, reports the scanner
+as disconnected, and keeps polling until the scanner starts at 03:55. The
+dashboard prints its listener once; the launcher prints the scanner URLs once
+the real API is live:
 
 - dashboard: `http://127.0.0.1:4173`;
 - scanner snapshot: `http://127.0.0.1:8080/api/v2/snapshot`;
@@ -137,9 +149,13 @@ independent of aggregate readiness and ranking.
 
 ## Cold starts, late starts, and restarts
 
-Before 04:00, the runtime waits for the bound session and then advances
-incrementally. This avoids a large elapsed-session REST backlog; it does not
-skip any symbol, use top-N hydration, or alter qualification/ranking.
+Before 03:55, the launcher runs only the dashboard and displays the scanner as
+disconnected. At 03:55 it starts the ordinary live scanner for the resolved
+trading date. From then until 04:00, the runtime waits in its engine-owned
+`awaiting_session` state and then advances incrementally. This avoids both
+spending finite provider retries overnight and creating a large elapsed-session
+REST backlog; it does not skip any symbol, use top-N hydration, or alter
+qualification/ranking.
 
 From 04:00 through 20:00 New York time, the launcher prints a warning and still
 starts normally. The current private path uses fresh hydration on every
@@ -147,8 +163,10 @@ restart: it hydrates the full elapsed session, consumes the buffered live tail,
 applies the exact ingress fence, and only then reports ready.
 
 There is no promised late-start completion time; a late start must process all
-elapsed aggregate history. The launcher refuses an invocation at or after 20:00
-New York time because historical/replay operation is a separate mode.
+elapsed aggregate history. At or after 20:00, and on weekends or exchange
+holidays, an invocation without `--trading-date` selects the next declared
+trading session and enters standby. An explicit unsupported or already-ended
+trading date still fails; historical/replay operation remains a separate mode.
 
 ## Proven capacity boundary
 
