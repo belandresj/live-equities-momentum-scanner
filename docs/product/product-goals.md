@@ -1,7 +1,8 @@
 # Product goals
 
 **Status:** Approved product contract; feature-set revision approved 2026-08-14;
-Day-%/From-Open presentation revision approved 2026-08-17.
+Day-%/From-Open presentation, compact dashboard structure, and compact rank-
+metadata revisions approved 2026-08-17.
 
 **Approved:** 2026-08-05
 
@@ -12,12 +13,21 @@ context/location/momentum feature set. Lower-level component contracts and the
 implementation still describe the previously accepted feature set until they
 are reconciled through the current capability sequence.
 
-**Presentation revised:** 2026-08-17 — Day % and From Open % use value-relative
-green scales computed from the exact displayed snapshot; the dashboard labels
+**Presentation revised:** 2026-08-17 — positive Day % and From Open % values use
+value-relative green scales computed from the exact displayed snapshot; zero is
+neutral gray and negative values use one fixed muted red. The dashboard labels
 Day % as `FROM CLOSE %` and Tape 5s as `TAPE SPEED`, with short pointer-hover
 header descriptions and no data-cell hover tooltips. These changes affect no
 market value, qualification, ranking, API field, readiness fact, or backend
-ownership.
+ownership. The dashboard uses the short title `MOMENTUM SCANNER`, one compact
+top-right status control with an always-visible trader-facing trust state and
+actionable T/Q warning, and a framed scanner surface. The control omits the
+redundant displayed-row count. Scanner, aggregate, trade, and quote status
+remain available in its native disclosure.
+Polling preserves the static table header and tooltip anchor while replacing
+only validated dynamic rows/messages. A compact Rank column shows current
+display position and rolling 60-second movement immediately before the Symbol
+column without changing row order.
 
 **Current delivery profile:** The owner-approved
 [`Live feature-set MVP program`](../live-feature-mvp-program.md) makes the
@@ -250,12 +260,13 @@ measurement and provider-mapping details but cannot change these meanings.
 The visible columns appear in this exact order and grouping:
 
 ```text
-CONTEXT                  LOCATION                     CURRENT MOMENTUM     EXECUTION
-SYMBOL FLOAT VOLUME LAST | FROM CLOSE % FROM OPEN % DAY RANGE | ACTIVITY 30s MOVE 30s | TAPE SPEED SPREAD
+CONTEXT                       LOCATION                     MOMENTUM            TAPE / EXECUTION
+RANK SYMBOL FLOAT VOLUME LAST | FROM CLOSE % FROM OPEN % DAY RANGE | ACTIVITY 30s MOVE 30s | TAPE SPEED SPREAD
 ```
 
 | Field | User question answered | Ranking effect |
 | --- | --- | --- |
+| Rank | What is the row's current top-20 position and its movement versus approximately 60 seconds ago? | Display of the existing order only. |
 | Symbol | Which exact listed security is this? | Exact symbol breaks Day-% ties. |
 | Float | How constrained is the stock's effective publicly tradable share supply? | Display only. |
 | Volume | How many shares have traded during the scanner session? | Display only. |
@@ -268,9 +279,19 @@ SYMBOL FLOAT VOLUME LAST | FROM CLOSE % FROM OPEN % DAY RANGE | ACTIVITY 30s MOV
 | Tape Speed | How quickly are distinct condition-qualified original trades printing now? | Display only. |
 | Spread | What is the latest valid quoted spread for the displayed leader, and how old is that quote? | Display only. |
 
-Row order itself expresses rank. A versioned API may carry an explicit rank
-ordinal for validation and accessibility, but the dashboard does not add a
-visible Rank column to the table above.
+Row order itself remains authoritative rank. A compact Rank column immediately
+before Symbol shows a neutral `#1` through `#20` ordinal and rolling 60-second
+movement; movement does not become a separate rank-delta column. For a symbol
+at current displayed position `R_t`, movement
+is `R_(t-60s) - R_t` using the closest current displayed snapshot to `t-60s`
+under the one-second UI cadence. Positive values render upward in the existing
+green family, negative values downward in the existing red family, zero is
+blank, and magnitudes above five render as `5+`. A symbol absent from a valid
+comparison snapshot renders `↑ NEW`; before a valid 60-second comparison
+exists, movement remains blank. This history is presentation-local, bounded,
+and cannot sort, delay, smooth, filter, or otherwise change incoming row order.
+A versioned API may continue to carry its rank ordinal for validation and
+accessibility.
 
 Float, aggregate context/momentum, and T/Q-derived fields are not prerequisites
 for displaying an otherwise trustworthy qualified Day-% row unless a later
@@ -613,33 +634,33 @@ approved.
 The dashboard uses color sparingly and consistently with the column groups:
 
 - Symbol, Float, Volume, and Last are predominantly neutral context.
-- Day % uses a readable value-relative green treatment across the exact rows in
-  the displayed snapshot. For `n` displayed rows, let `D_max` and `D_min` be
-  the maximum and minimum displayed Day-% values. When `D_max > D_min`, row
-  `i` has presentation position `c_i = (D_i-D_min)/(D_max-D_min)`. The scale is
-  value-relative, not rank-relative: a row close in value to the displayed
-  minimum remains visually close to that endpoint even when its ordinal rank
-  is high. `c=0` maps to restrained dark green `#4A965D`; `c=1` maps to neon
-  green `#2CFF05`. If all displayed values are identical, every row uses
-  `c=0.5`. Tied values always receive the same position. Fewer than 20 rows use
-  only their own extrema; empty snapshots have no scale.
-- From Open % uses the same continuous displayed-set-relative green scale as
-  Day %. For the displayed rows whose `from_open_change.status` is `current`
-  and whose `value_ratio` is finite, let `F_max` and `F_min` be the maximum and
-  minimum ratios and assign `c_i = (F_i-F_min)/(F_max-F_min)` when the range is
-  nonzero. The position is value-relative, not rank-relative or zero-relative:
-  it compares the displayed From Open values with one another. `c=0` is
-  restrained dark green `#4A965D`; `c=1` is neon green `#2CFF05`; interpolation
-  is continuous in CSS `oklab`. Fewer than 20 rows use only the eligible values
-  actually displayed, ties receive the same position, and one eligible value or
-  an identical eligible range receives `c=0.5`. Warming, unavailable, invalid,
-  and other non-current values do not participate and receive no position; an
-  empty eligible set receives no positions. A degraded, disconnected, frozen,
-  retained, or otherwise noncurrent table keeps its existing noncurrent color
-  even when a current field position exists in the view model. The displayed
-  text and underlying ratio are unchanged; this is a frontend presentation
-  transform with no API, backend, ranking, readiness, or market-measurement
-  ownership change.
+- Current rank is subdued neutral text in Rank. Rolling rank gains
+  and `NEW` use restrained green text, rank losses use restrained red text,
+  unchanged/warmup movement is blank, and no background color is added.
+- Day % uses a sign-aware value-relative treatment across the exact displayed
+  rows. Only finite positive Day-% values participate in the green scale: for
+  those values, `D_max` and `D_min` are the positive maximum and minimum, and
+  `c_i = (D_i-D_min)/(D_max-D_min)` when the positive range is nonzero. The
+  positive minimum maps to restrained dark green `#4A965D`; the positive
+  maximum maps to neon green `#2CFF05`; interpolation is continuous in CSS
+  `oklab`. A single positive value or identical positive values are all the
+  positive maximum and use `c=1`. Zero uses neutral gray `#8F9AA3`, negative
+  values use one fixed muted red `#C46B6B`, and neither participates in the
+  positive extrema. No positive values produce no green positions. Tied
+  positive values share the same position, and fewer than 20 rows use only
+  their own positive extrema; empty snapshots have no scale.
+- From Open % uses the same sign-aware positive-only green scale for displayed
+  rows whose `from_open_change.status` is `current` and whose `value_ratio` is
+  finite. Its positive `F_max` and `F_min` determine the interpolation; zero
+  uses neutral gray `#8F9AA3`, negative uses fixed muted red `#C46B6B`, and
+  non-current/unavailable/invalid values do not participate or receive a
+  position. A single positive value or identical positive values map to the
+  positive endpoint; an all-nonpositive or empty eligible set has no green
+  positions. A degraded, disconnected, frozen, retained, or otherwise
+  noncurrent table keeps its existing noncurrent color even when a current
+  field position exists in the view model. The displayed text and underlying
+  ratio are unchanged; this is a frontend presentation transform with no API,
+  backend, ranking, readiness, or market-measurement ownership change.
 - Day Range is the strongest location cue, progressing from low/red-neutral to
   high/green.
 - Activity 30s uses a gray-to-amber-to-bright-orange attention scale as its
@@ -654,17 +675,33 @@ The dashboard uses color sparingly and consistently with the column groups:
   `#70B873`, `+5%` `#45E532`, and `+7%` `#2CFF05`; each RGB channel is
   linearly interpolated between adjacent anchors, values outside the endpoints
   clamp to the nearest endpoint, and only the numeric text is colored.
-- Spread uses a continuous absolute-bps neutral-to-neon-red RGB gradient for
-  execution friction: `0` and `10` bps map to `#8F9AA3`, `25` to `#B06F6F`,
-  `50` to `#D84A4A`, `75` to `#EE2525`, and `100` to `#FC0000`; RGB channels
-  are linearly interpolated between anchors, values above `100` bps clamp to
-  `#FC0000`, and only the numeric text is colored. Tight spreads remain
-  neutral rather than green.
+- Spread uses a continuous absolute-bps neutral-to-amber/orange-to-red RGB
+  warning gradient for execution friction: `0–20` bps map to `#8F9AA3`, `35`
+  to `#B08A5A`, `60` to `#D1843E`, `100` to `#E05A32`, `200` to `#E9342B`,
+  and `400` to `#FC0000`; RGB channels are linearly interpolated between
+  adjacent anchors, values above `400` bps clamp to `#FC0000`, and only the
+  numeric text is colored. Tight spreads remain neutral rather than green.
 
 The visual grammar is: green means favorable location, orange means something
 is happening now, and red means execution friction or unfavorable state. Color never changes ranking,
 field availability, or the displayed numeric value, and every meaning remains
 available without color alone.
+
+The dashboard's primary chrome is deliberately subordinate to the scanner: a
+single-line `MOMENTUM SCANNER` title and compact top-right status control sit
+above one framed viewport-filling table surface. The status summary translates
+the authoritative publication/transport state into `CONNECTING`,
+`WAITING FOR SESSION`, `STARTING`, `LIVE`, `PARTIAL`, `RECOVERING`, `DELAYED`,
+`DISCONNECTED`, `UNAVAILABLE`, `SESSION ENDED`, or `HISTORICAL`; it does not
+show the redundant displayed-row count. `LIVE` means connected transport and
+an exact current qualified ranking, including a legitimate zero-row result.
+The summary adds an amber `TAPE / QUOTES DEGRADED` warning when execution-field
+coverage is affected. A keyboard-operable native disclosure presents
+trader-facing Scanner, Aggregates, Trades, and Quotes detail without exposing
+internal ranking-mode vocabulary. Delayed or disconnected transport always
+overrides a retained current/partial model in the visible status and table
+styling. T/Q degradation remains independent and does not demote an otherwise
+exact aggregate ranking from `LIVE`.
 
 Day-% and From-Open normalization are presentation transforms over one already
 validated, server-ordered snapshot. They must not sort, filter, backfill, or
@@ -800,7 +837,8 @@ Version 1 is product-complete only when reviewed evidence demonstrates that:
   feature set, while checkpoint-off is the supported MVP configuration;
 - the visible dashboard contains only Symbol, Float, Volume, Last, From Close %,
   From Open %, Day Range, Activity 30s, Move 30s, Tape Speed, and Spread in the
-  contracted grouping/order;
+  contracted grouping/order, preceded by the compact Rank column carrying
+  current rank and bounded rolling movement;
 - the dashboard's neutral/green/orange/red hierarchy communicates context,
   location, current activity, and execution friction without browser-owned
   market classification or color-only meaning;

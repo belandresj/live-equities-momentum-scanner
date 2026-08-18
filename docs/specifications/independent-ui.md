@@ -175,9 +175,9 @@ gray-to-orange intensity across its defined 0–100 percentile-derived scale.
 Tape uses the current product-approved absolute-rate gradient from 0 through
 500 five-second trades/second; rates above 500 retain their number and use the
 endpoint color. Spread uses the current product-approved continuous absolute-
-bps neutral-to-red text gradient through 100 bps; rates above 100 retain their
-number and use the endpoint color. Values outside a visual scale remain
-numerically visible.
+bps neutral-to-amber/orange-to-red text gradient through 400 bps; values above
+400 retain their number and use the endpoint color. Values outside a visual
+scale remain numerically visible.
 These presentation scales do not create
 alerts, qualification, ranking, readiness, or capacity claims.
 
@@ -497,7 +497,8 @@ contract. A follow-up owner revision makes Activity and five-second Tape Rate
 continuous gray-to-orange intensity scales, renders only the five-second Tape
 Rate and inline Spread bps/cents, and removes false decimal precision
 from range position and Activity. Spread now uses the current continuous
-absolute-bps neutral-to-red text gradient rather than cell bands. Focused
+absolute-bps neutral-to-amber/orange-to-red text gradient rather than cell
+bands. Focused
 model, palette, contrast, and fixture
 proofs distinguish these presentation-only decisions; C10 remains the sole
 ranking and value owner.
@@ -575,16 +576,19 @@ replay work, checkpoint work, or scanner/backend production changes.
 
 ### 20.1 Exact grouped table contract
 
-The table has a two-row semantic header and exactly these 11 leaf columns in
-this order. There is no visible Rank column; API row order is preserved
-exactly, and rank remains a validated server-owned ordering fact.
+The table has a two-row semantic header and exactly these 12 leaf columns in
+this order. A compact Rank column immediately precedes Symbol; there is no
+separate rank-delta column. API row order is preserved exactly, and rank remains
+a validated server-owned ordering fact. Rank's fixed-width metadata area shows
+the displayed array position as `#1` through `#N` and, when available, rolling
+60-second movement. Symbol contains only the ticker beneath its own header.
 
 | Group | Columns | Presentation meaning |
 | --- | --- | --- |
-| `CONTEXT` | `SYMBOL`, `FLOAT`, `VOLUME`, `LAST` | Predominantly neutral identity, tradable-supply context, cumulative session participation, and current aggregate mark. |
+| `CONTEXT` | `RANK`, `SYMBOL`, `FLOAT`, `VOLUME`, `LAST` | Predominantly neutral ordering, identity, tradable-supply context, cumulative session participation, and current aggregate mark. |
 | `LOCATION` | `FROM CLOSE %`, `FROM OPEN %`, `DAY RANGE` | Where the symbol is relative to the adjusted prior close, session open, and session range. From Close % is the presentation label for the canonical Day-% field and uses the product-approved displayed-set-relative dark-to-neon green scale; Day Range retains its red-neutral-green location scale. |
-| `CURRENT MOMENTUM` | `ACTIVITY 30s`, `MOVE 30s` | Recent aggregate participation and price movement. Activity uses gray-to-orange attention; Move uses the product-approved continuous signed red-to-gray-to-green RGB scale, with color applied only to the numeric text. |
-| `EXECUTION` | `TAPE SPEED`, `SPREAD` | Selected-row transaction activity and NBBO friction. Tape Speed is the presentation label for canonical Tape 5s and uses the product-approved continuous absolute-rate gradient from neutral gray at 0–50 trades/s through restrained/bright orange at 100/250 trades/s to `#FF8A00` at 500 trades/s and above. Spread uses the product-approved continuous absolute-bps neutral-to-neon-red gradient through `#FC0000` at 100 bps; both treatments color only numeric text. |
+| `MOMENTUM` | `ACTIVITY 30s`, `MOVE 30s` | Recent aggregate participation and price movement. Activity uses gray-to-orange attention; Move uses the product-approved continuous signed red-to-gray-to-green RGB scale, with color applied only to the numeric text. |
+| `TAPE / EXECUTION` | `TAPE SPEED`, `SPREAD` | Selected-row transaction activity and NBBO friction. Tape Speed is the presentation label for canonical Tape 5s and uses the product-approved continuous absolute-rate gradient from neutral gray at 0–50 trades/s through restrained/bright orange at 100/250 trades/s to `#FF8A00` at 500 trades/s and above. Spread uses the product-approved continuous absolute-bps neutral-to-amber/orange-to-red gradient through `#FC0000` at 400 bps; both treatments color only numeric text. |
 
 Group labels, visible separators, scoped leaf headers, and non-color text
 meaning must make these four scanning questions apparent without adding data
@@ -619,30 +623,46 @@ After validating one complete API v2 response, the view-model transformation
 uses one shared displayed-set-relative normalization helper over that response's
 exact `rows` array. The Day-% selector returns `row.day_change_ratio`; the From
 Open selector returns `row.from_open_change.value_ratio` only when that field's
-status is `current`, otherwise it returns `null`. The helper finds extrema only
-among finite selected values and returns one position per row, with `null` for
-excluded rows. For Day % its formula is `(D_i-D_min)/(D_max-D_min)`; for From
-Open it is `(F_i-F_min)/(F_max-F_min)`, clamped only for floating-point residue.
-The current qualified table interpolates both fields from `#4A965D` at zero to
+status is `current`, otherwise it returns `null`. The helper retains only finite
+positive selected values for the green extrema and returns `null` positions for
+zero, negative, invalid, or excluded values. For positive Day % its formula is
+`(D_i-D_min)/(D_max-D_min)`; for positive From Open it is
+`(F_i-F_min)/(F_max-F_min)`, clamped only for floating-point residue. The
+current qualified table interpolates positive values from `#4A965D` at zero to
 `#2CFF05` at one using the same continuous CSS `color-mix(in oklab, ...)`
-palette. A singleton or zero-width eligible range gives every eligible row
-`0.5`; equal values and ties share one position; fewer-than-20 snapshots use
-only their displayed eligible extrema; and no eligible From Open values produce
-no From Open positions. Warming, unavailable, invalid, and other non-current
-From Open fields retain their state, reason, text, and no-color presentation.
+palette. A singleton or zero-width positive range maps every positive value to
+the maximum endpoint `1`; equal values and ties share one position; fewer-than-
+20 snapshots use only their displayed positive extrema; and no positive From
+Open values produce no From Open positions. Current zero values use neutral
+gray `#8F9AA3`, current negative values use fixed muted red `#C46B6B`, and
+warming, unavailable, invalid, and other non-current From Open fields retain
+their state, reason, text, and no-color presentation.
 The transform does not sort, filter, backfill, or recheck server order, and it
 does not retain extrema across snapshots. Noncurrent/retained table styling
 continues to take precedence over either relative-green palette. Missing or
 nonfinite Day % fails the existing whole-response validation; the numeric field
 text and underlying ratios are never altered by this presentation metadata.
 
+The poll controller retains at most 70 current-ranking samples containing only
+`sampled_at` and a map from displayed symbols to their 1-based array positions.
+For each new current snapshot it chooses the retained sample closest to
+`sampled_at - 60s`, provided history reaches that target and the selected
+sample is within five seconds. Movement is `prior rank - current rank`:
+`1..5` renders `↑1..↑5` or `↓1..↓5`, larger magnitudes render `↑5+` or `↓5+`,
+and zero renders nothing. Absence from a valid comparison snapshot renders
+`↑ NEW`; lack of a valid comparison during startup or a history gap renders
+nothing. Binding/date changes and timestamp regression clear the history. The
+metadata calculation consumes the validated order after every successful poll
+and does not sort, debounce, smooth, delay, or suppress that order.
+
 ### 20.2 API v2 view and transport boundary
 
 The client accepts only `scanner.snapshot.v2` from `/api/v2/snapshot`. It
 validates the response and swaps one detached render model atomically. It
-preserves the server row order, validates consecutive rank identities without
-displaying rank, rejects duplicate or empty symbols and more than 20 rows, and
-does not sort, filter, join, clamp, calculate readiness, infer availability,
+preserves the server row order, validates consecutive rank identities, renders
+current array-position metadata in Rank, rejects duplicate or empty
+symbols and more than 20 rows, and does not sort, filter, join, clamp,
+calculate readiness, infer availability,
 or reconstruct a missing value. Exact API v2 status/reason/value and Float
 provenance tuples are enforced before rendering; unknown incompatible schema
 or contradictory known facts fail closed and retain the last valid snapshot as
@@ -658,22 +678,47 @@ details DOM/flattened view-model representation, fixtures, and headers rather
 than retaining hidden parallel representations. Field-specific reasons and
 provenance remain focus-accessible on their relevant table cells.
 
-The primary status strip contains only `BACKEND`, `RANKING`, and `T/Q`.
-Connection problems remain visible through the header's disconnected or delayed
-state; normal transport is not rendered as a separate status tile. Process
-liveness, operational sample accounting, sample identity/time, and the raw
-aggregate watermark remain available through the validated API and future
-diagnostic tooling. The dashboard renders no Operational Details disclosure.
+The compact top-right status control is the sole primary status surface. Its
+always-visible summary translates the validated primary publication/transport
+state into `CONNECTING`, `WAITING FOR SESSION`, `STARTING`, `LIVE`, `PARTIAL`,
+`RECOVERING`, `DELAYED`, `DISCONNECTED`, `UNAVAILABLE`, `SESSION ENDED`, or
+`HISTORICAL` and omits the redundant displayed-row count. `LIVE` requires
+connected exact qualified-current output; an exact zero-row result remains
+`LIVE`. When T/Q pressure, shedding, a retained-bound hit, or unknown selected-
+row coverage makes Tape Speed or Spread incomplete, the summary additionally
+exposes the trader-facing `TAPE / QUOTES DEGRADED` warning in amber without
+demoting the aggregate scanner state. The native keyboard-operable disclosure
+uses four trader-facing rows: Scanner, Aggregates, Trades, and Quotes. Aggregate
+startup/recovery detail retains exact work progress; Trades and Quotes report
+separate selected-row current/warming/stale/shed/unavailable/invalid counts.
+Raw backend-readiness and ranking-mode labels and a separate dashboard-feed row
+are not displayed. Connection problems remain visible in the summary's
+disconnected or delayed state; normal transport is not rendered separately.
+Process liveness, operational sample accounting, sample identity/time, and the
+raw aggregate watermark remain available through the validated API and future
+diagnostic tooling. The dashboard renders no broader Operational Details
+disclosure.
 
-During noncurrent live recovery, the header and Backend tile use the immutable
-API lifecycle, connection acknowledgement, `recovery.generation_active`, work
-accounting, and fence facts only for presentation. They distinguish
-`RECONNECTING`, `RESUBSCRIBING`, `PREPARING RECOVERY`, `RECOVERING`,
-`RETRYING RECOVERY`, and `FINALIZING RECOVERY`. Active work shows the exact
-generation and terminal/planned progress. A retained inactive prior ledger is
-never shown as current progress, and recovery never becomes `CURRENT` until the
-ordinary backend readiness fact does. Startup uses the corresponding
-`CONNECTING`, `SUBSCRIBING`, `HYDRATING`, and `FINALIZING HYDRATION` labels.
+The static dashboard shell, compact status control, semantic table, column
+groups, leaf headers, and header-tooltip anchors are created once. Each later
+validated render model is prepared off-DOM and committed synchronously by
+updating status/message content and replacing the table rows. The table header
+node therefore keeps identity across one-second samples, so an active custom
+header tooltip is not destroyed by polling. Row replacement remains one-model
+at a time, retains exact server order, and restores keyed cell focus where the
+same symbol/field remains available. A preparation or render failure leaves the
+previous coherent status/messages/rows intact.
+
+During noncurrent live recovery, the status summary and Aggregates detail use the
+immutable API lifecycle, connection acknowledgement,
+`recovery.generation_active`, work accounting, and fence facts only for
+presentation. The summary consolidates reconnect, resubscribe, preparation,
+active work, retry, and fence finalization as `RECOVERING`; Aggregates names the
+specific trader-facing step. Active work shows exact terminal/planned progress.
+A retained inactive prior ledger is never shown as current progress, and
+recovery never becomes `LIVE` until the ordinary backend readiness fact does.
+The summary similarly consolidates connection, subscription, hydration, and
+fence finalization as `STARTING`, with the specific step in Aggregates.
 During an independent rolling update, a v2 response that predates
 `generation_active` is conservatively treated as inactive and presented as
 preparing rather than fabricated progress. These labels add no browser-owned
@@ -696,8 +741,9 @@ unavailable Float; positive/negative Move; low/high Activity and Tape; retained
 stale Spread; hostile literal text; delayed, disconnected, and recovered
 transport; same-publication resampling; new-publication atomic replacement;
 and focus preservation when rows persist, reorder, or disappear. It asserts
-the exact four group labels, 11-column order, no Rank column, compact
-Float/Volume formatting, exact displayed-set-relative Day-% positions including
+the exact four group labels, 12-column order, distinct Rank and Symbol columns,
+compact current rank and rolling movement in Rank, compact Float/Volume formatting,
+exact displayed-set-relative Day-% positions including
 the `100%`, `20%`, `10%` example (`1`, approximately `.11`, `0`), exact
 displayed-set-relative From-Open positions including the `100%`, `20%`, `-10%`
 example (`1`, approximately `.2727`, `0`), fewer/equal/tied cases,
@@ -705,7 +751,9 @@ current-only participation, noncurrent precedence, no client sorting or
 market-state calculation, and complete focus-accessible reasons/provenance.
 It also asserts the renamed `FROM CLOSE %` and `TAPE SPEED` headers, all 11
 plain-language header descriptions, the pointer-hover-only custom tooltip
-behavior, and the absence of native data-cell `title` tooltips.
+behavior, stable header-node identity across consecutive samples, the compact
+status summary/disclosure hierarchy, and the absence of native data-cell
+`title` tooltips.
 
 The bounded production-Chrome proof runs through the real dashboard server and
 poller at 1440x900. It verifies one-viewport density, semantic grouped headers,
@@ -730,8 +778,8 @@ part of this slice.
 `MVP-S3` is accepted. The independently runnable dashboard consumes only
 `scanner.snapshot.v2` from `GET /api/v2/snapshot`, preserves the API row order
 while validating consecutive rank ordinals, and renders no Rank column. The
-two-row table header contains exactly the four `CONTEXT`, `LOCATION`, `CURRENT
-MOMENTUM`, and `EXECUTION` groups and the 11 contracted leaf columns. The
+two-row table header contains exactly the four `CONTEXT`, `LOCATION`, `MOMENTUM`,
+and `TAPE / EXECUTION` groups and the 11 contracted leaf columns. The
 accepted shell, bounded nonoverlapping poller, compact status hierarchy, safe
 detached replacement, focus restoration, live region, reduced-motion rule, and
 desktop density remain in the production path. The backend operations and
@@ -749,7 +797,8 @@ provenance; a retained cached Float and stale Spread retain their numeric value
 only under the exact stale tuple and show an explicit `stale` label. Float and
 Volume use compact share formatting with unit-boundary promotion. Tape uses
 the fixed absolute-rate gradient through `#FF8A00` at 500 trades/s, Spread uses
-the fixed absolute-bps gradient through `#FC0000` at 100 bps, and Move uses the
+the fixed absolute-bps neutral-to-amber/orange-to-red gradient through
+`#FC0000` at 400 bps, and Move uses the
 validated raw sign for its continuous positive/neutral/negative presentation,
 so exact zero is neutral. Every status-bearing cell is keyboard-focusable and exposes
 its reason plus applicable Float, Tape, Spread, and membership provenance.
@@ -870,3 +919,121 @@ local production dashboard and deterministic fixture were checked in the
 browser: the header tooltip was visible after 150 ms with the expected text,
 and a Volume data cell had no `title` attribute. No API, backend measurement,
 ranking, qualification, readiness, or cross-component interface changed.
+
+### 20.8 Compact dashboard structure and stable-header correction acceptance — 2026-08-17
+
+The dashboard now renders the short `MOMENTUM SCANNER` title, one compact
+top-right status summary/disclosure, and a framed scanner surface occupying the
+remaining viewport. The permanent three-tile Backend/Ranking/T/Q band is
+removed. The summary always shows exact publication/transport state and row
+count; T/Q pressure, aggregate-only shedding, retained-bound state, or unknown
+coverage adds the amber `TAPE / QUOTES DEGRADED` warning. Opening the native
+disclosure shows backend readiness, ranking mode/reason, and the exact T/Q mode,
+original pressure cause, oldest accepted waiting age, recovery progress, and
+unknown count without changing aggregate currentness.
+
+The renderer creates the dashboard shell, semantic table header, and custom
+tooltip anchors once. For each later validated model it prepares complete rows
+and messages off-DOM, commits those dynamic regions synchronously, and restores
+keyed cell focus. Consecutive-render proof preserves exact header and status-
+summary node identity and an open disclosure. The 1440x900 production fixture
+kept all 20 rows in one viewport; the framed surface absorbed the remaining
+height; degraded T/Q remained explicit; the native disclosure showed the exact
+fixture facts; and the From Close tooltip remained visible after 1.7 seconds,
+crossing a one-second poll. Browser console inspection found no warnings or
+errors.
+
+Independent review found one P2 inherited false-current boundary: a retained
+model could outrank an explicitly delayed/disconnected render event. The
+correction gives `refresh_delayed` and `disconnected` precedence over current
+or partial model labels, requires connected transport for green primary state,
+and forces retained table/cell styling at the render boundary. Exact current+
+delayed, current+disconnected, and partial+disconnected regressions distinguish
+the failure. Focused re-review found no remaining P1/P2.
+
+Fresh verification passed all 37 model/render/visual proofs, focused
+`internal/ui` and `cmd/dashboard` short tests, the full uncached repository
+short tier, the affected race tier, and `git diff --check`. This correction
+changes no API, polling cadence, market value, qualification, ranking,
+readiness, backend ownership, provider behavior, replay, or checkpoint claim.
+
+### 20.9 Compact rank and rolling movement correction implementation — 2026-08-17
+
+The dashboard now renders a compact Rank column immediately before Symbol.
+Each Rank cell contains a fixed-width 70px metadata block: subdued current
+`#N`, then optional restrained green upward or red downward rolling movement.
+The table has exactly 12 headers, with Symbol containing only the ticker beneath
+its own header and no separate rank-delta column. The displayed ordinal is
+assigned from the validated array position, and the current API row array is rendered immediately without
+sorting, smoothing, debouncing, or delay.
+
+`RankMovementHistory` is owned by the nonoverlapping poll controller and retains
+at most 70 timestamp/rank maps. It chooses the closest current-ranking sample
+within five seconds of `sampled_at - 60s`; values beyond five cap at `5+`.
+Startup and history gaps remain blank, while absence from an available
+comparison snapshot renders `↑ NEW`. Binding/date changes and timestamp
+regression reset the presentation-local history.
+
+The five rank-focused model/render/visual proofs pass, covering `#1..#N`, `#9 -> #4`,
+`#10 -> #4`, `#4 -> #6`, `#2 -> #10`, unchanged, `NEW`, startup, alternating
+immediate reorders, the 70-snapshot bound, and compact allocation. JavaScript
+syntax checks, focused dashboard/server tests, and `git diff --check` pass. The
+deterministic 1440x900 browser check rendered 20 rows, 12 headers, distinct
+Rank and Symbol headers, identical ticker-cell start coordinates, exact viewport extent, and no
+console warning/error. A concurrent user-owned Day/From-Open presentation edit
+currently leaves five unrelated focused UI assertions failing, so final
+correction acceptance and a whole-suite green claim remain pending worktree
+convergence. The rank implementation changes no API, backend rank, ranking
+algorithm, snapshot cadence, market calculation, readiness, replay, or
+checkpoint claim.
+
+### 20.10 Sign-aware Day/From Open presentation correction acceptance — 2026-08-17
+
+The Day % and From Open % presentation scales now normalize finite positive
+displayed values only. Positive minima use the existing dark-green endpoint
+`#4A965D`; positive maxima use `#2CFF05`. Zero values use the existing neutral
+gray `#8F9AA3`, and every negative value uses the existing muted red `#C46B6B`
+without a negative gradient. A singleton or zero-width positive set maps every
+positive value to the maximum endpoint; no-positive and non-current sets have
+no green position. Numeric text, API values, row order, and strict Day-%
+ranking remain unchanged.
+
+The shared `relativeColorPositions` helper accepts positive-only normalization,
+while the view model makes the sign-aware fixed-color decision and the renderer
+applies it only to current Day/From Open cells. Focused JavaScript verification
+passes all 41 model/render/visual proofs, including the requested mixed-sign
+examples, positive-only extrema, no-positive and identical-positive cases,
+fixed zero/negative colors, unavailable/invalid From Open states, noncurrent
+precedence, unchanged text, and unchanged order. `go test -short -timeout 2m
+./...` and `git diff --check` pass. No independent review is triggered because
+this is a presentation-only change with no trust, ownership, ordering,
+concurrency, API, or cross-component boundary change.
+
+### 20.11 Trader-facing status vocabulary correction acceptance — 2026-08-17
+
+The compact summary now maps validated lifecycle and transport facts to
+`CONNECTING`, `WAITING FOR SESSION`, `STARTING`, `LIVE`, `PARTIAL`,
+`RECOVERING`, `DELAYED`, `DISCONNECTED`, `UNAVAILABLE`, `SESSION ENDED`, or
+`HISTORICAL`. `LIVE` requires connected exact qualified-current output and
+remains correct for a resolved empty table. The displayed-row count and raw
+backend/ranking vocabulary are removed. Delayed/disconnected transport retains
+precedence over an otherwise current or partial model, and T/Q-only degradation
+does not demote the aggregate scanner from `LIVE`.
+
+The native disclosure contains Scanner, Aggregates, Trades, and Quotes only.
+Aggregates translates the already validated connection, acknowledgement,
+hydration, recovery, retry, and fence phase while preserving active work
+progress. Trades and Quotes separately summarize selected-row current, warming,
+stale, shed, unavailable, invalid, and unknown states. It does not add a
+dashboard-feed row or reconstruct backend state from table values.
+
+All 45 focused model/render/visual proofs pass, including exact lifecycle
+mapping, an exact zero-row `LIVE` result, current/partial transport-precedence
+counterexamples, T/Q-independent `LIVE`, separate coverage counts, and the
+absence of the ranked-row count. The full repository short tier passes.
+Deterministic browser inspection confirms the collapsed `LIVE` pill, the
+four-row disclosure, and the independent `TAPE / QUOTES DEGRADED` warning with
+separate shed counts; no browser warning or error was emitted. This correction
+changes no API, polling cadence, backend readiness, qualification, rank,
+provider behavior, replay, or checkpoint claim and does not trigger an
+additional independent review.

@@ -574,9 +574,9 @@ cannot create new T/Q subscriptions. When ranking leaves `qualified_current`,
 the engine closes affected desired membership and requests best-effort
 unsubscription of known provider members.
 
-### LIFE-TQ-02 — acknowledgement and measurements are subordinate
+### LIFE-TQ-02 — data confirmation and measurements are subordinate
 
-T/Q command intent, write outcome, acknowledgement, causal coverage, warming,
+T/Q command intent, write outcome, data confirmation, causal coverage, warming,
 measurement, and pressure changes are consumed as ordered facts but do not
 change the top-level scanner lifecycle unless the shared transport failure also
 invalidates aggregate/control processing.
@@ -602,8 +602,8 @@ No T/Q pressure state may:
 - change aggregate qualification, ranking, or backend readiness.
 
 When pressure recovers, T/Q promotion resumes gradually from the current
-qualified ranking and every affected feature warms from new acknowledged
-coverage.
+qualified ranking and every affected feature warms only from newly
+data-confirmed coverage.
 
 ## 9. Deterministic replay lifecycle
 

@@ -1,5 +1,11 @@
 # Live T/Q protocol resilience and aggregate continuity correction
 
+> **Superseded T/Q acknowledgement semantics:** The 2026-08-18
+> [`tq-data-confirmed-subscription-correction.md`](tq-data-confirmed-subscription-correction.md)
+> replaces this document's generic-success cardinality, deadline, and
+> acknowledgement-created coverage rules. Its T/Q-local containment and
+> aggregate-independence guarantees remain in force.
+
 **Status:** `TQR-S1` and `TQR-S2` accepted from their deterministic proofs
 
 **Boundary and completed-contract authority:** Direct owner request on

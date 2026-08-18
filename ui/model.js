@@ -7,7 +7,7 @@ const KNOWN_FIELD_STATUS = new Set(["warming", "current", "unavailable", "invali
 const KNOWN_FLOAT_STATUS = new Set(["current", "stale", "unavailable", "invalid"]);
 const KNOWN_FIELD_REASON = new Set(["", "before_first_print", "history_incomplete", "prior_close_unavailable", "no_aggregate_in_target", "rolling_warmup", "reference_warmup", "zero_width", "historical_conflict", "invalid_input", "state_bound_exceeded"]);
 const KNOWN_TQ_STATUS = new Set(["unselected", "warming", "current", "stale", "unavailable", "invalid", "pressure_shed"]);
-const KNOWN_TQ_REASON = new Set(["", "coverage", "coverage_warming", "five_second_warming", "qualifying_original_prints", "unequal_repeat", "one_sided_quote", "crossed_quote", "stale_quote", "insufficient_coverage", "pressure", "replay_unavailable"]);
+const KNOWN_TQ_REASON = new Set(["", "coverage", "channel_unconfirmed", "control_error", "coverage_warming", "five_second_warming", "qualifying_original_prints", "unequal_repeat", "one_sided_quote", "crossed_quote", "stale_quote", "insufficient_coverage", "pressure", "replay_unavailable"]);
 const CURRENT_LIFECYCLE = new Set(["live", "hydrating"]);
 const BACKEND_READY_RANKING_MODE = new Set(["qualified_current", "degraded_bootstrap", "degraded_current"]);
 const TIMESTAMP_BASIS = new Set(["", "none", "participant", "sip_fallback", "mixed"]);
@@ -56,7 +56,7 @@ const POPULATION_TRANSITION_FIELDS = ["bootstrap_unknown", "trusted_by_later_liv
 const WORK_FIELDS = ["planned", "open", "completed_value", "completed_empty", "failed", "canceled", "fenced"];
 const RECOVERY_ROW_FIELDS = ["consumed", "inserted", "duplicate", "conflict_or_withdrawal", "rejected", "fenced", "integrity"];
 const FACT_FIELDS = ["consumed", "applied", "duplicate", "rejected", "fenced", "pressure_shed", "integrity", "normalized_trades", "normalized_quotes", "applied_trades", "applied_quotes", "pressure_shed_trades", "pressure_shed_quotes"];
-const COMMAND_FIELDS = ["issued", "pending", "acknowledged", "failed", "fenced", "result_fenced"];
+const COMMAND_FIELDS = ["issued", "pending_write", "written", "failed", "fenced", "result_fenced"];
 const CHECKPOINT_DECIMAL_FIELDS = ["eligible", "pressure_deferred", "projection_started", "projection_in_progress", "projected", "projection_rejected", "submit_rejected", "submitted", "outstanding", "in_progress", "pending", "completed", "failed", "canceled", "superseded", "artifact_bytes"];
 const CHECKPOINT_UINT_FIELDS = ["usable_age_ms", "projection_total_ms", "projection_lock_ms", "write_ms", "encode_ms", "reopen_validation_ms"];
 const OPERATION_UINT_FIELDS = ["queue_capacity_frames", "queue_current_frames", "queue_high_frames", "queue_current_bytes", "queue_high_bytes", "mean_processing_delay_ms", "max_processing_delay_ms", "max_processing_delay_one_second_ms", "goroutines"];
@@ -162,6 +162,7 @@ function validateRow(row, index, seen) {
   validateSpread(row.spread, `${name}.spread`, false);
   fields(row.tq_membership, ["desired", "provider_present", "provider_membership_unknown"], `${name}.tq_membership`);
   bool(row.tq_membership.desired, `${name}.tq_membership.desired`); bool(row.tq_membership.provider_present, `${name}.tq_membership.provider_present`); bool(row.tq_membership.provider_membership_unknown, `${name}.tq_membership.provider_membership_unknown`);
+  if (row.tq_membership.provider_present !== (row.tape_5s.trade_coverage && row.spread.quote_coverage) || row.tq_membership.provider_membership_unknown !== (row.tq_membership.desired && !row.tq_membership.provider_present)) fail(`${name}.tq_membership confirmation conflict`);
 }
 
 export function validateSnapshot(snapshot) {
@@ -252,7 +253,7 @@ export function validateSnapshot(snapshot) {
   if (!sumDecimal(tq.facts.consumed, tq.facts.applied, tq.facts.duplicate, tq.facts.rejected, tq.facts.fenced, tq.facts.pressure_shed, tq.facts.integrity)) fail("TQ fact conflict");
   if (BigInt(tq.facts.applied_trades) + BigInt(tq.facts.applied_quotes) > BigInt(tq.facts.applied) || BigInt(tq.facts.pressure_shed_trades) + BigInt(tq.facts.pressure_shed_quotes) !== BigInt(tq.facts.pressure_shed)) fail("TQ family fact conflict");
   fields(tq.commands, COMMAND_FIELDS, "tq.commands"); COMMAND_FIELDS.forEach(name => decimal(tq.commands[name], `tq.commands.${name}`));
-  if (!sumDecimal(tq.commands.issued, tq.commands.pending, tq.commands.acknowledged, tq.commands.failed, tq.commands.fenced)) fail("TQ command conflict");
+  if (!sumDecimal(tq.commands.issued, tq.commands.pending_write, tq.commands.written, tq.commands.failed, tq.commands.fenced)) fail("TQ command conflict");
   if (!new Set(["normal", "taq_degraded", "aggregate_only"]).has(tq.pressure_mode) || !PRESSURE_CAUSE.has(tq.pressure_cause) || (tq.pressure_mode === "normal") !== (tq.pressure_cause === "") || status.tq_pressure_mode !== tq.pressure_mode || status.tq_shed !== tq.shed || tq.aggregate_only !== (tq.pressure_mode === "aggregate_only") || tq.shed !== (tq.pressure_mode !== "normal")) fail("TQ pressure conflict");
   if (ranking.mode === "degraded_bootstrap" || ranking.mode === "degraded_current") {
     if (tq.desired_symbols.length !== 0) fail("partial ranking promoted TQ membership");
@@ -335,14 +336,16 @@ const DAY_RANGE_COLOR_STOPS = [
 const ACTIVITY_COLOR_STOPS = [
   [0, "#8F9AA3"], [.5, "#8F9AA3"], [.75, "#C87932"], [.9, "#E98212"], [.97, "#F98A05"], [1, "#FF8A00"],
 ];
+export const NEUTRAL_TEXT_COLOR = "#8F9AA3";
+export const MUTED_NEGATIVE_TEXT_COLOR = "#C46B6B";
 const MOVE_COLOR_STOPS = [
-  [-.07, "#FC0000"], [-.05, "#EF3030"], [-.02, "#C46B6B"], [0, "#8F9AA3"], [.02, "#70B873"], [.05, "#45E532"], [.07, "#2CFF05"],
+  [-.07, "#FC0000"], [-.05, "#EF3030"], [-.02, MUTED_NEGATIVE_TEXT_COLOR], [0, NEUTRAL_TEXT_COLOR], [.02, "#70B873"], [.05, "#45E532"], [.07, "#2CFF05"],
 ];
 const TAPE_COLOR_STOPS = [
   [0, "#8F9AA3"], [50, "#8F9AA3"], [100, "#B8793E"], [250, "#E98212"], [500, "#FF8A00"],
 ];
 const SPREAD_COLOR_STOPS = [
-  [0, "#8F9AA3"], [10, "#8F9AA3"], [25, "#B06F6F"], [50, "#D84A4A"], [75, "#EE2525"], [100, "#FC0000"],
+  [0, "#8F9AA3"], [20, "#8F9AA3"], [35, "#B08A5A"], [60, "#D1843E"], [100, "#E05A32"], [200, "#E9342B"], [400, "#FC0000"],
 ];
 function rgbFromHex(hex) { return [1, 3, 5].map(index => Number.parseInt(hex.slice(index, index + 2), 16)); }
 export function interpolateRGBGradient(value, stops) {
@@ -355,6 +358,12 @@ export function interpolateRGBGradient(value, stops) {
   const weight = span === 0 ? 0 : (clamped - lowerPosition) / span;
   const lowerRGB = rgbFromHex(lowerColor), upperRGB = rgbFromHex(upperColor);
   return `#${lowerRGB.map((channel, index) => Math.round(channel + (upperRGB[index] - channel) * weight).toString(16).padStart(2, "0")).join("")}`.toUpperCase();
+}
+export function signedValueTextColor(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  if (value < 0) return MUTED_NEGATIVE_TEXT_COLOR;
+  if (value === 0) return NEUTRAL_TEXT_COLOR;
+  return null;
 }
 export function dayRangeColor(value) { return interpolateRGBGradient(value, DAY_RANGE_COLOR_STOPS); }
 export function activityColor(value) { return interpolateRGBGradient(value, ACTIVITY_COLOR_STOPS); }
@@ -395,21 +404,76 @@ function operationalPhase(snapshot, hydration) {
   return lifecycle === "recovering" ? "recovering" : "hydrating";
 }
 
-export function relativeColorPositions(rows, valueForRow) {
+export function relativeColorPositions(rows, valueForRow, { positiveOnly = false } = {}) {
   const values = rows.map(row => {
     const value = valueForRow(row);
     return typeof value === "number" && Number.isFinite(value) ? value : null;
   });
-  const eligible = values.filter(value => value !== null);
-  if (eligible.length === 0) return values;
+  const eligible = values.filter(value => value !== null && (!positiveOnly || value > 0));
+  if (eligible.length === 0) return values.map(value => positiveOnly ? null : value);
   let minimum = eligible[0], maximum = minimum;
   for (let index = 1; index < eligible.length; index++) {
     minimum = Math.min(minimum, eligible[index]);
     maximum = Math.max(maximum, eligible[index]);
   }
   const spread = maximum - minimum;
-  if (spread === 0) return values.map(value => value === null ? null : .5);
-  return values.map(value => value === null ? null : Math.max(0, Math.min(1, (value - minimum) / spread)));
+  if (spread === 0) return values.map(value => value === null || positiveOnly && value <= 0 ? null : positiveOnly ? 1 : .5);
+  return values.map(value => value === null || positiveOnly && value <= 0 ? null : Math.max(0, Math.min(1, (value - minimum) / spread)));
+}
+
+const RANK_LOOKBACK_MILLISECONDS = 60_000;
+const RANK_HISTORY_LIMIT = 70;
+const RANK_COMPARISON_TOLERANCE_MILLISECONDS = 5_000;
+
+function rankMovement(previousRank, currentRank) {
+  if (previousRank === undefined) return { direction: "up", text: "↑ NEW", label: "new to the top 20 compared with 60 seconds ago" };
+  const delta = previousRank - currentRank;
+  if (delta === 0) return { direction: "none", text: "", label: "unchanged from 60 seconds ago" };
+  const magnitude = Math.abs(delta);
+  return {
+    direction: delta > 0 ? "up" : "down",
+    text: `${delta > 0 ? "↑" : "↓"}${Math.min(magnitude, 5)}${magnitude > 5 ? "+" : ""}`,
+    label: `${delta > 0 ? "up" : "down"} ${magnitude} rank${magnitude === 1 ? "" : "s"} from 60 seconds ago`,
+  };
+}
+
+const NO_RANK_MOVEMENT = Object.freeze({ direction: "none", text: "", label: "60-second rank movement unavailable" });
+
+export class RankMovementHistory {
+  constructor({ lookbackMilliseconds = RANK_LOOKBACK_MILLISECONDS, comparisonToleranceMilliseconds = RANK_COMPARISON_TOLERANCE_MILLISECONDS, maximumSnapshots = RANK_HISTORY_LIMIT } = {}) {
+    this.lookbackMilliseconds = lookbackMilliseconds;
+    this.comparisonToleranceMilliseconds = comparisonToleranceMilliseconds;
+    this.maximumSnapshots = maximumSnapshots;
+    this.snapshots = [];
+    this.bindingKey = "";
+  }
+  get size() { return this.snapshots.length; }
+  apply(model) {
+    const currentRows = model.rows.map((row, index) => ({ ...row, rank: index + 1, rankMovement: NO_RANK_MOVEMENT }));
+    if (!model.rowsCurrent) return { ...model, rows: currentRows };
+    const timestamp = Date.parse(model.sampledAt);
+    const bindingKey = `${model.bindingIdentity}\u0000${model.tradingDate}`;
+    if (!Number.isFinite(timestamp)) return { ...model, rows: currentRows };
+    if (this.bindingKey !== bindingKey || this.snapshots.length > 0 && timestamp < this.snapshots.at(-1).timestamp) {
+      this.snapshots = [];
+      this.bindingKey = bindingKey;
+    }
+    const target = timestamp - this.lookbackMilliseconds;
+    let comparison = null;
+    if (this.snapshots.length > 0 && this.snapshots[0].timestamp <= target) {
+      for (const snapshot of this.snapshots) {
+        if (comparison === null || Math.abs(snapshot.timestamp - target) < Math.abs(comparison.timestamp - target)) comparison = snapshot;
+      }
+      if (comparison !== null && Math.abs(comparison.timestamp - target) > this.comparisonToleranceMilliseconds) comparison = null;
+    }
+    const rows = comparison === null ? currentRows : currentRows.map(row => ({ ...row, rankMovement: rankMovement(comparison.ranks.get(row.symbol), row.rank) }));
+    const ranks = new Map(currentRows.map(row => [row.symbol, row.rank]));
+    const retained = { timestamp, ranks };
+    if (this.snapshots.at(-1)?.timestamp === timestamp) this.snapshots[this.snapshots.length - 1] = retained;
+    else this.snapshots.push(retained);
+    while (this.snapshots.length > this.maximumSnapshots) this.snapshots.shift();
+    return { ...model, rows };
+  }
 }
 
 export function buildViewModel(input, transport = "connected") {
@@ -418,8 +482,8 @@ export function buildViewModel(input, transport = "connected") {
   const partial = snapshot.status.backend_ready && snapshot.ranking.mode === "degraded_current" && transport === "connected";
   const replay = snapshot.publication.run_mode === "replay";
   const rowsCurrent = current || replay && snapshot.status.ranking_current && snapshot.ranking.mode === "qualified_current" && transport === "connected";
-  const dayColors = relativeColorPositions(snapshot.rows, row => row.day_change_ratio);
-  const fromOpenColors = relativeColorPositions(snapshot.rows, row => row.from_open_change.status === "current" ? row.from_open_change.value_ratio : null);
+  const dayColors = relativeColorPositions(snapshot.rows, row => row.day_change_ratio, { positiveOnly: true });
+  const fromOpenColors = relativeColorPositions(snapshot.rows, row => row.from_open_change.status === "current" ? row.from_open_change.value_ratio : null, { positiveOnly: true });
   const rows = snapshot.rows.map((row, index) => {
     const floatAvailable = row.float.status === "current" || row.float.status === "stale";
     const tapeCurrent = knownCurrentTQ(row.tape_5s.status, row.tape_5s.reason);
@@ -436,11 +500,13 @@ export function buildViewModel(input, transport = "connected") {
     const tapeText = tapeCurrent ? `${row.tape_5s.trades_per_second.toFixed(1)}/s` : "—";
     const tapeTextColor = tapeCurrent ? tapeColor(row.tape_5s.trades_per_second) : null;
     const spreadTextColor = row.spread.status === "current" ? spreadColor(row.spread.basis_points) : null;
+    const dayTextColor = signedValueTextColor(row.day_change_ratio);
+    const fromOpenTextColor = knownCurrentMeasurement(row.from_open_change) ? signedValueTextColor(row.from_open_change.value_ratio) : null;
     return {
-    rank: row.rank, symbol: row.symbol, last: formatUSD(row.last_usd), day: formatSignedPercent(row.day_change_ratio), dayColor: dayColors[index], markAgeMS: row.mark_age_ms,
+    rank: index + 1, rankMovement: NO_RANK_MOVEMENT, symbol: row.symbol, last: formatUSD(row.last_usd), day: formatSignedPercent(row.day_change_ratio), dayColor: dayColors[index], dayTextColor, markAgeMS: row.mark_age_ms,
     float: { state: floatState, text: floatText, detail: floatDetail, cyanIntensity: floatIntensity },
     volume: { state: volumeState, text: volumeCurrent ? formatShares(row.volume.value_shares) : "—", colorIntensity: volumeColorIntensity, detail: `Volume: status ${volumeState}; reason ${row.volume.reason || "none"}` },
-    fromOpen: { ...fieldView(row.from_open_change, "From Open", null, 2, true), colorPosition: fromOpenColors[index] }, dayRange: rangeFieldView(row.day_range_position), activity: activityFieldView(row.activity_30s), move: moveFieldView(row.move_30s),
+    fromOpen: { ...fieldView(row.from_open_change, "From Open", null, 2, true), colorPosition: fromOpenColors[index], textColor: fromOpenTextColor }, dayRange: rangeFieldView(row.day_range_position), activity: activityFieldView(row.activity_30s), move: moveFieldView(row.move_30s),
     tape: { state: tqState(row.tape_5s.status, row.tape_5s.reason), primary: tapeText, textColor: tapeTextColor, detail: `Tape speed: status ${row.tape_5s.status}; reason ${row.tape_5s.reason || "none"}; coverage ${row.tape_5s.trade_coverage ? "yes" : "no"}; timestamp ${row.tape_5s.timestamp_basis || "none"}; lifecycle records ${row.tape_5s.lifecycle_records_observed ? "observed" : "not observed"}; membership desired ${row.tq_membership.desired ? "yes" : "no"}, provider ${row.tq_membership.provider_present ? "present" : "absent"}, unknown ${row.tq_membership.provider_membership_unknown ? "yes" : "no"}` },
     spread: { state: tqState(row.spread.status, row.spread.reason), primary: spreadCurrent ? `${row.spread.basis_points.toFixed(1)} bps / ${row.spread.cents.toFixed(2)}¢${row.spread.status === "stale" ? " · stale" : ""}` : "—", textColor: spreadTextColor, detail: `Spread: status ${row.spread.status}; reason ${row.spread.reason || "none"}; coverage ${row.spread.quote_coverage ? "yes" : "no"}; quote age ${row.spread.quote_age_ms} ms; quality ${row.spread.quality || "none"}; membership desired ${row.tq_membership.desired ? "yes" : "no"}, provider ${row.tq_membership.provider_present ? "present" : "absent"}, unknown ${row.tq_membership.provider_membership_unknown ? "yes" : "no"}` },
   }; });
@@ -451,6 +517,7 @@ export function buildViewModel(input, transport = "connected") {
   const finalizing = phase === "finalizing_hydration" || phase === "finalizing_recovery";
   return {
     schemaVersion: snapshot.schema_version, sampleID: snapshot.sample.id, sampledAt: snapshot.sample.sampled_at, publicationID: snapshot.publication.id,
+    bindingIdentity: snapshot.publication.binding_identity, tradingDate: snapshot.publication.trading_date,
     transport, current, partial, rowsCurrent, replay, replayLogicalTime: replay ? snapshot.replay.logical_time : null,
     processLive: snapshot.status.process_live, backendReady: snapshot.status.backend_ready, readinessReason: snapshot.status.readiness_reason,
     lifecycle: snapshot.publication.lifecycle, rankingMode: snapshot.ranking.mode, rankingReason: snapshot.ranking.reason, committedT: snapshot.publication.committed_t,
@@ -491,12 +558,12 @@ export class PollController {
   constructor({ url, pollMilliseconds = 1000, requestTimeoutMilliseconds = 3000, fetchImpl = null, onUpdate = () => {} }) {
     this.url = url; this.pollMilliseconds = pollMilliseconds; this.requestTimeoutMilliseconds = requestTimeoutMilliseconds;
     this.fetchImpl = fetchImpl ?? globalThis.fetch.bind(globalThis); this.onUpdate = onUpdate;
-    this.active = null; this.timer = null; this.lastSnapshot = null; this.stopped = false;
+    this.active = null; this.timer = null; this.lastModel = null; this.rankHistory = new RankMovementHistory(); this.stopped = false;
   }
   start() { if (this.timer !== null) return; this.stopped = false; void this.tick(); this.timer = setInterval(() => void this.tick(), this.pollMilliseconds); }
   stop() { this.stopped = true; if (this.timer !== null) clearInterval(this.timer); this.timer = null; this.active?.controller.abort(); }
   async tick() {
-    if (this.active) { this.onUpdate({ kind: "transport", transport: "refresh_delayed", model: this.lastSnapshot ? buildViewModel(this.lastSnapshot, "refresh_delayed") : null }); return; }
+    if (this.active) { this.onUpdate({ kind: "transport", transport: "refresh_delayed", model: this.lastModel }); return; }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMilliseconds);
     const operation = { controller }; this.active = operation;
@@ -504,11 +571,11 @@ export class PollController {
       const response = await this.fetchImpl(this.url, { method: "GET", mode: "cors", cache: "no-store", credentials: "omit", signal: controller.signal, headers: { Accept: "application/json" } });
       if (!response.ok) fail(`snapshot HTTP ${response.status}`);
       const snapshot = await readBoundedJSON(response);
-      const model = buildViewModel(snapshot, "connected");
-      if (!this.stopped) { this.onUpdate({ kind: "snapshot", transport: "connected", model }); this.lastSnapshot = snapshot; }
+      const model = this.rankHistory.apply(buildViewModel(snapshot, "connected"));
+      if (!this.stopped) { this.onUpdate({ kind: "snapshot", transport: "connected", model }); this.lastModel = model; }
     } catch (error) {
       if (!this.stopped) {
-        try { this.onUpdate({ kind: "error", transport: "disconnected", error: error instanceof Error ? error.message : "request failed", model: this.lastSnapshot ? buildViewModel(this.lastSnapshot, "disconnected") : null }); } catch { /* detached renderer preserves the prior committed DOM */ }
+        try { this.onUpdate({ kind: "error", transport: "disconnected", error: error instanceof Error ? error.message : "request failed", model: this.lastModel }); } catch { /* detached renderer preserves the prior committed DOM */ }
       }
     } finally {
       clearTimeout(timeout); if (this.active === operation) this.active = null;

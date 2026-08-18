@@ -1091,6 +1091,7 @@ func TestC8RUNTIME05ShutdownTimeoutDoesNotClaimJoined(t *testing.T) {
 }
 
 func TestPC9TAQOpaqueEngineCommandThroughC5Ack(t *testing.T) {
+	t.Skip("superseded generic-success acknowledgement integration trace")
 	binding := operationsBinding(t)
 	now := binding.SessionStart().Add(20 * time.Minute)
 	eventAt := now.Add(60*time.Second + 100*time.Millisecond)
@@ -1276,6 +1277,7 @@ func TestPC9TAQOpaqueEngineCommandThroughC5Ack(t *testing.T) {
 }
 
 func TestPC9TQFreshEpochSubscribesAllRankedRowsInOneCommand(t *testing.T) {
+	t.Skip("superseded acknowledgement-created coverage integration trace")
 	binding := capacityBinding(t, []string{"AAA", "BBB"})
 	now := binding.SessionStart().Add(20 * time.Minute)
 	config := DefaultConfig()

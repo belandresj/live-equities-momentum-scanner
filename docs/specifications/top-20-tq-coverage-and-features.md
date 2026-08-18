@@ -10,6 +10,13 @@ Release Program revision
 **Completed-contract authority:** V1 Release Program orchestrator; lower-level
 decisions remain revisable through the program correction loop
 
+**2026-08-18 correction:** [`tq-data-confirmed-subscription-correction.md`](../tq-data-confirmed-subscription-correction.md)
+supersedes this historical contract's generic-success acknowledgement,
+acknowledgement-deadline, and acknowledgement-created coverage text. The
+current rule is one successful paired write boundary and independent
+post-boundary T/Q data confirmation; silence remains unconfirmed rather than
+failed.
+
 **Controlling Phase 1 requirements:** `PG-FEATURE-03`, `PG-FEATURE-04`,
 `PG-FEATURE-05`, `PG-AVAIL-01`, `PG-AVAIL-03`, `PG-TAQ-01`,
 `PG-TAQ-02`, `PG-TAQ-03`, `ARCH-OWN-01`, `ARCH-OWN-02`,

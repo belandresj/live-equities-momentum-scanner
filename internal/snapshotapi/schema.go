@@ -274,8 +274,8 @@ type TQFacts struct {
 
 type TQCommands struct {
 	Issued       string `json:"issued"`
-	Pending      string `json:"pending"`
-	Acknowledged string `json:"acknowledged"`
+	Pending      string `json:"pending_write"`
+	Written      string `json:"written"`
 	Failed       string `json:"failed"`
 	Fenced       string `json:"fenced"`
 	ResultFenced string `json:"result_fenced"`

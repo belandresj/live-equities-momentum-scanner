@@ -7,7 +7,8 @@ the current sequential delivery program.
 
 **Product feature-set revision approved:** 2026-08-14
 
-**Day-%/From-Open presentation and header-tooltip revision approved:** 2026-08-17
+**Day-%/From-Open presentation, header-tooltip, compact dashboard-structure,
+trader-facing status, and compact Rank-column revisions approved:** 2026-08-17
 
 **Live feature-set MVP program approved:** 2026-08-14
 
@@ -73,7 +74,7 @@ create a shared replacement layer.
 The owner replaced the prior displayed feature set with:
 
 ```text
-SYMBOL | FLOAT | VOLUME | LAST || FROM CLOSE % | FROM OPEN % | DAY RANGE ||
+RANK | SYMBOL | FLOAT | VOLUME | LAST || FROM CLOSE % | FROM OPEN % | DAY RANGE ||
 ACTIVITY 30s | MOVE 30s || TAPE SPEED | SPREAD
 ```
 

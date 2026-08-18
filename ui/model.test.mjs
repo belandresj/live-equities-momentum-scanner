@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { activityColor, buildViewModel, dayRangeColor, floatCyanIntensity, formatShares, interpolateRGBGradient, moveColor, PollController, readBoundedJSON, spreadColor, tapeColor, validateSnapshot, volumeTurnoverIntensity } from "./model.js";
-import { renderDashboard } from "./render.js";
+import { activityColor, buildViewModel, dayRangeColor, floatCyanIntensity, formatShares, interpolateRGBGradient, moveColor, MUTED_NEGATIVE_TEXT_COLOR, NEUTRAL_TEXT_COLOR, PollController, RankMovementHistory, readBoundedJSON, signedValueTextColor, spreadColor, tapeColor, validateSnapshot, volumeTurnoverIntensity } from "./model.js";
+import { renderDashboard, scannerRowHeight } from "./render.js";
 import { snapshotFixtureV2 } from "./test-fixture-v2.js";
 
 const clone = value => structuredClone(value);
+test("P-MVP-UI fits rows to measured table space with a 50px cap", () => {
+  assert.equal(scannerRowHeight(816, 54, 20), 38.05);
+  assert.equal(scannerRowHeight(1116, 54, 20), 50);
+  assert.equal(scannerRowHeight(616, 54, 20), 28.05);
+  assert.equal(scannerRowHeight(816, 54, 10), 50);
+  assert.equal(scannerRowHeight(816, 54, 0), null);
+});
 function clearTQ(snapshot) {
   snapshot.tq.desired_symbols = []; snapshot.tq.known_present = 0;
   for (const row of snapshot.rows) {
@@ -15,15 +22,15 @@ function clearTQ(snapshot) {
   }
 }
 
-function recoverySnapshot({ active = false, connected = false, acknowledged = false, generation = "1", open = "0", completedValue = "2", completedEmpty = "0", canceled = "0" } = {}) {
+function recoverySnapshot({ active = false, connected = false, acknowledged = false, lifecycle = "recovering", generation = "1", open = "0", completedValue = "2", completedEmpty = "0", canceled = "0" } = {}) {
   const snapshot = snapshotFixtureV2(0); clearTQ(snapshot);
-  snapshot.publication.lifecycle = "recovering"; snapshot.publication.lifecycle_reason = "aggregate_epoch_lost"; snapshot.publication.suppression = "";
+  snapshot.publication.lifecycle = lifecycle; snapshot.publication.lifecycle_reason = lifecycle === "hydrating" ? "aggregate_acknowledged_at_session_start" : "aggregate_epoch_lost"; snapshot.publication.suppression = "";
   snapshot.publication.connection_epoch = connected ? "3" : "2"; snapshot.publication.connection_active = connected; snapshot.publication.aggregate_acknowledged = acknowledged;
   snapshot.publication.aggregate_ack_position = acknowledged ? { connection_epoch: snapshot.publication.connection_epoch, frame_sequence: "3", array_index: 0 } : { connection_epoch: "0", frame_sequence: "0", array_index: 0 };
   snapshot.publication.hydration_fence = { reconciled: false, connection_epoch: "0", through_frame_sequence: "0", marker_ordinal: "0", supported_through: null };
   snapshot.status.backend_ready = false; snapshot.status.readiness_reason = "lifecycle_not_ready"; snapshot.status.ranking_current = false;
   snapshot.ranking.mode = "unavailable"; snapshot.ranking.reason = "no_committed_watermark";
-  snapshot.recovery = { generation_active: active, purpose: active ? "gap_recovery" : "fresh_bootstrap", generation, start: "2026-08-08T15:58:00Z", end: "2026-08-08T15:59:00Z", supported_through: "2026-08-08T15:59:58Z", fence_reconciled: false, policy_waiting: false,
+  snapshot.recovery = { generation_active: active, purpose: lifecycle === "hydrating" ? "fresh_bootstrap" : active ? "gap_recovery" : "fresh_bootstrap", generation, start: "2026-08-08T15:58:00Z", end: "2026-08-08T15:59:00Z", supported_through: "2026-08-08T15:59:58Z", fence_reconciled: false, policy_waiting: false,
     work: { planned: active ? "5522" : "2", open, completed_value: completedValue, completed_empty: completedEmpty, failed: "0", canceled, fenced: "0" },
     rows: { consumed: "0", inserted: "0", duplicate: "0", conflict_or_withdrawal: "0", rejected: "0", fenced: "0", integrity: "0" } };
   return snapshot;
@@ -40,6 +47,59 @@ test("P-MVP-UI preserves v2 server order, exact rows, signed units, compact shar
   assert.equal(model.rows[1].move.text, "+1.25%"); assert.equal(model.rows[0].move.text, "-0.75%"); assert.equal(model.rows[1].tape.primary, "1.4/s");
   assert.deepEqual([buildViewModel(snapshotFixtureV2(3)).rows.length, buildViewModel(snapshotFixtureV2(0)).rows.length], [3, 0]);
   assert.deepEqual([formatShares(999), formatShares(1_250), formatShares(999_999), formatShares(999_999_999), formatShares(12_000_000), formatShares(2_500_000_000)], ["999", "1.3K", "1M", "1B", "12M", "2.5B"]);
+});
+
+function sampledAt(snapshot, seconds) {
+  snapshot.sample.id = String(10 + seconds);
+  snapshot.sample.sampled_at = new Date(Date.parse("2026-08-08T16:00:00Z") + seconds * 1000).toISOString().replace(".000Z", "Z");
+  return snapshot;
+}
+
+function moveSymbol(snapshot, symbol, rank) {
+  const index = snapshot.rows.findIndex(row => row.symbol === symbol);
+  const [row] = snapshot.rows.splice(index, 1); snapshot.rows.splice(rank - 1, 0, row);
+  snapshot.rows.forEach((candidate, candidateIndex) => { candidate.rank = candidateIndex + 1; });
+  snapshot.tq.desired_symbols = snapshot.rows.map(candidate => candidate.symbol);
+  return snapshot;
+}
+
+function movement(previousRank, currentRank) {
+  const history = new RankMovementHistory();
+  history.apply(buildViewModel(sampledAt(snapshotFixtureV2(10), 0)));
+  const symbol = `S${String(previousRank).padStart(2, "0")}`;
+  const current = moveSymbol(sampledAt(snapshotFixtureV2(10), 60), symbol, currentRank);
+  return history.apply(buildViewModel(current)).rows.find(row => row.symbol === symbol).rankMovement;
+}
+
+test("P-MVP-UI assigns displayed ranks and computes capped rolling 60-second movement", () => {
+  assert.deepEqual(buildViewModel(snapshotFixtureV2(6)).rows.map(row => row.rank), [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(movement(9, 4), { direction: "up", text: "↑5", label: "up 5 ranks from 60 seconds ago" });
+  assert.deepEqual(movement(10, 4), { direction: "up", text: "↑5+", label: "up 6 ranks from 60 seconds ago" });
+  assert.deepEqual(movement(4, 6), { direction: "down", text: "↓2", label: "down 2 ranks from 60 seconds ago" });
+  assert.deepEqual(movement(2, 10), { direction: "down", text: "↓5+", label: "down 8 ranks from 60 seconds ago" });
+  assert.deepEqual(movement(7, 7), { direction: "none", text: "", label: "unchanged from 60 seconds ago" });
+});
+
+test("P-MVP-UI distinguishes rank-history warmup from a new top-20 entrant", () => {
+  const history = new RankMovementHistory();
+  const initial = history.apply(buildViewModel(sampledAt(snapshotFixtureV2(10), 0)));
+  assert.ok(initial.rows.every(row => row.rankMovement.text === ""), "startup labeled rows as new");
+  const warmup = history.apply(buildViewModel(sampledAt(snapshotFixtureV2(10), 59)));
+  assert.ok(warmup.rows.every(row => row.rankMovement.text === ""), "sub-60-second history produced movement");
+  const entrant = sampledAt(snapshotFixtureV2(10), 60); entrant.rows[3].symbol = "NEW"; entrant.tq.desired_symbols[3] = "NEW";
+  const current = history.apply(buildViewModel(entrant));
+  assert.deepEqual(current.rows[3].rankMovement, { direction: "up", text: "↑ NEW", label: "new to the top 20 compared with 60 seconds ago" });
+});
+
+test("P-MVP-UI applies every new row order immediately and bounds rank history", () => {
+  const history = new RankMovementHistory();
+  for (let second = 0; second < 200; second++) {
+    const snapshot = sampledAt(snapshotFixtureV2(10), second);
+    if (second % 2 === 1) moveSymbol(snapshot, "S10", 1);
+    const model = history.apply(buildViewModel(snapshot));
+    assert.equal(model.rows[0].symbol, second % 2 === 1 ? "S10" : "S01", "rank order was smoothed or delayed");
+  }
+  assert.equal(history.size, 70, "rank history did not remain at its fixed bound");
 });
 
 test("P-MVP-UI maps absolute share-volume turnover to cyan intensity and keeps raw Volume", () => {
@@ -120,8 +180,8 @@ test("P-MVP-UI normalizes DAY % by displayed value rather than rank", () => {
 
   const tied = snapshotFixtureV2(4);
   tied.rows.forEach(row => { row.day_change_ratio = .25; });
-  assert.deepEqual(buildViewModel(tied).rows.map(row => row.dayColor), [.5, .5, .5, .5]);
-  assert.equal(buildViewModel(snapshotFixtureV2()).rows[0].dayColor, .5);
+  assert.deepEqual(buildViewModel(tied).rows.map(row => row.dayColor), [1, 1, 1, 1]);
+  assert.equal(buildViewModel(snapshotFixtureV2()).rows[0].dayColor, 1);
   assert.deepEqual(buildViewModel(snapshotFixtureV2(0)).rows, []);
 });
 
@@ -132,9 +192,9 @@ test("P-MVP-UI normalizes FROM OPEN % by eligible displayed value rather than ra
   assert.deepEqual(model.rows.map(row => row.symbol), snapshot.rows.map(row => row.symbol));
   assert.deepEqual(model.rows.map(row => row.fromOpen.text), ["+100.00%", "+20.00%", "-10.00%"]);
   assert.equal(model.rows[0].fromOpen.colorPosition, 1);
-  assert.ok(Math.abs(model.rows[1].fromOpen.colorPosition - 3 / 11) < 1e-12, `middle From Open color ${model.rows[1].fromOpen.colorPosition}`);
-  assert.equal(model.rows[2].fromOpen.colorPosition, 0);
-  assert.notEqual(model.rows[1].fromOpen.colorPosition, .5, "middle value was assigned by rank");
+  assert.equal(model.rows[1].fromOpen.colorPosition, 0);
+  assert.equal(model.rows[2].fromOpen.colorPosition, null);
+  assert.equal(model.rows[1].fromOpen.colorPosition, 0, "positive scale used the positive subset");
 
   const fewer = snapshotFixtureV2(3);
   fewer.rows.forEach((row, index) => { row.from_open_change.value_ratio = [.3, .2, .1][index]; });
@@ -142,17 +202,63 @@ test("P-MVP-UI normalizes FROM OPEN % by eligible displayed value rather than ra
   assert.equal(fewerColors[0], 1); assert.ok(Math.abs(fewerColors[1] - .5) < 1e-12); assert.equal(fewerColors[2], 0);
 
   const singleton = snapshotFixtureV2(1); singleton.rows[0].from_open_change.value_ratio = .4;
-  assert.deepEqual(buildViewModel(singleton).rows.map(row => row.fromOpen.colorPosition), [.5]);
+  assert.deepEqual(buildViewModel(singleton).rows.map(row => row.fromOpen.colorPosition), [1]);
   const equal = snapshotFixtureV2(3); equal.rows.forEach(row => { row.from_open_change.value_ratio = .2; });
-  assert.deepEqual(buildViewModel(equal).rows.map(row => row.fromOpen.colorPosition), [.5, .5, .5]);
+  assert.deepEqual(buildViewModel(equal).rows.map(row => row.fromOpen.colorPosition), [1, 1, 1]);
   const negative = snapshotFixtureV2(3);
   negative.rows.forEach((row, index) => { row.from_open_change.value_ratio = [-.05, -.1, -.2][index]; });
   const negativeColors = buildViewModel(negative).rows.map(row => row.fromOpen.colorPosition);
-  assert.equal(negativeColors[0], 1); assert.ok(Math.abs(negativeColors[1] - 2 / 3) < 1e-12); assert.equal(negativeColors[2], 0);
+  assert.deepEqual(negativeColors, [null, null, null]);
   const tied = snapshotFixtureV2(4);
   tied.rows.forEach((row, index) => { row.from_open_change.value_ratio = [.5, .2, .2, .1][index]; });
   assert.deepEqual(buildViewModel(tied).rows.map(row => row.fromOpen.colorPosition), [1, .25, .25, 0]);
   assert.deepEqual(buildViewModel(snapshotFixtureV2(0)).rows, []);
+});
+
+test("P-MVP-UI makes FROM CLOSE % and FROM OPEN % sign-aware with positive-only normalization", () => {
+  const values = [1.6344, .3522, .016, 0, -.0099, -.1079];
+  const snapshot = snapshotFixtureV2(values.length);
+  snapshot.rows.forEach((row, index) => {
+    row.day_change_ratio = values[index];
+    row.from_open_change.value_ratio = values[index];
+  });
+  const model = buildViewModel(snapshot);
+  const middlePosition = (values[1] - values[2]) / (values[0] - values[2]);
+  assert.deepEqual(model.rows.map(row => row.dayColor), [1, middlePosition, 0, null, null, null]);
+  assert.deepEqual(model.rows.map(row => row.fromOpen.colorPosition), [1, middlePosition, 0, null, null, null]);
+  assert.deepEqual(model.rows.map(row => row.dayTextColor), [null, null, null, NEUTRAL_TEXT_COLOR, MUTED_NEGATIVE_TEXT_COLOR, MUTED_NEGATIVE_TEXT_COLOR]);
+  assert.deepEqual(model.rows.map(row => row.fromOpen.textColor), [null, null, null, NEUTRAL_TEXT_COLOR, MUTED_NEGATIVE_TEXT_COLOR, MUTED_NEGATIVE_TEXT_COLOR]);
+  assert.equal(signedValueTextColor(Number.NaN), null);
+  assert.equal(signedValueTextColor(0), NEUTRAL_TEXT_COLOR);
+  assert.equal(signedValueTextColor(-.005), MUTED_NEGATIVE_TEXT_COLOR);
+
+  const document = new FakeDocument(); renderDashboard(document, { transport: "connected", model });
+  const dayCells = find(document.body, node => node.dataset.focusKey?.endsWith(":day"));
+  const fromOpenCells = find(document.body, node => node.dataset.focusKey?.endsWith(":fromopen"));
+  const middleWeight = `${Math.round(middlePosition * 10000) / 100}%`;
+  assert.deepEqual(dayCells.map(cell => cell.dataset.palette), ["day", "day", "day", undefined, undefined, undefined]);
+  assert.deepEqual(dayCells.map(cell => cell.dataset.dayWeight), ["100%", middleWeight, "0%", undefined, undefined, undefined]);
+  assert.deepEqual(fromOpenCells.map(cell => cell.dataset.palette), ["from-open", "from-open", "from-open", undefined, undefined, undefined]);
+  assert.deepEqual(fromOpenCells.map(cell => cell.dataset.fromOpenWeight), ["100%", middleWeight, "0%", undefined, undefined, undefined]);
+  assert.deepEqual(dayCells.map(cell => cell.children[0].style.color), [undefined, undefined, undefined, NEUTRAL_TEXT_COLOR, MUTED_NEGATIVE_TEXT_COLOR, MUTED_NEGATIVE_TEXT_COLOR]);
+  assert.deepEqual(fromOpenCells.map(cell => cell.children[0].style.color), [undefined, undefined, undefined, NEUTRAL_TEXT_COLOR, MUTED_NEGATIVE_TEXT_COLOR, MUTED_NEGATIVE_TEXT_COLOR]);
+  assert.deepEqual(dayCells.map(cell => cell.textContent), ["+163.44%", "+35.22%", "+1.60%", "0.00%", "-0.99%", "-10.79%"]);
+
+  const noPositive = snapshotFixtureV2(3);
+  noPositive.rows.forEach((row, index) => {
+    row.day_change_ratio = [0, -.01, -.2][index];
+    row.from_open_change.value_ratio = [0, -.01, -.2][index];
+  });
+  const noPositiveModel = buildViewModel(noPositive);
+  assert.deepEqual(noPositiveModel.rows.map(row => row.dayColor), [null, null, null]);
+  assert.deepEqual(noPositiveModel.rows.map(row => row.fromOpen.colorPosition), [null, null, null]);
+  assert.deepEqual(noPositiveModel.rows.map(row => row.dayTextColor), [NEUTRAL_TEXT_COLOR, MUTED_NEGATIVE_TEXT_COLOR, MUTED_NEGATIVE_TEXT_COLOR]);
+  assert.deepEqual(noPositiveModel.rows.map(row => row.fromOpen.textColor), [NEUTRAL_TEXT_COLOR, MUTED_NEGATIVE_TEXT_COLOR, MUTED_NEGATIVE_TEXT_COLOR]);
+
+  const equalPositive = snapshotFixtureV2(2);
+  equalPositive.rows.forEach(row => { row.day_change_ratio = .05; row.from_open_change.value_ratio = .05; });
+  assert.deepEqual(buildViewModel(equalPositive).rows.map(row => row.dayColor), [1, 1]);
+  assert.deepEqual(buildViewModel(equalPositive).rows.map(row => row.fromOpen.colorPosition), [1, 1]);
 });
 
 test("P-MVP-UI interpolates Day Range through exact RGB control points", () => {
@@ -193,12 +299,14 @@ test("P-MVP-UI interpolates Tape 5s through exact absolute-rate RGB control poin
 });
 
 test("P-MVP-UI interpolates Spread through exact absolute-bps RGB control points", () => {
-  const anchors = [[0, "#8F9AA3"], [10, "#8F9AA3"], [25, "#B06F6F"], [50, "#D84A4A"], [75, "#EE2525"], [100, "#FC0000"]];
+  const anchors = [[0, "#8F9AA3"], [20, "#8F9AA3"], [35, "#B08A5A"], [60, "#D1843E"], [100, "#E05A32"], [200, "#E9342B"], [400, "#FC0000"]];
   for (const [value, color] of anchors) assert.equal(spreadColor(value), color);
-  assert.deepEqual([spreadColor(5), spreadColor(18), spreadColor(40), spreadColor(65), spreadColor(90)], ["#8F9AA3", "#A18387", "#C85959", "#E53434", "#F60F0F"]);
-  assert.notEqual(spreadColor(24), spreadColor(25)); assert.notEqual(spreadColor(25), spreadColor(26));
-  assert.notEqual(spreadColor(49), spreadColor(50)); assert.notEqual(spreadColor(50), spreadColor(51));
-  assert.equal(spreadColor(101), "#FC0000"); assert.equal(spreadColor(1000), "#FC0000");
+  assert.deepEqual([spreadColor(10), spreadColor(27.5), spreadColor(47.5), spreadColor(80), spreadColor(150), spreadColor(300)], ["#8F9AA3", "#A0927F", "#C1874C", "#D96F38", "#E5472F", "#F31A16"]);
+  assert.equal(spreadColor(19.9), "#8F9AA3");
+  assert.notEqual(spreadColor(34), spreadColor(35)); assert.notEqual(spreadColor(35), spreadColor(36));
+  assert.notEqual(spreadColor(59), spreadColor(60)); assert.notEqual(spreadColor(60), spreadColor(61));
+  assert.notEqual(spreadColor(198), spreadColor(200)); assert.notEqual(spreadColor(200), spreadColor(202));
+  assert.equal(spreadColor(401), "#FC0000"); assert.equal(spreadColor(1000), "#FC0000");
 });
 
 test("P-MVP-UI excludes non-current FROM OPEN % states from the relative scale", () => {
@@ -209,7 +317,7 @@ test("P-MVP-UI excludes non-current FROM OPEN % states from the relative scale",
   snapshot.rows[3].from_open_change = { status: "invalid", reason: "historical_conflict", value_ratio: null };
   snapshot.rows[4].from_open_change.value_ratio = -.2;
   const model = buildViewModel(snapshot);
-  assert.deepEqual(model.rows.map(row => row.fromOpen.colorPosition), [1, null, null, null, 0]);
+  assert.deepEqual(model.rows.map(row => row.fromOpen.colorPosition), [1, null, null, null, null]);
   assert.deepEqual(model.rows.map(row => row.fromOpen.state), ["current", "warming", "unavailable", "invalid", "current"]);
   assert.deepEqual(model.rows.map(row => row.fromOpen.text), ["+40.00%", "—", "—", "—", "-20.00%"]);
 
@@ -239,6 +347,7 @@ test("P-MVP-UI handles independent field states without fabricating zero", () =>
   snapshot.rows[5].float = { status: "unavailable", reason: "not_available", value_shares: null, percent_ratio: null, provider: "", effective_date: null, retrieved_at: null, provenance: "" };
   snapshot.rows[0].tape_5s = { ...snapshot.rows[0].tape_5s, status: "pressure_shed", reason: "pressure", trade_coverage: false, trades_per_second: null, timestamp_basis: "" };
   snapshot.rows[0].spread = { status: "warming", reason: "coverage_warming", quote_coverage: true, cents: null, basis_points: null, quote_age_ms: 0, quality: "" };
+  snapshot.rows[0].tq_membership = { desired: true, provider_present: false, provider_membership_unknown: true };
   const rows = buildViewModel(snapshot).rows;
   assert.deepEqual([rows[0].fromOpen.state, rows[1].dayRange.state, rows[2].activity.state, rows[3].move.state, rows[4].volume.state, rows[5].float.state], ["unavailable", "invalid", "warming", "warming", "unavailable", "unavailable"]);
   assert.ok([rows[0].fromOpen.text, rows[1].dayRange.text, rows[2].activity.text, rows[3].move.text, rows[4].volume.text, rows[5].float.text].every(text => text === "—"));
@@ -255,6 +364,7 @@ test("P-MVP-UI fails closed on v1, bad rank/symbol/bound, and contradictory tupl
 test("P-MVP-UI preserves status hierarchy and T/Q-independent current rows", () => {
   const pressure = snapshotFixtureV2(); pressure.status.tq_pressure_mode = "aggregate_only"; pressure.status.tq_shed = true; pressure.tq.pressure_mode = "aggregate_only"; pressure.tq.pressure_cause = "tq_retention_bound"; pressure.tq.aggregate_only = true; pressure.tq.shed = true;
   pressure.rows[0].tape_5s = { ...pressure.rows[0].tape_5s, status: "pressure_shed", reason: "pressure", trade_coverage: false, trades_per_second: null, timestamp_basis: "" }; pressure.rows[0].spread = { status: "pressure_shed", reason: "pressure", quote_coverage: false, cents: null, basis_points: null, quote_age_ms: 0, quality: "" };
+  pressure.rows[0].tq_membership = { desired: true, provider_present: false, provider_membership_unknown: true };
   const model = buildViewModel(pressure); assert.equal(model.current, true); assert.equal(model.tqAggregateOnly, true);
   const partial = snapshotFixtureV2(); partial.ranking.mode = "degraded_current"; partial.ranking.reason = "qualification_incomplete"; clearTQ(partial); const partialModel = buildViewModel(partial); assert.equal(partialModel.partial, true); assert.equal(partialModel.rowsCurrent, false);
 });
@@ -265,12 +375,15 @@ test("P-MVP-TQ-RECOVERY renders the accepted pressure sample and recovery progre
   snapshot.tq.pressure_recovery = { healthy_samples: 3, required_samples: 5 };
   snapshot.rows[0].tape_5s = { ...snapshot.rows[0].tape_5s, status: "pressure_shed", reason: "pressure", trade_coverage: false, trades_per_second: null, timestamp_basis: "" };
   snapshot.rows[0].spread = { status: "pressure_shed", reason: "pressure", quote_coverage: false, cents: null, basis_points: null, quote_age_ms: 0, quality: "" };
+  snapshot.rows[0].tq_membership = { desired: true, provider_present: false, provider_membership_unknown: true };
   const model = buildViewModel(snapshot); assert.equal(model.current, true); assert.equal(model.tqOldestWaitingFrameAgeMS, 612); assert.equal(model.tqRecoveryHealthySamples, 3);
   const document = new FakeDocument(); renderDashboard(document, { transport: "connected", model });
-  assert.match(document.body.textContent, /T\/Qtaq_degraded · oldest_waiting_frame · oldest 612 ms · recovery 3\/5 · 0 unknown/);
+  assert.equal(document.getElementById("status-live").textContent, "LIVE");
+  assert.match(document.body.textContent, /TAPE \/ QUOTES DEGRADED.*Trades1 shed.*Quotes1 shed/s);
   const missReset = clone(snapshot); missReset.tq.pressure_recovery.healthy_samples = 0;
   const resetDocument = new FakeDocument(); renderDashboard(resetDocument, { transport: "connected", model: buildViewModel(missReset) });
-  assert.match(resetDocument.body.textContent, /oldest 612 ms · recovery 0\/5/);
+  assert.equal(resetDocument.getElementById("status-live").textContent, "LIVE");
+  assert.match(resetDocument.body.textContent, /TAPE \/ QUOTES DEGRADED/);
   const impossibleComplete = clone(snapshot); impossibleComplete.tq.pressure_recovery.healthy_samples = 5;
   assert.throws(() => validateSnapshot(impossibleComplete), /TQ pressure recovery conflict/);
 });
@@ -296,9 +409,21 @@ test("P-MVP-RECOVERY-OBS distinguishes reconnect, active retry, and final fence 
   const finalizing = buildViewModel(active); assert.equal(finalizing.phase, "finalizing_recovery"); assert.equal(finalizing.finalizing, true);
 
   const document = new FakeDocument(); renderDashboard(document, { transport: "connected", model: activeModel });
-  assert.match(document.body.textContent, /RECOVERING.*generation 3.*5,099 \/ 5,522.*Ranking remains noncurrent/s);
+  assert.equal(document.getElementById("status-live").textContent, "RECOVERING");
+  assert.match(document.getElementById("aggregate-status").textContent, /Repairing aggregate gap.*5,099 \/ 5,522/);
+  assert.equal(find(document.body, node => node.className === "message").length, 0);
+
+  const hydrating = recoverySnapshot({ active: true, connected: true, acknowledged: true, lifecycle: "hydrating", generation: "1", open: "5505", completedValue: "17" });
+  const hydratingModel = buildViewModel(hydrating);
+  assert.equal(hydratingModel.phase, "hydrating");
+  const hydratingDocument = new FakeDocument(); renderDashboard(hydratingDocument, { transport: "connected", model: hydratingModel });
+  assert.equal(hydratingDocument.getElementById("status-live").textContent, "STARTING");
+  assert.match(hydratingDocument.getElementById("aggregate-status").textContent, /Syncing history.*17 \/ 5,522/);
+  assert.equal(find(hydratingDocument.body, node => node.className === "message").length, 0);
+
   const reconnectDocument = new FakeDocument(); renderDashboard(reconnectDocument, { transport: "connected", model: reconnecting });
-  assert.match(reconnectDocument.body.textContent, /RECONNECTING/); assert.doesNotMatch(reconnectDocument.body.textContent, /2 \/ 2/);
+  assert.equal(reconnectDocument.getElementById("status-live").textContent, "RECOVERING");
+  assert.match(reconnectDocument.getElementById("aggregate-status").textContent, /Reconnecting aggregate stream/); assert.doesNotMatch(reconnectDocument.body.textContent, /2 \/ 2/);
 
   const priorV2 = recoverySnapshot({ connected: true, acknowledged: true }); delete priorV2.recovery.generation_active;
   const compatible = buildViewModel(priorV2); assert.equal(compatible.phase, "preparing_recovery"); assert.equal(compatible.recoveryGenerationActive, false);
@@ -331,15 +456,70 @@ test("P-MVP-UI renders exact groups/columns safely and atomically with keyed foc
   assert.equal(buildViewModel(snapshot).diagnostics, undefined);
   assert.equal(document.getElementById("diagnostics"), null);
   assert.doesNotMatch(document.body.textContent, /Operational details/);
-  const statusGrid = find(document.body, node => node.tagName === "SECTION" && node.className === "status-grid")[0];
-  assert.deepEqual(statusGrid.children.map(item => item.children[0].textContent), ["Backend", "Ranking", "T/Q"]);
-  for (const label of ["Transport", "Process", "Ops sample", "Watermark", "Sample"]) assert.doesNotMatch(document.body.textContent, new RegExp(`\\b${label}\\b`, "i"));
-  assert.match(document.body.textContent, /CONTEXT.*LOCATION.*CURRENT MOMENTUM.*EXECUTION/s);
-  assert.match(document.body.textContent, /CURRENT · 2 ranked/); assert.doesNotMatch(document.body.textContent, /publication \d+/i);
-  const headers = find(document.body, node => node.tagName === "TH"); const leafHeaders = headers.filter(node => node.attributes.scope === "col"); assert.deepEqual(leafHeaders.map(node => node.textContent), ["SYMBOL", "FLOAT", "VOLUME", "LAST", "FROM CLOSE %", "FROM OPEN %", "DAY RANGE", "ACTIVITY 30s", "MOVE 30s", "TAPE SPEED", "SPREAD"]); assert.deepEqual(leafHeaders.map(node => node.attributes["data-tooltip"]), ["Ticker symbol for the listed stock.", "Estimated number of publicly tradable shares.", "Total shares traded during the current scanner session.", "Latest trusted price.", "Percent change from the adjusted previous close.", "Percent change from the first eligible session price.", "Current price position between today's low and high.", "Recent share-volume activity compared with the prior five-minute baseline.", "Signed price change over the last 30 seconds.", "Qualified trades per second over the last five seconds.", "Difference between the current bid and ask, shown in cents and basis points."]); assert.ok(headers.every(node => node.textContent !== "Rank")); assert.ok(leafHeaders.every(node => node.tabIndex === undefined && node.title === undefined)); const cells = find(document.body, node => node.tagName === "TD"); assert.ok(cells.every(cell => cell.title === undefined)); assert.equal(find(document.body, node => node.tagName === "TBODY")[0].children[0].children.length, 11);
-  const committed = document.body.children[0]; assert.throws(() => renderDashboard(document, { transport: "connected", model: buildViewModel(snapshotFixtureV2()) }, { beforeCommit: () => { throw new Error("render failed"); } })); assert.equal(document.body.children[0], committed);
+  assert.equal(find(document.body, node => node.className === "status-grid")[0], undefined);
+  const status = document.getElementById("system-status"), statusSummary = document.getElementById("status-summary");
+  const statusDetails = find(document.body, node => node.className === "status-detail");
+  assert.equal(status.tagName, "DETAILS"); assert.equal(statusSummary.tagName, "SUMMARY");
+  assert.deepEqual(statusDetails.map(item => item.children[0].textContent), ["Scanner", "Aggregates", "Trades", "Quotes"]);
+  for (const label of ["Backend", "Ranking mode", "Dashboard feed", "Transport", "Process", "Ops sample", "Watermark", "Sample"]) assert.doesNotMatch(document.body.textContent, new RegExp(`\\b${label}\\b`, "i"));
+  assert.match(document.body.textContent, /CONTEXT.*LOCATION.*MOMENTUM.*TAPE \/ EXECUTION/s);
+  assert.equal(document.getElementById("status-live").textContent, "LIVE");
+  assert.match(document.getElementById("scanner-status").textContent, /exact qualified ranking/);
+  assert.equal(document.getElementById("trade-status").textContent, "2/2 current");
+  assert.equal(document.getElementById("quote-status").textContent, "2/2 current");
+  assert.doesNotMatch(document.body.textContent, /\b2 ranked\b|publication \d+/i);
+  const headers = find(document.body, node => node.tagName === "TH"); const leafHeaders = headers.filter(node => node.attributes.scope === "col"); assert.deepEqual(leafHeaders.map(node => node.textContent), ["RANK", "SYMBOL", "FLOAT", "VOLUME", "LAST", "FROM CLOSE %", "FROM OPEN %", "DAY RANGE", "ACTIVITY 30s", "MOVE 30s", "TAPE SPEED", "SPREAD"]); assert.deepEqual(leafHeaders.map(node => node.attributes["data-tooltip"]), ["Current scanner rank and movement compared with approximately 60 seconds ago.", "Ticker symbol for the listed stock.", "Estimated number of publicly tradable shares.", "Total shares traded during the current scanner session.", "Latest trusted price.", "Percent change from the adjusted previous close.", "Percent change from the first eligible session price.", "Current price position between today's low and high.", "Recent share-volume activity compared with the prior five-minute baseline.", "Signed price change over the last 30 seconds.", "Qualified trades per second over the last five seconds.", "Difference between the current bid and ask, shown in cents and basis points."]); assert.ok(leafHeaders.every(node => node.tabIndex === undefined && node.title === undefined)); const cells = find(document.body, node => node.tagName === "TD"); assert.ok(cells.every(cell => cell.title === undefined)); assert.equal(find(document.body, node => node.tagName === "TBODY")[0].children[0].children.length, 12);
+  const rankCells = find(document.body, node => node.className === "rank-cell"); assert.deepEqual(rankCells.map(cell => cell.children[0].children[0].textContent), ["#1", "#2"]); assert.ok(rankCells.every(cell => cell.children[0].children[1].textContent === ""));
+  const committed = document.body.children[0], tableHead = find(document.body, node => node.tagName === "THEAD")[0], originalRows = document.getElementById("rows").textContent; status.open = true;
+  assert.throws(() => renderDashboard(document, { transport: "connected", model: buildViewModel(snapshotFixtureV2()) }, { beforeCommit: () => { throw new Error("render failed"); } })); assert.equal(document.body.children[0], committed); assert.equal(document.getElementById("rows").textContent, originalRows);
   const focused = find(document.body, node => node.dataset.focusKey?.endsWith(":spread"))[0]; focused.focus(); const key = focused.dataset.focusKey; [snapshot.rows[0], snapshot.rows[1]] = [snapshot.rows[1], snapshot.rows[0]]; snapshot.rows.forEach((row, index) => { row.rank = index + 1; }); snapshot.tq.desired_symbols = snapshot.rows.map(row => row.symbol); renderDashboard(document, { transport: "connected", model: buildViewModel(snapshot) }); assert.equal(document.activeElement.dataset.focusKey, key);
+  assert.equal(find(document.body, node => node.tagName === "THEAD")[0], tableHead, "poll replaced the header tooltip anchors"); assert.equal(document.getElementById("status-summary"), statusSummary); assert.equal(status.open, true, "poll closed the status disclosure");
   renderDashboard(document, { transport: "connected", model: buildViewModel(snapshotFixtureV2()) }); assert.equal(document.getElementById("diagnostics"), null); assert.doesNotMatch(document.body.textContent, /Operational details/); const source = await readFile(new URL("./render.js", import.meta.url), "utf8"); assert.doesNotMatch(source, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
+});
+
+test("P-MVP-UI gives delayed and disconnected transport precedence over retained model state", () => {
+  const currentModel = buildViewModel(snapshotFixtureV2(2));
+  for (const [transport, label] of [["refresh_delayed", "DELAYED"], ["disconnected", "DISCONNECTED"]]) {
+    const document = new FakeDocument(); renderDashboard(document, { transport, model: currentModel });
+    const live = document.getElementById("status-live"), table = document.getElementById("scanner-table"), cells = find(document.body, node => node.tagName === "TD");
+    assert.match(live.textContent, new RegExp(`^${label}`)); assert.equal(live.dataset.state, "warning"); assert.equal(table.dataset.publicationState, "noncurrent"); assert.ok(cells.every(cell => cell.dataset.state === "retained"));
+  }
+  const partialSnapshot = snapshotFixtureV2(2); partialSnapshot.ranking.mode = "degraded_current"; partialSnapshot.ranking.reason = "qualification_incomplete"; clearTQ(partialSnapshot);
+  const partialDocument = new FakeDocument(); renderDashboard(partialDocument, { transport: "disconnected", model: buildViewModel(partialSnapshot) });
+  assert.equal(partialDocument.getElementById("status-live").textContent, "DISCONNECTED");
+});
+
+test("P-MVP-UI maps scanner lifecycle to trader-facing status without a row count", () => {
+  const current = buildViewModel(snapshotFixtureV2(2));
+  const cases = [
+    [{ transport: "connected", model: null }, "CONNECTING"],
+    [{ transport: "disconnected", model: null, error: "offline" }, "DISCONNECTED"],
+    [{ transport: "connected", model: { ...current, current: false, backendReady: false, lifecycle: "awaiting_session" } }, "WAITING FOR SESSION"],
+    [{ transport: "connected", model: { ...current, current: false, backendReady: false, lifecycle: "initializing" } }, "STARTING"],
+    [{ transport: "connected", model: current }, "LIVE"],
+    [{ transport: "connected", model: { ...current, current: false, partial: true, rankingMode: "degraded_current" } }, "PARTIAL"],
+    [{ transport: "connected", model: { ...current, current: false, backendReady: false, lifecycle: "recovering", recovering: true } }, "RECOVERING"],
+    [{ transport: "connected", model: { ...current, current: false, backendReady: false, lifecycle: "suppressed" } }, "UNAVAILABLE"],
+    [{ transport: "connected", model: { ...current, current: false, backendReady: false, lifecycle: "ended" } }, "SESSION ENDED"],
+    [{ transport: "connected", model: { ...current, current: false, replay: true } }, "HISTORICAL"],
+  ];
+  for (const [event, expected] of cases) {
+    const document = new FakeDocument(); renderDashboard(document, event);
+    assert.equal(document.getElementById("status-live").textContent, expected);
+    assert.doesNotMatch(document.getElementById("status-summary").textContent, /ranked/i);
+  }
+  const emptyDocument = new FakeDocument(); renderDashboard(emptyDocument, { transport: "connected", model: buildViewModel(snapshotFixtureV2(0)) });
+  assert.equal(emptyDocument.getElementById("status-live").textContent, "LIVE", "exact empty ranking was not live");
+});
+
+test("P-MVP-UI summarizes trade and quote coverage separately", () => {
+  const snapshot = snapshotFixtureV2(3);
+  snapshot.rows[1].tape_5s = { status: "warming", reason: "five_second_warming", trade_coverage: true, trades_per_second: null, timestamp_basis: "mixed", lifecycle_records_observed: true };
+  snapshot.rows[2].spread = { ...snapshot.rows[2].spread, status: "stale", reason: "stale_quote", quote_age_ms: 9000 };
+  const document = new FakeDocument(); renderDashboard(document, { transport: "connected", model: buildViewModel(snapshot) });
+  assert.equal(document.getElementById("trade-status").textContent, "2/3 current · 1 warming");
+  assert.equal(document.getElementById("quote-status").textContent, "2/3 current · 1 stale");
+  assert.equal(document.getElementById("status-live").textContent, "LIVE");
 });
 
 test("P-MVP-UI colors only current Move 30s text and leaves its cell neutral", () => {
@@ -369,24 +549,26 @@ test("P-MVP-UI colors only current Tape 5s text and leaves its cell neutral", ()
   assert.ok(cells.every(cell => cell.style.background === undefined && cell.dataset.palette === undefined));
 
   const unavailable = snapshotFixtureV2(); unavailable.rows[0].tape_5s = { status: "unavailable", reason: "coverage", trade_coverage: false, trades_per_second: null, timestamp_basis: "none", lifecycle_records_observed: false };
+  unavailable.rows[0].tq_membership = { desired: true, provider_present: false, provider_membership_unknown: true };
   const unavailableDocument = new FakeDocument(); renderDashboard(unavailableDocument, { transport: "connected", model: buildViewModel(unavailable) });
   const unavailableCell = find(unavailableDocument.body, node => node.dataset.focusKey?.endsWith(":tape"))[0];
   assert.equal(unavailableCell.children[0].style.color, undefined); assert.equal(unavailableCell.dataset.fieldState, "unavailable"); assert.equal(unavailableCell.style.background, undefined); assert.equal(unavailableCell.dataset.palette, undefined);
 });
 
 test("P-MVP-UI colors only current Spread text and leaves invalid or unavailable cells neutral", () => {
-  const bps = [0, 10, 25, 50, 75, 100];
+  const bps = [0, 20, 35, 60, 100, 450];
   const snapshot = snapshotFixtureV2(bps.length);
   bps.forEach((value, index) => { snapshot.rows[index].spread.basis_points = value; });
   const document = new FakeDocument(); renderDashboard(document, { transport: "connected", model: buildViewModel(snapshot) });
   const cells = find(document.body, node => node.dataset.focusKey?.endsWith(":spread"));
   assert.deepEqual(cells.map(cell => cell.children[0].style.color), bps.map(spreadColor));
-  assert.deepEqual(cells.map(cell => cell.textContent), ["0.0 bps / 1.50¢", "10.0 bps / 1.50¢", "25.0 bps / 1.50¢", "50.0 bps / 1.50¢", "75.0 bps / 1.50¢", "100.0 bps / 1.50¢"]);
+  assert.deepEqual(cells.map(cell => cell.textContent), ["0.0 bps / 1.50¢", "20.0 bps / 1.50¢", "35.0 bps / 1.50¢", "60.0 bps / 1.50¢", "100.0 bps / 1.50¢", "450.0 bps / 1.50¢"]);
   assert.ok(cells.every(cell => cell.style.background === undefined && cell.dataset.palette === undefined));
 
   const invalid = snapshotFixtureV2(2);
   invalid.rows[0].spread = { status: "invalid", reason: "crossed_quote", quote_coverage: true, cents: null, basis_points: null, quote_age_ms: 0, quality: "" };
   invalid.rows[1].spread = { status: "unavailable", reason: "coverage", quote_coverage: false, cents: null, basis_points: null, quote_age_ms: 0, quality: "" };
+  invalid.rows[1].tq_membership = { desired: true, provider_present: false, provider_membership_unknown: true };
   const invalidDocument = new FakeDocument(); renderDashboard(invalidDocument, { transport: "connected", model: buildViewModel(invalid) });
   const invalidCells = find(invalidDocument.body, node => node.dataset.focusKey?.endsWith(":spread"));
   assert.deepEqual(invalidCells.map(cell => cell.children[0].style.color), [undefined, undefined]);
@@ -437,8 +619,9 @@ test("P-MVP-UI renders FROM OPEN % palette metadata only for eligible values", (
   [snapshot.rows[0].from_open_change.value_ratio, snapshot.rows[1].from_open_change.value_ratio, snapshot.rows[2].from_open_change.value_ratio] = [1, .2, -.1];
   renderDashboard(document, { transport: "connected", model: buildViewModel(snapshot) });
   const cells = find(document.body, node => node.dataset.focusKey?.endsWith(":fromopen"));
-  assert.deepEqual(cells.map(cell => cell.dataset.palette), ["from-open", "from-open", "from-open"]);
-  assert.deepEqual(cells.map(cell => cell.dataset.fromOpenWeight), ["100%", "27.27%", "0%"]);
+  assert.deepEqual(cells.map(cell => cell.dataset.palette), ["from-open", "from-open", undefined]);
+  assert.deepEqual(cells.map(cell => cell.dataset.fromOpenWeight), ["100%", "0%", undefined]);
+  assert.deepEqual(cells.map(cell => cell.children[0].style.color), [undefined, undefined, MUTED_NEGATIVE_TEXT_COLOR]);
   assert.deepEqual(cells.map(cell => cell.textContent), ["+100.00%", "+20.00%", "-10.00%"]);
 
   const mixed = snapshotFixtureV2(3);
@@ -490,7 +673,7 @@ test("P-MVP-UI keeps From Open relative metadata subordinate to retained table s
   const cells = find(document.body, node => node.dataset.focusKey?.endsWith(":fromopen"));
   assert.equal(table.dataset.publicationState, "noncurrent");
   assert.deepEqual(cells.map(cell => cell.dataset.state), ["retained", "retained", "retained"]);
-  assert.deepEqual(cells.map(cell => cell.dataset.fromOpenWeight), ["100%", "27.27%", "0%"]);
+  assert.deepEqual(cells.map(cell => cell.dataset.fromOpenWeight), ["100%", "0%", undefined]);
 });
 
 test("P-MVP-UI assets contain only v2 and final-field representations", async () => {

@@ -192,6 +192,10 @@ func mapRecovery(value engine.OperationalHydration) Recovery {
 
 func mapTQ(value engine.TQView, normalization massive.TQNormalizationAccounting) TQ {
 	a, c := value.Accounting, value.Commands
+	written := c.Written
+	if written < c.Acknowledged { // legacy in-process fixture compatibility
+		written = c.Acknowledged
+	}
 	return TQ{DesiredSymbols: append([]string{}, value.Desired...), PressureMode: string(value.Pressure), PressureCause: string(value.PressureCause), AggregateOnly: value.AggregateOnly,
 		Shed: value.ShedTradesQuotes, RetainedBoundHit: value.Bounds, PressureMisses: uint64(value.PressureMisses),
 		PressureTransitions: decimal(value.PressureTransitions), PressureFenced: decimal(value.PressureFenced),
@@ -204,7 +208,7 @@ func mapTQ(value engine.TQView, normalization massive.TQNormalizationAccounting)
 		Facts: TQFacts{Consumed: decimal(a.Consumed), Applied: decimal(a.Applied), Duplicate: decimal(a.Duplicate), Rejected: decimal(a.Rejected),
 			Fenced: decimal(a.Fenced), PressureShed: decimal(a.PressureShed), Integrity: decimal(a.Integrity), NormalizedTrades: decimal(normalization.NormalizedTrades), NormalizedQuotes: decimal(normalization.NormalizedQuotes), AppliedTrades: decimal(a.AppliedTrades),
 			AppliedQuotes: decimal(a.AppliedQuotes), PressureShedTrades: decimal(a.PressureShedTrades), PressureShedQuotes: decimal(a.PressureShedQuotes)},
-		Commands: TQCommands{Issued: decimal(c.Issued), Pending: decimal(c.Pending), Acknowledged: decimal(c.Acknowledged), Failed: decimal(c.Failed),
+		Commands: TQCommands{Issued: decimal(c.Issued), Pending: decimal(c.Pending), Written: decimal(written), Failed: decimal(c.Failed),
 			Fenced: decimal(c.Fenced), ResultFenced: decimal(c.ResultFenced)}}
 }
 
@@ -267,7 +271,10 @@ func mapRow(row engine.ReplayRankingRowView, tq engine.TQSymbolView) (Row, error
 	if tq.Symbol == "" {
 		return result, nil
 	}
-	result.TQMembership = TQMembership{Desired: tq.Desired, ProviderPresent: tq.ProviderPresent, ProviderMembershipUnknown: tq.ProviderMembershipUnknown}
+	// The public membership fact is defined by independent coverage evidence,
+	// never by a successful write or a legacy adapter hint.
+	present := tq.TradeCoverage && tq.QuoteCoverage
+	result.TQMembership = TQMembership{Desired: tq.Desired, ProviderPresent: present, ProviderMembershipUnknown: tq.Desired && !present}
 	// Tape.Status/Reason is the engine's authoritative five-second product
 	// projection. The retained nested members exist for the superseded v1
 	// shape and are required by engine publication validation to agree.
@@ -434,7 +441,7 @@ func validateSnapshot(value Snapshot) error {
 	if !validDecimal(tq.NormalizedTrades) || !validDecimal(tq.NormalizedQuotes) || !decimalSumAtMost(tq.Applied, tq.AppliedTrades, tq.AppliedQuotes) || !sumDecimalEquals(tq.PressureShed, tq.PressureShedTrades, tq.PressureShedQuotes) {
 		return rejectMapping("tq_family_fact_identity")
 	}
-	if !sumDecimalEquals(commands.Issued, commands.Pending, commands.Acknowledged, commands.Failed, commands.Fenced) {
+	if !sumDecimalEquals(commands.Issued, commands.Pending, commands.Written, commands.Failed, commands.Fenced) {
 		return rejectMapping("tq_command_identity")
 	}
 	if !sumDecimalEquals(checkpoint.Submitted, checkpoint.Outstanding, checkpoint.Completed, checkpoint.Failed, checkpoint.Canceled, checkpoint.Superseded) {
@@ -488,6 +495,10 @@ func validateSnapshot(value Snapshot) error {
 		}
 		if _, exists := seenRows[row.Symbol]; exists {
 			return rejectMapping("duplicate_product_row")
+		}
+		if row.TQMembership.ProviderPresent != (row.Tape5s.TradeCoverage && row.Spread.QuoteCoverage) ||
+			row.TQMembership.ProviderMembershipUnknown != (row.TQMembership.Desired && !row.TQMembership.ProviderPresent) {
+			return rejectMapping("tq_membership_confirmation")
 		}
 		seenRows[row.Symbol] = struct{}{}
 	}
@@ -596,7 +607,7 @@ func tape5sValid(value Tape5s) bool {
 	case "current":
 		return value.TradeCoverage && value.Reason == "qualifying_original_prints"
 	case "unavailable":
-		return oneOf(value.Reason, "coverage", "replay_unavailable")
+		return oneOf(value.Reason, "coverage", "channel_unconfirmed", "control_error", "replay_unavailable")
 	case "invalid":
 		return value.TradeCoverage && value.Reason == "unequal_repeat"
 	case "pressure_shed":
@@ -617,7 +628,7 @@ func spreadTupleValid(value Spread) bool {
 	case "stale":
 		return value.QuoteCoverage && value.Reason == "stale_quote"
 	case "unavailable":
-		return value.Reason == "coverage" || value.Reason == "replay_unavailable" || value.QuoteCoverage && value.Reason == "one_sided_quote"
+		return value.Reason == "coverage" || value.Reason == "channel_unconfirmed" || value.Reason == "control_error" || value.Reason == "replay_unavailable" || value.QuoteCoverage && value.Reason == "one_sided_quote"
 	case "invalid":
 		return value.QuoteCoverage && value.Reason == "crossed_quote"
 	case "pressure_shed":
@@ -649,7 +660,7 @@ func tqStatus(value string) bool {
 }
 
 func tqReason(value string) bool {
-	return oneOf(value, "", "coverage", "coverage_warming", "five_second_warming", "qualifying_original_prints", "unequal_repeat", "one_sided_quote", "crossed_quote", "stale_quote", "insufficient_coverage", "pressure", "replay_unavailable")
+	return oneOf(value, "", "coverage", "channel_unconfirmed", "control_error", "coverage_warming", "five_second_warming", "qualifying_original_prints", "unequal_repeat", "one_sided_quote", "crossed_quote", "stale_quote", "insufficient_coverage", "pressure", "replay_unavailable")
 }
 
 func validReplaySnapshot(value Snapshot) bool {

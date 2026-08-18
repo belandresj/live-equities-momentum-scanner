@@ -3,37 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Momentum Scanner</title>
+  <title>MOMENTUM SCANNER</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <div id="app"><main>
-    <header>
-      <div><p class="eyebrow">LIVE EQUITIES</p><h1>Momentum Scanner</h1></div>
-      <div id="status-live" class="status-live" role="status" aria-live="polite">Connecting to scanner API</div>
-    </header>
-    <section class="status-grid" aria-label="Scanner status">
-      <div><span>Backend</span><strong id="backend">unknown</strong></div>
-      <div><span>Ranking</span><strong id="ranking">unknown</strong></div>
-      <div><span>T/Q</span><strong id="tq">unknown</strong></div>
-    </section>
-    <div id="message" class="message" hidden></div>
-    <div class="table-shell">
-      <table id="scanner-table">
-        <caption>Server-ranked top 20 qualifying equities</caption>
-        <colgroup>
-          <col class="context-column"><col class="context-column"><col class="context-column"><col class="context-column">
-          <col class="location-column"><col class="location-column"><col class="location-column">
-          <col class="momentum-column"><col class="momentum-column">
-          <col class="execution-column"><col class="execution-column">
-        </colgroup>
-        <thead>
-          <tr class="group-header"><th scope="colgroup" colspan="4">CONTEXT</th><th scope="colgroup" colspan="3">LOCATION</th><th scope="colgroup" colspan="2">CURRENT MOMENTUM</th><th scope="colgroup" colspan="2">EXECUTION</th></tr>
-          <tr class="leaf-header"><th scope="col" data-tooltip="Ticker symbol for the listed stock.">SYMBOL</th><th scope="col" data-tooltip="Estimated number of publicly tradable shares.">FLOAT</th><th scope="col" data-tooltip="Total shares traded during the current scanner session.">VOLUME</th><th scope="col" data-tooltip="Latest trusted price.">LAST</th><th scope="col" data-tooltip="Percent change from the adjusted previous close.">FROM CLOSE %</th><th scope="col" data-tooltip="Percent change from the first eligible session price.">FROM OPEN %</th><th scope="col" data-tooltip="Current price position between today's low and high.">DAY RANGE</th><th scope="col" data-tooltip="Recent share-volume activity compared with the prior five-minute baseline.">ACTIVITY 30s</th><th scope="col" data-tooltip="Signed price change over the last 30 seconds.">MOVE 30s</th><th scope="col" data-tooltip="Qualified trades per second over the last five seconds.">TAPE SPEED</th><th scope="col" data-tooltip="Difference between the current bid and ask, shown in cents and basis points.">SPREAD</th></tr>
-        </thead>
-        <tbody id="rows"></tbody>
-      </table>
-    </div>
+  <div id="app"><main class="dashboard dashboard-loading">
+    <header class="app-bar"><h1>MOMENTUM SCANNER</h1><div class="loading-status" role="status" aria-live="polite">Connecting to scanner API</div></header>
   </main></div>
   <div id="announcer" class="sr-only" role="status" aria-live="polite">Connecting to scanner API</div>
   <script src="/config.js"></script>

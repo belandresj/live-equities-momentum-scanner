@@ -738,10 +738,13 @@ compatibility representation.
 
 ### DTE-TQ-01 — selected enrichment has its own coverage
 
-Trade/quote coverage is per symbol and per channel. It begins strictly after
-the completed acknowledgement’s live causal position for the current
-connection epoch. A trade or quote at or before that position cannot satisfy a
-selected-symbol window merely because its event time is recent.
+Trade/quote coverage is per symbol and per channel. A successful paired T/Q
+write records the greatest complete frame sequence `B` already read when the
+write returns. Coverage begins only when a structurally valid matching event
+for that channel is received strictly after `B` in the current connection epoch
+and request generation. A trade or quote at or before `B` cannot satisfy a
+selected-symbol window merely because its event time is recent. Generic
+post-handshake `success` statuses are informational and never create coverage.
 
 Coverage ends at the earliest of:
 
@@ -750,22 +753,23 @@ Coverage ends at the earliest of:
 - connection loss or connection-epoch change; or
 - session end.
 
-Subscription intent and a sent command are not coverage. An acknowledgement
-alone also does not instantly warm a trailing window; sufficient event-time
-history and continuous causal coverage are both required.
+Subscription intent and a successful write are not coverage. The first
+post-boundary event starts its channel's coverage at that event's receipt time;
+sufficient event-time history and continuous causal coverage are both required.
 
 ### DTE-TQ-02 — gaps clear derived state
 
 A gap closes the affected trade or quote coverage interval and changes
 dependent fields to warming, stale, unavailable, or invalid as defined by the
 feature contract. It must not preserve an apparently current Tape Rate or
-Spread across an unknown interval. Absence of trades or quotes while the
-acknowledged connection and channel coverage remain continuous is not a gap:
+Spread across an unknown interval. Absence of trades or quotes while
+data-confirmed channel coverage remains continuous is not a gap:
 Tape Rate may be zero and the last valid Spread remains numeric with quote age
 and stale status.
 
-Resubscription starts new coverage after its acknowledgement and warms the
-feature again. T/Q coverage, pressure state, and feature time never gate or
+Resubscription starts a new request generation and requires fresh
+post-boundary data confirmation before warming the feature again. T/Q coverage,
+pressure state, and feature time never gate or
 advance aggregate `T`, aggregate qualification, or ranking.
 
 ### DTE-TQ-03 — intentional shedding is observable

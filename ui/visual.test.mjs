@@ -10,8 +10,8 @@ function contrast(foreground, background) { const a = luminance(foreground), b =
 test("P-MVP-UI visual grammar keeps backend-neutral continuous presentation", () => {
   const snapshot = snapshotFixtureV2(3); snapshot.rows[0].day_range_position.value_ratio = .75; snapshot.rows[0].activity_30s.value_ratio = 1; snapshot.rows[0].tape_5s.trades_per_second = 30; snapshot.rows[0].spread.basis_points = 50;
   [snapshot.rows[0].from_open_change.value_ratio, snapshot.rows[1].from_open_change.value_ratio, snapshot.rows[2].from_open_change.value_ratio] = [1, .2, -.1];
-  const row = buildViewModel(snapshot).rows[0]; assert.deepEqual([row.dayColor, row.fromOpen.colorPosition, row.dayRange.position, row.activity.position, row.tape.textColor, row.spread.textColor], [1, 1, 75, 100, "#8F9AA3", "#D84A4A"]); assert.equal(buildViewModel(snapshot).current, true);
-  assert.ok(Math.abs(buildViewModel(snapshot).rows[1].fromOpen.colorPosition - 3 / 11) < 1e-12);
+  const row = buildViewModel(snapshot).rows[0]; assert.deepEqual([row.dayColor, row.fromOpen.colorPosition, row.dayRange.position, row.activity.position, row.tape.textColor, row.spread.textColor], [1, 1, 75, 100, "#8F9AA3", "#C48649"]); assert.equal(buildViewModel(snapshot).current, true);
+  assert.equal(buildViewModel(snapshot).rows[1].fromOpen.colorPosition, 0);
 });
 
 test("P-MVP-UI text/status palettes meet WCAG AA contrast", () => {
@@ -21,8 +21,9 @@ test("P-MVP-UI text/status palettes meet WCAG AA contrast", () => {
 
 test("P-MVP-UI CSS fixes desktop density, groups, header tooltips, retained contrast, and reduced motion", async () => {
   const css = await readFile(new URL("./styles.css", import.meta.url), "utf8");
-  assert.match(css, /main \{ min-width: 1120px/); assert.match(css, /td \{ height: 32px/); assert.match(css, /\.group-header th/); assert.match(css, /\.leaf-header th/); assert.match(css, /:focus-visible/); assert.doesNotMatch(css, /tbody\s+tr:hover/); assert.match(css, /@media \(prefers-reduced-motion: reduce\)/); assert.match(css, /animation-duration: \.01ms !important/); assert.match(css, /table\[data-publication-state="noncurrent"\]/); assert.doesNotMatch(css, /data-palette="range"|data-range-(?:red|green)-weight/); assert.doesNotMatch(css, /data-palette="heat"|data-heat-weight|#80400d/);
+  assert.match(css, /main \{ min-width: 1120px/); assert.match(css, /\.dashboard \{[^}]*min-height: 100vh/); assert.match(css, /\.scanner-panel \{[^}]*display: flex[^}]*flex: 1[^}]*flex-direction: column/); assert.match(css, /\.table-shell \{[^}]*--scanner-row-height: 32px[^}]*container-type: size[^}]*flex: 1[^}]*min-height: 0[^}]*overflow-x: auto[^}]*overflow-y: hidden/); assert.doesNotMatch(css, /\.table-shell \{[^}]*height: 100%/); assert.match(css, /\.system-status/); assert.match(css, /\.status-panel \{[^}]*position: absolute/); assert.doesNotMatch(css, /\.status-grid/); assert.match(css, /td \{ height: var\(--scanner-row-height\)/); assert.match(css, /\.group-header th/); assert.match(css, /\.leaf-header th/); assert.match(css, /:focus-visible/); assert.doesNotMatch(css, /tbody\s+tr:hover/); assert.match(css, /@media \(prefers-reduced-motion: reduce\)/); assert.match(css, /animation-duration: \.01ms !important/); assert.match(css, /table\[data-publication-state="noncurrent"\]/); assert.doesNotMatch(css, /data-palette="range"|data-range-(?:red|green)-weight/); assert.doesNotMatch(css, /data-palette="heat"|data-heat-weight|#80400d/);
   assert.match(css, /\.leaf-header th\[data-tooltip\]::after/); assert.match(css, /content: attr\(data-tooltip\)/); assert.match(css, /transition: opacity 80ms ease/); assert.match(css, /pointer-events: none/); assert.match(css, /\.leaf-header th\[data-tooltip\]:hover::after/);
+  assert.match(css, /table col\.rank-column \{ width: 7%/); assert.match(css, /\.rank-metadata \{[^}]*width: 70px[^}]*grid-template-columns: 25px 45px/); assert.match(css, /rank-movement\[data-direction="up"\][^}]*#70B873/); assert.match(css, /rank-movement\[data-direction="down"\][^}]*#EF3030/);
   assert.match(css, /#4A965D/); assert.match(css, /#2CFF05/); assert.match(css, /color-mix\(in oklab, #4A965D, #2CFF05 var\(--day-weight\)\)/); assert.match(css, /in oklab/);
   assert.match(css, /attr\(data-day-weight type\(<percentage>\), 50%\)/); assert.match(css, /attr\(data-from-open-weight type\(<percentage>\), 50%\)/); assert.match(css, /data-palette="from-open"/);
   assert.match(css, /#00FFFF/); assert.match(css, /color-mix\(in oklab, #d9e5ed, #00FFFF var\(--volume-turnover-weight\)\)/); assert.match(css, /attr\(data-volume-turnover-weight type\(<percentage>\), 0%\)/);
@@ -32,11 +33,20 @@ test("P-MVP-UI CSS fixes desktop density, groups, header tooltips, retained cont
   assert.ok(32 + 52 + 53 + 27 + 54 + 20 * 32 <= 900, "full dashboard exceeds target height allocation");
 });
 
-test("P-MVP-UI allocates compact equal context columns and readable equal execution columns", async () => {
+test("P-MVP-UI allocates distinct compact Rank and Symbol columns without widening the table", async () => {
   const css = await readFile(new URL("./styles.css", import.meta.url), "utf8");
-  assert.match(css, /table col\.context-column \{ width: 6\.75%; \}/);
+  assert.match(css, /table col\.rank-column \{ width: 7%; \}/);
+  assert.match(css, /table col\.symbol-column, table col\.context-column \{ width: 5%; \}/);
   assert.match(css, /table col\.location-column \{ width: 9%; \}/);
   assert.match(css, /table col\.momentum-column \{ width: 9%; \}/);
   assert.match(css, /table col\.execution-column \{ width: 14%; \}/);
   assert.doesNotMatch(css, /td:first-child\s*\{[^}]*width:/);
+});
+
+test("P-MVP-UI stripes current rows by displayed position and preserves noncurrent styling", async () => {
+  const css = await readFile(new URL("./styles.css", import.meta.url), "utf8");
+  assert.match(css, /table\[data-publication-state="current"\] > tbody > tr:nth-child\(odd\) \{ background: #071019; \}/);
+  assert.match(css, /table\[data-publication-state="current"\] > tbody > tr:nth-child\(even\) \{ background: #0A1823; \}/);
+  assert.match(css, /table\[data-publication-state="noncurrent"\] tbody \{ background: #111a21; \}/);
+  assert.doesNotMatch(css, /data-(?:rank|symbol)-.*background/);
 });

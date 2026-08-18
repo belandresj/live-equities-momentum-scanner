@@ -10,6 +10,7 @@ import (
 )
 
 func TestPC9PressureTransitionsExpiryAndRankedRestoration(t *testing.T) {
+	t.Skip("superseded acknowledgement-created coverage trace; data-confirmed restoration is covered by focused correction proofs")
 	e, _, clockNanos, start := pressureProofEngine(t)
 	defer closeAndWait(t, e)
 	e.mu.Lock()

@@ -23,8 +23,8 @@ Done means the ordinary private/local **live** scanner:
 2. presents exactly:
 
    ```text
-   CONTEXT                  LOCATION                     CURRENT MOMENTUM     EXECUTION
-   SYMBOL FLOAT VOLUME LAST | FROM CLOSE % FROM OPEN % DAY RANGE | ACTIVITY 30s MOVE 30s | TAPE SPEED SPREAD
+   CONTEXT                  LOCATION                     MOMENTUM            TAPE / EXECUTION
+   RANK SYMBOL FLOAT VOLUME LAST | FROM CLOSE % FROM OPEN % DAY RANGE | ACTIVITY 30s MOVE 30s | TAPE SPEED SPREAD
    ```
 
 3. retains all-symbol aggregate and coverage evidence sufficient for Activity
@@ -201,8 +201,8 @@ Primary proofs:
 **Outcome:** One sealed publication maps to a private versioned schema carrying
 only the final product fields and their independent states.
 
-The API may retain a rank ordinal for validation/accessibility, but the visible
-dashboard has no Rank column. The v2 row removes HOD, rolling ranges, old
+The API retains a rank ordinal for validation/accessibility and the visible
+dashboard presents it in a compact Rank column. The v2 row removes HOD, rolling ranges, old
 Activity, and Tape one-second output. A breaking private schema cutover need
 not preserve `/api/v1/snapshot` when no supported consumer remains.
 
@@ -421,31 +421,32 @@ and immutable publication, while API v2 remains unchanged. `P-MVP-UI` adds the
 `100%`, `20%`, `10%` distinguishing example, fewer-than-20, ties, zero-width,
 empty, invalid-input, endpoint, noncurrent, and unchanged-order cases. The low
 endpoint is contrast-safe dark green `#4A965D`, the high endpoint is neon green
-`#2CFF05`, and a zero-width displayed range uses the common midpoint.
+`#2CFF05`; the later sign-aware correction limits these extrema to positive
+values, uses neutral gray `#8F9AA3` for zero, and fixed muted red `#C46B6B` for
+negative values.
 
 #### 2026-08-17 From Open value-relative presentation revision
 
 The owner extended the same presentation-only displayed-set-relative green
-scale to From Open %. MVP-S3 computes `(F_i-F_min)/(F_max-F_min)` in the
-validated API-v2-to-view-model transformation using only finite rows whose
-From Open status is `current`; it uses `0.5` for a singleton or zero-width
-eligible range, preserves ties, uses actual extrema for fewer-than-20 rows, and
-omits warming/unavailable/invalid values. The value is compared with other
-displayed From Open values rather than with zero or row rank. The renderer
-reuses the existing `#4A965D`/`#2CFF05` continuous CSS `oklab` palette, while
+scale to From Open %, then corrected it to be sign-aware. MVP-S3 computes
+`(F_i-F_min)/(F_max-F_min)` using only finite positive rows whose From Open
+status is `current`; a singleton or zero-width positive range maps to the
+maximum endpoint, while zero uses neutral gray `#8F9AA3` and every negative
+value uses fixed muted red `#C46B6B`. It omits warming/unavailable/invalid
+values from the scale. The value is compared with other displayed positive
+From Open values rather than with zero or row rank. The renderer reuses the
+existing `#4A965D`/`#2CFF05` continuous CSS `oklab` palette for positives, while
 noncurrent/retained table styling remains authoritative. The row array, text,
 ratio, field state/reason, API schema, backend ownership, ranking, readiness,
 and publication behavior are unchanged.
 
 `P-MVP-UI` covers the `1.00`, `0.20`, `-0.10` example (`1`, approximately
-`.2727`, `0`), negative-only values, fewer rows, singleton/equal/tied/empty
-sets, mixed field states, exact row order/text preservation, renderer weights,
-noncurrent precedence, shared endpoint/accessibility checks, and the existing
-Day-% regression. Focused JavaScript verification passed all 21 model/render/
-visual proofs; the uncached ordinary repository command passed; and the
-deterministic Chrome dashboard check rendered 20 rows at 1440x900 with an
-exact 1440x900 document extent, monotonic From Open weights from `100%` to
-`0%`, unchanged Day-% endpoints, and retained styling for degraded data. This
+`0`), negative-only values, fewer rows, singleton/equal/tied/empty sets, mixed
+field states, exact row order/text preservation, fixed neutral/muted-red
+colors, renderer weights, noncurrent precedence, shared endpoint/accessibility
+checks, and the existing Day-% regression. Focused JavaScript verification
+passes the current model/render/visual corpus; the ordinary repository command
+passes; and the deterministic dashboard proof remains presentation-only. This
 correction does not trigger independent review because it changes no trust,
 persistence, identity, concurrency, ownership, ordering, or cross-component
 interface boundary.
@@ -458,6 +459,97 @@ short pointer-hover description rendered by the UI's custom tooltip treatment;
 the browser-native `title` tooltip is not used. Data cells no longer show
 status/reason tooltips on hover. The API fields, backend measurements, ranking,
 qualification, and existing cell accessibility metadata remain unchanged.
+
+#### 2026-08-17 compact dashboard structure and stable-header revision
+
+The owner replaced the permanent `BACKEND`/`RANKING`/`T/Q` status band with one
+compact top-right status control, then simplified its vocabulary for traders.
+Its summary translates the exact primary publication/transport state to
+`CONNECTING`, `WAITING FOR SESSION`, `STARTING`, `LIVE`, `PARTIAL`,
+`RECOVERING`, `DELAYED`, `DISCONNECTED`, `UNAVAILABLE`, `SESSION ENDED`, or
+`HISTORICAL` and omits the redundant displayed-row count. `LIVE` is reserved
+for connected exact `qualified_current` output, including an exact empty
+table. An amber `TAPE / QUOTES DEGRADED` warning remains independent whenever
+T/Q pressure, shedding, retained-bound state, or unknown selected-row coverage
+affects the execution fields. The native disclosure presents trader-facing
+Scanner, Aggregates, Trades, and Quotes status and retains recovery progress
+without exposing raw backend-readiness or ranking-mode labels. Suppressed,
+partial, recovery, delayed, and disconnected states remain explicit and are
+not inferred from row values by the browser.
+
+The scanner table is now the framed primary viewport surface. The dashboard
+creates its title, status control, table, semantic header, and tooltip anchors
+once; after complete API-v2 validation it prepares the next messages and rows
+off-DOM and synchronously replaces only that dynamic content. This preserves
+the header node under the pointer across one-second polls and removes tooltip
+flicker without changing polling, API fields, atomic response validation,
+server order, focus restoration, market calculations, readiness, or the
+approved color grammar. `P-MVP-UI` adds exact status-disclosure and consecutive-
+render header-identity proofs.
+
+Acceptance passed all 37 focused UI proofs, focused dashboard/server tests, the
+uncached ordinary repository tier, affected race verification, `git diff
+--check`, and deterministic Chrome inspection at 1440x900. The browser kept
+the tooltip visible across a poll, showed exact degraded T/Q facts in the
+disclosure, retained all 20 rows in one viewport, and emitted no console
+warning/error. Independent review found one inherited P2 where a retained model
+could outrank an explicit delayed/disconnected render event. Transport failure
+now takes visible precedence, forces warning/noncurrent styling, and has exact
+current/partial counterexample proofs; focused re-review found no remaining
+P1/P2.
+
+#### 2026-08-17 trader-facing status vocabulary revision
+
+The status summary now reserves `LIVE` for a connected exact qualified-current
+publication and removes the redundant displayed-row count. It maps the full
+validated lifecycle/transport surface to the compact trader vocabulary recorded
+above; delayed or disconnected transport still outranks retained model state,
+and an exact empty ranking remains live. The expanded disclosure contains only
+Scanner, Aggregates, Trades, and Quotes. Aggregate startup/recovery detail keeps
+bounded progress, while Trades and Quotes separately count selected-row current,
+warming, stale, shed, unavailable, invalid, and unknown states. There is no
+dashboard-feed row and no raw `qualified_current` or backend-ready label.
+
+All 45 focused model/render/visual proofs pass, including every primary state,
+the exact-empty case, transport precedence, T/Q-independent `LIVE`, separate
+trade/quote coverage counts, and the absence of a ranked-row count. The ordinary
+repository short tier passes. Deterministic browser inspection showed the
+collapsed `LIVE` pill, the four-row disclosure, and `LIVE · TAPE / QUOTES
+DEGRADED` with independently shed Trades and Quotes; the console was clean.
+This presentation-only correction changes no API, polling, market calculation,
+qualification, ordering, readiness, provider, replay, or checkpoint behavior
+and does not trigger an additional independent review.
+
+#### 2026-08-17 compact Rank column and 60-second movement revision
+
+The owner added a compact Rank column immediately before Symbol for current
+rank and rolling 60-second rank movement. Movement remains within Rank rather
+than becoming a separate delta column. The client assigns
+`#1` through `#N` from each already validated server-ordered row array and
+compares symbols with the closest retained current-ranking snapshot to
+`sampled_at - 60s`. Positive movement is `prior rank - current rank`; values
+above five display as `5+`, unchanged movement is blank, and a symbol absent
+from a valid comparison snapshot displays `↑ NEW`. Startup remains blank until
+a valid 60-second comparison exists.
+
+The poll controller owns at most 70 lightweight timestamp/rank maps, resets
+them across binding/date changes or timestamp regression, and uses only a
+comparison within five seconds of the 60-second target. It never sorts,
+debounces, smooths, delays, or suppresses the current API row array. The API,
+backend rank ordinal, Day-%/symbol ordering, top-20 membership, snapshot cadence,
+market calculations, and readiness remain unchanged. `P-MVP-UI` adds exact
+up/down/cap/unchanged/new/warmup/immediate-reorder/bounded-history cases.
+
+The five rank-focused model/render/visual proofs pass, including the exact movement
+examples, immediate alternating reorders, fixed history bound, and compact
+layout. JavaScript syntax checks, focused dashboard server tests, and `git diff
+--check` pass. The deterministic in-app browser check at 1440x900 rendered 20
+rows and 12 headers with distinct Rank and Symbol headers, a 70px rank-metadata
+block, identical ticker-cell start coordinates, exact viewport document extent,
+and no console warning/error.
+The current combined UI suite is not claimed green because a concurrent
+user-owned Day/From-Open presentation edit leaves five non-rank assertions
+failing; correction acceptance remains pending convergence of that worktree.
 
 #### 2026-08-17 live aggregate heartbeat and resubscription correction
 

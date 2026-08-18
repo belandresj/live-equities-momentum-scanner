@@ -35,7 +35,7 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 		t.Fatal(err)
 	}
 	hash := sha256.Sum256(body)
-	const goldenSHA256 = "d579d426c499d0349909436c3f630ce46425e61e985d3f013cc03bab5941914e"
+	const goldenSHA256 = "5a819616fd9a5018dcad2ef057e70f0105b3ccd50a4363923dcd1bb54e301c49"
 	if got := hex.EncodeToString(hash[:]); got != goldenSHA256 {
 		t.Fatalf("snapshot golden SHA-256 = %s", got)
 	}
@@ -174,6 +174,7 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 	missResetPressure.TQ.PressureMode, missResetPressure.TQ.PressureCause, missResetPressure.TQ.Shed = "taq_degraded", "oldest_waiting_frame", true
 	missResetPressure.Rows[0].Tape5s = Tape5s{Status: "pressure_shed", Reason: "pressure"}
 	missResetPressure.Rows[0].Spread = Spread{Status: "pressure_shed", Reason: "pressure"}
+	missResetPressure.Rows[0].TQMembership = TQMembership{Desired: true, ProviderMembershipUnknown: true}
 	if err := validateSnapshot(missResetPressure); err != nil {
 		t.Fatalf("missing sample could not reset progress after a healthy accepted sample: %v", err)
 	}
