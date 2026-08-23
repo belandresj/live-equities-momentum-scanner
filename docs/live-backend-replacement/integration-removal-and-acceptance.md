@@ -138,6 +138,9 @@ and validation behavior remain observable.
 ## 6. Deterministic acceptance manifest
 
 `LBR-P1` freezes one versioned manifest before implementation changes behavior.
+The exact frozen artifact is
+[`baseline-characterization.md`](baseline-characterization.md); this section
+defines its required interpretation and final acceptance use.
 The manifest contains the approved 5,694-symbol mature binding/reference
 facts, session bounds, hydration value/empty/failure cases, aggregate
 correction/duplicate/invalid classes, rapid top-20 churn, selected T/Q
