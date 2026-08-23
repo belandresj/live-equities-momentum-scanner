@@ -487,7 +487,7 @@ but copy no status.
 | Parent architecture | `approved` | Current replacement architecture |
 | Delivery program | `approved` | Current replacement delivery authority |
 | `LBR-P1` focused contracts and characterization | `accepted` | Five-spec independent cross-review and owner acceptance are recorded; [`baseline-characterization.md`](baseline-characterization.md), SHA-256 `3a70dda5bc040d1a77fbe3e114d788d3fc04c93fbb51ff2e5eec646f4c10e6e3`, freezes baseline `0d043c1`, the semantic/API/UI corpus, durable queue/heartbeat/hydration/cycle/memory evidence, and the exact 5,694-symbol deterministic manifest. Comparable baseline CPU/RSS remain explicitly unknown. Next: activate `LBR-A1`. |
-| Capability A — canonical state and hydration | `lbr_a1_accepted_a2_next` | `LBR-A1` primary proof, affected verification, two correction rounds, and focused re-review are clean. Activate only [`LBR-A2`](tickets/lbr-a2-hydration-and-recovery-installation.md); Capability B remains inactive. |
+| Capability A — canonical state and hydration | `lbr_a2_active` | `LBR-A1` is accepted. Implement only [`LBR-A2`](tickets/lbr-a2-hydration-and-recovery-installation.md); Capability B remains inactive. |
 | Capability B — evaluation and publication | `not_started` | Requires Capability A interface acceptance |
 | Capability C — selected-row T/Q | `not_started` | Requires Capability B publication/selection interface |
 | Capability D — live ingress | `not_started` | Requires accepted state/TQ input interface |
