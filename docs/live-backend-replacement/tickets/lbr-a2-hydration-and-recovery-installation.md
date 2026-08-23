@@ -45,13 +45,17 @@ accepted producer seam temporarily.
 Allowed paths are hydration/recovery/generation ownership in `internal/engine`;
 REST worker, result, and fence-conversion seams in `internal/massive`; and the
 smallest `internal/operations` composition/configuration seam required to run
-one worker. Focused tests may use those packages. `cmd/scanner` may change only
-if construction cannot otherwise enforce the parent one-worker live topology;
-record that need before editing.
+one worker. Focused tests may use those packages. The Capability A final-review
+correction also permits only the hydration-worker flag/default/argument
+surfaces in `cmd/scanner`, `internal/privatelauncher`,
+`scripts/run-private-scanner`, `README.md`, and
+`docs/private-live-scanner-runbook.md` so the retained ordinary one-command
+workflow constructs the required one-worker topology. No other launcher,
+scanner, script, or documentation behavior is in scope.
 
-Do not modify ranking/formulas, T/Q, decoder/queue topology, API/UI, launcher,
-or checkpoint/replay implementations. Do not use credentials or provider
-requests.
+Do not modify ranking/formulas, T/Q, decoder/queue topology, API/UI, unrelated
+launcher/scanner behavior, or checkpoint/replay implementations. Do not use
+credentials or provider requests.
 
 ## 4. Evidence and source whitelist
 
@@ -91,6 +95,15 @@ reject old ledgers, state shape, checkpoint catch-up, and worker topology.
 - Work and row accounting identities reconcile before completion can be
   trusted. Recovery cannot leave an inactive terminal state freezing ordinary
   accepted live evaluation.
+- Exact gap planning treats already compacted `sealedLive` presence as
+  independently supported canonical evidence rather than an unrecoverable
+  compacted-history error. Historical rows for those identities cannot reopen
+  or replace sealed live authority; equal/unequal REST evidence remains
+  honestly dispositioned and the generation can still reconcile through its
+  exact fence. Compacted presence without sealed live support remains rejected.
+- The scanner, private launcher, wrapper script, and active runbook accept and
+  emit exactly one hydration worker for the supported live path. No default or
+  accepted flag may construct a multiworker `RunLive` composition.
 
 ## 6. Primary proof and acceptance distinction
 
@@ -101,6 +114,12 @@ REST/live delivery permutations, invalid/global-ambiguity rejection without
 partial state, exact before-`S` wait/preconnect, in-session
 `awaiting_aggregate_ack`, at/after-`E` terminal behavior, bounded initialization
 progress/failure/exhaustion, and a marker behind already-read live work.
+It includes a committed-watermark stall longer than 16 minutes followed by
+loss, re-acknowledgement, exact gap planning across compacted sealed-live
+identities, equal/mismatched REST reconciliation, fence/evaluation, and later
+ordinary timer advancement. It also composes the default private-launcher
+arguments through scanner/live-component validation and proves that only one
+worker is accepted end to end.
 
 Observe exact work/row identities, canonical projection, local coverage
 consequence, lifecycle/currentness, and absence of a current publication before
