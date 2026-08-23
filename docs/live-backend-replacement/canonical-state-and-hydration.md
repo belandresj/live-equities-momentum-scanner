@@ -101,6 +101,13 @@ Once an identity is strictly outside the correction horizon, its effect folds
 once into the prefix and its mutable record is discarded. No ordinary later
 input can reopen it.
 
+The compact coverage evidence retains whether folded presence has independent
+sealed-live support. Exact value comparison needed by a historical request may
+exist only as bounded reconciliation evidence owned by that exact active
+request; it is consumed by the matching row and purged on terminal, fence,
+cancellation, loss, or generation replacement. It is not permanent symbol
+history, a rebuildable index, or another canonical aggregate copy.
+
 ## 4. Aggregate behavior
 
 For every aggregate input, the engine validates schema, binding, canonical
@@ -117,6 +124,17 @@ disposition and accounting consequence.
   including identities older than the live correction horizon. It never
   reopens live correction for a sealed identity. Live evidence wins regardless
   of delivery order.
+- Compacted sealed-live presence is independently supported canonical evidence
+  even when its discarded values predate the current historical request. The
+  current request may reconcile through that identity without reopening it.
+  When request-scoped exact comparison evidence exists, equality is an exact
+  duplicate and inequality is a live-preserving local conflict. When the live
+  values compacted before the request and equality is therefore no longer
+  reconstructible, any returned historical row is conservatively classified
+  as live-preserving conflict evidence; it cannot poison the independently
+  supported live coverage, replace the live fact, or create a false current
+  claim. Compacted presence without sealed-live support remains ambiguous and
+  cannot authorize recovery completion.
 - Unequal historical rows claiming one identity within one result withdraw any
   historical-only value installed from that result and leave the affected
   historical coverage unknown. A historical/live mismatch retains the live
@@ -171,6 +189,14 @@ or conflicts remain separate from transport success. The identities
 `planned = value + empty + failed + canceled + fenced` and the associated row
 disposition identity must reconcile before completion can be trusted.
 
+Exact gap recovery remains plannable when the committed watermark has stalled
+long enough for accepted post-watermark live identities to fold into the
+prefix. Source-aware registration admits only folded slots with sealed-live
+support, reconciles returned REST rows under the rule above, and still requires
+the exact terminal accounting, ordered ingress fence, and successful ordinary
+evaluation. Compaction therefore cannot strand recovery or freeze later
+ordinary live evaluation.
+
 ## 6. Failure and trust boundaries
 
 The smallest false success is a complete-looking generation whose interval is
@@ -206,7 +232,7 @@ bound hits without symbol-keyed logs or provider prose in retained state.
 | Slice | Primary proof | Claim, dangerous counterexample, observable distinction, limitation |
 | --- | --- | --- | --- |
 | `LBR-A1` | `P-LBR-A1-CANONICAL` | A deterministic approved fixture corpus drives insert, equal duplicate, revision, withdrawal/conflict, ordinary out-of-order live input, REST/live delivery permutations, current-token historical fill both inside and far older than the 16-minute horizon, the exact live 16-minute/equality boundary, no-print, invalid, and unknown coverage through both the approved baseline oracle and replacement semantic projection. It requires historical/historical conflict to withdraw only the historical result, historical/live mismatch to retain independently trusted live state while localizing historical uncertainty, and equal marks, coverage classes, sufficient-field inputs, and accounting—not private struct equality. It asserts one mutable record per identity and bounded fold state. It detects a latest-price-only, delivery-order-dependent, or horizon-blind historical implementation. It does not prove full hydration, scale, or provider correctness. |
-| `LBR-A2` | `P-LBR-A2-HYDRATION` | A real engine plus bounded fake REST/fence producers composes value, exact empty, malformed row, failure, cancellation, superseded generation, epoch loss, post-live gap recovery, live-over-REST precedence, and a fence placed behind already-read live work. It observes exact work/row identities, coverage consequence, lifecycle/currentness, and no current publication before fence plus evaluation. It does not prove provider availability or connection retry execution. |
+| `LBR-A2` | `P-LBR-A2-HYDRATION` | A real engine plus bounded fake REST/fence producers composes value, exact empty, malformed row, failure, cancellation, superseded generation, epoch loss, post-live gap recovery, live-over-REST precedence, and a fence placed behind already-read live work. A long-stall trace accepts more than 16 minutes of post-watermark live rows, folds early identities, loses/replaces the epoch, plans exact `[T,R)` across sealed-live presence, reconciles equal/unequal REST rows without reopening live authority, restores current only through the fence evaluator, and then advances ordinarily. It observes exact work/row identities, coverage consequence, lifecycle/currentness, and no current publication before fence plus evaluation. It does not prove provider availability or connection retry execution. |
 
 `LBR-A1` implements the compact prefix/tail, canonical merge, coverage, and
 affected-state mutation. Acceptance makes the old `symbolAggregateState`

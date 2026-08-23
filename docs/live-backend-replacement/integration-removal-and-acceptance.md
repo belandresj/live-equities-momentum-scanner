@@ -135,6 +135,14 @@ private Go struct or removed replay/checkpoint equality. An intentional neutral
 checkpoint-off source change is acceptable only if the same API-v2 live value
 and validation behavior remain observable.
 
+The supported live hydration topology is exactly one REST worker end to end.
+The wrapper script, private launcher, scanner CLI/help/validation, operations
+composition, and active runbook must default to, emit, and accept only one.
+Multiworker and checkpoint-backed live compositions are rejected before the
+runtime starts; generic constructors retained solely for unsupported tooling
+cannot be selected by the ordinary scanner. Compatibility does not preserve a
+historical multiworker flag surface that contradicts the replacement topology.
+
 ## 6. Deterministic acceptance manifest
 
 `LBR-P1` freezes one versioned manifest before implementation changes behavior.

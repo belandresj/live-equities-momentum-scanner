@@ -388,6 +388,28 @@ orchestrator
   -> acceptance record and next slice
 ```
 
+Before assigning a ticket, the orchestrator performs one compact read-only
+counterexample audit across the current ticket, accepted dependency handoff,
+and every production consumer whose defaults or configuration can construct
+the changed interface. The audit must cover, where applicable:
+
+- exact equality and one-tick boundaries around correction, expiry, cadence,
+  retry, and retention horizons;
+- a duration longer than every owned retention horizon while committed time is
+  stalled, followed by loss/recovery;
+- default wrapper/CLI/launcher/configuration values through the final runtime
+  validator;
+- empty, malformed, duplicate, conflict, overflow, cancellation, replacement,
+  and terminal evidence that could falsely appear complete/current; and
+- old code or unsupported tooling that still compiles but must not remain a
+  production constructor or fallback.
+
+This audit changes no authority and does not create a ceremonial review. If it
+finds a consequential ownership, ordering, concurrency, persistence, or
+false-success ambiguity that construction and the allocated primary proof do
+not already resolve, use the program's existing narrow-review route before
+coding rather than discovering the boundary only at capability review.
+
 At most one write-capable worker is active. Reviewers are read-only and may not
 edit, stage, commit, approve, expand scope, or preserve an implementation over
 controlling authority. Independent semantic, concurrency, and performance
@@ -407,6 +429,13 @@ Review cadence:
 One implementation assignment covers one slice and contains the ten items
 required by `AGENTS.md`. Tickets are generated from the approved focused specs;
 they are not new architecture documents or authorities.
+
+During implementation and correction, run only the narrow distinguishing proof
+and direct affected tests until the bytes are stable. Run the affected race
+tier, focused vet/diff gate, and repository ordinary command once on the final
+candidate bytes. A later edit that changes the proved boundary invalidates only
+the affected final-byte gates; it does not justify repeatedly rerunning
+unchanged expensive evidence.
 
 ## 13. Correction and acceptance
 
@@ -535,6 +564,14 @@ request-local reconciliation, immutable downstream views, and source-aware
 long-stall recovery. It does not claim provider availability, live retry
 chronology, mature resource targets, replay/checkpoint compatibility, or
 trading edge. `LBR-B1` is the next permitted write-capable slice.
+
+Post-acceptance specification clarification records the already-proven behavior
+without changing code or acceptance: the canonical/hydration contract now
+states the conservative REST disposition and recovery legality for live values
+that compacted before an exact gap request; the integration contract now states
+the one-worker invariant through wrapper, launcher, scanner, operations, and
+runbook. The program orchestration section now requires a pre-assignment
+cross-boundary counterexample audit and final-byte-only expensive verification.
 
 ## 14. Sole delivery ledger
 
