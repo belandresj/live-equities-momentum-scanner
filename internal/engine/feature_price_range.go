@@ -233,6 +233,15 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 			symbol := &e.state.binding.symbols[index]
 			if state := symbol.aggregates; state != nil {
 				e.compactSymbolLocked(state, e.state.binding, symbol.symbol, node.admissionTime)
+				if evaluate && !e.hiddenReplayWarmupLocked(node) {
+					advanceSelectionMark(state, e.state.binding, target)
+					// Qualification is canonical owner-local state. Advance its
+					// bounded proof endpoints before staging selection so the cycle
+					// reads scalars and never clones proof maps. This maintenance is
+					// independent of publication acceptance; it creates no mark,
+					// coverage, selection membership, or watermark.
+					evaluateQualificationThrough(state, e.state.binding, target, node.admissionTime)
+				}
 				if !e.hiddenReplayWarmupLocked(node) {
 					maintainActivityState(state, e.state.binding, node.admissionTime, maintenanceAt)
 				}
@@ -326,7 +335,7 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 			}
 			evaluationSymbol := e.state.binding.symbols[index]
 			evaluationSymbol.aggregates = &evaluationState
-			ensurePriceRangeState(state).result = evaluatePriceRangeFeatures(e.state.binding, &evaluationSymbol, *e.state.committedT)
+			ensurePriceRangeState(state).result = e.evaluatePriceRangeFeaturesLocked(e.state.binding, &evaluationSymbol, *e.state.committedT)
 			applyActivityResult(state, e.state.binding, evaluateActivityFeatures(e.state.binding, &evaluationState, *e.state.committedT))
 			return nil
 		}
@@ -414,13 +423,26 @@ func (e *Engine) recordAggregateEvaluationStartLocked(node *queueNode, target ti
 }
 
 func evaluatePriceRangeFeatures(binding *installedBinding, symbol *coreSymbol, at time.Time) priceRangeFeatureResult {
-	result := unavailablePriceRangeResult(at)
 	state := symbol.aggregates
 	if state == nil {
-		return result
+		return unavailablePriceRangeResult(at)
 	}
-	features := ensurePriceRangeState(state)
 	mark, hasMark := latestMarkBefore(state, at)
+	return evaluatePriceRangeFeaturesWithMark(binding, symbol, at, mark, hasMark)
+}
+
+func (e *Engine) evaluatePriceRangeFeaturesLocked(binding *installedBinding, symbol *coreSymbol, at time.Time) priceRangeFeatureResult {
+	if symbol == nil || symbol.aggregates == nil {
+		return unavailablePriceRangeResult(at)
+	}
+	mark, hasMark := e.latestSelectionMarkLocked(symbol.aggregates, at)
+	return evaluatePriceRangeFeaturesWithMark(binding, symbol, at, mark, hasMark)
+}
+
+func evaluatePriceRangeFeaturesWithMark(binding *installedBinding, symbol *coreSymbol, at time.Time, mark canonicalAggregate, hasMark bool) priceRangeFeatureResult {
+	result := unavailablePriceRangeResult(at)
+	state := symbol.aggregates
+	features := ensurePriceRangeState(state)
 	if !hasMark {
 		return result
 	}
@@ -482,6 +504,113 @@ func unavailablePriceRangeResult(at time.Time) priceRangeFeatureResult {
 }
 
 func latestMarkBefore(state *symbolAggregateState, at time.Time) (canonicalAggregate, bool) {
+	return latestMarkBeforeCompact(state, at)
+}
+
+func latestMarkBeforeReplay(state *symbolAggregateState, at time.Time) (canonicalAggregate, bool) {
+	result, found := latestMarkBeforeCompact(state, at)
+	// Retained replay tooling may be many seconds ahead of its logical target
+	// during hidden warm-up and has no previously committed live boundary.
+	// Preserve that unsupported-mode compatibility here. Supported live B1
+	// selection calls latestMarkBeforeCompact directly and never scans the tail.
+	for _, record := range state.tail {
+		if record.windowStart.Before(at) && (!found || record.windowStart.After(result.windowStart)) {
+			result, found = *record, true
+		}
+	}
+	return result, found
+}
+
+func (e *Engine) latestSelectionMarkLocked(state *symbolAggregateState, at time.Time) (canonicalAggregate, bool) {
+	if e.mode == RunModeReplay {
+		return latestMarkBeforeReplay(state, at)
+	}
+	return latestMarkBeforeCompact(state, at)
+}
+
+func installCommittedSelection(state *symbolAggregateState, at time.Time, next *committedAggregateMark) {
+	if state == nil {
+		return
+	}
+	if !state.selectionAt.IsZero() && !state.selectionAt.Equal(at) {
+		state.priorSelectionAt = state.selectionAt
+		state.priorSelectionMark = cloneCommittedMark(state.committedLatest)
+	}
+	state.selectionAt, state.committedLatest = at, cloneCommittedMark(next)
+}
+
+func cloneCommittedMark(mark *committedAggregateMark) *committedAggregateMark {
+	if mark == nil {
+		return nil
+	}
+	result := *mark
+	if mark.greatestLiveSupport != nil {
+		position := *mark.greatestLiveSupport
+		result.greatestLiveSupport = &position
+	}
+	return &result
+}
+
+func advanceSelectionMark(state *symbolAggregateState, binding *installedBinding, target time.Time) {
+	if state == nil || target.IsZero() || !state.selectionAt.IsZero() && target.Before(state.selectionAt) || target.Equal(state.selectionAt) {
+		return
+	}
+	var next *committedAggregateMark
+	if state.selectionAt.IsZero() || target.Sub(state.selectionAt) != time.Second {
+		next = repairSelectionMarkBefore(state, binding, target)
+	} else {
+		next = cloneCommittedMark(state.committedLatest)
+		start := target.Add(-time.Second)
+		if record := state.tail[start.Unix()]; record != nil && record.windowStart.Equal(start) {
+			next = committedMark(*record)
+		} else if state.olderLatest != nil && state.olderLatest.windowStart.Equal(start) && !state.prefix.latestUncertain {
+			next = committedMark(*state.olderLatest)
+		}
+	}
+	installCommittedSelection(state, target, next)
+}
+
+// repairSelectionMarkBefore is correction/jump work, never routine selection
+// work. It scans at most the bounded canonical tail for one affected symbol and
+// consults only independently trusted folded/latest scalars.
+func repairSelectionMarkBefore(state *symbolAggregateState, _ *installedBinding, at time.Time) *committedAggregateMark {
+	if state == nil || at.IsZero() {
+		return nil
+	}
+	var result *committedAggregateMark
+	consider := func(record canonicalAggregate) {
+		if !record.windowStart.Before(at) || result != nil && !record.windowStart.After(result.windowStart) {
+			return
+		}
+		result = committedMark(record)
+	}
+	if state.committedLatest != nil && state.committedLatest.windowStart.Before(at) {
+		result = cloneCommittedMark(state.committedLatest)
+	}
+	if state.latest != nil {
+		consider(state.latest.record)
+	}
+	if state.olderLatest != nil && !state.prefix.latestUncertain {
+		consider(*state.olderLatest)
+	}
+	for _, record := range state.tail {
+		if record != nil {
+			consider(*record)
+		}
+	}
+	return result
+}
+
+func latestMarkBeforeCompact(state *symbolAggregateState, at time.Time) (canonicalAggregate, bool) {
+	if state == nil {
+		return canonicalAggregate{}, false
+	}
+	if state.selectionAt.Equal(at) {
+		return canonicalFromCommitted(state.committedLatest)
+	}
+	if state.priorSelectionAt.Equal(at) {
+		return canonicalFromCommitted(state.priorSelectionMark)
+	}
 	// latest is maintained across the folded prefix and canonical tail. When it
 	// is already strictly before the as-of boundary, no other record can be a
 	// later eligible mark and the session tail need not be scanned. Equality is
@@ -500,9 +629,9 @@ func latestMarkBefore(state *symbolAggregateState, at time.Time) (canonicalAggre
 	found := false
 	if state.committedLatest != nil && state.committedLatest.windowStart.Before(at) {
 		result = canonicalAggregate{
-			identity:    aggregateIdentity{start: state.committedLatest.start},
+			identity:    aggregateIdentity{symbol: state.committedLatest.symbol, start: state.committedLatest.start},
 			windowStart: state.committedLatest.windowStart, windowEnd: state.committedLatest.windowEnd,
-			values: state.committedLatest.values,
+			values: state.committedLatest.values, authority: state.committedLatest.authority, greatestLiveSupport: state.committedLatest.greatestLiveSupport,
 		}
 		found = true
 	}
@@ -511,12 +640,17 @@ func latestMarkBefore(state *symbolAggregateState, at time.Time) (canonicalAggre
 			result, found = *state.olderLatest, true
 		}
 	}
-	for _, record := range state.tail {
-		if record.windowStart.Before(at) && (!found || !record.windowStart.Before(result.windowStart)) {
-			result, found = *record, true
-		}
-	}
 	return result, found
+}
+
+func canonicalFromCommitted(mark *committedAggregateMark) (canonicalAggregate, bool) {
+	if mark == nil {
+		return canonicalAggregate{}, false
+	}
+	return canonicalAggregate{
+		identity: aggregateIdentity{symbol: mark.symbol, start: mark.start}, windowStart: mark.windowStart, windowEnd: mark.windowEnd,
+		values: mark.values, authority: mark.authority, greatestLiveSupport: mark.greatestLiveSupport,
+	}, true
 }
 
 func evaluateRollingRange(state *symbolAggregateState, binding *installedBinding, last float64, at time.Time, width time.Duration, tailLow, tailHigh float64, tailFound bool) aggregateFeatureField {

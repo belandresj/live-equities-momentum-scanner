@@ -48,6 +48,7 @@ type ConnectionControlInput struct {
 
 type ConnectionControlDisposition struct {
 	EngineSequence         uint64
+	SystemSequence         uint64
 	Code                   DispositionCode
 	Reason                 DispositionReason
 	SuppressionDisposition SuppressionDisposition

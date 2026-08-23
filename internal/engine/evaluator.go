@@ -402,13 +402,14 @@ func (e *Engine) applyAggregateCandidateLocked(at, engineTime time.Time) {
 		if symbol.aggregates == nil {
 			continue
 		}
-		if mark, ok := latestMarkBefore(symbol.aggregates, at); ok {
-			symbol.aggregates.committedLatest = committedMark(mark)
+		advanceSelectionMark(symbol.aggregates, e.state.binding, at)
+		if mark, ok := e.latestSelectionMarkLocked(symbol.aggregates, at); ok {
+			installCommittedSelection(symbol.aggregates, at, committedMark(mark))
 		} else {
-			symbol.aggregates.committedLatest = nil
+			installCommittedSelection(symbol.aggregates, at, nil)
 		}
 		evaluateQualificationThrough(symbol.aggregates, e.state.binding, at, engineTime)
-		ensurePriceRangeState(symbol.aggregates).result = evaluatePriceRangeFeatures(e.state.binding, symbol, at)
+		ensurePriceRangeState(symbol.aggregates).result = e.evaluatePriceRangeFeaturesLocked(e.state.binding, symbol, at)
 		applyActivityResult(symbol.aggregates, e.state.binding, evaluateActivityFeatures(e.state.binding, symbol.aggregates, at))
 		var invalid *invalidMarkEvidence
 		if evidence, ok := e.state.aggregateEvaluator.invalidMarks[index]; ok {
@@ -433,7 +434,7 @@ func (e *Engine) applyStagedAggregateCandidateLocked(staged aggregateEvaluationR
 		if state == nil || !update.present {
 			continue
 		}
-		state.committedLatest = update.committedLatest
+		installCommittedSelection(state, staged.at, update.committedLatest)
 		state.qualification = update.qualification
 		ensurePriceRangeState(state).result = update.priceRange
 		applyActivityResult(state, e.state.binding, update.activity)
@@ -564,6 +565,7 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 	allUnresolvedBootstrap := true
 	for index := range e.state.binding.symbols {
 		symbol := &e.state.binding.symbols[index]
+		selectionView := e.selectionStateViewAtLocked(index, at)
 		result.population.universeTotal++
 		state := symbol.aggregates
 		evaluationState := state
@@ -585,7 +587,15 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 		var mark canonicalAggregate
 		hasMark := false
 		if state != nil {
-			mark, hasMark = latestMarkBefore(state, at)
+			mark, hasMark = e.latestSelectionMarkLocked(state, at)
+			if e.mode == RunModeLive && (hasMark != selectionView.MarkAvailable ||
+				(hasMark && (!mark.windowStart.Equal(selectionView.TrustedMarkAt) || mark.values != selectionView.TrustedMark))) {
+				result.invalidSupport = true
+				if result.invalidSupportSymbol == "" {
+					result.invalidSupportSymbol = symbol.symbol
+					result.invalidSupportReason = "selection_view_mark_mismatch"
+				}
+			}
 		}
 		coverage, hasCoverageConsequence := e.state.aggregateEvaluator.coverage[index]
 		// A complete fresh replay proves every symbol's presence or absence
@@ -632,11 +642,21 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 		measurements := unavailableMVPMeasurementResult(at)
 		var projectedQualification *qualificationState
 		if state != nil {
-			projectionState.qualification = cloneQualificationState(state.qualification)
+			// Qualification was advanced incrementally by the owner transition
+			// before staging. Selection reads its fixed result scalars directly;
+			// proof maps are neither cloned nor mutated by this candidate. The
+			// projection copy exists only for temporary pre-B3 display adapters.
+			projectionState.qualification = state.qualification
+			if e.mode == RunModeReplay {
+				// Replay is unsupported tooling pending E1 disposition. Preserve its
+				// hidden-warmup projection compatibility without restoring a clone or
+				// second qualification owner to the supported live path.
+				projectionState.qualification = cloneQualificationStateForReplay(state.qualification)
+				evaluateQualificationThrough(&projectionState, e.state.binding, at, engineTime)
+			}
 			projectionSymbol := *symbol
 			projectionSymbol.aggregates = &projectionState
-			evaluateQualificationThrough(&projectionState, e.state.binding, at, engineTime)
-			features = evaluatePriceRangeFeatures(e.state.binding, &projectionSymbol, at)
+			features = evaluatePriceRangeFeaturesWithMark(e.state.binding, &projectionSymbol, at, mark, hasMark)
 			activity = evaluateActivityFeatures(e.state.binding, &projectionState, at)
 			measurements = evaluateMVPMeasurements(e.state.binding, &projectionState, at, invalidEvidence)
 			projectedQualification = projectionState.qualification
@@ -778,7 +798,7 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 	return result
 }
 
-func cloneQualificationState(source *qualificationState) *qualificationState {
+func cloneQualificationStateForReplay(source *qualificationState) *qualificationState {
 	if source == nil {
 		return nil
 	}

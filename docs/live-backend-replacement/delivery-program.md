@@ -573,6 +573,42 @@ the one-worker invariant through wrapper, launcher, scanner, operations, and
 runbook. The program orchestration section now requires a pre-assignment
 cross-boundary counterexample audit and final-byte-only expensive verification.
 
+#### `LBR-B1` — accepted 2026-08-23
+
+- **Coherent behavior:** the sole engine owner now advances bounded symbol-local
+  qualification proof state before selection and scans fixed population scalars
+  once per unique supported candidate/revision. Exact Day-%/symbol top 20 uses
+  one candidate-relative mark strictly before `T`; ordinary `T` to `T+1`
+  advancement is constant work per symbol, while initial/non-unit recovery and
+  accepted withdrawal use one bounded symbol-local repair across at most the
+  961-record correction tail. Timer and real connection-control work share one
+  positive engine-assigned nonreused system sequence.
+- **Proof:** `P-LBR-B1-SELECTION` passes exact qualification gates, correction
+  equality and strict finalization, first-later-print, quiet timers, candidate-
+  middle advancement, revisions, two consecutive withdrawals, fewer-than-20,
+  exact ties, incomplete/invalid population, T/Q/display-field independence,
+  unchanged-prefix coalescing, and control/timer/control sequencing. The real
+  A2 trace stalls committed `T` beyond 16 minutes, compacts rows on both sides,
+  loses and exactly recovers coverage, then proves the post-fence old-`T`
+  evaluator row/order/accounting excludes marks beginning at or after `T`.
+- **Ownership/removal:** live selection reads fixed mark/qualification scalars
+  and retains at most top 20; it neither clones qualification maps nor scans a
+  canonical tail. Rare correction/jump repair remains owner-local and bounded.
+  Replay-only projection cloning/tail lookup is explicitly mode-isolated pending
+  E1 disposition. Old live qualification cloning, full-history selection scans,
+  and duplicate same-prefix triggers are now removable.
+- **Verification/review:** the final candidate passes the composed B1/A2 proof,
+  affected engine short and race suites, focused vet, diff hygiene, and ordinary
+  repository short verification. Pre-assignment review corrected the missing
+  as-of-`T` recovery discriminator. Implementation review then reopened the
+  test-only control proof, candidate-relative mark maintenance, repeated
+  withdrawal repair, live Day-% mark coherence, and composed recovery proof;
+  focused corrections passed final re-review `CLEAN/PASS`.
+- **Limitation/next gate:** B1 does not prove selected-row enrichment, immutable
+  combined publication, T/Q behavior, provider traffic, or mature resources.
+  Temporary full-population display adapters remain until B2/B3. `LBR-B2`
+  remains valid and is next but inactive pending its pre-assignment audit.
+
 ## 14. Sole delivery ledger
 
 This table is the only mutable program status. Focused specs name allocations
@@ -584,7 +620,7 @@ but copy no status.
 | Delivery program | `approved` | Current replacement delivery authority |
 | `LBR-P1` focused contracts and characterization | `accepted` | Five-spec independent cross-review and owner acceptance are recorded; [`baseline-characterization.md`](baseline-characterization.md), SHA-256 `3a70dda5bc040d1a77fbe3e114d788d3fc04c93fbb51ff2e5eec646f4c10e6e3`, freezes baseline `0d043c1`, the semantic/API/UI corpus, durable queue/heartbeat/hydration/cycle/memory evidence, and the exact 5,694-symbol deterministic manifest. Comparable baseline CPU/RSS remain explicitly unknown. |
 | Capability A — canonical state and hydration | `finally_accepted` | A1/A2 proofs, verification, two A1 re-reviews, the A2 long-stall/launcher correction, and Capability A final focused re-review are clean. Next: activate only [`LBR-B1`](tickets/lbr-b1-incremental-qualification-and-selection.md). |
-| Capability B — evaluation and publication | `lbr_b1_active` | The pre-assignment audit corrected B1's as-of-`T` proof for a >16-minute committed-time stall, compaction, loss, and exact-gap recovery; focused re-review is `CLEAN/PASS`. Implement only [`LBR-B1`](tickets/lbr-b1-incremental-qualification-and-selection.md). |
+| Capability B — evaluation and publication | `lbr_b1_accepted_b2_next` | `LBR-B1` primary proof, affected verification, correction reviews, and final focused re-review are clean. Audit [`LBR-B2`](tickets/lbr-b2-selected-enrichment-and-publication.md) before activation; B2 is not active. |
 | Capability C — selected-row T/Q | `not_started` | Requires Capability B publication/selection interface |
 | Capability D — live ingress | `not_started` | Requires accepted state/TQ input interface |
 | Capability E — integration/removal/acceptance | `not_started` | Requires Capabilities A-D accepted |

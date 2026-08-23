@@ -713,7 +713,7 @@ func (e *Engine) admitNode(ctx context.Context, node *queueNode, optional bool) 
 			e.mu.Unlock()
 			return AdmissionSequenceBudgetExhausted
 		}
-		if (node.kind == inputTimer || node.kind == inputReplayGroup) && e.lastSystem == math.MaxUint64 {
+		if systemPositionedInput(node.kind) && e.lastSystem == math.MaxUint64 {
 			e.sealed = true
 			e.exhausted = true
 			e.commitNonAdmissionLocked(AdmissionSequenceBudgetExhausted)
@@ -754,11 +754,13 @@ func (e *Engine) admitNode(ctx context.Context, node *queueNode, optional bool) 
 				if e.state.binding != nil {
 					node.bindingID = e.state.binding.identity
 				}
-				e.lastSystem++
-				node.systemSequence = e.lastSystem
 				node.timerCompletion = make(chan TimerDisposition, 1)
 			} else {
 				node.completion = make(chan Disposition, 1)
+			}
+			if systemPositionedInput(node.kind) {
+				e.lastSystem++
+				node.systemSequence = e.lastSystem
 			}
 			e.queue = append(e.queue, node)
 			e.counters.inProgress--
@@ -884,7 +886,7 @@ func (e *Engine) consume() {
 			node.aggregateCompletion <- AggregateDisposition{EngineSequence: disposition.EngineSequence, Code: disposition.Code, Reason: disposition.Reason, SuppressionDisposition: disposition.SuppressionDisposition}
 			close(node.aggregateCompletion)
 		} else if node.kind == inputConnectionControl {
-			node.controlCompletion <- ConnectionControlDisposition{EngineSequence: disposition.EngineSequence, Code: disposition.Code, Reason: disposition.Reason, SuppressionDisposition: disposition.SuppressionDisposition}
+			node.controlCompletion <- ConnectionControlDisposition{EngineSequence: disposition.EngineSequence, SystemSequence: node.systemSequence, Code: disposition.Code, Reason: disposition.Reason, SuppressionDisposition: disposition.SuppressionDisposition}
 			close(node.controlCompletion)
 		} else if hydrationInputKind(node.kind) {
 			node.hydrationCompletion <- HydrationDisposition{
@@ -913,6 +915,14 @@ func (e *Engine) consume() {
 			close(node.completion)
 		}
 	}
+}
+
+// systemPositionedInput is deliberately closed. Timer/replay-group facts and
+// engine controls share one positive run-local sequence; no caller supplies or
+// reuses it. A connection control retains its independent provider LivePosition
+// and the engine-assigned system sequence never impersonates that position.
+func systemPositionedInput(kind inputKind) bool {
+	return kind == inputTimer || kind == inputReplayGroup || kind == inputControl || kind == inputStop || kind == inputConnectionControl
 }
 
 type transitionDisposition struct {

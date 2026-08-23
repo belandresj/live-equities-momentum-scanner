@@ -197,6 +197,14 @@ func (state *symbolAggregateState) notifyAggregate(record canonicalAggregate, pr
 }
 
 func (e *Engine) selectionStateViewLocked(index int) SelectionStateView {
+	return e.selectionStateViewAtLocked(index, time.Time{})
+}
+
+// selectionStateViewAtLocked returns the compact selection scalars at one
+// candidate boundary. A zero boundary is the diagnostic latest-delivery view;
+// production selection always supplies T. In particular, a bar beginning at T
+// is outside [S,T) and cannot displace the retained predecessor mark.
+func (e *Engine) selectionStateViewAtLocked(index int, at time.Time) SelectionStateView {
 	symbol := &e.state.binding.symbols[index]
 	state := symbol.aggregates
 	view := SelectionStateView{Symbol: symbol.symbol, PriorClose: symbol.prior.close, PriorCloseValid: symbol.prior.status == "valid"}
@@ -208,9 +216,18 @@ func (e *Engine) selectionStateViewLocked(index int) SelectionStateView {
 	view.PrefixVolume, view.PrefixPrints = state.prefix.volume, state.prefix.printCount
 	view.PrefixFirstOpen, view.PrefixHigh, view.PrefixLow = state.prefix.firstOpen, state.prefix.high, state.prefix.low
 	view.PrefixFirstOpenTrusted, view.PrefixExtremaTrusted, view.PrefixLatestTrusted = state.prefix.firstOpenTrusted, state.prefix.extremaTrusted, state.prefix.latestTrusted
-	if state.latest != nil {
-		view.TrustedMark, view.TrustedMarkAt, view.MarkAvailable = state.latest.record.values, state.latest.record.windowStart, true
-		view.Coverage = coverageClassAt(state, e.state.binding, state.latest.record.windowStart)
+	var mark canonicalAggregate
+	var hasMark bool
+	if at.IsZero() {
+		if state.latest != nil {
+			mark, hasMark = state.latest.record, true
+		}
+	} else {
+		mark, hasMark = latestMarkBeforeCompact(state, at)
+	}
+	if hasMark {
+		view.TrustedMark, view.TrustedMarkAt, view.MarkAvailable = mark.values, mark.windowStart, true
+		view.Coverage = coverageClassAt(state, e.state.binding, mark.windowStart)
 	}
 	if invalid, ok := e.state.aggregateEvaluator.invalidMarks[index]; ok && (!view.MarkAvailable || !invalid.windowStart.Before(view.TrustedMarkAt)) {
 		view.Coverage = AggregateCoverageInvalid

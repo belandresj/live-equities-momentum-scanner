@@ -460,6 +460,14 @@ func TestEvaluationCoalescingSemanticDifferential(t *testing.T) {
 	qualification.proofs[proofEnd.Unix()] = struct{}{}
 	qualification.accountedThrough = target
 	qualification.result = qualificationResult{at: target, status: qualificationProvisional, currentProofCount: 1}
+	// B1 advances qualification in the owner-maintenance phase before staging
+	// compact selection. The semantic oracle mirrors that phase explicitly;
+	// stageAggregateEvaluationAtLocked is now a nonmutating candidate read.
+	for index := range e.state.binding.symbols {
+		if state := e.state.binding.symbols[index].aggregates; state != nil {
+			evaluateQualificationThrough(state, e.state.binding, target, now)
+		}
+	}
 	oracle := e.stageAggregateEvaluationAtLocked(target, now)
 	if validation := validateAggregateEvaluation(oracle); validation != nil {
 		e.mu.Unlock()
@@ -506,6 +514,11 @@ func TestEvaluationCoalescingSemanticDifferential(t *testing.T) {
 		}
 	}
 	e.state.hydration.supportedThrough = immutableTime(quietTarget)
+	for index := range e.state.binding.symbols {
+		if state := e.state.binding.symbols[index].aggregates; state != nil {
+			evaluateQualificationThrough(state, e.state.binding, quietTarget, now)
+		}
+	}
 	quietOracle := e.stageAggregateEvaluationAtLocked(quietTarget, now)
 	e.mu.Unlock()
 	applyLiveCoverageFenceForCoalescing(t, e, 4, 3, quietTarget)
@@ -533,6 +546,11 @@ func TestEvaluationCoalescingSemanticDifferential(t *testing.T) {
 		}
 	}
 	e.state.hydration.supportedThrough = immutableTime(sessionEnd)
+	for index := range e.state.binding.symbols {
+		if state := e.state.binding.symbols[index].aggregates; state != nil {
+			evaluateQualificationThrough(state, e.state.binding, sessionEnd, now)
+		}
+	}
 	endFenceOracle := e.stageAggregateEvaluationAtLocked(sessionEnd, now)
 	e.mu.Unlock()
 	priorPublicationID := e.observePublication().publicationID

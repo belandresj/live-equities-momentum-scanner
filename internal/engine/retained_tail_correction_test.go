@@ -35,6 +35,8 @@ func TestLatestMarkBeforeMaintainedLatestFastPath(t *testing.T) {
 			tail:   map[int64]*canonicalAggregate{selected.identity.start: selected, boundary.identity.start: boundary},
 			latest: &latestAggregateMark{record: *boundary},
 		}
+		recomputeLatest(state)
+		advanceSelectionMark(state, nil, boundary.windowStart)
 		got, ok := latestMarkBefore(state, boundary.windowStart)
 		if !ok || got != *selected {
 			t.Fatalf("latest=%+v available=%t want prior=%+v", got, ok, *selected)
@@ -46,6 +48,8 @@ func TestLatestMarkBeforeMaintainedLatestFastPath(t *testing.T) {
 			tail:   map[int64]*canonicalAggregate{selected.identity.start: selected, future.identity.start: future},
 			latest: &latestAggregateMark{record: *future},
 		}
+		recomputeLatest(state)
+		advanceSelectionMark(state, nil, boundary.windowStart)
 		got, ok := latestMarkBefore(state, boundary.windowStart)
 		if !ok || got != *selected {
 			t.Fatalf("latest=%+v available=%t want as-of=%+v", got, ok, *selected)

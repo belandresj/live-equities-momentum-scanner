@@ -256,12 +256,17 @@ func TestPLBRA2Hydration(t *testing.T) {
 			t.Fatalf("initial fence = %+v", got)
 		}
 		committed := *e.state.committedT
+		preT := liveAggregate(binding, "AAA", committed.Add(-time.Second), 1, 2)
+		preT.Values.Open, preT.Values.High, preT.Values.Low, preT.Values.Close, preT.Values.VWAP = 9, 9, 9, 9, 9
+		if got := admitProductionAggregate(t, e, preT); got.Code != DispositionAggregateInserted {
+			t.Fatalf("pre-T retained mark = %+v", got)
+		}
 		const stalledSeconds = 17*60 + 2
 		values := make(map[int64]AggregateValues, stalledSeconds)
 		for second := 0; second < stalledSeconds; second++ {
 			window := committed.Add(time.Duration(second) * time.Second)
 			now = window.Add(time.Second)
-			live := liveAggregate(binding, "AAA", window, 1, uint64(second+2))
+			live := liveAggregate(binding, "AAA", window, 1, uint64(second+3))
 			live.Values.Close, live.Values.High, live.Values.VWAP = 10+float64(second%7)/10, 10+float64(second%7)/10, 10+float64(second%7)/10
 			values[window.Unix()] = live.Values
 			if got := admitProductionAggregate(t, e, live); got.Code != DispositionAggregateInserted {
@@ -276,13 +281,17 @@ func TestPLBRA2Hydration(t *testing.T) {
 				t.Fatalf("live identity did not compact with sealed source support at %s", at)
 			}
 		}
+		preTView := e.selectionStateViewAtLocked(e.state.binding.index["AAA"], committed)
+		if !preTView.MarkAvailable || !preTView.TrustedMarkAt.Equal(committed.Add(-time.Second)) || preTView.TrustedMark.Close != 9 {
+			t.Fatalf("compaction replaced the strict pre-T mark: %+v", preTView)
+		}
 		if e.state.committedT == nil || !e.state.committedT.Equal(committed) || r.Sub(committed) <= correctionHorizon {
 			t.Fatalf("committed stall = T:%v R:%s", e.state.committedT, r)
 		}
 
 		now = r
 		admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionLost, 1,
-			LivePosition{ConnectionEpoch: 1, FrameSequence: stalledSeconds + 2}, now, 0, ControlFailed))
+			LivePosition{ConnectionEpoch: 1, FrameSequence: stalledSeconds + 3}, now, 0, ControlFailed))
 		ackRecoveryEpoch(t, e, binding, 2, 3, 4, r, &now)
 		gap := admitHydrationPlan(t, e, HydrationGapRecovery, 2, generousHydrationBudgets())
 		if gap.Code != DispositionHydrationPlanApplied || gap.Plan.Start() != committed || gap.Plan.End() != r || len(gap.Plan.Requests()) != 1 {
@@ -316,6 +325,18 @@ func TestPLBRA2Hydration(t *testing.T) {
 		if state.historicalConflict != nil && (state.historicalConflict.has(sessionSlot(e.state.binding, committed)) ||
 			state.historicalConflict.has(sessionSlot(e.state.binding, committed.Add(time.Second)))) {
 			t.Fatal("conservative REST disposition poisoned sealed live coverage")
+		}
+		recoveredPreT := e.selectionStateViewAtLocked(e.state.binding.index["AAA"], committed)
+		if !recoveredPreT.MarkAvailable || !recoveredPreT.TrustedMarkAt.Equal(committed.Add(-time.Second)) || recoveredPreT.TrustedMark.Close != 9 {
+			t.Fatalf("post-recovery as-of T selected T-or-later mark: %+v", recoveredPreT)
+		}
+		e.mu.Lock()
+		recoveredEvaluation := e.stageAggregateEvaluationAtLocked(committed, now)
+		e.mu.Unlock()
+		if validation := validateAggregateEvaluation(recoveredEvaluation); validation != nil || !recoveredEvaluation.population.reconciles() ||
+			recoveredEvaluation.population.trustedRankableMark != 1 || len(recoveredEvaluation.rows) != 1 ||
+			recoveredEvaluation.rows[0].symbol != "AAA" || recoveredEvaluation.rows[0].last != 9 {
+			t.Fatalf("post-recovery production evaluator at old T = %+v validation=%v", recoveredEvaluation, validation)
 		}
 
 		now = r.Add(time.Second)

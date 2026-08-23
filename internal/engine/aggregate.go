@@ -155,9 +155,12 @@ type latestAggregateMark struct {
 }
 
 type committedAggregateMark struct {
+	symbol                 string
 	start                  int64
 	windowStart, windowEnd time.Time
 	values                 AggregateValues
+	authority              aggregateEvidence
+	greatestLiveSupport    *LivePosition
 }
 
 type slotBitmap [sessionSeconds / 64]uint64
@@ -185,6 +188,9 @@ type symbolAggregateState struct {
 	latest             *latestAggregateMark
 	olderLatest        *canonicalAggregate
 	committedLatest    *committedAggregateMark
+	selectionAt        time.Time
+	priorSelectionAt   time.Time
+	priorSelectionMark *committedAggregateMark
 	recomputations     uint64
 	canonicalRevision  uint64
 	affected           aggregateAffectedState
@@ -723,13 +729,9 @@ func (e *Engine) installAggregateLocked(symbol *coreSymbol, input frozenAggregat
 		retainMutableMVPMeasurement(state, record)
 	}
 	if !foldedDirect || !state.prefix.latestUncertain {
-		if state.latest == nil || record.windowStart.After(state.latest.record.windowStart) || record.identity == state.latest.record.identity {
-			if state.latest == nil {
-				state.latest = &latestAggregateMark{}
-			}
-			state.latest.record = record
-		}
+		considerLatestMark(state, record)
 	}
+	updateSelectionForAcceptedMutation(state, record)
 	rebuildTailCoverage(state, e.state.binding)
 	state.recomputations++
 	state.notifyAggregate(record, aggregateProofAll)
@@ -756,6 +758,11 @@ func (e *Engine) integrityWithdrawLocked(symbol *coreSymbol, existing *canonical
 	}
 	if state.committedLatest != nil && state.committedLatest.start == existing.identity.start {
 		state.committedLatest = nil
+		state.committedLatest = repairSelectionMarkBefore(state, e.state.binding, state.selectionAt)
+	}
+	if state.priorSelectionMark != nil && state.priorSelectionMark.start == existing.identity.start {
+		state.priorSelectionMark = nil
+		state.priorSelectionMark = repairSelectionMarkBefore(state, e.state.binding, state.priorSelectionAt)
 	}
 	rebuildTailCoverage(state, e.state.binding)
 	state.recomputations++
@@ -791,6 +798,11 @@ func (e *Engine) historicalWithdrawLocked(symbol *coreSymbol, existing *canonica
 	}
 	if state.committedLatest != nil && state.committedLatest.start == existing.identity.start {
 		state.committedLatest = nil
+		state.committedLatest = repairSelectionMarkBefore(state, e.state.binding, state.selectionAt)
+	}
+	if state.priorSelectionMark != nil && state.priorSelectionMark.start == existing.identity.start {
+		state.priorSelectionMark = nil
+		state.priorSelectionMark = repairSelectionMarkBefore(state, e.state.binding, state.priorSelectionAt)
 	}
 	rebuildTailCoverage(state, e.state.binding)
 	state.recomputations++
@@ -899,18 +911,49 @@ func (e *Engine) compactAggregateLocked(state *symbolAggregateState, binding *in
 }
 
 func committedMark(record canonicalAggregate) *committedAggregateMark {
-	return &committedAggregateMark{start: record.identity.start, windowStart: record.windowStart, windowEnd: record.windowEnd, values: record.values}
+	mark := &committedAggregateMark{symbol: record.identity.symbol, start: record.identity.start, windowStart: record.windowStart, windowEnd: record.windowEnd,
+		values: record.values, authority: record.authority}
+	if record.greatestLiveSupport != nil {
+		position := *record.greatestLiveSupport
+		mark.greatestLiveSupport = &position
+	}
+	return mark
+}
+
+// considerLatestMark maintains the two compact delivery-time mark scalars used
+// by strict as-of selection. Ordinary selection therefore never scans the
+// correction-tail map when the newest bar begins at candidate T.
+func considerLatestMark(state *symbolAggregateState, record canonicalAggregate) {
+	if state.latest == nil {
+		state.latest = &latestAggregateMark{record: record}
+		return
+	}
+	latest := state.latest.record
+	if record.identity == latest.identity {
+		state.latest.record = record
+	} else if record.windowStart.After(latest.windowStart) {
+		state.latest.record = record
+	}
+}
+
+func updateSelectionForAcceptedMutation(state *symbolAggregateState, record canonicalAggregate) {
+	if !state.selectionAt.IsZero() && record.windowStart.Before(state.selectionAt) &&
+		(state.committedLatest == nil || record.windowStart.After(state.committedLatest.windowStart) || state.committedLatest.start == record.identity.start) {
+		state.committedLatest = committedMark(record)
+	}
+	if !state.priorSelectionAt.IsZero() && record.windowStart.Before(state.priorSelectionAt) &&
+		(state.priorSelectionMark == nil || record.windowStart.After(state.priorSelectionMark.windowStart) || state.priorSelectionMark.start == record.identity.start) {
+		state.priorSelectionMark = committedMark(record)
+	}
 }
 
 func recomputeLatest(state *symbolAggregateState) {
 	state.latest = nil
 	if state.olderLatest != nil && !state.prefix.latestUncertain {
-		state.latest = &latestAggregateMark{record: *state.olderLatest}
+		considerLatestMark(state, *state.olderLatest)
 	}
 	for _, record := range state.tail {
-		if state.latest == nil || record.windowStart.After(state.latest.record.windowStart) {
-			state.latest = &latestAggregateMark{record: *record}
-		}
+		considerLatestMark(state, *record)
 	}
 }
 
