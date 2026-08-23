@@ -29,12 +29,17 @@ only validated dynamic rows/messages. A compact Rank column shows current
 display position and rolling 60-second movement immediately before the Symbol
 column without changing row order.
 
+**Delivery profile revised:** 2026-08-23 — the approved live backend
+replacement changes implementation architecture and delivery sequencing only;
+the product meanings in this document are unchanged.
+
 **Current delivery profile:** The owner-approved
-[`Live feature-set MVP program`](../live-feature-mvp-program.md) makes the
-ordinary fresh-start live scanner the only required operating path for the
-interview MVP. Replay remains present but unverified and non-gating;
-checkpoint persistence remains present but disabled and non-gating. Neither
-may fabricate revised-feature compatibility.
+[`live backend replacement architecture`](../live-backend-replacement.md) and
+[`delivery program`](../live-backend-replacement/delivery-program.md) replace
+the live core while preserving this product contract. The ordinary fresh-start
+live scanner remains the only supported operating path. Replay is unverified
+and checkpoint persistence is disabled; neither may add a gate or fabricate
+revised-feature compatibility.
 
 **Scope:** User-facing behavior, product priorities, version 1 outcomes, and
 developer-facing product constraints. Provider mappings, internal component

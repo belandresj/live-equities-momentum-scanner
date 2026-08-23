@@ -1,6 +1,11 @@
 # Scanner State Engine lifecycle
 
-**Status:** Approved architecture contract.
+**Status:** Approved lifecycle semantics and compatible replacement evidence.
+The 2026-08-23
+[`live backend replacement`](../live-backend-replacement.md) controls
+conflicting live topology/state machinery; focused replacement specs must route
+the retained fresh/hydrating/live/recovering/currentness/termination meanings.
+Replay and checkpoint states create no replacement gate.
 
 **Prepared:** 2026-08-05
 

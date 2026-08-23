@@ -1,6 +1,9 @@
 # Live feature-set MVP program
 
-**Status:** Owner-approved current delivery authority, 2026-08-14.
+**Status:** Historical accepted delivery evidence, approved 2026-08-14 and
+superseded as the active program by the owner-approved
+[`live backend replacement delivery program`](live-backend-replacement/delivery-program.md)
+on 2026-08-23.
 
 **Scope:** The smallest sequential change that makes the private/local live
 scanner compute, publish, and display the revised feature set for the interview

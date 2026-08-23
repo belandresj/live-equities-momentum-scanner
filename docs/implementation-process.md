@@ -4,7 +4,7 @@
 
 **Approved:** 2026-08-05
 
-**Revised:** 2026-08-14 for the Live feature-set MVP program
+**Revised:** 2026-08-23 for the live backend replacement program
 
 **Scope:** Capability/component research, contracts, predecessor reuse, proof
 allocation, implementation assignments, correction, acceptance, integration,
@@ -12,10 +12,10 @@ and private/local release validation.
 
 This process does not redefine scanner behavior. The product and architecture
 contracts remain authoritative. The current
-[`Live feature-set MVP program`](live-feature-mvp-program.md) supplies the
-active capability sequence, delivery scope, and completion boundary. The
-[`Version 1 Release Program`](v1-release-program.md) remains applicable as
-historical authority and compatible evidence for its former C7-C11 scope.
+[`live backend replacement delivery program`](live-backend-replacement/delivery-program.md)
+supplies the active capability sequence, delivery scope, resource-target
+policy, and completion boundary. The former live-feature MVP and Version 1
+program remain historical accepted evidence for their scopes.
 
 ## 1. Authority and correction model
 
@@ -330,17 +330,17 @@ repeated correction loops.
 
 ### 6.4 Deterministic fixtures and retained replay
 
-For the live feature-set MVP, use compact deterministic event traces,
+For the live backend replacement, use compact deterministic event traces,
 fake-provider inputs, API fixtures, and UI fixtures. These may prove formulas,
 state transitions, and presentation while the market is closed, but they are
 not product replay. Retained replay code has unknown current capability and is
-not an MVP proof or acceptance gate.
+not a replacement proof or acceptance gate.
 
 ### 6.5 Live validation
 
 Live observation is separate, credentialed, and owner-authorized per execution.
 Follow [`market-hours-validation.md`](market-hours-validation.md). Pending live
-validation does not block deterministic private/local MVP acceptance and does
+validation does not block deterministic replacement acceptance and does
 not authorize replay as a substitute operating claim.
 
 ### 6.6 Universal bounds
@@ -381,40 +381,34 @@ Reviewer execution/model policy is in `AGENTS.md`.
 
 ## 8. Current capability sequence and integration milestones
 
-The specification map identifies the current program. Under the live
-feature-set MVP, implementation is sequential:
+The specification map and replacement delivery program identify the current
+sequence:
 
-1. **MVP-S1 live backend:** final aggregate measurements, all-symbol retained
-   evidence, and Float reference enrichment;
-2. **MVP-S2 snapshot API v2:** one sealed backend publication mapped to only
-   the revised public fields;
-3. **MVP-S3 dashboard:** exact final presentation without browser-owned market
-   calculations; and
-4. **MVP-S4 integrated live MVP:** deterministic production-path composition
-   plus a separately authorized or owner-run live observation when available.
+1. **`LBR-P1`:** complete/cross-review the five focused specs and baseline
+   characterization;
+2. **Capability A:** compact canonical state and hydration;
+3. **Capability B:** incremental two-phase evaluation and publication;
+4. **Capability C:** compact selected-row T/Q;
+5. **Capability D:** single-pass live ingress and one handoff; and
+6. **Capability E:** exclusive cutover/removal, deterministic resource/desktop
+   acceptance, then separately authorized live confirmation.
 
-Replay proof, checkpoint repair, numbered-component cleanup, and broad
-refactoring are not milestones in this sequence. Reuse accepted lower-layer
-evidence instead of duplicating it.
+The focused specs allocate exact slices and primary proofs. Historical replay,
+checkpoint repair, and unrelated cleanup are not milestones.
 
-## 9. Final live-MVP validation
+## 9. Final replacement validation
 
-Final validation assembles, rather than reinvents, evidence:
+Final validation assembles the accepted capability evidence, ordinary and
+allocated race/vet verification, one exact API/UI composition, one mature
+resource/desktop run, and the final integrated read-only review. Every numeric
+resource target is reported; a miss follows the single bounded response in the
+delivery program. Hard acceptance depends on correctness, bounded resource
+plateaus, sustained feed handling without loss/backlog/readiness flapping,
+usable one-second snapshot delivery, and acceptable desktop coexistence.
 
-1. confirm each MVP requirement routes to its primary proof in
-   [`live-feature-mvp-program.md`](live-feature-mvp-program.md);
-2. run the short repository command;
-3. run the narrow backend, API, and UI proofs once in their recorded
-   configurations;
-4. run one compact deterministic cross-capability scenario through scanner,
-   T/Q, API, and UI, asserting only integration meanings;
-5. verify independent UI restart leaves backend processing live;
-6. run the required final read-only reviews; and
-7. record market-hours validation as `pending` unless separately executed.
-
-The result is a private/local live-feature MVP. It does not establish replay
-support, checkpoint compatibility, live-provider validation, public
-deployment, production cutover, or trading-edge evidence.
+Separately authorized live observation is recorded as pending or confirmed; it
+is never inferred from deterministic evidence. The result establishes neither
+replay/checkpoint support, public deployment, provider SLA, nor trading edge.
 
 ## 10. Drift audit
 

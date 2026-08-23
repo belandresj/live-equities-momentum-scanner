@@ -36,18 +36,18 @@ The complete product contract is
 
 ## Architecture
 
-The design has:
+The approved live-backend replacement has:
 
 - one authoritative `ScannerStateEngine` and one canonical per-symbol session
   state;
-- normalized aggregate, trade, quote, control, hydration, and timer inputs;
+- a compact sealed session prefix plus sparse correction tail;
+- one single-pass Massive decoder and one bounded decoded-batch live handoff;
 - one committed aggregate watermark and one qualification/ranking path;
-- explicit bootstrap, live, recovery, suppression, session-end, and shutdown
-  lifecycles;
+- incremental qualification and one-second two-phase selection/enrichment;
 - default T/Q coverage for displayed rows, with T/Q degraded before aggregate
   correctness;
-- retained optional checkpoint and replay code that is outside the current MVP
-  operating claim;
+- fresh/gap hydration through the same canonical state and exact ingress fence;
+- replay/checkpoint state excluded from the supported live core;
 - immutable snapshots served by the scanner backend; and
 - an independently deployable UI that owns presentation, not market state.
 
@@ -61,7 +61,9 @@ approved requirement establishes a concrete need.
 | --- | --- |
 | [`AGENTS.md`](AGENTS.md) | Repository rules, authority order, engineering invariants, and agent-assignment requirements. |
 | [`docs/product/product-goals.md`](docs/product/product-goals.md) | Highest product authority: user-facing behavior, formulas, version 1 scope, and non-goals. |
-| [`docs/live-feature-mvp-program.md`](docs/live-feature-mvp-program.md) | Current delivery authority: incremental backend, API, UI, and integrated-live feature cutover; replay unverified and checkpoints disabled. |
+| [`docs/live-backend-replacement.md`](docs/live-backend-replacement.md) | Current architecture authority: compact live state, two-phase evaluation, one ingress handoff, retained hydration/recovery, resource policy, and removal boundary. |
+| [`docs/live-backend-replacement/delivery-program.md`](docs/live-backend-replacement/delivery-program.md) | Current delivery authority: focused-contract gate, five sequential capabilities, agent/review policy, and integrated acceptance. |
+| [`docs/live-feature-mvp-program.md`](docs/live-feature-mvp-program.md) | Historical accepted feature/API/UI/stability delivery evidence; superseded as the active program. |
 | [`docs/architecture/system-overview.md`](docs/architecture/system-overview.md) | Runtime topology, component boundaries, state ownership, and failure containment. |
 | [`docs/architecture/data-time-and-event-contract.md`](docs/architecture/data-time-and-event-contract.md) | Session, clock, event, ordering, coverage, reconciliation, replay, and checkpoint-cutoff semantics. |
 | [`docs/architecture/scanner-state-engine-lifecycle.md`](docs/architecture/scanner-state-engine-lifecycle.md) | Legal engine states, transitions, publication permissions, recovery, and termination. |
@@ -76,32 +78,23 @@ approved requirement establishes a concrete need.
 
 ## How work advances
 
-Phase 1 product and architecture contracts are owner-approved. Current component
-status and the sequential implementation roadmap are maintained only in the
-[`specification map`](docs/specification-map.md).
+The product contract and live-backend replacement architecture are
+owner-approved. Current status and the sequential roadmap live in the
+[`replacement delivery program`](docs/live-backend-replacement/delivery-program.md)
+and [`specification map`](docs/specification-map.md).
 
-The current incremental plan is the
-[`Live feature-set MVP program`](docs/live-feature-mvp-program.md): implement
-the backend measurements and Float enrichment, cut the snapshot API to v2,
-finish the dashboard, then verify the integrated live composition. Keep one
-write-capable slice active. The numbered component contracts remain reusable
-evidence; this MVP does not rename or comprehensively refactor them.
+The current phase is `LBR-P1`: write and cross-review five focused contracts
+for canonical state/hydration, evaluation/publication, selected-row T/Q, live
+ingress, and integration/removal/acceptance. Implementation remains sequential
+with one write-capable slice. Historical numbered components and stability
+corrections are evidence, not requirements to preserve their private
+representations.
 
-### Current live feature-set MVP
-
-The owner approved the
-[`Live feature-set MVP program`](docs/live-feature-mvp-program.md) on
-2026-08-14. The only supported operating path in this cut is the ordinary
-fresh-start live scanner. Deterministic unit, fake-provider, API, and UI
-fixtures remain the normal proof and weekend-development tools; they are not a
-claim that product replay works.
-
-Replay implementation remains in the repository with unknown current
-capability and no MVP acceptance role. Checkpoint persistence also remains but
-is disabled; the MVP restarts through fresh hydration. An old checkpoint must
-not be restored and presented as complete revised-feature state. The program
-does not authorize credential access or provider requests, public deployment,
-or any claim of trading edge.
+The only supported operating path remains the ordinary fresh-start live
+scanner. Replay capability is unknown and checkpoint persistence is disabled.
+Deterministic fixtures remain proof tools, not product replay. No current
+document authorizes credentials, provider requests, public deployment, or a
+trading-edge claim.
 
 ## Private local dashboard
 

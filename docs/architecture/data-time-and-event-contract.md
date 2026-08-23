@@ -1,6 +1,11 @@
 # Data, time, and event contract
 
-**Status:** Approved architecture contract.
+**Status:** Approved semantic architecture and compatible replacement evidence.
+The 2026-08-23
+[`live backend replacement`](../live-backend-replacement.md) controls
+conflicting live topology/state mechanics; focused replacement specs must route
+the retained live session/event/merge/watermark meanings before implementation.
+Replay and checkpoint sections create no replacement gate.
 
 **Prepared:** 2026-08-05
 

@@ -1,6 +1,10 @@
 # System overview
 
-**Status:** Approved architecture contract.
+**Status:** Historical approved architecture and compatible evidence;
+superseded for the supported live-backend topology, state, queue, evaluation,
+resource, and removal scope by
+[`../live-backend-replacement.md`](../live-backend-replacement.md), approved
+2026-08-23.
 
 **Prepared:** 2026-08-05
 

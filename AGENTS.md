@@ -5,7 +5,7 @@
 Read `README.md`, `docs/specification-map.md`, and the relevant approved
 product, architecture, delivery-program, and component documents before
 changing code or contracts. The current program is
-[`docs/live-feature-mvp-program.md`](docs/live-feature-mvp-program.md).
+[`docs/live-backend-replacement/delivery-program.md`](docs/live-backend-replacement/delivery-program.md).
 
 Authority descends in this order:
 
@@ -24,32 +24,35 @@ component-local owner gate.
 
 ## Current phase
 
-Phase 1 product and architecture are complete and owner-approved. Components
-1-11 and the former private/local V1 RC are historical accepted evidence for
-the superseded feature set. C12 replay work is incomplete and its current
-runnable capability is unknown.
+The product contract and the
+[`live backend replacement architecture`](docs/live-backend-replacement.md)
+are owner-approved. The accepted feature-MVP, numbered components, stability
+corrections, and private/local baseline remain reusable evidence, not the
+active implementation plan. Replay is unverified and checkpoint persistence is
+disabled; neither is a replacement gate.
 
 The active goal is the private/local
-[`Live feature-set MVP`](docs/live-feature-mvp-program.md): live backend
-measurements and Float enrichment, snapshot API v2, final dashboard, then
-integrated live-MVP acceptance. Replay is retained but unverified and
-non-gating. Checkpoint persistence is retained but disabled and non-gating;
-fresh hydration is the supported restart path. Public deployment and
-credentialed market-hours validation are not part of the program's authority.
+[`live backend replacement`](docs/live-backend-replacement/delivery-program.md):
+compact canonical state and hydration, incremental two-phase evaluation,
+bounded selected-row T/Q, single-pass live ingress with one handoff, then
+exclusive cutover/removal and integrated resource/desktop acceptance. The
+current phase is `LBR-P1`: complete and cross-review the five focused specs and
+baseline characterization before implementation.
 
-Implementation remains sequential in MVP-S1 through MVP-S4. Keep one active
-write-capable implementation slice and finally review each capability before
-starting the next. Do not begin a component-number cleanup, replay proof, or
-checkpoint repair as a prerequisite for the live feature cutover.
+Keep one active write-capable slice and finally review each capability before
+starting the next. Public deployment, replay repair, checkpoint compatibility,
+and credentialed market-hours work are outside current authority. A provider
+request always requires separate exact authorization.
 
-## V1 fixed and revisable decisions
+## Replacement fixed and revisable decisions
 
-For the current feature cutover, the fixed behavior, revisable delivery
-choices, containment, proof allocation, and completion boundary in
-[`docs/live-feature-mvp-program.md`](docs/live-feature-mvp-program.md) control.
-The material below remains applicable to work explicitly resumed under the
-historical C7-C11 program and as compatible evidence; it does not create a
-current replay or checkpoint gate.
+For the current replacement, fixed behavior, revisable delivery choices,
+resource-target policy, proof/review allocation, and completion boundaries in
+the [parent architecture](docs/live-backend-replacement.md) and
+[delivery program](docs/live-backend-replacement/delivery-program.md) control.
+The former live-feature MVP and V1 material remains compatible historical
+evidence; it does not preserve an old representation, queue, feature state,
+replay path, checkpoint shape, or delivery gate.
 
 The fixed product/architecture meanings and agent-revisable delivery decisions
 are authoritative in
@@ -76,10 +79,11 @@ Contract-first design remains mandatory:
 
 1. Read this file, the repository guide and map, the current delivery program,
    relevant Phase 1 authorities, and accepted dependency contracts.
-2. Enumerate the exact controlling Phase 1 requirement IDs.
+2. Enumerate the exact controlling `PG-*` and `LBR-ARCH-*` IDs plus any routed
+   compatible `DTE-*`/`LIFE-*` semantic dependencies.
 3. State one component ownership boundary and explicit non-scope.
-4. Choose the simplest design satisfying every cited requirement and V1
-   outcome.
+4. Choose the simplest design satisfying every cited requirement and current
+   replacement outcome.
 5. Introduce no new product rule, competing owner, watermark, evaluator,
    T/Q-to-ranking dependency, changed time-window meaning, speculative edge
    case, or duplicated responsibility.
@@ -97,14 +101,16 @@ Contract-first design remains mandatory:
 9. Prefer one compact contract and no more than two slices for C8-C11. Add a
    third only when a distinct provider/canonical, trust, ownership, or proof
    boundary cannot be coherently implemented and reviewed in two.
-10. Record the completed contract as the current executable plan. Under the V1
-    program this does not freeze it: later evidence invokes the correction
-    loop rather than an owner stop.
+10. Record the completed contract as the current executable plan. Under the
+    replacement program this does not freeze it: later evidence invokes the
+    correction loop rather than an owner stop.
 
 Use the mandatory
 [`focused component specification template`](docs/specifications/focused-component-spec-template.md).
-Phase 1 already controls shared engine, state, event, time, and lifecycle
-semantics. Do not create a redundant shared architecture or core-domain spec.
+The replacement parent controls shared ownership/topology; existing approved
+data/time/lifecycle semantics remain compatible evidence until routed to one
+focused replacement home. Do not create another shared architecture or
+core-domain spec.
 
 ### Modular focused contracts
 
@@ -125,11 +131,14 @@ review. Within C7-C11, a document-map change is agent-revisable under the V1
 correction loop. Outside that program, follow the applicable owner approval
 gate.
 
-## V1 correction and acceptance
+## Replacement correction and acceptance
 
-Use the mandatory correction loop in
-[`docs/v1-release-program.md`](docs/v1-release-program.md#4-required-correction-loop).
-A failure records evidence; it does not freeze the failed premise.
+Use the correction and acceptance policy in the current
+[delivery program](docs/live-backend-replacement/delivery-program.md#13-correction-and-acceptance).
+A failure records evidence; it does not freeze the failed premise. A numeric
+resource-target miss alone receives the program's one bounded diagnostic/
+correction/rerun response; it cannot create an indefinite optimization loop
+when hard behavioral and bounded-plateau acceptance passes.
 
 An accepted slice means its current proofs passed. If later evidence exposes a
 defect, mark the slice/component `reopened`, name the invalidated claim, preserve
@@ -173,7 +182,7 @@ rewrite history, delete branches, or use destructive reset operations.
 - The module path is
   `github.com/belandresj/live-equities-momentum-scanner`.
 - Prefer the Go standard library; add a third-party dependency only when the
-  current component contract and V1 slice require it.
+  current focused contract and replacement slice require it.
 
 ### Architecture and implementation
 
