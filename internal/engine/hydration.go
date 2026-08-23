@@ -1059,7 +1059,7 @@ func (e *Engine) applyHydrationTerminalLocked(node *queueNode) (DispositionCode,
 		} else {
 			evaluateQualificationThrough(state, e.state.binding, input.token.end, node.admissionTime)
 		}
-		ensurePriceRangeState(state).result = evaluatePriceRangeFeatures(e.state.binding, &e.state.binding.symbols[index], input.token.end)
+		ensurePriceRangeState(state).result = e.evaluatePriceRangeFeaturesLocked(e.state.binding, &e.state.binding.symbols[index], input.token.end)
 		applyActivityResult(state, e.state.binding, evaluateActivityFeatures(e.state.binding, state, input.token.end))
 	}
 	e.state.hydration.revision++
@@ -1136,7 +1136,7 @@ func (e *Engine) applyAggregateIngressFenceLocked(node *queueNode) (DispositionC
 			}
 			continue
 		}
-		if _, hasMark := latestMarkBefore(state, target); hasMark {
+		if _, hasMark := e.latestSelectionMarkLocked(state, target); hasMark {
 			delete(e.state.aggregateEvaluator.coverage, index)
 		} else {
 			e.state.aggregateEvaluator.coverage[index] = coverageNoPrintThroughT

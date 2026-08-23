@@ -192,7 +192,7 @@ func (e *Engine) extendOrdinaryLiveCoverageLocked(start, end time.Time) {
 			}
 			continue
 		}
-		if _, hasMark := latestMarkBefore(state, end); hasMark {
+		if _, hasMark := e.latestSelectionMarkLocked(state, end); hasMark {
 			delete(e.state.aggregateEvaluator.coverage, index)
 		} else {
 			e.state.aggregateEvaluator.coverage[index] = coverageNoPrintThroughT
