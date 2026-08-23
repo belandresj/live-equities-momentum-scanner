@@ -385,6 +385,7 @@ type engineState struct {
 	globalFailure               bool
 	exposedRevision             uint64
 	evaluationRevision          uint64
+	evaluationAppliedSequence   uint64
 	aggregateEvaluator          aggregateEvaluatorState
 	aggregateProjectionPending  bool
 	aggregateEvaluationDeadline *time.Time
@@ -1256,9 +1257,16 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 	trace.WithRegion(context.Background(), "feature_work", func() {
 		stagedEvaluation = e.runAggregateFeatureContributorLocked(node, code, reason)
 	})
-	if !e.runAggregateEvaluatorLocked(node, code, reason, stagedEvaluation) {
+	evaluationAccepted := e.runAggregateEvaluatorLocked(node, code, reason, stagedEvaluation)
+	if !evaluationAccepted {
 		code, reason = DispositionAccountingIntegrity, ReasonAccounting
 		e.enterSuppressionLocked(lifecycleEventAccountingIntegrity, node, lifecycleReasonAccountingIntegrity)
+	}
+	if evaluationAccepted && node.kind == inputAggregateIngressFence && code == DispositionAggregateIngressFenceApplied &&
+		e.state.evaluationAppliedSequence == node.engineSequence && e.state.committedT != nil && e.state.committedT.Equal(e.state.fenceTiming.Target) {
+		e.state.connectionControl.recoveryAttempts = 0
+		e.state.scheduledRecovery.pending = nil
+		e.state.scheduledRecovery.dispatched = false
 	}
 	e.reconcileTQLocked(node.admissionTime)
 	if tqProjectionInput(node.kind) || e.state.tq.immediateProjectionPending {

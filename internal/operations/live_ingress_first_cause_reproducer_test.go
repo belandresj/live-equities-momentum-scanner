@@ -321,8 +321,8 @@ func runIngressFirstCauseCase(t *testing.T, fault ingressReproducerFault) (*Ingr
 			t.Errorf("production queue boundary not reached: %s %+v", fault, attempt.QueueAccounting())
 		}
 	}
-	components := LiveComponents{Adapter: adapter, Hydrator: hydrator, Workers: 2, RowsPerChunk: 4, MaximumResponseBytes: 1 << 20,
-		MaximumNormalizedRecords: int64(len(binding.UniverseSymbols())) * 57_600, MaximumResidentRecords: 2 * 57_600, Durations: capacityDurations()}
+	components := LiveComponents{Adapter: adapter, Hydrator: hydrator, Workers: 1, RowsPerChunk: 4, MaximumResponseBytes: 1 << 20,
+		MaximumNormalizedRecords: int64(len(binding.UniverseSymbols())) * 57_600, MaximumResidentRecords: 57_600, Durations: capacityDurations()}
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	done := make(chan error, 1)
 	go func() { done <- run.RunLive(ctx, components) }()

@@ -477,6 +477,42 @@ conflict. Later evidence may reopen it before integrated completion.
   state and request-scoped reconciliation seam without restoring raw-tail
   pinning.
 
+#### `LBR-A2` — accepted 2026-08-23
+
+- **Coherent behavior:** fresh `[S,R)` and exact post-live gap hydration now
+  use the A1 compact state, one engine generation/request ledger, one supported
+  REST worker, exact terminal/row accounting, and one ordered ingress fence.
+  The supported `RunLive` composition rejects checkpoint storage and worker
+  counts other than one; the Massive live-plan seam accepts only fresh/gap
+  work. Generic worker construction remains reachable only by separated
+  historical tooling pending the E1 source decision.
+- **Proof:** `P-LBR-A2-HYDRATION` passes across the real engine, Massive worker
+  seam, and operations composition. It covers before-session wait, in-session
+  acknowledgement, at/after-session terminal behavior, invalid-binding
+  atomicity, bounded initialization exhaustion, value/empty/failure/cancel/
+  fenced terminals, malformed rows, generation/epoch replacement, preserved
+  accepted facts, current-token fencing, REST/live precedence, terminal-before-
+  fence ordering, a marker behind already-read work, retry-reset/currentness
+  only after the fence-target evaluator applies, exact gap recovery, and later
+  ordinary live advancement. Work and row identities reconcile before fence
+  trust; successful empty proves only its exact interval.
+- **Ownership/removal:** blocking REST work returns immutable bounded facts and
+  owns no symbol/currentness state. The engine remains the sole generation,
+  coverage, fence, retry-reset, and lifecycle owner. Ordinary-live multiworker
+  configuration, checkpoint-backed `LiveComponents`, checkpoint-catchup in the
+  live worker seam, and old hydration proof/backing assumptions are now
+  removable; physical replay/checkpoint disposition remains E1.
+- **Verification/review:** named proof, affected engine/Massive/operations
+  short and race suites, focused vet, diff hygiene, and repository short
+  verification pass. An initial generic worker-count change broke retained
+  replay compilation; the corrected layering enforces one worker only in the
+  supported live composition and the distinguishing replay regression passes.
+- **Limitation/next gate:** deterministic evidence does not establish provider
+  availability, connection retry chronology, or resource throughput. Both A
+  slices are ready for the required Capability A final read-only review;
+  Capability B remains inactive until that review is clean and Capability A is
+  finally accepted.
+
 ## 14. Sole delivery ledger
 
 This table is the only mutable program status. Focused specs name allocations
@@ -487,7 +523,7 @@ but copy no status.
 | Parent architecture | `approved` | Current replacement architecture |
 | Delivery program | `approved` | Current replacement delivery authority |
 | `LBR-P1` focused contracts and characterization | `accepted` | Five-spec independent cross-review and owner acceptance are recorded; [`baseline-characterization.md`](baseline-characterization.md), SHA-256 `3a70dda5bc040d1a77fbe3e114d788d3fc04c93fbb51ff2e5eec646f4c10e6e3`, freezes baseline `0d043c1`, the semantic/API/UI corpus, durable queue/heartbeat/hydration/cycle/memory evidence, and the exact 5,694-symbol deterministic manifest. Comparable baseline CPU/RSS remain explicitly unknown. Next: activate `LBR-A1`. |
-| Capability A — canonical state and hydration | `lbr_a2_active` | `LBR-A1` is accepted. Implement only [`LBR-A2`](tickets/lbr-a2-hydration-and-recovery-installation.md); Capability B remains inactive. |
+| Capability A — canonical state and hydration | `slices_accepted_final_review_next` | `LBR-A1` and `LBR-A2` proofs and verification pass. Run the required Capability A final read-only review; Capability B remains inactive. |
 | Capability B — evaluation and publication | `not_started` | Requires Capability A interface acceptance |
 | Capability C — selected-row T/Q | `not_started` | Requires Capability B publication/selection interface |
 | Capability D — live ingress | `not_started` | Requires accepted state/TQ input interface |

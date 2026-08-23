@@ -330,6 +330,7 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 	}
 	applyStarted := e.evaluationTimingStart()
 	e.applyStagedAggregateCandidateLocked(staged, node.admissionTime)
+	e.state.evaluationAppliedSequence = node.engineSequence
 	e.state.evaluationTiming.Apply = e.evaluationTimingElapsed(applyStarted)
 	if node.kind == inputAggregateIngressFence {
 		e.state.fenceTiming.EvaluationApply = e.state.evaluationTiming.Apply

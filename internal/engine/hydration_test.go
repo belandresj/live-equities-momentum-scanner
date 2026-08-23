@@ -1127,7 +1127,7 @@ func failedRecoveryGeneration(t *testing.T, binding reference.Binding, start tim
 }
 
 func generousHydrationBudgets() HydrationPlanBudgets {
-	return HydrationPlanBudgets{Workers: 2, RowsPerChunk: 100, MaximumResponseBytes: 1 << 20, MaximumNormalizedRecords: 100_000, MaximumResidentRecords: 100_000}
+	return HydrationPlanBudgets{Workers: 1, RowsPerChunk: 100, MaximumResponseBytes: 1 << 20, MaximumNormalizedRecords: 100_000, MaximumResidentRecords: 100_000}
 }
 
 func admitHydrationPlan(t *testing.T, e *Engine, purpose HydrationPurpose, epoch uint64, budgets HydrationPlanBudgets) HydrationDisposition {

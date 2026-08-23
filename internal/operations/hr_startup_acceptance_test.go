@@ -49,11 +49,11 @@ func TestPHRStartupLossCancelsAndReplansThroughFence(t *testing.T) {
 			_, _ = fmt.Fprintf(writer, `{"status":"OK","ticker":%q,"adjusted":false,"results":[]}`, parts[4])
 			return
 		}
-		if firstActive.Add(1) == int32(len(symbols)) {
+		if firstActive.Add(1) == 1 {
 			activeOnce.Do(func() { close(allFirstActive) })
 		}
 		<-request.Context().Done()
-		if firstCanceled.Add(1) == int32(len(symbols)) {
+		if firstCanceled.Add(1) == 1 {
 			replacement.Store(true)
 		}
 	}))
@@ -103,7 +103,7 @@ func TestPHRStartupLossCancelsAndReplansThroughFence(t *testing.T) {
 	durations := capacityDurations()
 	durations.HeartbeatInterval = 250 * time.Millisecond
 	durations.HeartbeatDeadline = 100 * time.Millisecond
-	components := LiveComponents{Adapter: adapter, Hydrator: hydrator, Workers: len(symbols), RowsPerChunk: 1,
+	components := LiveComponents{Adapter: adapter, Hydrator: hydrator, Workers: 1, RowsPerChunk: 1,
 		MaximumResponseBytes: 4 << 20, MaximumNormalizedRecords: int64(len(symbols)) * 57_600, MaximumResidentRecords: int64(len(symbols)) * 57_600, Durations: durations}
 	ctx, cancel := context.WithCancel(context.Background())
 	joined := make(chan error, 1)
@@ -127,7 +127,7 @@ func TestPHRStartupLossCancelsAndReplansThroughFence(t *testing.T) {
 	}
 	view := run.Engine().ObserveOperational()
 	incident := run.FirstIngressIncident()
-	if connections.Load() != 2 || firstCanceled.Load() != int32(len(symbols)) || view.Lifecycle != "live" || view.Hydration.Purpose != engine.HydrationFreshBootstrap ||
+	if connections.Load() != 2 || firstCanceled.Load() != 1 || view.Lifecycle != "live" || view.Hydration.Purpose != engine.HydrationFreshBootstrap ||
 		view.Hydration.Generation != 2 || !view.Hydration.FenceReconciled || view.Hydration.Accounting.CompletedEmpty != uint64(len(symbols)) ||
 		view.Hydration.Accounting.Open != 0 || view.Connection.RecoveryAttempts != 0 || incident == nil || incident.Source != string(massive.TerminalHeartbeat) ||
 		incident.Reason != string(massive.TerminalHeartbeatDeadlineNoProgress) || incident.Epoch != 1 {

@@ -13,11 +13,11 @@ import (
 	"github.com/belandresj/live-equities-momentum-scanner/internal/engine"
 )
 
-// TestC6INTEGRATION01OfflineComponentsOneThroughSixAggregateLifecycle is
-// P-C6-INTEGRATION. It composes the real binding, fake C5 socket, strict C6
+// TestPLBRA2HydrationWorkerAndFence is the worker/composition portion of
+// P-LBR-A2-HYDRATION. It composes the real binding, fake live socket, strict
 // HTTP worker, sole C4 mapper, C2 FIFO/canonical merge, C3 evaluator, fence,
-// and publication path without a runtime reconnect/readiness owner.
-func TestC6INTEGRATION01OfflineComponentsOneThroughSixAggregateLifecycle(t *testing.T) {
+// and publication path without provider access.
+func TestPLBRA2HydrationWorkerAndFence(t *testing.T) {
 	binding := component4TestBinding(t, []string{"AAA"})
 	now := binding.SessionStart().Add(30 * time.Second)
 	delay := time.Duration(0)
@@ -74,9 +74,19 @@ func TestC6INTEGRATION01OfflineComponentsOneThroughSixAggregateLifecycle(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	workerPlan, err := NewHydrationWorkerPlan([]HydrationWorkItem{work}, 1, 8, budgets.MaximumResponseBytes, budgets.MaximumNormalizedRecords, budgets.MaximumResidentRecords)
+	workerPlan, err := NewLiveHydrationWorkerPlan([]HydrationWorkItem{work}, 8, budgets.MaximumResponseBytes, budgets.MaximumNormalizedRecords, budgets.MaximumResidentRecords)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if workerPlan.workers != 1 {
+		t.Fatalf("live hydration workers=%d", workerPlan.workers)
+	}
+	checkpointWork, err := NewHydrationWorkItem(binding, work.Generation(), work.RequestID()+1, HydrationCheckpointCatchUp, "AAA", work.Start(), work.End(), work.ConnectionEpoch())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewLiveHydrationWorkerPlan([]HydrationWorkItem{checkpointWork}, 8, budgets.MaximumResponseBytes, budgets.MaximumNormalizedRecords, budgets.MaximumResidentRecords); err == nil {
+		t.Fatal("supported live worker accepted checkpoint catch-up work")
 	}
 
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -92,7 +102,7 @@ func TestC6INTEGRATION01OfflineComponentsOneThroughSixAggregateLifecycle(t *test
 	}
 	sink := &integrationHydrationEngineSink{state: state, tokens: map[uint64]engine.HydrationRequestToken{requests[0].RequestID(): requests[0]}}
 	workerResult := worker.Run(context.Background(), context.Background(), workerPlan, sink)
-	if workerResult.Accounting().ProviderCompletedValue != 1 || sink.err != nil || sink.command.CommandToken() == 0 || sink.chunkDisposition.Rows.Inserted != 1 {
+	if workerResult.Accounting().ProviderCompletedValue != 1 || workerResult.Accounting().MaximumActiveWorkers != 1 || sink.err != nil || sink.command.CommandToken() == 0 || sink.chunkDisposition.Rows.Inserted != 1 {
 		t.Fatalf("worker/sink = %+v err=%v command=%+v", workerResult.Accounting(), sink.err, sink.command)
 	}
 	// The pre-capture live frame overlaps the REST identity and replaces its

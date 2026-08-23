@@ -253,7 +253,7 @@ func capacityDurations() massive.OperationalDurations {
 
 func completeCapacityHydration(t *testing.T, ctx context.Context, run *Runtime, attempt *massive.LiveAttempt, binding reference.Binding, now time.Time) {
 	t.Helper()
-	budgets := engine.HydrationPlanBudgets{Workers: 8, RowsPerChunk: 256, MaximumResponseBytes: 64 << 20, MaximumNormalizedRecords: int64(len(binding.UniverseSymbols())) * 57_600, MaximumResidentRecords: 8 * 57_600}
+	budgets := engine.HydrationPlanBudgets{Workers: 1, RowsPerChunk: 256, MaximumResponseBytes: 64 << 20, MaximumNormalizedRecords: int64(len(binding.UniverseSymbols())) * 57_600, MaximumResidentRecords: 57_600}
 	admission, completion := run.Engine().AdmitHydrationPlan(ctx, engine.HydrationPlanInput{SchemaVersion: engine.HydrationPlanSchemaV1, BindingIdentity: binding.Identity(), Purpose: engine.HydrationFreshBootstrap, ConnectionEpoch: attempt.Epoch(), Budgets: budgets})
 	if admission != engine.AdmissionAdmitted || completion == nil {
 		t.Fatal("capacity hydration plan was not admitted")

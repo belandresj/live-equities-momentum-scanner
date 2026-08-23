@@ -880,8 +880,8 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 	server.framesRead = func() uint64 { return attempt.QueueAccounting().FramesRead - queueBase.FramesRead }
 	planAdmission, planCompletion := run.Engine().AdmitHydrationPlan(ctx, engine.HydrationPlanInput{SchemaVersion: engine.HydrationPlanSchemaV1,
 		BindingIdentity: manifest.binding.Identity(), Purpose: engine.HydrationFreshBootstrap, ConnectionEpoch: attempt.Epoch(),
-		Budgets: engine.HydrationPlanBudgets{Workers: 2, RowsPerChunk: cachedFenceRowsPerChunk, MaximumResponseBytes: 2 << 30,
-			MaximumNormalizedRecords: int64(len(manifest.rowsBySymbol)) * 57_600, MaximumResidentRecords: 2 * 57_600}})
+		Budgets: engine.HydrationPlanBudgets{Workers: 1, RowsPerChunk: cachedFenceRowsPerChunk, MaximumResponseBytes: 2 << 30,
+			MaximumNormalizedRecords: int64(len(manifest.rowsBySymbol)) * 57_600, MaximumResidentRecords: 57_600}})
 	if planAdmission != engine.AdmissionAdmitted || planCompletion == nil {
 		t.Fatal("production hydration plan not admitted")
 	}

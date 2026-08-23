@@ -22,7 +22,7 @@ type LiveComponents struct {
 }
 
 func (c LiveComponents) valid() bool {
-	return c.Adapter != nil && c.Hydrator != nil && c.Workers > 0 && c.RowsPerChunk > 0 &&
+	return c.Adapter != nil && c.Hydrator != nil && c.Store == nil && c.Workers == 1 && c.RowsPerChunk > 0 &&
 		c.MaximumResponseBytes > 0 && c.MaximumNormalizedRecords > 0 && c.MaximumResidentRecords > 0
 }
 
@@ -480,7 +480,7 @@ func (r *Runtime) hydrate(ctx context.Context, components LiveComponents, attemp
 		}
 		work[index], tokens[token.RequestID()] = item, token
 	}
-	plan, err := massive.NewHydrationWorkerPlan(work, components.Workers, components.RowsPerChunk, components.MaximumResponseBytes, components.MaximumNormalizedRecords, components.MaximumResidentRecords)
+	plan, err := massive.NewLiveHydrationWorkerPlan(work, components.RowsPerChunk, components.MaximumResponseBytes, components.MaximumNormalizedRecords, components.MaximumResidentRecords)
 	if err != nil {
 		return engine.HydrationFenceCommand{}, err
 	}

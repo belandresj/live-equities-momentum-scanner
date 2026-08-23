@@ -625,7 +625,7 @@ func TestC8RUNTIME02HydrationOutlivesConnectionDeadline(t *testing.T) {
 	}
 }
 
-func TestC8RUNTIME02MultiWorkerDisconnectDuringHydration(t *testing.T) {
+func TestLBRRuntimeOneWorkerDisconnectDuringHydration(t *testing.T) {
 	symbols := make([]string, 8)
 	for index := range symbols {
 		symbols[index] = fmt.Sprintf("S%02d", index)
@@ -649,7 +649,7 @@ func TestC8RUNTIME02MultiWorkerDisconnectDuringHydration(t *testing.T) {
 	var active atomic.Int32
 	var activeOnce sync.Once
 	hydrationServer := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
-		if active.Add(1) == int32(len(symbols)) {
+		if active.Add(1) == 1 {
 			activeOnce.Do(func() { close(allActive) })
 		}
 		defer active.Add(-1)
@@ -668,7 +668,7 @@ func TestC8RUNTIME02MultiWorkerDisconnectDuringHydration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	components := LiveComponents{Adapter: adapter, Hydrator: hydrator, Workers: 8, RowsPerChunk: 1, MaximumResponseBytes: 8 << 20, MaximumNormalizedRecords: int64(len(symbols)) * 57_600, MaximumResidentRecords: int64(len(symbols)) * 57_600, Durations: capacityDurations()}
+	components := LiveComponents{Adapter: adapter, Hydrator: hydrator, Workers: 1, RowsPerChunk: 1, MaximumResponseBytes: 8 << 20, MaximumNormalizedRecords: int64(len(symbols)) * 57_600, MaximumResidentRecords: 57_600, Durations: capacityDurations()}
 	done := make(chan error, 1)
 	go func() { done <- run.RunLive(context.Background(), components) }()
 	deadline := time.After(5 * time.Second)
@@ -718,7 +718,7 @@ func TestC8RUNTIME02ShutdownJoinsBlockedHydrationAndAttempt(t *testing.T) {
 	var active atomic.Int32
 	var activeOnce sync.Once
 	hydrationServer := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
-		if active.Add(1) == int32(len(symbols)) {
+		if active.Add(1) == 1 {
 			activeOnce.Do(func() { close(allActive) })
 		}
 		defer active.Add(-1)
@@ -738,7 +738,7 @@ func TestC8RUNTIME02ShutdownJoinsBlockedHydrationAndAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	components := LiveComponents{Adapter: adapter, Hydrator: hydrator, Workers: 8, RowsPerChunk: 1, MaximumResponseBytes: 8 << 20, MaximumNormalizedRecords: int64(len(symbols)) * 57_600, MaximumResidentRecords: int64(len(symbols)) * 57_600, Durations: capacityDurations()}
+	components := LiveComponents{Adapter: adapter, Hydrator: hydrator, Workers: 1, RowsPerChunk: 1, MaximumResponseBytes: 8 << 20, MaximumNormalizedRecords: int64(len(symbols)) * 57_600, MaximumResidentRecords: 57_600, Durations: capacityDurations()}
 	done := make(chan error, 1)
 	go func() { done <- run.RunLive(context.Background(), components) }()
 	select {

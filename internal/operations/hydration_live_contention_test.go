@@ -121,8 +121,8 @@ func runHydrationLiveContention(t *testing.T, rate int) hydrationContentionResul
 
 	planAdmission, planCompletion := run.Engine().AdmitHydrationPlan(ctx, engine.HydrationPlanInput{SchemaVersion: engine.HydrationPlanSchemaV1,
 		BindingIdentity: binding.Identity(), Purpose: engine.HydrationFreshBootstrap, ConnectionEpoch: attempt.Epoch(),
-		Budgets: engine.HydrationPlanBudgets{Workers: 2, RowsPerChunk: hydrationContentionChunkRows, MaximumResponseBytes: 2 << 30,
-			MaximumNormalizedRecords: int64(len(symbols)) * 57_600, MaximumResidentRecords: 2 * 57_600}})
+		Budgets: engine.HydrationPlanBudgets{Workers: 1, RowsPerChunk: hydrationContentionChunkRows, MaximumResponseBytes: 2 << 30,
+			MaximumNormalizedRecords: int64(len(symbols)) * 57_600, MaximumResidentRecords: 57_600}})
 	if planAdmission != engine.AdmissionAdmitted || planCompletion == nil {
 		t.Fatal("hydration plan admission")
 	}
