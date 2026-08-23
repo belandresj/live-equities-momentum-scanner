@@ -25,7 +25,7 @@ through the replacement architecture and:
 - publishes the existing API v2 contract to the finished dashboard;
 - removes the old live state/evaluator/handoff and superseded feature
   machinery from the supported path;
-- passes semantic, recovery, concurrency, resource, and desktop-composition
+- passes semantic, recovery, concurrency, and resource-stability
   acceptance; and
 - records live-provider confirmation only when separately owner-authorized or
   owner-executed.
@@ -147,6 +147,13 @@ Characterization freezes, without changing production behavior:
 Existing expensive evidence is reused when its code/configuration/premise is
 unchanged. Missing current CPU/RSS evidence is recorded as unknown rather than
 backfilled from an incomparable historical run.
+
+The completed-contract independent cross-review on 2026-08-23 returned
+`CLEAN/PASS` with no P1, P2, or P3 finding after the source-aware hydration,
+historical/live trust, cross-cutting allocation, retry-ordinal, and generic
+stability-acceptance corrections. This completes the review portion of
+`LBR-P1`. The owner accepted the reviewed five-spec set on 2026-08-23. Baseline
+characterization remains before `LBR-P1` can authorize implementation.
 
 ## 6. Capability A — canonical state and hydration
 
@@ -270,8 +277,9 @@ heartbeat, retry pacing/exhaustion, resubscription, and exact recovery.
 
 Primary proof covers mixed frames, backpressure, safe T/Q shedding, aggregate
 overflow terminal/recovery, fence ordering, heartbeat progress/no-progress,
-failed handshakes, five-attempt exhaustion, and zero silent aggregate/control
-loss.
+failed handshakes, one immediate process-start dial plus five exactly paced
+recovery attempts, exhaustion before recovery attempt 6, and zero silent
+aggregate/control loss.
 
 Capability D final review focuses on ordering linearization, socket/worker
 joins, one queue, overflow false-success, and preserved connection semantics.
@@ -290,7 +298,7 @@ API v2, dashboard, launcher, reference, hydration, and operator behavior remain
 compatible unless an accepted focused contract explicitly revises an internal
 interface.
 
-### `LBR-E2` — deterministic resource and desktop acceptance
+### `LBR-E2` — deterministic resource and stability acceptance
 
 Run one mature approximately 5,700-symbol deterministic 30-minute mixed-feed
 soak with selected-row T/Q and one-second dashboard polling. Use a fixed
@@ -299,25 +307,25 @@ better documented 1.5x observed rate. Measure the parent CPU, heap, RSS,
 allocation, goroutine, queue, cycle, capture, watermark, loss, and accounting
 targets.
 
-Then run the same composition with the owner-selected ordinary Zoom call and
-screen-share workload. Record scanner results, system memory pressure/swap,
-and Zoom degradation relative to a Zoom-only control. Failure reopens the
-narrowest implicated capability; it does not loosen correctness/readiness.
+An optional generic host-coexistence observation may repeat the accepted
+composition alongside any owner-chosen ordinary local workload and record
+scanner/system headroom. It is diagnostic and non-gating unless it exposes a
+hard scanner failure such as unbounded growth, sustained backlog/readiness
+flapping, or unusable one-second polling.
 
 The 30-minute duration is this program's explicit exception to the ordinary
-15-minute local-command ceiling: the claim requires a mature heap plateau,
-sustained queue slope, and desktop co-residency rather than a short burst.
+15-minute local-command ceiling: the claim requires a mature heap plateau and
+sustained queue slope rather than a short burst.
 Validate the manifest first, keep stop conditions active, and do not extend an
 individual trial beyond 30 minutes without a new recorded reason.
 
 Every numeric target is reported. A miss invokes exactly one bounded
 measurement/profile/correction/rerun cycle. If the final composition is
 correct, reaches a bounded resource plateau, handles the characterized feed
-without sustained backlog/loss/readiness flapping, keeps API polling usable,
-and coexists acceptably with the desktop workload, record the deviation and
-accept the measured result. The orchestrator must not continue optimization
-only to hit a target. Block only on a hard failure or explicit owner rejection
-of the desktop result.
+without sustained backlog/loss/readiness flapping, and keeps API polling usable,
+record the deviation and accept the measured result. The orchestrator must not
+continue optimization only to hit a target. Block only on a hard failure or
+explicit owner rejection of the measured stable result.
 
 ### `LBR-E3` — separately authorized market-hours confirmation
 
@@ -437,7 +445,7 @@ but copy no status.
 | --- | --- | --- |
 | Parent architecture | `approved` | Current replacement architecture |
 | Delivery program | `approved` | Current replacement delivery authority |
-| `LBR-P1` focused contracts and characterization | `next` | Draft and cross-review the five focused specs |
+| `LBR-P1` focused contracts and characterization | `characterization_next` | Five-spec independent cross-review is clean and owner acceptance is recorded; freeze the exact baseline/manifest before implementation |
 | Capability A — canonical state and hydration | `not_started` | Requires accepted focused contract and `LBR-P1` |
 | Capability B — evaluation and publication | `not_started` | Requires Capability A interface acceptance |
 | Capability C — selected-row T/Q | `not_started` | Requires Capability B publication/selection interface |
@@ -470,7 +478,7 @@ but copy no status.
 - superseded product feature state and old fallback implementations removed;
 - API v2/UI/launcher compatibility proven;
 - ordinary/race/vet/diff verification green as allocated;
-- `LBR-E2` hard resource/desktop acceptance, with every target measured and
+- `LBR-E2` hard resource/stability acceptance, with every target measured and
   deviations recorded; and
 - a clean final integrated read-only review.
 
@@ -485,5 +493,4 @@ provider SLA, or trading expectancy.
 | Decision | Recommended default | Needed by |
 | --- | --- | --- |
 | Replay/checkpoint source disposition | Remove from supported live binary/core; decide delete versus unsupported tooling | Before `LBR-E1` |
-| Desktop benchmark host | The private 8-GB M1 baseline host unless owner selects another | Before `LBR-E2` |
 | Market-hours execution | One exact-date owner-run or separately authorized observation | Before `LBR-E3` |

@@ -136,8 +136,9 @@ The
 [`live backend replacement delivery program`](live-backend-replacement/delivery-program.md)
 supersedes conflicting historical implementation sequences and private
 representations for its scope. Keep one write-capable slice and finally review
-each capability. The current phase is `LBR-P1`: complete and cross-review the
-five focused contracts and baseline characterization.
+each capability. The current phase is `LBR-P1`: the five focused contracts are
+owner-approved after a clean independent cross-review; baseline
+characterization remains before implementation.
 
 The active capability order is:
 
@@ -145,7 +146,7 @@ The active capability order is:
 2. incremental evaluation and immutable publication;
 3. compact selected-row T/Q under the approved 30-second late/duplicate policy;
 4. single-pass Massive ingress and one decoded-batch handoff; and
-5. exclusive cutover, deletion, deterministic resource/desktop acceptance,
+5. exclusive cutover, deletion, deterministic resource/stability acceptance,
    then separately authorized live confirmation.
 
 The accepted live-feature MVP, scanner-stability corrections, numbered
@@ -156,8 +157,9 @@ core path, or proof gate. The API v2 and finished UI meanings remain fixed.
 Numeric resource values in the parent are design targets. A miss receives one
 bounded measurement/profile/correction/rerun response and a recorded
 deviation. Only correctness/loss, unbounded resource growth, sustained
-backlog/readiness failure, unusable one-second API/dashboard behavior, or
-owner-rejected desktop coexistence blocks completion.
+backlog/readiness failure, or unusable one-second API/dashboard behavior blocks
+completion. Optional generic host-coexistence evidence characterizes practical
+headroom without adding an application-specific gate.
 
 ## Historical Phase 2 focused component sequence
 

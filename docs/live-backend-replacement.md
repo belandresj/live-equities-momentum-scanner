@@ -289,10 +289,12 @@ views.
 ### `LBR-ARCH-10` — retain bounded connection recovery
 
 Use one Massive Stocks WebSocket. Only one attempt may dial, handshake, run, or
-clean up at a time. The first attempt is immediate; greater attempts are paced
-1, 2, 4, 8, and 16 seconds. Five consecutive failed/lost epochs reach stable
-noncurrent exhaustion with no automatic sixth attempt. Only a successfully
-reconciled hydration/recovery fence resets the consecutive budget.
+clean up at a time. The process-start dial is immediate and is not a recovery
+ordinal. After a failed process-start dial or any lost epoch, recovery attempts
+1 through 5 wait exactly 1, 2, 4, 8, and 16 seconds respectively. Failure or
+loss of recovery attempt 5 reaches stable noncurrent exhaustion with no recovery
+attempt 6. Only a successfully reconciled hydration/recovery fence resets the
+recovery budget.
 
 A failed heartbeat with later supported inbound frame progress is diagnostic
 and nonterminal. A read failure, independent heartbeat transport failure, or
@@ -348,8 +350,7 @@ Hard resource acceptance requires:
 - the characterized ordinary feed and accepted stress composition show no
   sustained queue growth or silent aggregate/control loss;
 - normal operation has no recurring watermark-stale/readiness flapping;
-- snapshot/API work remains usable at the one-second dashboard cadence; and
-- the scanner coexists acceptably with the owner-selected desktop workload.
+- snapshot/API work remains usable at the one-second dashboard cadence.
 
 Missing a numeric design target is a recorded deviation, not automatic
 rejection. It triggers one bounded response: verify the measurement, profile
@@ -357,18 +358,19 @@ once, make at most one focused correction for demonstrated unnecessary work,
 and rerun once. If hard acceptance then passes, record the measured result and
 continue. The orchestrator may not repeat optimization solely to reach an
 aspirational number. Only correctness/loss, unbounded growth, sustained
-backlog/readiness failure, unusable API/dashboard behavior, or owner-rejected
-desktop coexistence blocks completion.
+backlog/readiness failure, or unusable API/dashboard behavior blocks
+completion.
 
 The delivery program may revise queue slots, byte division, fixture pacing,
 measurement mechanics, or the reported target deviation when evidence
 requires it. It may not loosen product correctness, readiness, market-time, or
 bounded-plateau requirements to pass a benchmark.
 
-Desktop coexistence is a separate acceptance composition: the same soak runs
-with the dashboard and an ordinary Zoom call/screen-share workload on the
-owner-selected private host. The exact host and Zoom acceptance observation
-must be recorded before claiming coexistence.
+An optional generic host-coexistence observation may repeat the accepted soak
+alongside an owner-chosen ordinary local workload. It records practical CPU,
+memory-pressure, swap, UI, and API headroom but is not a named-application
+requirement or completion gate. It becomes correction evidence only when it
+exposes one of the hard scanner failures above.
 
 ## 9. Retain, replace, and remove
 
@@ -404,11 +406,11 @@ ledger.
 | Document | Sole responsibility | Current state |
 | --- | --- | --- |
 | [`delivery-program.md`](live-backend-replacement/delivery-program.md) | Capability order, slices, proof/review gates, Git/orchestration policy, and sole delivery ledger | Approved current delivery authority |
-| `canonical-state-and-hydration.md` | Aggregate prefix/tail, merge, coverage, correction, hydration, and recovery installation | Planned after parent approval |
-| `evaluation-and-publication.md` | Incremental qualification, two-phase selection/enrichment, accounting, and immutable publication | Planned after parent approval |
-| `tq-state.md` | Selected membership, T/Q coverage, Tape/Spread state, deduplication, and degradation | Planned after parent approval |
-| `live-ingress.md` | Single-pass Massive decoding, decoded-batch FIFO, epochs, heartbeat, commands, and transport terminals | Planned after parent approval |
-| `integration-removal-and-acceptance.md` | Production cutover, deletion, API/UI compatibility, capacity, desktop, and live confirmation | Planned after parent approval |
+| [`canonical-state-and-hydration.md`](live-backend-replacement/canonical-state-and-hydration.md) | Aggregate prefix/tail, merge, coverage, correction, hydration, and recovery installation | Owner-approved focused contract |
+| [`evaluation-and-publication.md`](live-backend-replacement/evaluation-and-publication.md) | Incremental qualification, two-phase selection/enrichment, accounting, and immutable publication | Owner-approved focused contract |
+| [`tq-state.md`](live-backend-replacement/tq-state.md) | Selected membership, T/Q coverage, Tape/Spread state, deduplication, and degradation | Owner-approved focused contract |
+| [`live-ingress.md`](live-backend-replacement/live-ingress.md) | Single-pass Massive decoding, decoded-batch FIFO, epochs, heartbeat, commands, and transport terminals | Owner-approved focused contract |
+| [`integration-removal-and-acceptance.md`](live-backend-replacement/integration-removal-and-acceptance.md) | Production cutover, deletion, API/UI compatibility, capacity, stability, and live confirmation | Owner-approved focused contract |
 
 Each subordinate specification names this parent, owns its allocated
 requirements/proofs/slices exactly once, and copies no status. Localized work
@@ -442,5 +444,5 @@ loss, unsupported readiness, or replay/checkpoint gate.
    aggregate correction horizon, ranking input, or backend-readiness rule.
 3. The numeric resource values are design targets governed by the bounded
    response above. Hard acceptance is behavioral and plateau-based.
-4. The owner identifies the exact Zoom benchmark host before integrated
-   acceptance and separately authorizes or executes any market-hours run.
+4. The owner separately authorizes or executes any market-hours run. No
+   host-coexistence observation is required for deterministic completion.

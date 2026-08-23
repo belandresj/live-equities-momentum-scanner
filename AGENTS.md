@@ -35,9 +35,10 @@ The active goal is the private/local
 [`live backend replacement`](docs/live-backend-replacement/delivery-program.md):
 compact canonical state and hydration, incremental two-phase evaluation,
 bounded selected-row T/Q, single-pass live ingress with one handoff, then
-exclusive cutover/removal and integrated resource/desktop acceptance. The
-current phase is `LBR-P1`: complete and cross-review the five focused specs and
-baseline characterization before implementation.
+exclusive cutover/removal and integrated resource/stability acceptance. The
+current phase is `LBR-P1`: the five focused specs are owner-approved after a
+clean independent cross-review; freeze the baseline characterization before
+implementation.
 
 Keep one active write-capable slice and finally review each capability before
 starting the next. Public deployment, replay repair, checkpoint compatibility,

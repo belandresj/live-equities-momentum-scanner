@@ -384,13 +384,13 @@ Reviewer execution/model policy is in `AGENTS.md`.
 The specification map and replacement delivery program identify the current
 sequence:
 
-1. **`LBR-P1`:** complete/cross-review the five focused specs and baseline
-   characterization;
+1. **`LBR-P1`:** the cleanly cross-reviewed five focused specs are accepted;
+   freeze baseline characterization;
 2. **Capability A:** compact canonical state and hydration;
 3. **Capability B:** incremental two-phase evaluation and publication;
 4. **Capability C:** compact selected-row T/Q;
 5. **Capability D:** single-pass live ingress and one handoff; and
-6. **Capability E:** exclusive cutover/removal, deterministic resource/desktop
+6. **Capability E:** exclusive cutover/removal, deterministic resource/stability
    acceptance, then separately authorized live confirmation.
 
 The focused specs allocate exact slices and primary proofs. Historical replay,
@@ -400,11 +400,12 @@ checkpoint repair, and unrelated cleanup are not milestones.
 
 Final validation assembles the accepted capability evidence, ordinary and
 allocated race/vet verification, one exact API/UI composition, one mature
-resource/desktop run, and the final integrated read-only review. Every numeric
+resource/stability run, and the final integrated read-only review. Every numeric
 resource target is reported; a miss follows the single bounded response in the
 delivery program. Hard acceptance depends on correctness, bounded resource
 plateaus, sustained feed handling without loss/backlog/readiness flapping,
-usable one-second snapshot delivery, and acceptable desktop coexistence.
+usable one-second snapshot delivery. Optional generic host-coexistence evidence
+may characterize practical headroom but is not a separate completion gate.
 
 Separately authorized live observation is recorded as pending or confirmed; it
 is never inferred from deterministic evidence. The result establishes neither

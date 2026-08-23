@@ -83,12 +83,13 @@ owner-approved. Current status and the sequential roadmap live in the
 [`replacement delivery program`](docs/live-backend-replacement/delivery-program.md)
 and [`specification map`](docs/specification-map.md).
 
-The current phase is `LBR-P1`: write and cross-review five focused contracts
-for canonical state/hydration, evaluation/publication, selected-row T/Q, live
-ingress, and integration/removal/acceptance. Implementation remains sequential
-with one write-capable slice. Historical numbered components and stability
-corrections are evidence, not requirements to preserve their private
-representations.
+The current phase is `LBR-P1`: the five focused contracts for canonical state/
+hydration, evaluation/publication, selected-row T/Q, live ingress, and
+integration/removal/acceptance are owner-approved after a clean independent
+cross-review. Baseline characterization remains before sequential
+implementation begins with one write-capable slice. Historical numbered
+components and stability corrections are evidence, not requirements to
+preserve their private representations.
 
 The only supported operating path remains the ordinary fresh-start live
 scanner. Replay capability is unknown and checkpoint persistence is disabled.
