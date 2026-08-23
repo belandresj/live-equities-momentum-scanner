@@ -65,8 +65,14 @@ ledger, replay, and checkpoint cases are rejection evidence, not requirements.
 - Preserve one engine-owned monotonically increasing system position for timer
   and owner-control work; callers cannot select or reuse that position.
 - Scan the fixed symbol array once, classify every primary population and
-  qualification bin, validate rankable marks, compute approved Day-%, and keep
-  exact top 20 by Day-% descending then symbol ascending.
+  qualification bin, select the latest trusted mark strictly before candidate
+  `T`, compute approved Day-%, and keep exact top 20 by Day-% descending then
+  symbol ascending. A mark whose window starts at or after `T` cannot rank or
+  displace an older eligible mark retained by compact canonical state.
+- Preserve that as-of-`T` mark rule when committed time stalls longer than the
+  correction horizon, accepted post-`T` rows compact, and loss/gap recovery
+  evaluates the still-older or recovered `T`; selection cannot substitute the
+  globally latest accepted mark for the eligible pre-`T` mark.
 - Preserve exact fewer-than-20, tie, exact-empty, degraded/unavailable, invalid
   prior/mark, and incomplete-population behavior.
 - T/Q, Float, and aggregate display-field state do not enter qualification,
@@ -81,14 +87,17 @@ correction revocation at strict/equality edges, finalization, first later print,
 quiet timers, fewer-than-20, exact ties, invalid prior/mark, incomplete
 population, absent T/Q/display fields, and monotonic nonreused system positions
 across timer/control work through the production path and approved semantic
-oracle.
+oracle. It also stalls committed `T` longer than the 16-minute correction
+horizon, compacts accepted rows on both sides of `T`, performs loss and exact
+gap recovery, and proves that a mark with `window_start == T` or after `T`
+cannot rank or displace the retained latest eligible mark strictly before `T`.
 
 Observe proof classes, Day-%, order, watermark candidate/commit, accounting,
 affected symbols, and exact count of full-population cycles. The dangerous
 counterexamples are cloned/rescanned proof state, caller-selected/reused system
-position, a duplicated same-prefix cycle, or T/Q/display-field-dependent
-ranking. The proof does not establish enrichment, immutable capture, or mature
-resource acceptance.
+position, a duplicated same-prefix cycle, future-to-`T` selection after a long
+stall/recovery, or T/Q/display-field-dependent ranking. The proof does not
+establish enrichment, immutable capture, or mature resource acceptance.
 
 ## 7. Verification and timeout policy
 

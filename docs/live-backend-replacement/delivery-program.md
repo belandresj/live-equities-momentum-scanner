@@ -584,7 +584,7 @@ but copy no status.
 | Delivery program | `approved` | Current replacement delivery authority |
 | `LBR-P1` focused contracts and characterization | `accepted` | Five-spec independent cross-review and owner acceptance are recorded; [`baseline-characterization.md`](baseline-characterization.md), SHA-256 `3a70dda5bc040d1a77fbe3e114d788d3fc04c93fbb51ff2e5eec646f4c10e6e3`, freezes baseline `0d043c1`, the semantic/API/UI corpus, durable queue/heartbeat/hydration/cycle/memory evidence, and the exact 5,694-symbol deterministic manifest. Comparable baseline CPU/RSS remain explicitly unknown. |
 | Capability A — canonical state and hydration | `finally_accepted` | A1/A2 proofs, verification, two A1 re-reviews, the A2 long-stall/launcher correction, and Capability A final focused re-review are clean. Next: activate only [`LBR-B1`](tickets/lbr-b1-incremental-qualification-and-selection.md). |
-| Capability B — evaluation and publication | `not_started_b1_next` | Capability A interface is accepted; `LBR-B1` is the next permitted slice but is not active. |
+| Capability B — evaluation and publication | `lbr_b1_active` | The pre-assignment audit corrected B1's as-of-`T` proof for a >16-minute committed-time stall, compaction, loss, and exact-gap recovery; focused re-review is `CLEAN/PASS`. Implement only [`LBR-B1`](tickets/lbr-b1-incremental-qualification-and-selection.md). |
 | Capability C — selected-row T/Q | `not_started` | Requires Capability B publication/selection interface |
 | Capability D — live ingress | `not_started` | Requires accepted state/TQ input interface |
 | Capability E — integration/removal/acceptance | `not_started` | Requires Capabilities A-D accepted |
