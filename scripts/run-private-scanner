@@ -9,7 +9,7 @@ runtime_directory="$repository_root/var/run-private-scanner/bin"
 usage() {
     printf '%s\n' \
         'Usage:' \
-        '  ./scripts/run-private-scanner [--trading-date YYYY-MM-DD] [--hydration-workers 1|2|4|8] [--open]'
+        '  ./scripts/run-private-scanner [--trading-date YYYY-MM-DD] [--hydration-workers 1] [--open]'
 }
 
 seen_date=0
@@ -17,7 +17,7 @@ seen_workers=0
 seen_open=0
 seen_help=0
 trading_date=
-hydration_workers=
+hydration_workers=1
 remaining=$#
 while [ "$remaining" -gt 0 ]; do
     argument=$1
@@ -44,20 +44,17 @@ while [ "$remaining" -gt 0 ]; do
                 exit 2
             fi
             if [ "$remaining" -eq 0 ]; then
-                printf '%s\n' '--hydration-workers requires 1, 2, 4, or 8' >&2
+                printf '%s\n' '--hydration-workers requires 1' >&2
                 exit 2
             fi
             seen_workers=1
             hydration_workers=$1
             shift
             remaining=$((remaining - 1))
-            case "$hydration_workers" in
-                1|2|4|8) ;;
-                *)
-                    printf '%s\n' '--hydration-workers must be one of 1, 2, 4, or 8' >&2
-                    exit 2
-                    ;;
-            esac
+            if [ "$hydration_workers" != 1 ]; then
+                printf '%s\n' '--hydration-workers must be exactly 1' >&2
+                exit 2
+            fi
             ;;
         --open)
             if [ "$seen_open" -ne 0 ]; then
@@ -111,9 +108,7 @@ set --
 if [ "$seen_date" -ne 0 ]; then
     set -- "$@" --trading-date "$trading_date"
 fi
-if [ "$seen_workers" -ne 0 ]; then
-    set -- "$@" --hydration-workers "$hydration_workers"
-fi
+set -- "$@" --hydration-workers "$hydration_workers"
 if [ "$seen_open" -ne 0 ]; then
     set -- "$@" --open
 fi

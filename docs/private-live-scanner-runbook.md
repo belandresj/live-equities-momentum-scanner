@@ -47,7 +47,7 @@ build environments. It reaches only the scanner child environment.
 The public command shape is:
 
 ```text
-./scripts/run-private-scanner [--trading-date YYYY-MM-DD] [--hydration-workers 1|2|4|8] [--open]
+./scripts/run-private-scanner [--trading-date YYYY-MM-DD] [--hydration-workers 1] [--open]
 ```
 
 `--open` asks macOS to open the dashboard once its listener is healthy; during
@@ -56,8 +56,8 @@ nonfatal. `--trading-date` is for an exact date correction; it does not
 authorize historical replay through the live provider path. The launcher and
 scanner use the same validated exchange schedule. Automatic selection skips
 weekends and holidays; an explicit weekend, holiday, unsupported, or ended date
-is rejected. Hydration defaults to eight workers. The
-worker override changes only bounded REST hydration concurrency; it does not
+is rejected. Hydration uses exactly one worker; `--hydration-workers 1` is
+accepted only as an explicit restatement of that fixed topology. It does not
 change the universe, interval, merge rules, ranking, readiness, or T/Q path.
 
 The launcher invokes the scanner with these exact settings:
@@ -65,7 +65,7 @@ The launcher invokes the scanner with these exact settings:
 ```text
 --run-mode live
 --trading-date <current America/New_York date or explicit override>
---hydration-workers <8 by default; explicit 1, 2, 4, or 8>
+--hydration-workers 1
 --reference-dir <repo>/var/reference
 --checkpoint-dir <repo>/var/checkpoints
 --checkpoint-mode off

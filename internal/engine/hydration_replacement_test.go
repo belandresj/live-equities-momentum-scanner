@@ -244,4 +244,98 @@ func TestPLBRA2Hydration(t *testing.T) {
 		}
 		closeAndWait(t, faulted)
 	})
+
+	t.Run("stalled committed T recovers across compacted sealed live presence", func(t *testing.T) {
+		now := start.Add(3 * time.Second)
+		e, initialToken := plannedHydrationEngine(t, binding, &now)
+		initialEmpty, _ := NewHydrationTerminalInput(initialToken, initialToken.ResultID(), HydrationCompletedEmpty, HydrationReasonNone, 1, 1, 10, 0, 0, 0)
+		initialTerminal := admitHydrationTerminal(t, e, initialEmpty)
+		initialFence, _ := NewAggregateIngressFenceInput(initialTerminal.FenceCommand, AggregateIngressFenceComplete, 1, 1, now)
+		_, initialCompletion := e.AdmitAggregateIngressFence(context.Background(), initialFence)
+		if got := awaitHydrationDisposition(t, initialCompletion); got.Code != DispositionAggregateIngressFenceApplied {
+			t.Fatalf("initial fence = %+v", got)
+		}
+		committed := *e.state.committedT
+		const stalledSeconds = 17*60 + 2
+		values := make(map[int64]AggregateValues, stalledSeconds)
+		for second := 0; second < stalledSeconds; second++ {
+			window := committed.Add(time.Duration(second) * time.Second)
+			now = window.Add(time.Second)
+			live := liveAggregate(binding, "AAA", window, 1, uint64(second+2))
+			live.Values.Close, live.Values.High, live.Values.VWAP = 10+float64(second%7)/10, 10+float64(second%7)/10, 10+float64(second%7)/10
+			values[window.Unix()] = live.Values
+			if got := admitProductionAggregate(t, e, live); got.Code != DispositionAggregateInserted {
+				t.Fatalf("stalled live second %d = %+v", second, got)
+			}
+		}
+		r := committed.Add(stalledSeconds * time.Second)
+		state := aggregateState(t, e, "AAA")
+		for _, at := range []time.Time{committed, committed.Add(time.Second)} {
+			slot := sessionSlot(e.state.binding, at)
+			if state.tail[at.Unix()] != nil || state.presence == nil || !state.presence.has(slot) || state.sealedLive == nil || !state.sealedLive.has(slot) {
+				t.Fatalf("live identity did not compact with sealed source support at %s", at)
+			}
+		}
+		if e.state.committedT == nil || !e.state.committedT.Equal(committed) || r.Sub(committed) <= correctionHorizon {
+			t.Fatalf("committed stall = T:%v R:%s", e.state.committedT, r)
+		}
+
+		now = r
+		admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionLost, 1,
+			LivePosition{ConnectionEpoch: 1, FrameSequence: stalledSeconds + 2}, now, 0, ControlFailed))
+		ackRecoveryEpoch(t, e, binding, 2, 3, 4, r, &now)
+		gap := admitHydrationPlan(t, e, HydrationGapRecovery, 2, generousHydrationBudgets())
+		if gap.Code != DispositionHydrationPlanApplied || gap.Plan.Start() != committed || gap.Plan.End() != r || len(gap.Plan.Requests()) != 1 {
+			t.Fatalf("compacted exact-gap plan = %+v", gap)
+		}
+		token := gap.Plan.Requests()[0]
+		if len(e.observeHydration().Requests[0].reconciliation) != 0 {
+			t.Fatal("pre-request compaction fabricated equality history")
+		}
+		equalRow, _ := NewHydrationRow("AAA", committed, committed.Add(time.Second), values[committed.Unix()])
+		mismatchValues := values[committed.Add(time.Second).Unix()]
+		mismatchValues.Close, mismatchValues.High, mismatchValues.VWAP = 99, 99, 99
+		mismatchRow, _ := NewHydrationRow("AAA", committed.Add(time.Second), committed.Add(2*time.Second), mismatchValues)
+		chunk, _ := NewHydrationChunkInput(token, token.ResultID(), 0, 1, 0, 2, []HydrationRow{equalRow, mismatchRow})
+		rows := admitHydrationChunk(t, e, chunk)
+		if rows.Code != DispositionHydrationChunkApplied || rows.Rows != (HydrationRowAccounting{Consumed: 2, ConflictOrWithdrawal: 2}) || !rows.Rows.reconciles() ||
+			len(e.observeHydration().Requests[0].reconciliation) != 0 {
+			t.Fatalf("conservative sealed-live reconciliation = %+v hydration=%+v", rows, e.observeHydration())
+		}
+		terminalInput, _ := NewHydrationTerminalInput(token, token.ResultID(), HydrationCompletedValue, HydrationReasonNone, 1, 1, 10, 2, 1, 2)
+		terminal := admitHydrationTerminal(t, e, terminalInput)
+		if terminal.Accounting != (HydrationAccounting{Planned: 1, CompletedValue: 1}) || !terminal.Accounting.reconciles() {
+			t.Fatalf("compacted gap terminal accounting = %+v", terminal)
+		}
+		gapFence, _ := NewAggregateIngressFenceInput(terminal.FenceCommand, AggregateIngressFenceComplete, 1, 1, now)
+		_, gapCompletion := e.AdmitAggregateIngressFence(context.Background(), gapFence)
+		if got := awaitHydrationDisposition(t, gapCompletion); got.Code != DispositionAggregateIngressFenceApplied || !e.ObserveOperational().CurrentMarketClaim ||
+			e.state.committedT == nil || !e.state.committedT.Equal(r) {
+			t.Fatalf("compacted gap did not restore current = %+v view=%+v", got, e.ObserveOperational())
+		}
+		if state.historicalConflict != nil && (state.historicalConflict.has(sessionSlot(e.state.binding, committed)) ||
+			state.historicalConflict.has(sessionSlot(e.state.binding, committed.Add(time.Second)))) {
+			t.Fatal("conservative REST disposition poisoned sealed live coverage")
+		}
+
+		now = r.Add(time.Second)
+		later := liveAggregate(binding, "AAA", r, 2, 2)
+		if got := admitProductionAggregate(t, e, later); got.Code != DispositionAggregateInserted {
+			t.Fatalf("later ordinary live = %+v", got)
+		}
+		coverageCommand, err := e.IssueLiveCoverageFence()
+		if err != nil {
+			t.Fatal(err)
+		}
+		coverage, _ := NewLiveCoverageFenceInput(coverageCommand, LiveCoverageFenceComplete, 2, 2, now)
+		_, coverageCompletion := e.AdmitLiveCoverageFence(context.Background(), coverage)
+		if got := <-coverageCompletion; got.Code != DispositionLiveCoverageFenceApplied {
+			t.Fatalf("later coverage = %+v", got)
+		}
+		_, timer := e.AdmitTimer(context.Background())
+		if got := awaitTimerDisposition(t, timer); got.Code != DispositionTimerApplied || e.state.committedT == nil || !e.state.committedT.Equal(now) {
+			t.Fatalf("later timer did not advance after compacted recovery = %+v T=%v", got, e.state.committedT)
+		}
+		closeAndWait(t, e)
+	})
 }

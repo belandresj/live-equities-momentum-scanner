@@ -136,9 +136,10 @@ The
 [`live backend replacement delivery program`](live-backend-replacement/delivery-program.md)
 supersedes conflicting historical implementation sequences and private
 representations for its scope. Keep one write-capable slice and finally review
-each capability. The current phase is `LBR-P1`: the five focused contracts are
-owner-approved after a clean independent cross-review; baseline
-characterization remains before implementation.
+each capability. `LBR-P1` and Capability A are finally accepted after their
+allocated proofs, correction re-reviews, and Capability A final review. The
+next permitted slice is `LBR-B1` incremental qualification and selection; it
+is not yet active.
 
 The active capability order is:
 

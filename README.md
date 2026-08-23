@@ -83,13 +83,12 @@ owner-approved. Current status and the sequential roadmap live in the
 [`replacement delivery program`](docs/live-backend-replacement/delivery-program.md)
 and [`specification map`](docs/specification-map.md).
 
-The current phase is `LBR-P1`: the five focused contracts for canonical state/
-hydration, evaluation/publication, selected-row T/Q, live ingress, and
-integration/removal/acceptance are owner-approved after a clean independent
-cross-review. Baseline characterization remains before sequential
-implementation begins with one write-capable slice. Historical numbered
-components and stability corrections are evidence, not requirements to
-preserve their private representations.
+`LBR-P1` and Capability A are accepted. The scanner now has the replacement
+compact canonical aggregate state plus one-worker fresh/gap hydration, including
+source-aware recovery across compacted sealed-live evidence. The next permitted
+slice is `LBR-B1` incremental qualification and selection; it is not yet active.
+Historical numbered components and stability corrections remain evidence, not
+requirements to preserve their private representations.
 
 The only supported operating path remains the ordinary fresh-start live
 scanner. Replay capability is unknown and checkpoint persistence is disabled.
@@ -113,10 +112,9 @@ ordinary scanner for the current or next exchange-declared trading session.
 Starting at approximately 03:55 remains the shortest path. It builds and
 supervises the existing scanner and dashboard and reports authoritative
 liveness and readiness without moving market-state ownership into the launcher. For the current MVP,
-checkpoint mode stays off and restart uses fresh hydration. Hydration defaults
-to eight workers;
-`--hydration-workers 1|2|4|8` selects a lower supported concurrency when
-needed. The manual commands below remain useful for development and
+checkpoint mode stays off and restart uses fresh hydration. Hydration uses
+exactly one worker; `--hydration-workers 1` is the only accepted explicit
+value. The manual commands below remain useful for development and
 independent-process inspection.
 
 The dashboard is an independent loopback process. Start the scanner API with

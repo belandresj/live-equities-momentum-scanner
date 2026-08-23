@@ -26,10 +26,19 @@ func (c LiveComponents) valid() bool {
 		c.MaximumResponseBytes > 0 && c.MaximumNormalizedRecords > 0 && c.MaximumResidentRecords > 0
 }
 
+// ValidateLiveComponents applies the supported ordinary-live composition
+// boundary before the runtime goroutine is started.
+func ValidateLiveComponents(components LiveComponents) error {
+	if !components.valid() {
+		return errors.New("invalid live runtime composition")
+	}
+	return nil
+}
+
 // RunLive is the concrete Components 2/5/6/7 composition. It supplies facts to
 // the sole engine owner and never derives readiness itself.
 func (r *Runtime) RunLive(ctx context.Context, components LiveComponents) error {
-	if r == nil || r.engine == nil || ctx == nil || !components.valid() {
+	if r == nil || r.engine == nil || ctx == nil || ValidateLiveComponents(components) != nil {
 		return errors.New("invalid live runtime composition")
 	}
 	lifetime, finish, err := r.beginLive(ctx)

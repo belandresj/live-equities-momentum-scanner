@@ -181,7 +181,7 @@ func TestDailyDefaultsDeriveNewYorkDateAndIsolateCredential(t *testing.T) {
 	if len(fixture.starts) != 2 || fixture.starts[0].name != "scanner" || fixture.starts[1].name != "dashboard" {
 		t.Fatalf("startup order=%v", processNames(fixture.starts))
 	}
-	wantScanner := []string{"--run-mode", "live", "--trading-date", "2026-08-10", "--hydration-workers", "8", "--reference-dir", "/repo/var/reference",
+	wantScanner := []string{"--run-mode", "live", "--trading-date", "2026-08-10", "--hydration-workers", "1", "--reference-dir", "/repo/var/reference",
 		"--checkpoint-dir", "/repo/var/checkpoints", "--checkpoint-mode", "off", "--api-address", scannerAddress, "--allow-origin", dashboardOrigin}
 	wantDashboard := []string{"--address", dashboardAddress, "--api-origin", scannerOrigin, "--assets", "/repo/ui"}
 	if !reflect.DeepEqual(fixture.starts[0].arguments, wantScanner) || !reflect.DeepEqual(fixture.starts[1].arguments, wantDashboard) {
@@ -200,18 +200,19 @@ func TestDailyDefaultsDeriveNewYorkDateAndIsolateCredential(t *testing.T) {
 
 func TestTradingDateAndHydrationWorkerOverridesRejectInvalidArguments(t *testing.T) {
 	fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 3, 55))
-	if err := fixture.run(t, "--trading-date", "2026-08-10", "--hydration-workers", "4"); err != nil {
+	if err := fixture.run(t, "--trading-date", "2026-08-10", "--hydration-workers", "1"); err != nil {
 		t.Fatal(err)
 	}
 	if got := argumentValue(fixture.starts[0].arguments, "--trading-date"); got != "2026-08-10" {
 		t.Fatalf("trading date=%q", got)
 	}
-	if got := argumentValue(fixture.starts[0].arguments, "--hydration-workers"); got != "4" {
+	if got := argumentValue(fixture.starts[0].arguments, "--hydration-workers"); got != "1" {
 		t.Fatalf("hydration workers=%q", got)
 	}
 	for _, test := range [][]string{{"--trading-date", "2026-8-10"}, {"--trading-date", "2026-02-30"}, {"--trading-date"},
 		{"--trading-date", "2026-08-10", "--trading-date", "2026-08-11"}, {"--hydration-workers"}, {"--hydration-workers", "0"},
-		{"--hydration-workers", "3"}, {"--hydration-workers", "8", "--hydration-workers", "4"}, {"--open", "--open"}, {"--unknown"}, {"positional"}} {
+		{"--hydration-workers", "2"}, {"--hydration-workers", "3"}, {"--hydration-workers", "4"}, {"--hydration-workers", "8"},
+		{"--hydration-workers", "1", "--hydration-workers", "1"}, {"--open", "--open"}, {"--unknown"}, {"positional"}} {
 		candidate := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 3, 55))
 		if err := candidate.run(t, test...); err == nil {
 			t.Fatalf("arguments %q accepted", test)
@@ -244,7 +245,7 @@ func TestHelpAndPreflightFailuresDoNotAcquireCredentialOrStartChildren(t *testin
 	if err := help.run(t, "--help"); err != nil {
 		t.Fatal(err)
 	}
-	if help.preflights != 0 || help.credentials != 0 || len(help.starts) != 0 || !strings.Contains(help.stdout.String(), "--hydration-workers 1|2|4|8") {
+	if help.preflights != 0 || help.credentials != 0 || len(help.starts) != 0 || !strings.Contains(help.stdout.String(), "--hydration-workers 1") {
 		t.Fatalf("help crossed boundary: preflight=%d credential=%d starts=%d output=%q", help.preflights, help.credentials, len(help.starts), help.stdout.String())
 	}
 
@@ -1029,15 +1030,15 @@ func TestPublicWrapperParsesHelpAndInvalidArgumentsBeforeBuild(t *testing.T) {
 		return string(output), runErr
 	}
 	output, err := runPublic("--help")
-	if err != nil || !strings.Contains(output, "--hydration-workers 1|2|4|8") {
+	if err != nil || !strings.Contains(output, "--hydration-workers 1") {
 		t.Fatalf("public help output=%q err=%v", output, err)
 	}
 	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("help invoked Go build: %v", err)
 	}
 	for _, arguments := range [][]string{{"--trading-date", "2026-02-30"}, {"--trading-date"}, {"--trading-date", "2026-08-10", "--trading-date", "2026-08-11"},
-		{"--hydration-workers"}, {"--hydration-workers", "3"}, {"--hydration-workers", "8", "--hydration-workers", "4"},
-		{"--open", "--open"}, {"--unknown"}, {"positional"}, {"--help", "--open"}, {"--help", "--hydration-workers", "8"}} {
+		{"--hydration-workers"}, {"--hydration-workers", "2"}, {"--hydration-workers", "3"}, {"--hydration-workers", "4"}, {"--hydration-workers", "8"},
+		{"--hydration-workers", "1", "--hydration-workers", "1"}, {"--open", "--open"}, {"--unknown"}, {"positional"}, {"--help", "--open"}, {"--help", "--hydration-workers", "1"}} {
 		output, err := runPublic(arguments...)
 		if err == nil || output == "" {
 			t.Fatalf("public arguments %q output=%q err=%v", arguments, output, err)
@@ -1045,6 +1046,43 @@ func TestPublicWrapperParsesHelpAndInvalidArgumentsBeforeBuild(t *testing.T) {
 		if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("public arguments %q invoked Go build: %v", arguments, err)
 		}
+	}
+}
+
+func TestPLBRA2PublicWrapperDefaultsOneHydrationWorker(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fakeDirectory := t.TempDir()
+	launcherArguments := filepath.Join(fakeDirectory, "launcher-arguments")
+	fakeGo := filepath.Join(fakeDirectory, "go")
+	fakeSource := "#!/bin/sh\n" +
+		"output=\n" +
+		"while [ \"$#\" -gt 0 ]; do\n" +
+		"  if [ \"$1\" = -o ]; then shift; output=$1; break; fi\n" +
+		"  shift\n" +
+		"done\n" +
+		"[ -n \"$output\" ] || exit 91\n" +
+		"/usr/bin/printf '%s\\n' '#!/bin/sh' '/usr/bin/printf \"%s\\n\" \"$@\" > \"$FAKE_LAUNCHER_ARGUMENTS\"' > \"$output\"\n" +
+		"/bin/chmod 700 \"$output\"\n"
+	if err := os.WriteFile(fakeGo, []byte(fakeSource), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(filepath.Join(root, "scripts", "run-private-scanner"))
+	command.Dir = t.TempDir()
+	command.Env = append(removeEnvironment(removeEnvironment(os.Environ(), "PATH"), "MASSIVE_API_KEY"),
+		"PATH="+fakeDirectory+":"+os.Getenv("PATH"), "FAKE_LAUNCHER_ARGUMENTS="+launcherArguments)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("public wrapper output=%q err=%v", output, err)
+	}
+	rawArguments, err := os.ReadFile(launcherArguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Fields(string(rawArguments)), []string{"--hydration-workers", "1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("default launcher arguments=%q want=%q", got, want)
 	}
 }
 

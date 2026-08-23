@@ -116,6 +116,7 @@ func TestC12RunModeConfigurationIsMutuallyExclusive(t *testing.T) {
 		{"live replay flag", []string{"--trading-date=2026-08-07", "--observation-start=09:30:00"}, "rejects replay"},
 		{"live zero hydration workers", []string{"--trading-date=2026-08-07", "--hydration-workers=0"}, "hydration-workers"},
 		{"live unsupported hydration workers", []string{"--trading-date=2026-08-07", "--hydration-workers=3"}, "hydration-workers"},
+		{"live multiworker hydration", []string{"--trading-date=2026-08-07", "--hydration-workers=2"}, "hydration-workers"},
 		{"duplicate scalar", []string{"--trading-date=2026-08-07", "--trading-date=2026-08-08"}, "duplicate --trading-date"},
 		{"position", []string{"--trading-date=2026-08-07", "extra"}, "flags are invalid"},
 	} {
@@ -136,24 +137,30 @@ func TestLiveHydrationWorkerBounds(t *testing.T) {
 	if liveHydrationResponseByteBudget != 4<<30 {
 		t.Fatalf("live cumulative response budget = %d", liveHydrationResponseByteBudget)
 	}
-	for _, test := range []struct {
-		workers      int
-		wantResident int64
-	}{
-		{1, 57_600},
-		{2, 115_200},
-		{4, 230_400},
-		{8, 460_800},
-	} {
-		normalized, resident, err := liveHydrationBounds(test.workers, 6_000)
-		if err != nil || normalized != 345_600_000 || resident != test.wantResident {
-			t.Fatalf("workers=%d bounds=%d/%d err=%v", test.workers, normalized, resident, err)
-		}
+	normalized, resident, err := liveHydrationBounds(1, 6_000)
+	if err != nil || normalized != 345_600_000 || resident != 57_600 {
+		t.Fatalf("one-worker bounds=%d/%d err=%v", normalized, resident, err)
 	}
-	for _, workers := range []int{0, 3, 9} {
+	for _, workers := range []int{0, 2, 3, 4, 8, 9} {
 		if _, _, err := liveHydrationBounds(workers, 6_000); err == nil {
 			t.Fatalf("workers=%d accepted", workers)
 		}
+	}
+}
+
+func TestPLBRA2ScannerDefaultConstructsOneWorkerLiveComponents(t *testing.T) {
+	normalized, resident, err := liveHydrationBounds(1, 6_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	components := operations.LiveComponents{Adapter: &massive.LiveAdapter{}, Hydrator: &massive.HydrationWorker{}, Workers: 1, RowsPerChunk: 256,
+		MaximumResponseBytes: liveHydrationResponseByteBudget, MaximumNormalizedRecords: normalized, MaximumResidentRecords: resident}
+	if err := operations.ValidateLiveComponents(components); err != nil {
+		t.Fatalf("scanner default does not construct supported live topology: %v", err)
+	}
+	components.Workers = 2
+	if err := operations.ValidateLiveComponents(components); err == nil {
+		t.Fatal("scanner composition boundary accepted multiple hydration workers")
 	}
 }
 

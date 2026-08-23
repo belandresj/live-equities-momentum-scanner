@@ -477,7 +477,7 @@ conflict. Later evidence may reopen it before integrated completion.
   state and request-scoped reconciliation seam without restoring raw-tail
   pinning.
 
-#### `LBR-A2` — accepted then reopened 2026-08-23
+#### `LBR-A2` — accepted after final-review correction 2026-08-23
 
 - **Coherent behavior:** fresh `[S,R)` and exact post-live gap hydration now
   use the A1 compact state, one engine generation/request ledger, one supported
@@ -512,14 +512,29 @@ conflict. Later evidence may reopen it before integrated completion.
   slices are ready for the required Capability A final read-only review;
   Capability B remains inactive until that review is clean and Capability A is
   finally accepted.
-- **Reopened by Capability A review:** the seconds-long recovery proof missed a
+- **Final-review correction:** the seconds-long recovery proof missed a
   stalled watermark whose accepted post-`T` live rows compact before loss;
   source-blind registration then rejected the required exact gap. The review
   also found that the retained launcher still emitted its historical default
-  of eight workers into a live composition that now requires one. Preserve all
-  unaffected A1/A2 evidence; correct sealed-live gap registration/reconciliation
-  plus only the exact scanner/launcher/script/runbook worker surfaces allocated
-  by the revised A2 ticket, then run focused re-review.
+  of eight workers into a live composition that now requires one. Source-aware
+  planning now admits compacted presence only with sealed-live support; a
+  1,022-row/>16-minute stalled-`T` recovery trace passes through exact gap,
+  conservative REST/live conflict accounting, ordered fence/evaluation, and
+  later ordinary advancement without raw repinning or permanent comparison
+  history. Wrapper, launcher, scanner, operations, README, and runbook now
+  accept/emit exactly one worker. Focused re-review returned `CLEAN/PASS` with
+  no remaining P1/P2/P3 finding.
+
+#### Capability A — finally accepted 2026-08-23
+
+Both A1 and A2 primary proofs, affected short/race/vet/diff gates, repository
+short verification, correction re-reviews, and the final capability review are
+clean. The accepted handoff is one compact canonical aggregate owner plus one
+worker fresh/gap hydration, exact generation/work/row/fence accounting, bounded
+request-local reconciliation, immutable downstream views, and source-aware
+long-stall recovery. It does not claim provider availability, live retry
+chronology, mature resource targets, replay/checkpoint compatibility, or
+trading edge. `LBR-B1` is the next permitted write-capable slice.
 
 ## 14. Sole delivery ledger
 
@@ -530,9 +545,9 @@ but copy no status.
 | --- | --- | --- |
 | Parent architecture | `approved` | Current replacement architecture |
 | Delivery program | `approved` | Current replacement delivery authority |
-| `LBR-P1` focused contracts and characterization | `accepted` | Five-spec independent cross-review and owner acceptance are recorded; [`baseline-characterization.md`](baseline-characterization.md), SHA-256 `3a70dda5bc040d1a77fbe3e114d788d3fc04c93fbb51ff2e5eec646f4c10e6e3`, freezes baseline `0d043c1`, the semantic/API/UI corpus, durable queue/heartbeat/hydration/cycle/memory evidence, and the exact 5,694-symbol deterministic manifest. Comparable baseline CPU/RSS remain explicitly unknown. Next: activate `LBR-A1`. |
-| Capability A — canonical state and hydration | `lbr_a2_reopened_correction_active` | Final review found exact gap recovery rejected compacted sealed-live presence after a >16-minute watermark stall, and the ordinary launcher still emitted eight workers into the new one-worker live composition. Correct the revised [`LBR-A2`](tickets/lbr-a2-hydration-and-recovery-installation.md) boundary and focused re-review; Capability B remains inactive. |
-| Capability B — evaluation and publication | `not_started` | Requires Capability A interface acceptance |
+| `LBR-P1` focused contracts and characterization | `accepted` | Five-spec independent cross-review and owner acceptance are recorded; [`baseline-characterization.md`](baseline-characterization.md), SHA-256 `3a70dda5bc040d1a77fbe3e114d788d3fc04c93fbb51ff2e5eec646f4c10e6e3`, freezes baseline `0d043c1`, the semantic/API/UI corpus, durable queue/heartbeat/hydration/cycle/memory evidence, and the exact 5,694-symbol deterministic manifest. Comparable baseline CPU/RSS remain explicitly unknown. |
+| Capability A — canonical state and hydration | `finally_accepted` | A1/A2 proofs, verification, two A1 re-reviews, the A2 long-stall/launcher correction, and Capability A final focused re-review are clean. Next: activate only [`LBR-B1`](tickets/lbr-b1-incremental-qualification-and-selection.md). |
+| Capability B — evaluation and publication | `not_started_b1_next` | Capability A interface is accepted; `LBR-B1` is the next permitted slice but is not active. |
 | Capability C — selected-row T/Q | `not_started` | Requires Capability B publication/selection interface |
 | Capability D — live ingress | `not_started` | Requires accepted state/TQ input interface |
 | Capability E — integration/removal/acceptance | `not_started` | Requires Capabilities A-D accepted |

@@ -804,7 +804,11 @@ func (e *Engine) hydrationRegistrationAllowedLocked(symbolIndex int, start, end 
 		return true
 	}
 	for at := start; at.Before(end); at = at.Add(time.Second) {
-		if state.presence.has(sessionSlot(e.state.binding, at)) && !aggregatePresentAt(state, at.Unix()) {
+		slot := sessionSlot(e.state.binding, at)
+		if state.presence.has(slot) && !aggregatePresentAt(state, at.Unix()) {
+			if state.sealedLive != nil && state.sealedLive.has(slot) {
+				continue
+			}
 			return false
 		}
 	}
