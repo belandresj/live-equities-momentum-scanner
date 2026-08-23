@@ -45,8 +45,12 @@ Allowed production paths are current-product aggregate-field evaluation,
 publication construction/validation/atomic storage, immutable engine snapshot
 views, and the smallest `internal/operations` capture seam needed to keep one
 atomic load and cached diagnostics. Focused `internal/snapshotapi` tests may
-assert unchanged v2 mapping; production schema/semantics may not change. UI,
-massive transport, T/Q policy, replay, and checkpoint paths are excluded.
+assert unchanged v2 mapping. The narrow canonical seam may be corrected to
+return one selected symbol's immutable projection explicitly bound to candidate
+`T` and the accepted preselection revision; it may not create another canonical
+owner or expose writable/history aliases. Production schema/semantics may not
+change. UI, massive transport, T/Q policy, replay, and checkpoint paths are
+excluded.
 
 ## 4. Evidence and source whitelist
 
@@ -62,7 +66,10 @@ are explicitly rejected.
 - Capture one accepted selection/canonical revision and reject/fence a stale
   apply rather than joining mixed revisions.
 - Evaluate/read Volume, From Open, Day Range, Activity 30s, and Move 30s only
-  for at most 20 selected rows using the same preselection canonical state.
+  for at most 20 selected rows using the same preselection canonical state and
+  strict as-of-`T` intervals. The selected projection remains exact when
+  `PrefixFoldedThrough` is after `T`: compacted post-`T` Volume, open/extrema,
+  Activity, Move, or mark evidence cannot enter the row.
 - Keep aggregate sufficient history selection-independent: a symbol absent for
   more than 330 seconds enters with immediate exact aggregate-derived fields;
   only Tape/Spread may warm.
@@ -84,13 +91,23 @@ are explicitly rejected.
 selects it only through Day-%, and requires exact aggregate fields while T/Q
 alone warms. Compose corrections, genuine zero, no-print, independent field
 failures, same-`T` trust closure, concurrent captures, and slow/canceled clients.
+It also stalls committed `T` beyond the 16-minute correction horizon, compacts
+accepted rows after `T`, loses the epoch, performs exact gap recovery, and
+requires the old/recovered-`T` selected fields to match `[S,T)` and their exact
+`T`-relative windows with all compacted future rows excluded.
+
+The production publisher/capture trace distinguishes successful empty from a
+malformed or incomplete terminal, cancellation, and binding/generation/epoch
+replacement. Successful empty becomes resolved no-print only after its exact
+fence and accepted evaluator cycle; every other terminal remains explicit
+noncurrent/unknown and cannot publish a current complete population.
 
 Observe one publication identity/revision/`T`, exact ordered rows/field states/
 accounting, immediate closure, no duplicate same-prefix cycle, detached
 captures, and engine-lock independence. The dangerous counterexample is a
-current snapshot joining different revisions or selection-warmed aggregate
-history. The proof does not establish final T/Q formulas or HTTP/browser
-presentation.
+current snapshot joining different revisions, future-to-`T` compacted state,
+selection-warmed aggregate history, or unresolved terminal evidence. The proof
+does not establish final T/Q formulas or HTTP/browser presentation.
 
 ## 7. Verification and timeout policy
 
