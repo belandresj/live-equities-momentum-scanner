@@ -436,6 +436,47 @@ Capability acceptance requires all allocated slices, proportionate
 verification, one final read-only review, and no unresolved parent/product
 conflict. Later evidence may reopen it before integrated completion.
 
+### Accepted slice records
+
+#### `LBR-A1` — accepted 2026-08-23
+
+- **Coherent behavior:** one engine-owned, binding-indexed canonical aggregate
+  state now has a sealed sufficient prefix, a strict inclusive 961-identity
+  correction tail, explicit present/no-print/unknown/invalid/conflict evidence,
+  symbol-local canonical revisions/affected-proof notifications, and detached
+  `SelectionStateView`/`SelectedAggregateView` values. Current-token old
+  historical fills fold directly without hydration pinning a full-session raw
+  tail. Exact REST/live comparison values exist only inside the exact active
+  hydration request, are capped at 961, force unknown coverage on overflow,
+  and purge on row consumption, terminal, fence, cancellation, loss, or
+  generation replacement.
+- **Proof:** `P-LBR-A1-CANONICAL` passes insert/equal duplicate/revision,
+  historical withdrawal/conflict, ordinary out-of-order live delivery,
+  REST/live permutations, inside/far-old historical fill, exact 16-minute
+  equality/+1-ns boundaries, no-print/invalid/unknown coverage, strict tail and
+  temporary reconciliation bounds, immutable views, and production hydration
+  accounting/purge. The dangerous horizon-blind/latest-only counterexamples
+  cannot acquire too-late live authority, reopen sealed live state, preserve a
+  withdrawn prefix effect, restore unsupported first-open/extrema, hide a later
+  trusted mark, miss invalid-evidence notification, or retain a comparison
+  shadow after its request.
+- **Ownership/removal:** canonical merge reads only the one aggregate state.
+  Existing `priceRange`, `activity`, `mvpMeasurements`, and qualification
+  structs remain one-way compatibility projections, never merge inputs;
+  Capability B removes them in its allocated slices. The old hydration
+  raw-tail pin is removed. No writable view alias or production fallback
+  exists.
+- **Verification/review:** focused proof, engine short/race, focused vet, diff
+  hygiene, and repository short verification pass. Narrow independent review
+  first reopened too-late authority, prefix trust, sealed-live comparison, and
+  invalid-notification false-success cases; both focused correction rounds
+  passed re-review with no remaining P1/P2 finding.
+- **Limitation/next gate:** this proves canonical merge/state behavior, not A2
+  generation/fence completion, mature-population resource scale, or provider
+  correctness. `LBR-A2` remains valid and is next; it must consume this compact
+  state and request-scoped reconciliation seam without restoring raw-tail
+  pinning.
+
 ## 14. Sole delivery ledger
 
 This table is the only mutable program status. Focused specs name allocations
@@ -446,7 +487,7 @@ but copy no status.
 | Parent architecture | `approved` | Current replacement architecture |
 | Delivery program | `approved` | Current replacement delivery authority |
 | `LBR-P1` focused contracts and characterization | `accepted` | Five-spec independent cross-review and owner acceptance are recorded; [`baseline-characterization.md`](baseline-characterization.md), SHA-256 `3a70dda5bc040d1a77fbe3e114d788d3fc04c93fbb51ff2e5eec646f4c10e6e3`, freezes baseline `0d043c1`, the semantic/API/UI corpus, durable queue/heartbeat/hydration/cycle/memory evidence, and the exact 5,694-symbol deterministic manifest. Comparable baseline CPU/RSS remain explicitly unknown. Next: activate `LBR-A1`. |
-| Capability A — canonical state and hydration | `lbr_a1_correction_active` | The too-late historical-only/live authority fix passes focused re-review. Remaining correction: an earlier conflict keeps first-open/extrema untrusted but a strictly later trusted mark must supersede latest uncertainty; sealed-live equality evidence may exist only as bounded active-request reconciliation evidence and must purge at request terminal/fence rather than persist as a non-rebuildable shadow history; structural invalid-evidence install must advance the symbol revision/affected notification consumed by B1. Preserve the accepted 961-tail/view/sole-owner evidence, correct only these boundaries in [`LBR-A1`](tickets/lbr-a1-compact-canonical-aggregate-state.md), then focused re-review. `LBR-A2` remains inactive. |
+| Capability A — canonical state and hydration | `lbr_a1_accepted_a2_next` | `LBR-A1` primary proof, affected verification, two correction rounds, and focused re-review are clean. Activate only [`LBR-A2`](tickets/lbr-a2-hydration-and-recovery-installation.md); Capability B remains inactive. |
 | Capability B — evaluation and publication | `not_started` | Requires Capability A interface acceptance |
 | Capability C — selected-row T/Q | `not_started` | Requires Capability B publication/selection interface |
 | Capability D — live ingress | `not_started` | Requires accepted state/TQ input interface |

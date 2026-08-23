@@ -176,19 +176,26 @@ func (b *slotBitmap) has(slot int) bool {
 }
 
 type symbolAggregateState struct {
+	prefix             aggregatePrefix
 	tail               map[int64]*canonicalAggregate
 	presence           *slotBitmap
+	sealedLive         *slotBitmap
 	provenAbsent       *slotBitmap
 	historicalConflict *slotBitmap
 	latest             *latestAggregateMark
 	olderLatest        *canonicalAggregate
 	committedLatest    *committedAggregateMark
 	recomputations     uint64
+	canonicalRevision  uint64
+	affected           aggregateAffectedState
+	tailBoundHits      uint64
 	lastConflict       *aggregateConflictEvidence
-	priceRange         *priceRangeFeatureState
-	activity           *activityFeatureState
-	mvpMeasurements    *mvpMeasurementState
-	qualification      *qualificationState
+	// These feature structs are temporary one-way projections for the existing
+	// evaluator. Canonical merge never reads them; LBR-B3 removes them.
+	priceRange      *priceRangeFeatureState
+	activity        *activityFeatureState
+	mvpMeasurements *mvpMeasurementState
+	qualification   *qualificationState
 	// tailCoverage is bounded derived acceleration for the at-most-961-second
 	// canonical correction tail. It is rebuilt from tail and never persisted.
 	tailCoverage       evaluationTailWindow
@@ -349,8 +356,9 @@ func (e *Engine) updateInvalidMarkEvidenceLocked(input frozenAggregateInput, now
 			e.state.aggregateEvaluator.invalidMarks = make(map[int]invalidMarkEvidence)
 		}
 		invalid := invalidMarkEvidence{windowStart: input.WindowStart}
-		state := e.state.binding.symbols[index].aggregates
-		if state != nil && state.provenAbsent != nil {
+		state := ensureAggregateState(&e.state.binding.symbols[index])
+		hadAbsence := state.provenAbsent != nil && state.provenAbsent.has(sessionSlot(e.state.binding, invalid.windowStart))
+		if state.provenAbsent != nil {
 			state.provenAbsent.clear(sessionSlot(e.state.binding, invalid.windowStart))
 		}
 		if e.state.hydration.supportedThrough != nil && invalid.windowStart.Before(*e.state.hydration.supportedThrough) {
@@ -362,8 +370,13 @@ func (e *Engine) updateInvalidMarkEvidenceLocked(input frozenAggregateInput, now
 				e.state.aggregateEvaluator.coverage[index] = coverageUnknownPostBootstrap
 			}
 		}
-		if prior, exists := e.state.aggregateEvaluator.invalidMarks[index]; !exists || input.WindowStart.After(prior.windowStart) {
+		prior, exists := e.state.aggregateEvaluator.invalidMarks[index]
+		replaced := !exists || input.WindowStart.After(prior.windowStart)
+		if replaced {
 			e.state.aggregateEvaluator.invalidMarks[index] = invalid
+		}
+		if hadAbsence || replaced {
+			state.notifyAggregate(canonicalAggregate{identity: aggregateIdentity{symbol: input.Symbol, start: input.WindowStart.Unix()}, windowStart: input.WindowStart, windowEnd: input.WindowEnd}, aggregateProofAll)
 		}
 		return
 	}
@@ -450,6 +463,26 @@ func (e *Engine) decideAggregateLocked(input frozenAggregateInput, now time.Time
 		if input.historicalProof.conflicted {
 			return DispositionAggregateRejected, ReasonHistoricalHistoricalConflict
 		}
+	}
+	if state != nil && input.Source == AggregateSourceHistorical && state.sealedLive != nil && state.sealedLive.has(sessionSlot(binding, input.WindowStart)) {
+		if sealed, ok := e.takeHydrationReconciliationLocked(input); ok && aggregateValuesEqual(sealed, input.Values) {
+			return DispositionAggregateExactDuplicate, ReasonNone
+		}
+		state.lastConflict = &aggregateConflictEvidence{identity: aggregateIdentity{symbol: input.Symbol, start: identityStart}, current: aggregateEvidence{source: AggregateSourceLive}, incoming: evidence(input)}
+		return DispositionAggregateRejected, ReasonHistoricalLiveConflict
+	}
+	// An old identity supported only by historical evidence must not acquire
+	// live authority through the equality fast path. Existing live authority may
+	// still classify a duplicate, but an unequal revision remains too late.
+	if input.Source == AggregateSourceLive && now.Sub(input.WindowEnd) > correctionHorizon &&
+		(existing == nil || existing.authority.source != AggregateSourceLive && existing.greatestLiveSupport == nil) {
+		return DispositionAggregateRejected, ReasonTooLate
+	}
+	// A live identity strictly outside the correction horizon can never reopen
+	// the sealed prefix. Classify it by the time boundary before consulting
+	// compact coverage evidence, which does not retain the discarded raw row.
+	if existing == nil && input.Source != AggregateSourceHistorical && now.Sub(input.WindowEnd) > correctionHorizon {
+		return DispositionAggregateRejected, ReasonTooLate
 	}
 	if state != nil && existing == nil && state.presence != nil && state.presence.has(sessionSlot(binding, input.WindowStart)) {
 		return DispositionAggregateFenced, ReasonHistoricalContext
@@ -664,14 +697,16 @@ func (e *Engine) installAggregateLocked(symbol *coreSymbol, input frozenAggregat
 	if input.Source == AggregateSourceReplay {
 		e.state.replayArtifact = input.Replay.ArtifactID
 	}
-	if input.Source == AggregateSourceHistorical && now.Sub(input.WindowEnd) > correctionHorizon {
+	foldedDirect := input.Source == AggregateSourceHistorical && now.Sub(input.WindowEnd) > correctionHorizon
+	if foldedDirect {
 		slot := sessionSlot(e.state.binding, input.WindowStart)
 		ensurePresence(state).set(slot)
 		foldQualificationAggregate(state, e.state.binding, record, now)
 		foldPriceRangeAggregate(state, e.state.binding, record)
 		foldActivityAggregate(state, e.state.binding, record, now)
 		foldMVPMeasurementAggregate(state, record)
-		if state.olderLatest == nil || record.windowStart.After(state.olderLatest.windowStart) {
+		state.prefix.fold(record)
+		if !state.prefix.latestUncertain && (state.olderLatest == nil || record.windowStart.After(state.olderLatest.windowStart)) {
 			if state.olderLatest == nil {
 				state.olderLatest = &canonicalAggregate{}
 			}
@@ -687,14 +722,17 @@ func (e *Engine) installAggregateLocked(symbol *coreSymbol, input frozenAggregat
 		retainMutablePriceRangeEvidence(ensurePriceRangeState(state), record)
 		retainMutableMVPMeasurement(state, record)
 	}
-	if state.latest == nil || record.windowStart.After(state.latest.record.windowStart) || record.identity == state.latest.record.identity {
-		if state.latest == nil {
-			state.latest = &latestAggregateMark{}
+	if !foldedDirect || !state.prefix.latestUncertain {
+		if state.latest == nil || record.windowStart.After(state.latest.record.windowStart) || record.identity == state.latest.record.identity {
+			if state.latest == nil {
+				state.latest = &latestAggregateMark{}
+			}
+			state.latest.record = record
 		}
-		state.latest.record = record
 	}
 	rebuildTailCoverage(state, e.state.binding)
 	state.recomputations++
+	state.notifyAggregate(record, aggregateProofAll)
 	if revision {
 		return DispositionAggregateRevised, ReasonNone
 	}
@@ -721,12 +759,14 @@ func (e *Engine) integrityWithdrawLocked(symbol *coreSymbol, existing *canonical
 	}
 	rebuildTailCoverage(state, e.state.binding)
 	state.recomputations++
+	state.notifyAggregate(*existing, aggregateProofAll)
 	e.state.aggregateIntegrity = true
 	return DispositionAggregateIntegrity
 }
 
 func (e *Engine) historicalWithdrawLocked(symbol *coreSymbol, existing *canonicalAggregate, input frozenAggregateInput) DispositionCode {
 	state := ensureAggregateState(symbol)
+	wasFolded := state.presence != nil && state.presence.has(sessionSlot(e.state.binding, existing.windowStart))
 	delete(state.tail, existing.identity.start)
 	removeMutablePriceRangeEvidence(state.priceRange, existing.identity.start)
 	removeMutableMVPMeasurement(state, existing.identity.start)
@@ -734,6 +774,9 @@ func (e *Engine) historicalWithdrawLocked(symbol *coreSymbol, existing *canonica
 	slot := sessionSlot(e.state.binding, existing.windowStart)
 	if state.presence != nil {
 		state.presence.clear(slot)
+	}
+	if wasFolded && existing.authority.source == AggregateSourceHistorical {
+		state.prefix.withdrawHistorical(*existing)
 	}
 	ensureHistoricalConflict(state).set(slot)
 	if state.provenAbsent != nil {
@@ -751,6 +794,7 @@ func (e *Engine) historicalWithdrawLocked(symbol *coreSymbol, existing *canonica
 	}
 	rebuildTailCoverage(state, e.state.binding)
 	state.recomputations++
+	state.notifyAggregate(*existing, aggregateProofAll)
 	return DispositionAggregateWithdrawn
 }
 
@@ -774,6 +818,13 @@ func ensurePresence(state *symbolAggregateState) *slotBitmap {
 	return state.presence
 }
 
+func ensureSealedLive(state *symbolAggregateState) *slotBitmap {
+	if state.sealedLive == nil {
+		state.sealedLive = &slotBitmap{}
+	}
+	return state.sealedLive
+}
+
 func ensureHistoricalConflict(state *symbolAggregateState) *slotBitmap {
 	if state.historicalConflict == nil {
 		state.historicalConflict = &slotBitmap{}
@@ -782,19 +833,9 @@ func ensureHistoricalConflict(state *symbolAggregateState) *slotBitmap {
 }
 
 func (e *Engine) compactSymbolLocked(state *symbolAggregateState, binding *installedBinding, symbol string, now time.Time) {
-	// Every compaction-eligible record for a symbol with active hydration must
-	// remain available until that generation's ingress fence. Avoid walking the
-	// retained tail only to rediscover that fact for every record and every live
-	// update. The fence transition marks the generation inactive before its
-	// contributor pass, so the same tail is compacted exactly once there.
-	if generation := &e.state.hydration.generation; generation.active {
-		if requestIndex, pinned := generation.symbolIndex[symbol]; pinned {
-			entry := &generation.requests[requestIndex]
-			if entry.terminal == "" && !entry.engineClosed && !entry.fenced {
-				return
-			}
-		}
-	}
+	// Current-token historical rows can fill directly into the prefix, so an
+	// active hydration request no longer pins a full-session mutable tail.
+	_ = symbol
 	type compactableAggregate struct {
 		start  int64
 		record *canonicalAggregate
@@ -822,6 +863,12 @@ func (e *Engine) compactSymbolLocked(state *symbolAggregateState, binding *insta
 		e.compactAggregateLocked(state, binding, record, now)
 	}
 	rebuildTailCoverage(state, binding)
+	if len(state.tail) > maximumTailRecords {
+		// Valid one-second identities within the inclusive horizon cannot exceed
+		// 961. Preserve the state for diagnostics, but record the invariant breach
+		// so it cannot masquerade as a successful bound.
+		state.tailBoundHits++
+	}
 }
 
 func (e *Engine) compactAggregateLocked(state *symbolAggregateState, binding *installedBinding, record *canonicalAggregate, now time.Time) {
@@ -829,11 +876,16 @@ func (e *Engine) compactAggregateLocked(state *symbolAggregateState, binding *in
 		return
 	}
 	ensurePresence(state).set(sessionSlot(binding, record.windowStart))
+	if record.authority.source == AggregateSourceLive {
+		ensureSealedLive(state).set(sessionSlot(binding, record.windowStart))
+		e.retainHydrationReconciliationLocked(record.identity.symbol, *record)
+	}
 	foldQualificationAggregate(state, binding, *record, now)
 	foldPriceRangeAggregate(state, binding, *record)
 	removeMutablePriceRangeEvidence(state.priceRange, record.identity.start)
 	foldActivityAggregate(state, binding, *record, now)
 	foldMVPMeasurementAggregate(state, *record)
+	state.prefix.fold(*record)
 	removeMutableMVPMeasurement(state, record.identity.start)
 	if state.olderLatest == nil || record.windowStart.After(state.olderLatest.windowStart) {
 		copyRecord := *record
@@ -852,7 +904,7 @@ func committedMark(record canonicalAggregate) *committedAggregateMark {
 
 func recomputeLatest(state *symbolAggregateState) {
 	state.latest = nil
-	if state.olderLatest != nil {
+	if state.olderLatest != nil && !state.prefix.latestUncertain {
 		state.latest = &latestAggregateMark{record: *state.olderLatest}
 	}
 	for _, record := range state.tail {

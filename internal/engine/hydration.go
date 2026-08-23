@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"sort"
 	"time"
 
 	"github.com/belandresj/live-equities-momentum-scanner/internal/reference"
@@ -337,18 +338,91 @@ const (
 )
 
 type hydrationLedgerEntry struct {
-	token           HydrationRequestToken
-	nextChunk       int
-	totalChunks     int
-	totalRows       int64
-	consumedRows    int64
-	lastWindowStart time.Time
-	rowAccounting   HydrationRowAccounting
-	terminal        HydrationTerminalState
-	terminalReason  HydrationProviderReason
-	engineClosed    bool
-	fenced          bool
-	coverage        hydrationCoverage
+	token                   HydrationRequestToken
+	nextChunk               int
+	totalChunks             int
+	totalRows               int64
+	consumedRows            int64
+	lastWindowStart         time.Time
+	rowAccounting           HydrationRowAccounting
+	terminal                HydrationTerminalState
+	terminalReason          HydrationProviderReason
+	engineClosed            bool
+	fenced                  bool
+	coverage                hydrationCoverage
+	reconciliation          []sealedLiveComparison
+	reconciliationBoundHits uint64
+}
+
+func (e *Engine) retainHydrationReconciliationLocked(symbol string, record canonicalAggregate) {
+	generation := &e.state.hydration.generation
+	if !generation.active {
+		return
+	}
+	requestIndex, ok := generation.requestIndexBySymbol(symbol)
+	if !ok || requestIndex < 0 {
+		return
+	}
+	entry := &generation.requests[requestIndex]
+	if entry.terminal != "" || entry.engineClosed || entry.fenced || record.windowStart.Before(entry.token.start) || !record.windowStart.Before(entry.token.end) {
+		return
+	}
+	start := record.identity.start
+	index := sort.Search(len(entry.reconciliation), func(i int) bool { return entry.reconciliation[i].start >= start })
+	comparison := sealedLiveComparison{start: start, values: record.values}
+	if index < len(entry.reconciliation) && entry.reconciliation[index].start == start {
+		entry.reconciliation[index] = comparison
+		return
+	}
+	if len(entry.reconciliation) >= maximumTailRecords {
+		entry.reconciliationBoundHits++
+		entry.coverage = hydrationCoverageUnknown
+		return
+	}
+	if len(entry.reconciliation) == cap(entry.reconciliation) {
+		capacity := min(max(8, cap(entry.reconciliation)*2), maximumTailRecords)
+		expanded := make([]sealedLiveComparison, len(entry.reconciliation), capacity)
+		copy(expanded, entry.reconciliation)
+		entry.reconciliation = expanded
+	}
+	entry.reconciliation = append(entry.reconciliation, sealedLiveComparison{})
+	copy(entry.reconciliation[index+1:], entry.reconciliation[index:])
+	entry.reconciliation[index] = comparison
+}
+
+func (e *Engine) takeHydrationReconciliationLocked(input frozenAggregateInput) (AggregateValues, bool) {
+	proof := input.historicalProof
+	generation := &e.state.hydration.generation
+	if proof == nil || !generation.active || proof.bindingID != generation.bindingID || proof.generation != generation.generation {
+		return AggregateValues{}, false
+	}
+	requestIndex, ok := generation.requestIndexBySymbol(input.Symbol)
+	if !ok || requestIndex < 0 {
+		return AggregateValues{}, false
+	}
+	entry := &generation.requests[requestIndex]
+	if entry.terminal != "" || entry.engineClosed || entry.fenced || proof.token != entry.token.requestToken ||
+		proof.intervalStart != entry.token.start || proof.intervalEnd != entry.token.end {
+		return AggregateValues{}, false
+	}
+	start := input.WindowStart.Unix()
+	index := sort.Search(len(entry.reconciliation), func(i int) bool { return entry.reconciliation[i].start >= start })
+	if index >= len(entry.reconciliation) || entry.reconciliation[index].start != start {
+		return AggregateValues{}, false
+	}
+	values := entry.reconciliation[index].values
+	copy(entry.reconciliation[index:], entry.reconciliation[index+1:])
+	entry.reconciliation = entry.reconciliation[:len(entry.reconciliation)-1]
+	return values, true
+}
+
+func clearHydrationReconciliation(generation *hydrationGenerationState) {
+	if generation == nil {
+		return
+	}
+	for index := range generation.requests {
+		generation.requests[index].reconciliation = nil
+	}
 }
 
 type hydrationGenerationState struct {
@@ -926,6 +1000,7 @@ func (e *Engine) applyHydrationTerminalLocked(node *queueNode) (DispositionCode,
 	}
 	entry.terminal = input.state
 	entry.terminalReason = input.reason
+	entry.reconciliation = nil
 	generation.responseBytes += input.responseBytes
 	generation.normalizedRows += input.normalizedRows
 	if entry.coverage != hydrationCoverageUnknown {
@@ -1076,6 +1151,7 @@ func (e *Engine) applyAggregateIngressFenceLocked(node *queueNode) (DispositionC
 		e.state.hydration.revision++
 		return DispositionAggregateIngressFenceApplied, ReasonNone
 	}
+	clearHydrationReconciliation(generation)
 	generation.active = false
 	e.state.hydration.fenceReconciled = true
 	e.state.hydration.fenceEpoch = generation.epoch
@@ -1164,11 +1240,13 @@ func (g *hydrationGenerationState) requestIndexBySymbol(symbol string) (int, boo
 func (e *Engine) cancelHydrationGenerationLocked(fenced bool) bool {
 	generation := &e.state.hydration.generation
 	if !generation.active {
+		clearHydrationReconciliation(generation)
 		return true
 	}
 	changed := false
 	for index := range generation.requests {
 		entry := &generation.requests[index]
+		entry.reconciliation = nil
 		if entry.terminal != "" || entry.engineClosed || entry.fenced {
 			continue
 		}
@@ -1232,9 +1310,13 @@ func (e *Engine) observeHydration() hydrationObservation {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	generation := e.state.hydration.generation
+	requests := slices.Clone(generation.requests)
+	for index := range requests {
+		requests[index].reconciliation = slices.Clone(requests[index].reconciliation)
+	}
 	return hydrationObservation{
 		Active: generation.active, Generation: generation.generation, Purpose: generation.purpose,
 		Start: generation.start, End: generation.end, Accounting: generation.accounting,
-		Rows: generation.rowAccounting, Requests: slices.Clone(generation.requests),
+		Rows: generation.rowAccounting, Requests: requests,
 	}
 }

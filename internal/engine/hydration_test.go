@@ -133,14 +133,11 @@ func TestC6PLAN01DeterministicModeIntervalPopulation(t *testing.T) {
 	})
 }
 
-// TestC6PIN01HydrationPinsOneSymbolWithoutPerRecordPopulationScans is the
-// regression for the 2026-08-10 end-of-day live run. A live aggregate arriving
-// while hydration was active used to walk the symbol's retained tail and scan
-// the complete hydration request population for every record. The active
-// generation now pins the symbol once, and the ordinary ingress-fence
-// contributor compacts the retained record after the generation becomes
-// inactive.
-func TestC6PIN01HydrationPinsOneSymbolWithoutPerRecordPopulationScans(t *testing.T) {
+// TestLBRHydrationDoesNotPinCanonicalTail preserves the old population-scan
+// regression while enforcing LBR-A1's 961-record bound. Current-token old
+// historical fills now fold directly, so active hydration does not need to pin
+// raw live aggregates until the ingress fence.
+func TestLBRHydrationDoesNotPinCanonicalTail(t *testing.T) {
 	binding := testBinding(t)
 	start := binding.SessionStart()
 	now := start.Add(20 * time.Minute)
@@ -167,10 +164,11 @@ func TestC6PIN01HydrationPinsOneSymbolWithoutPerRecordPopulationScans(t *testing
 	e.state.greatestIngressPosition = oldLive.Live
 	state := symbol.aggregates
 	e.compactSymbolLocked(state, e.state.binding, "AAA", now)
-	_, retainedWhilePinned := state.tail[start.Unix()]
+	_, retainedWhileHydrating := state.tail[start.Unix()]
+	presentWhileHydrating := state.presence != nil && state.presence.has(sessionSlot(e.state.binding, start))
 	e.mu.Unlock()
-	if !retainedWhilePinned {
-		t.Fatal("active hydration did not pin the symbol tail")
+	if retainedWhileHydrating || !presentWhileHydrating {
+		t.Fatalf("active hydration retained old mutable identity=%t present=%t", retainedWhileHydrating, presentWhileHydrating)
 	}
 
 	terminal, err := NewHydrationTerminalInput(requests[0], requests[0].ResultID(), HydrationCompletedEmpty, HydrationReasonNone, 1, 1, 10, 0, 0, 0)

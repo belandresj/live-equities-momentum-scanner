@@ -66,7 +66,7 @@ func TestENGAGG01ValidationMergeRetentionMatrix(t *testing.T) {
 				input := base
 				tc.mutate(&input)
 				applyAggregate(t, e, input, tc.code, tc.reason)
-				assertNoAggregateState(t, e, "AAA")
+				assertNoCanonicalAggregateValue(t, e, "AAA")
 			})
 		}
 
@@ -727,6 +727,17 @@ func assertNoAggregateState(t *testing.T, e *Engine, symbol string) {
 	index := e.state.binding.index[symbol]
 	if e.state.binding.symbols[index].aggregates != nil {
 		t.Fatalf("rejected input allocated aggregate state for %s", symbol)
+	}
+}
+
+func assertNoCanonicalAggregateValue(t *testing.T, e *Engine, symbol string) {
+	t.Helper()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	index := e.state.binding.index[symbol]
+	state := e.state.binding.symbols[index].aggregates
+	if state != nil && (len(state.tail) != 0 || state.latest != nil || state.olderLatest != nil || state.prefix.printCount != 0) {
+		t.Fatalf("rejected input installed canonical aggregate value for %s: %+v", symbol, state)
 	}
 }
 
