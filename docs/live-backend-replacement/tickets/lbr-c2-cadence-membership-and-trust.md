@@ -1,7 +1,8 @@
 # LBR-C2 implementation assignment — cadence membership and trust transitions
 
-**Status:** Draft for independent cross-check; not an active ledger entry or
-implementation authorization.
+**Status:** Independently reviewed implementation assignment. Activation occurs
+only through the [delivery program](../delivery-program.md); this file is not a
+mutable ledger.
 
 **Activation gate:** `LBR-C1` and all A/B dependencies must be accepted; the
 [delivery program](../delivery-program.md) must mark only `LBR-C2` active.

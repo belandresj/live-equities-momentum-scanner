@@ -1,7 +1,8 @@
 # LBR-D1 implementation assignment — single-pass Massive decoding
 
-**Status:** Draft for independent cross-check; not an active ledger entry or
-implementation authorization.
+**Status:** Independently reviewed implementation assignment. Activation occurs
+only through the [delivery program](../delivery-program.md); this file is not a
+mutable ledger.
 
 **Activation gate:** `LBR-P1` and Capabilities A–C must be accepted; the
 [delivery program](../delivery-program.md) must mark only `LBR-D1` active.

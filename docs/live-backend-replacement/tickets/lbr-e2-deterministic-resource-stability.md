@@ -1,7 +1,8 @@
 # LBR-E2 implementation assignment — deterministic resource stability
 
-**Status:** Draft for independent cross-check; not an active ledger entry or
-implementation authorization.
+**Status:** Independently reviewed implementation assignment. Activation occurs
+only through the [delivery program](../delivery-program.md); this file is not a
+mutable ledger.
 
 **Activation gate:** `LBR-E1` must be accepted and the delivery ledger must
 record the exact `LBR-P1` manifest/characterization frozen. The

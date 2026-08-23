@@ -1,7 +1,8 @@
 # LBR-E1 implementation assignment — exclusive cutover and cleanup
 
-**Status:** Draft for independent cross-check; not an active ledger entry or
-implementation authorization.
+**Status:** Independently reviewed implementation assignment. Activation occurs
+only through the [delivery program](../delivery-program.md); this file is not a
+mutable ledger.
 
 **Activation gate:** `LBR-P1` and Capabilities A–D, including their final
 reviews, must be accepted. The owner must decide replay/checkpoint deletion

@@ -1,7 +1,8 @@
 # LBR-A1 implementation assignment — compact canonical aggregate state
 
-**Status:** Draft for independent cross-check. This ticket is not a delivery
-ledger and does not authorize implementation.
+**Status:** Independently reviewed implementation assignment. Activation occurs
+only through the [delivery program](../delivery-program.md); this file is not a
+mutable ledger.
 
 **Activation gate:** The [delivery program](../delivery-program.md) must record
 `LBR-P1` complete and `LBR-A1` active. No later slice may write concurrently.

@@ -1,7 +1,8 @@
 # LBR-E3 execution assignment — authorized market-hours confirmation
 
-**Status:** Draft for independent cross-check. This ticket grants no credential
-or provider authority and is not an active ledger entry.
+**Status:** Independently reviewed execution assignment. Activation occurs only
+through the [delivery program](../delivery-program.md); this file grants no
+credential or provider authority and is not a mutable ledger.
 
 **Activation gate:** `LBR-E2` and the final integrated review must be accepted.
 The owner must execute the observation or grant explicit authorization naming

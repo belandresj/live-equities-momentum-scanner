@@ -1,7 +1,8 @@
 # LBR-B1 implementation assignment — incremental qualification and selection
 
-**Status:** Draft for independent cross-check; not an active ledger entry or
-implementation authorization.
+**Status:** Independently reviewed implementation assignment. Activation occurs
+only through the [delivery program](../delivery-program.md); this file is not a
+mutable ledger.
 
 **Activation gate:** The [delivery program](../delivery-program.md) must record
 `LBR-P1` and Capability A accepted and mark only `LBR-B1` active.

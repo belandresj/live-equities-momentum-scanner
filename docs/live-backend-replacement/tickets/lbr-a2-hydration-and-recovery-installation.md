@@ -1,7 +1,8 @@
 # LBR-A2 implementation assignment — hydration and recovery installation
 
-**Status:** Draft for independent cross-check. This ticket is not a delivery
-ledger and does not authorize implementation.
+**Status:** Independently reviewed implementation assignment. Activation occurs
+only through the [delivery program](../delivery-program.md); this file is not a
+mutable ledger.
 
 **Activation gate:** `LBR-P1` and `LBR-A1` must be accepted in the
 [delivery program](../delivery-program.md), which must mark only `LBR-A2`

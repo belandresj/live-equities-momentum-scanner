@@ -1,7 +1,8 @@
 # LBR-C1 implementation assignment — bounded Tape and Spread state
 
-**Status:** Draft for independent cross-check; not an active ledger entry or
-implementation authorization.
+**Status:** Independently reviewed implementation assignment. Activation occurs
+only through the [delivery program](../delivery-program.md); this file is not a
+mutable ledger.
 
 **Activation gate:** `LBR-P1` and Capabilities A/B must be accepted; the
 [delivery program](../delivery-program.md) must mark only `LBR-C1` active.
