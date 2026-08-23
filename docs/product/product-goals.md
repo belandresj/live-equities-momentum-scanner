@@ -691,7 +691,7 @@ The dashboard's primary chrome is deliberately subordinate to the scanner: a
 single-line `MOMENTUM SCANNER` title and compact top-right status control sit
 above one framed viewport-filling table surface. The status summary translates
 the authoritative publication/transport state into `CONNECTING`,
-`WAITING FOR SESSION`, `STARTING`, `LIVE`, `PARTIAL`, `RECOVERING`, `DELAYED`,
+`WAITING FOR SESSION`, `WARMING UP`, `LIVE`, `PARTIAL`, `RECOVERING`, `DELAYED`,
 `DISCONNECTED`, `UNAVAILABLE`, `SESSION ENDED`, or `HISTORICAL`; it does not
 show the redundant displayed-row count. `LIVE` means connected transport and
 an exact current qualified ranking, including a legitimate zero-row result.

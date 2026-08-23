@@ -59,7 +59,7 @@ function buildShell(document) {
   const summary = element(document, "summary", "status-summary"); summary.id = "status-summary";
   const live = textElement(document, "span", "Connecting to scanner API", "status-primary"); live.id = "status-live"; live.setAttribute("role", "status"); live.setAttribute("aria-live", "polite");
   const alert = textElement(document, "span", "", "status-alert"); alert.id = "status-alert";
-  const chevron = textElement(document, "span", "⌄", "status-chevron"); chevron.setAttribute("aria-hidden", "true");
+  const chevron = element(document, "span", "status-chevron"); chevron.setAttribute("aria-hidden", "true");
   summary.append(live, alert, chevron); status.append(summary);
   const panel = element(document, "div", "status-panel"); panel.setAttribute("aria-label", "Scanner status details");
   const scannerItem = statusDetail(document, "Scanner", "scanner-status"), aggregatesItem = statusDetail(document, "Aggregates", "aggregate-status"), tradesItem = statusDetail(document, "Trades", "trade-status"), quotesItem = statusDetail(document, "Quotes", "quote-status");
@@ -120,11 +120,15 @@ function buildMessages(document, model, phaseLabel, workProgress) {
 }
 
 function traderStatus(event, model) {
-  if (!model) return event.error
-    ? { label: "DISCONNECTED", scanner: "Disconnected · no current scanner snapshot", aggregates: "Status unavailable" }
-    : { label: "CONNECTING", scanner: "Connecting to scanner", aggregates: "Establishing connection" };
-  if (event.transport === "disconnected") return { label: "DISCONNECTED", scanner: "Disconnected · displayed rows are frozen", aggregates: "Status retained from the last update" };
   if (event.transport === "refresh_delayed") return { label: "DELAYED", scanner: "Delayed · displayed rows are retained", aggregates: "Status retained from the last update" };
+  if (event.transport === "api_unavailable") return { label: "UNAVAILABLE", scanner: "Unavailable · scanner API did not respond", aggregates: "Status retained from the last update" };
+  // PollController emits api_unavailable for browser/API failures. Keep the
+  // older token renderable for direct callers; DISCONNECTED is reserved for a
+  // validated backend/provider fact rather than a fetch exception.
+  if (event.transport === "disconnected") return { label: "DISCONNECTED", scanner: "Disconnected · displayed rows are frozen", aggregates: "Status retained from the last update" };
+  if (!model) return event.error
+    ? { label: "UNAVAILABLE", scanner: "Unavailable · no current scanner snapshot", aggregates: "Status unavailable" }
+    : { label: "CONNECTING", scanner: "Connecting to scanner", aggregates: "Establishing connection" };
   if (model.replay) return { label: "HISTORICAL", scanner: "Historical data · not live", aggregates: "Historical aggregate playback" };
   if (model.lifecycle === "ended") return { label: "SESSION ENDED", scanner: "Session ended · final snapshot retained", aggregates: "Session ended" };
   if (model.lifecycle === "suppressed") return { label: "UNAVAILABLE", scanner: "Unavailable · integrity protection active", aggregates: "Aggregate ranking unavailable" };
@@ -132,7 +136,7 @@ function traderStatus(event, model) {
   if (model.current) return { label: "LIVE", scanner: "Live · exact qualified ranking", aggregates: "Streaming · ranking current" };
   if (model.partial || model.backendReady && ["degraded_bootstrap", "degraded_current"].includes(model.rankingMode)) return { label: "PARTIAL", scanner: "Partial · qualification is incomplete", aggregates: "Streaming · partial population" };
   if (model.lifecycle === "recovering" || model.recovering) return { label: "RECOVERING", scanner: "Recovering · displayed ranking is not current", aggregates: aggregateProgress(model) };
-  if (["initializing", "awaiting_aggregate_ack", "hydrating"].includes(model.lifecycle) || model.phase) return { label: "STARTING", scanner: "Starting · ranking is not yet current", aggregates: aggregateProgress(model) };
+  if (["initializing", "awaiting_aggregate_ack", "hydrating"].includes(model.lifecycle) || model.phase) return { label: "WARMING UP", scanner: "Warming up · ranking is not yet current", aggregates: aggregateProgress(model) };
   return { label: "UNAVAILABLE", scanner: "Unavailable · no current ranking", aggregates: "Aggregate ranking unavailable" };
 }
 

@@ -465,7 +465,7 @@ qualification, and existing cell accessibility metadata remain unchanged.
 The owner replaced the permanent `BACKEND`/`RANKING`/`T/Q` status band with one
 compact top-right status control, then simplified its vocabulary for traders.
 Its summary translates the exact primary publication/transport state to
-`CONNECTING`, `WAITING FOR SESSION`, `STARTING`, `LIVE`, `PARTIAL`,
+`CONNECTING`, `WAITING FOR SESSION`, `WARMING UP`, `LIVE`, `PARTIAL`,
 `RECOVERING`, `DELAYED`, `DISCONNECTED`, `UNAVAILABLE`, `SESSION ENDED`, or
 `HISTORICAL` and omits the redundant displayed-row count. `LIVE` is reserved
 for connected exact `qualified_current` output, including an exact empty

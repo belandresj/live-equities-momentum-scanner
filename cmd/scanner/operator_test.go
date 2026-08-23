@@ -237,15 +237,6 @@ func TestLiveOperatorRendersDecisiveCapacityOperands(t *testing.T) {
 	}
 }
 
-func TestInitialOperatorFailureRunsJoinedShutdown(t *testing.T) {
-	renderer := newOperatorRenderer(failingWriter{}, &bytes.Buffer{})
-	shutdowns := 0
-	err := renderInitialOperator(renderer, warmupOperatorSample(time.Now().UTC()), func() error { shutdowns++; return errors.New("joined shutdown") })
-	if err == nil || !strings.Contains(err.Error(), "write operational status") || !strings.Contains(err.Error(), "joined shutdown") || shutdowns != 1 {
-		t.Fatalf("err=%v shutdowns=%d", err, shutdowns)
-	}
-}
-
 func warmupOperatorSample(at time.Time) liveOperatorSample {
 	result := liveOperatorSample{Status: operations.Status{Lifecycle: "hydrating", Reason: operations.ReasonFencePending, SampledAt: at}}
 	result.Metrics.Engine.Connection.Active = true

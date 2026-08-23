@@ -20,6 +20,7 @@ type mvpMeasurementPoint struct {
 // the correction tail remains the sole mutable aggregate representation.
 type mvpMeasurementState struct {
 	folded []mvpMeasurementPoint
+	tail   []mvpMeasurementPoint
 	result mvpMeasurementResult
 }
 
@@ -50,6 +51,34 @@ func foldMVPMeasurementAggregate(state *symbolAggregateState, record canonicalAg
 	recomputeMVPVolumePrefix(measurements, i)
 }
 
+func retainMutableMVPMeasurement(state *symbolAggregateState, record canonicalAggregate) {
+	measurements := ensureMVPMeasurementState(state)
+	point := mvpMeasurementPoint{start: record.windowStart.Unix(), volume: record.values.Volume, close: record.values.Close}
+	i := sort.Search(len(measurements.tail), func(i int) bool { return measurements.tail[i].start >= point.start })
+	if i < len(measurements.tail) && measurements.tail[i].start == point.start {
+		measurements.tail[i] = point
+	} else {
+		measurements.tail = append(measurements.tail, mvpMeasurementPoint{})
+		copy(measurements.tail[i+1:], measurements.tail[i:])
+		measurements.tail[i] = point
+	}
+	recomputeMVPVolumePoints(measurements.tail, i)
+}
+
+func removeMutableMVPMeasurement(state *symbolAggregateState, start int64) {
+	if state == nil || state.mvpMeasurements == nil {
+		return
+	}
+	points := state.mvpMeasurements.tail
+	i := sort.Search(len(points), func(i int) bool { return points[i].start >= start })
+	if i == len(points) || points[i].start != start {
+		return
+	}
+	copy(points[i:], points[i+1:])
+	state.mvpMeasurements.tail = points[:len(points)-1]
+	recomputeMVPVolumePoints(state.mvpMeasurements.tail, i)
+}
+
 func removeFoldedMVPMeasurement(state *symbolAggregateState, start int64) {
 	if state == nil || state.mvpMeasurements == nil {
 		return
@@ -65,16 +94,20 @@ func removeFoldedMVPMeasurement(state *symbolAggregateState, start int64) {
 }
 
 func recomputeMVPVolumePrefix(state *mvpMeasurementState, from int) {
+	recomputeMVPVolumePoints(state.folded, from)
+}
+
+func recomputeMVPVolumePoints(points []mvpMeasurementPoint, from int) {
 	if from < 0 {
 		from = 0
 	}
 	running := 0.0
 	if from > 0 {
-		running = state.folded[from-1].cumulative
+		running = points[from-1].cumulative
 	}
-	for i := from; i < len(state.folded); i++ {
-		running += state.folded[i].volume
-		state.folded[i].cumulative = running
+	for i := from; i < len(points); i++ {
+		running += points[i].volume
+		points[i].cumulative = running
 	}
 }
 
@@ -114,6 +147,14 @@ func sessionVolumeBefore(state *symbolAggregateState, at time.Time) float64 {
 			result = points[i-1].cumulative
 		}
 	}
+	if state.mvpMeasurements != nil && len(state.mvpMeasurements.tail) == len(state.tail) {
+		points := state.mvpMeasurements.tail
+		i := sort.Search(len(points), func(i int) bool { return points[i].start >= at.Unix() })
+		if i > 0 {
+			return result + points[i-1].cumulative
+		}
+		return result
+	}
 	starts := make([]int64, 0, len(state.tail))
 	for start := range state.tail {
 		if start < at.Unix() {
@@ -141,18 +182,18 @@ func evaluateActivity30s(binding *installedBinding, state *symbolAggregateState,
 	if trust := historyTrust(state, binding, floor, at, false); trust.status != featureCurrent {
 		return trust
 	}
-	volumes := make([]float64, 330)
+	var volumes [330]float64
 	for i := range volumes {
 		if record, ok := aggregateAt(state, floor.Add(time.Duration(i)*time.Second).Unix()); ok {
 			volumes[i] = record.volume
 		}
 	}
-	prefix := make([]float64, len(volumes)+1)
+	var prefix [331]float64
 	for i, value := range volumes {
 		prefix[i+1] = prefix[i] + value
 	}
 	target := (prefix[330] - prefix[300]) / 30
-	references := make([]float64, activityReferenceSamples)
+	var references [activityReferenceSamples]float64
 	for k := range references {
 		end := 300 - 5*k
 		references[k] = (prefix[end] - prefix[end-30]) / 30
@@ -211,6 +252,14 @@ type mvpAggregateValue struct {
 }
 
 func aggregateAt(state *symbolAggregateState, start int64) (mvpAggregateValue, bool) {
+	if state.mvpMeasurements != nil && len(state.mvpMeasurements.tail) == len(state.tail) {
+		points := state.mvpMeasurements.tail
+		i := sort.Search(len(points), func(i int) bool { return points[i].start >= start })
+		if i < len(points) && points[i].start == start {
+			point := points[i]
+			return mvpAggregateValue{start: time.Unix(start, 0).UTC(), end: time.Unix(start+1, 0).UTC(), volume: point.volume, close: point.close}, true
+		}
+	}
 	if record := state.tail[start]; record != nil {
 		return mvpAggregateValue{start: record.windowStart, end: record.windowEnd, volume: record.values.Volume, close: record.values.Close}, true
 	}
@@ -235,6 +284,18 @@ func markStrictlyBefore(state *symbolAggregateState, boundary time.Time) (mvpAgg
 			point := points[i-1]
 			result = mvpAggregateValue{start: time.Unix(point.start, 0).UTC(), end: time.Unix(point.start+1, 0).UTC(), volume: point.volume, close: point.close}
 			found = true
+		}
+		if len(state.mvpMeasurements.tail) == len(state.tail) {
+			points = state.mvpMeasurements.tail
+			i = sort.Search(len(points), func(i int) bool { return points[i].start >= boundary.Unix() })
+			if i > 0 {
+				point := points[i-1]
+				candidate := mvpAggregateValue{start: time.Unix(point.start, 0).UTC(), end: time.Unix(point.start+1, 0).UTC(), volume: point.volume, close: point.close}
+				if !found || result.start.Before(candidate.start) {
+					result, found = candidate, true
+				}
+			}
+			return result, found
 		}
 	}
 	for start, record := range state.tail {

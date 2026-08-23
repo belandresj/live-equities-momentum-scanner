@@ -718,6 +718,9 @@ func buildCheckpointSymbol(binding *installedBinding, source checkpoint.Symbol, 
 			retainMutablePriceRangeEvidence(state.priceRange, *record)
 		}
 	}
+	for _, record := range state.tail {
+		retainMutableMVPMeasurement(state, *record)
+	}
 	state.activity, err = restoreActivity(source.Activity, binding, t0)
 	if err != nil {
 		return nil, err

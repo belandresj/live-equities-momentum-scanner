@@ -33,6 +33,7 @@ func NewDeliveryLatencyRegressionRuntime(t *testing.T, ctx context.Context) (*Ru
 // exporting that mutable operation from a non-test build.
 func RecordDeliveryLatencyForTest(run *Runtime, delay time.Duration, family DeliveryLatencyFamily) {
 	run.recordDeliveryLatency(delay, family)
+	run.storeDiagnosticsSample(run.Metrics())
 }
 
 // SampleAndResetDeliveryLatencyWindowForTest runs the production pressure
@@ -58,4 +59,5 @@ func SampleAndResetDeliveryLatencyWindowForTest(t *testing.T, ctx context.Contex
 	}
 	run.syncTQPressure(ctx)
 	run.pressureSampler = priorSampler
+	run.storeDiagnosticsSample(run.Metrics())
 }

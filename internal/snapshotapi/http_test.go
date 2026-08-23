@@ -3,16 +3,19 @@ package snapshotapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/belandresj/live-equities-momentum-scanner/internal/engine"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/operations"
@@ -635,6 +638,158 @@ func TestPC10HTTPBoundsLoopbackCancellationAndProgress(t *testing.T) {
 	}
 }
 
+func TestP2ConcurrentCapturesDoNotWaitBehindBlockedWriter(t *testing.T) {
+	runtime, _, _ := newSnapshotRuntime(t)
+	t.Cleanup(func() { shutdownSnapshotRuntime(t, runtime) })
+	handler, err := NewHandler(runtime, HandlerConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blocked := newBlockingWriter()
+	blockedDone := make(chan struct{})
+	go func() {
+		defer close(blockedDone)
+		handler.ServeHTTP(blocked, httptest.NewRequest(http.MethodGet, "/api/v2/snapshot", nil))
+	}()
+	select {
+	case <-blocked.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("blocked writer was not reached")
+	}
+
+	const total = 128
+	type result struct {
+		id      string
+		elapsed time.Duration
+		err     error
+	}
+	results := make(chan result, total)
+	var group sync.WaitGroup
+	for index := 0; index < total; index++ {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			started := time.Now()
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v2/snapshot", nil))
+			var snapshot Snapshot
+			decodeErr := json.Unmarshal(response.Body.Bytes(), &snapshot)
+			var requestErr error
+			if response.Code != http.StatusOK {
+				requestErr = fmt.Errorf("status=%d body=%s", response.Code, response.Body.String())
+			} else if decodeErr != nil {
+				requestErr = decodeErr
+			}
+			results <- result{id: snapshot.Sample.ID, elapsed: time.Since(started), err: requestErr}
+		}()
+	}
+	group.Wait()
+	close(results)
+	close(blocked.release)
+	select {
+	case <-blockedDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("blocked writer handler did not finish")
+	}
+
+	ids := make([]uint64, 0, total)
+	latencies := make([]time.Duration, 0, total)
+	for result := range results {
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		id, parseErr := strconv.ParseUint(result.id, 10, 64)
+		if parseErr != nil {
+			t.Fatalf("invalid sample ID %q: %v", result.id, parseErr)
+		}
+		ids = append(ids, id)
+		latencies = append(latencies, result.elapsed)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	for index, id := range ids {
+		want := uint64(index + 2) // the blocked request owns sample 1.
+		if id != want {
+			t.Fatalf("sample IDs were not unique/contiguous: index=%d got=%d want=%d ids=%v", index, id, want, ids)
+		}
+	}
+	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+	p99 := latencies[int(0.99*float64(len(latencies)-1))]
+	maximum := latencies[len(latencies)-1]
+	if p99 >= 100*time.Millisecond || maximum >= 500*time.Millisecond {
+		t.Fatalf("concurrent capture latency p99=%s maximum=%s", p99, maximum)
+	}
+}
+
+func TestP4CancellationStopsMappingAndDiagnostics(t *testing.T) {
+	runtime, binding, now := newSnapshotRuntime(t)
+	makeSnapshotReady(t, runtime.Engine(), binding, *now)
+	t.Cleanup(func() { shutdownSnapshotRuntime(t, runtime) })
+	diagnostics := NewMappingDiagnostics()
+	source := &countingCaptureSource{runtime: runtime}
+	handlerValue, err := NewHandler(source, HandlerConfig{Diagnostics: diagnostics})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshotHandler := handlerValue.(*handler)
+
+	request, cancel := context.WithCancel(context.Background())
+	cancel()
+	before := source.calls.Load()
+	response := httptest.NewRecorder()
+	snapshotHandler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v2/snapshot", nil).WithContext(request))
+	if source.calls.Load() != before || response.Body.Len() != 0 {
+		t.Fatalf("pre-capture cancellation reached capture or wrote a body: calls=%d body=%q", source.calls.Load(), response.Body.String())
+	}
+
+	request, cancel = context.WithCancel(context.Background())
+	snapshotHandler.testAfterCapture = func(*http.Request) { cancel() }
+	response = httptest.NewRecorder()
+	snapshotHandler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v2/snapshot", nil).WithContext(request))
+	snapshotHandler.testAfterCapture = nil
+	if response.Body.Len() != 0 {
+		t.Fatalf("post-capture cancellation wrote a body: %q", response.Body.String())
+	}
+
+	invalidCapture, captureErr := runtime.CaptureSnapshot()
+	if captureErr != nil {
+		t.Fatal(captureErr)
+	}
+	corruptSnapshotCapture(t, &invalidCapture)
+	invalidSource := fixedCaptureSource{capture: invalidCapture}
+	invalidHandlerValue, err := NewHandler(invalidSource, HandlerConfig{Diagnostics: diagnostics})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidHandler := invalidHandlerValue.(*handler)
+	request, cancel = context.WithCancel(context.Background())
+	invalidHandler.testAfterMapping = func(*http.Request) { cancel() }
+	response = httptest.NewRecorder()
+	invalidHandler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v2/snapshot", nil).WithContext(request))
+	if response.Body.Len() != 0 {
+		t.Fatalf("post-mapping cancellation wrote a body: %q", response.Body.String())
+	}
+	if _, ok := diagnostics.Latest(); ok {
+		t.Fatal("canceled mapping failure was recorded")
+	}
+
+	response = httptest.NewRecorder()
+	invalidHandler.testAfterMapping = nil
+	invalidHandler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v2/snapshot", nil))
+	if response.Code != http.StatusServiceUnavailable || response.Body.String() != `{"error":"snapshot_unavailable"}` {
+		t.Fatalf("uncanceled invalid capture did not fail closed: code=%d body=%s", response.Code, response.Body.String())
+	}
+	if _, ok := diagnostics.Latest(); !ok {
+		t.Fatal("uncanceled mapping failure was not recorded")
+	}
+
+	response = httptest.NewRecorder()
+	snapshotHandler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v2/snapshot", nil))
+	if response.Code != http.StatusOK || response.Body.Len() == 0 {
+		t.Fatalf("uncanceled request did not succeed after canceled requests: code=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestPTQRRecoverableSuppressionKeepsAPIAndLivenessAvailable(t *testing.T) {
 	runtime, binding, now := newSnapshotRuntime(t)
 	defer func() {
@@ -925,6 +1080,15 @@ func shutdownSnapshotRuntime(t *testing.T, runtime *operations.Runtime) {
 }
 
 func strconvLen(value []byte) string { return strconv.Itoa(len(value)) }
+
+func corruptSnapshotCapture(t *testing.T, capture *operations.SnapshotCapture) {
+	t.Helper()
+	mirror := (*snapshotCaptureMirror)(unsafe.Pointer(capture))
+	if mirror.sealed == nil {
+		t.Fatal("runtime returned an unsealed capture")
+	}
+	mirror.sealed.view.Engine.Publication.AggregateEvaluation.Population.ValidPriorClose++
+}
 
 type blockingWriter struct {
 	header  http.Header

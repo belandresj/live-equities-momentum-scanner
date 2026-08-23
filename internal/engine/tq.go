@@ -182,8 +182,23 @@ type tqSymbolState struct {
 }
 
 type tqState struct {
-	epoch                                                                                                       uint64
-	revision                                                                                                    uint64
+	epoch uint64
+	// canonicalMutations advances for every ordered T/Q/time fact that is
+	// classified on the engine path. It is deliberately not part of the global
+	// publication fingerprint: canonical progress is synchronous even when the
+	// public projection waits for a cadence boundary.
+	canonicalMutations uint64
+	// publicProjectionRevision advances only for a trust transition that must
+	// replace the combined immutable publication immediately.
+	publicProjectionRevision                                                                                    uint64
+	projectionDirty                                                                                             bool
+	projectionDirtyMutations                                                                                    uint64
+	projectionDirtied                                                                                           uint64
+	projectionFlushedByCadence                                                                                  uint64
+	immediateTrustTransitionPublications                                                                        uint64
+	immediateTrustTransitionMutations                                                                           uint64
+	coalescedOrdinaryMutations                                                                                  uint64
+	immediateProjectionPending                                                                                  bool
 	nextToken                                                                                                   uint64
 	desired                                                                                                     []string
 	members                                                                                                     map[string]*tqSymbolState
@@ -298,6 +313,43 @@ type TQView struct {
 	QuarantineObserved                  int
 	QuarantineDeadline                  bool
 	Quarantines, QuarantineFenced       uint64
+}
+
+// TQPublicationAccountingView is fixed-cardinality engine observation for the
+// publication-coalescing proof. It is intentionally outside the strict v2
+// snapshot schema: the counters describe projection mechanics, not market
+// state or product fields.
+type TQPublicationAccountingView struct {
+	CanonicalMutations                   uint64
+	ProjectionDirtied                    uint64
+	ProjectionFlushedByCadence           uint64
+	ImmediateTrustTransitionPublications uint64
+	ImmediateTrustTransitionMutations    uint64
+	CoalescedOrdinaryMutations           uint64
+	PendingProjectionMutations           uint64
+	ProjectionDirty                      bool
+}
+
+// ObserveTQPublicationAccounting returns bounded publication-coalescing
+// diagnostics from the sole engine owner. It never returns mutable state and
+// does not create a second publication or T/Q authority.
+func (e *Engine) ObserveTQPublicationAccounting() TQPublicationAccountingView {
+	if e == nil {
+		return TQPublicationAccountingView{}
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	s := e.state.tq
+	return TQPublicationAccountingView{
+		CanonicalMutations:                   s.canonicalMutations,
+		ProjectionDirtied:                    s.projectionDirtied,
+		ProjectionFlushedByCadence:           s.projectionFlushedByCadence,
+		ImmediateTrustTransitionPublications: s.immediateTrustTransitionPublications,
+		ImmediateTrustTransitionMutations:    s.immediateTrustTransitionMutations,
+		CoalescedOrdinaryMutations:           s.coalescedOrdinaryMutations,
+		PendingProjectionMutations:           s.projectionDirtyMutations,
+		ProjectionDirty:                      s.projectionDirty,
+	}
 }
 
 func (e *Engine) AdmitTQControlQuarantine(ctx context.Context, input TQControlQuarantineInput) (AdmissionResult, <-chan Disposition) {
@@ -422,7 +474,14 @@ func (e *Engine) reconcileTQLocked(now time.Time) {
 		pressure.capacityObserved, pressure.lastSlotDrops, pressure.lastByteDrops = false, 0, 0
 		pressure.nextSequence = maxUint64(1, pressure.nextSequence)
 		*s = tqState{
-			epoch: e.state.liveEpoch, revision: previous.revision, nextToken: maxUint64(e.state.aggregateWriteToken+1, maxUint64(1, previous.nextToken)), members: make(map[string]*tqSymbolState),
+			epoch: e.state.liveEpoch, canonicalMutations: previous.canonicalMutations, publicProjectionRevision: previous.publicProjectionRevision,
+			projectionDirty: previous.projectionDirty, projectionDirtyMutations: previous.projectionDirtyMutations,
+			projectionDirtied: previous.projectionDirtied, projectionFlushedByCadence: previous.projectionFlushedByCadence,
+			immediateTrustTransitionPublications: previous.immediateTrustTransitionPublications,
+			immediateTrustTransitionMutations:    previous.immediateTrustTransitionMutations,
+			coalescedOrdinaryMutations:           previous.coalescedOrdinaryMutations,
+			immediateProjectionPending:           previous.immediateProjectionPending,
+			nextToken:                            maxUint64(e.state.aggregateWriteToken+1, maxUint64(1, previous.nextToken)), members: make(map[string]*tqSymbolState),
 			consumed: previous.consumed, applied: previous.applied, duplicate: previous.duplicate, rejected: previous.rejected, fenced: previous.fenced,
 			pressureShed: previous.pressureShed, integrity: previous.integrity, tradeApplied: previous.tradeApplied, quoteApplied: previous.quoteApplied,
 			tradePressureShed: previous.tradePressureShed, quotePressureShed: previous.quotePressureShed,
@@ -434,6 +493,9 @@ func (e *Engine) reconcileTQLocked(now time.Time) {
 			quarantineReason: previous.quarantineReason, quarantineEpoch: previous.quarantineEpoch, quarantinePosition: previous.quarantinePosition,
 			quarantineExpected: previous.quarantineExpected, quarantineObserved: previous.quarantineObserved,
 			quarantineDeadline: previous.quarantineDeadline, quarantines: previous.quarantines, quarantineFenced: previous.quarantineFenced,
+		}
+		if previousTQPublicationState(previous) {
+			e.markTQTrustTransitionLocked()
 		}
 	}
 	if s.nextToken <= e.state.aggregateWriteToken {
@@ -448,7 +510,11 @@ func (e *Engine) reconcileTQLocked(now time.Time) {
 			desired = append(desired, row.symbol)
 		}
 	}
+	previousDesired := s.desired
 	s.desired = desired
+	if !equalTQSymbols(previousDesired, desired) {
+		e.markTQTrustTransitionLocked()
+	}
 	target := now
 	if e.state.committedT != nil {
 		target = *e.state.committedT
@@ -550,6 +616,72 @@ func (s *tqState) member(symbol string) *tqSymbolState {
 	return m
 }
 
+func previousTQPublicationState(s tqState) bool {
+	if len(s.desired) > 0 || s.pending != nil || s.quarantined || s.aggregateOnly || s.globalBound {
+		return true
+	}
+	for _, member := range s.members {
+		if member.requested || member.present || member.unknown || member.tradeCoverage.active || member.quoteCoverage.active {
+			return true
+		}
+	}
+	return false
+}
+
+func equalTQSymbols(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+// markTQTrustTransitionLocked records that the current ordered input changed
+// whether a T/Q field or membership claim can be trusted. The mutation is
+// materialized into the public projection once at the end of the input.
+func (e *Engine) markTQTrustTransitionLocked() {
+	e.state.tq.immediateProjectionPending = true
+}
+
+// recordTQProjectionInputLocked accounts one ordered T/Q/time input after all
+// of its canonical mutation and reconciliation work has completed. Ordinary
+// inputs dirtied here do not advance publicProjectionRevision.
+func (e *Engine) recordTQProjectionInputLocked() {
+	s := &e.state.tq
+	s.canonicalMutations++
+	s.projectionDirtied++
+	s.projectionDirty = true
+	s.projectionDirtyMutations++
+	if s.immediateProjectionPending {
+		s.publicProjectionRevision++
+		s.immediateTrustTransitionMutations++
+	} else {
+		s.coalescedOrdinaryMutations++
+	}
+}
+
+// flushTQProjectionLocked clears only the dirty work represented by the
+// combined publication just stored. The sole engine owner holds the lock, so
+// no later input can be cleared accidentally.
+func (e *Engine) flushTQProjectionLocked() {
+	s := &e.state.tq
+	if !s.projectionDirty {
+		return
+	}
+	if s.immediateProjectionPending {
+		s.immediateTrustTransitionPublications++
+	} else {
+		s.projectionFlushedByCadence++
+	}
+	s.projectionDirty = false
+	s.projectionDirtyMutations = 0
+	s.immediateProjectionPending = false
+}
+
 func (s *tqState) releaseMember(m *tqSymbolState) {
 	s.tradeCount -= len(m.trades)
 	s.quoteCount -= retainedQuoteCount(m)
@@ -614,6 +746,9 @@ func (e *Engine) IssueTQCommand() (TQCommand, error) {
 }
 
 func (e *Engine) enterTQGlobalBoundLocked() {
+	if !e.state.tq.globalBound {
+		e.markTQTrustTransitionLocked()
+	}
 	e.state.tq.globalBound = true
 	e.state.tq.pressure.cause = TQPressureCauseRetentionBound
 	e.enterTQAggregateOnlyLocked()
@@ -621,6 +756,18 @@ func (e *Engine) enterTQGlobalBoundLocked() {
 
 func (e *Engine) enterTQAggregateOnlyLocked() {
 	s := &e.state.tq
+	wasTrustworthy := !s.aggregateOnly && s.pressure.mode != TQPressureAggregateOnly
+	if !wasTrustworthy {
+		for _, member := range s.members {
+			if member.present || member.tradeCoverage.active || member.quoteCoverage.active {
+				wasTrustworthy = true
+				break
+			}
+		}
+	}
+	if wasTrustworthy {
+		e.markTQTrustTransitionLocked()
+	}
 	s.pressure.streaks.healthy = 0
 	s.pressure.lastSampleRecoveryHealthy = false
 	if s.pressure.mode != TQPressureAggregateOnly {
@@ -662,6 +809,10 @@ func (e *Engine) applyTQCommandResultLocked(node *queueNode) (DispositionCode, D
 		s.commandResultsFenced++
 		return DispositionTQFenced, ReasonHistoricalContext
 	}
+	// A current command result changes requested/provider-membership trust even
+	// when the local write failed; the complete input publishes that transition
+	// once after all cleanup and reconciliation are done.
+	e.markTQTrustTransitionLocked()
 	commandSymbols := v.command.symbols[:v.command.symbolCount]
 	s.pending, s.dispatched = nil, false
 	if v.outcome != ControlSucceeded {
@@ -737,6 +888,7 @@ func (e *Engine) applyTQControlQuarantineLocked(node *queueNode) (DispositionCod
 		return DispositionTQFenced, ReasonNonprecedent
 	}
 	if !s.quarantined {
+		e.markTQTrustTransitionLocked()
 		s.quarantined = true
 		s.quarantineReason = v.Failure
 		s.quarantineEpoch = v.ConnectionEpoch
@@ -783,6 +935,11 @@ func (e *Engine) clearTQControlQuarantineLocked(epoch uint64) {
 			s.pressure.mode = TQPressureNormal
 		}
 	}
+	// A strictly newer aggregate acknowledgement restores the public T/Q trust
+	// domain. The connection-control fingerprint would publish the combined
+	// cell anyway, but this transition must also be represented by the T/Q
+	// projection accounting and immediate-transition counters.
+	e.markTQTrustTransitionLocked()
 	s.quarantined, s.quarantineRaisedAggregateOnly = false, false
 	s.quarantineReason, s.quarantineEpoch, s.quarantinePosition = "", 0, LivePosition{}
 	s.quarantineExpected, s.quarantineObserved, s.quarantineDeadline = 0, 0, false
@@ -803,15 +960,21 @@ func (e *Engine) applyTQDropLocked(node *queueNode) (DispositionCode, Dispositio
 			s.quotePressureShed++
 		}
 		if v.Symbol == "" {
+			changed := false
 			for _, member := range s.members {
 				if v.Family == "T" {
+					changed = changed || member.tradeCoverage.active
 					member.tradeCoverage.active = false
 				} else {
+					changed = changed || member.quoteCoverage.active
 					member.quoteCoverage.active = false
 				}
 				if member.present {
 					member.resetRequired = true
 				}
+			}
+			if changed {
+				e.markTQTrustTransitionLocked()
 			}
 			return DispositionTQRejected, ReasonPressure
 		}
@@ -839,6 +1002,9 @@ func (e *Engine) applyTQDropLocked(node *queueNode) (DispositionCode, Dispositio
 				s.quotePressureShed--
 			}
 			return DispositionTQFenced, ReasonHistoricalContext
+		}
+		if coverage.active || !m.resetRequired {
+			e.markTQTrustTransitionLocked()
 		}
 		coverage.greatest = v.Live
 		m.tradeCoverage.active, m.quoteCoverage.active, m.resetRequired = false, false, true
@@ -877,6 +1043,9 @@ func (e *Engine) applyTQDropLocked(node *queueNode) (DispositionCode, Dispositio
 		s.fenced++
 		return DispositionTQFenced, ReasonHistoricalContext
 	}
+	if coverage.active || !m.resetRequired {
+		e.markTQTrustTransitionLocked()
+	}
 	coverage.greatest = v.Live
 	m.tradeCoverage.active, m.quoteCoverage.active, m.resetRequired = false, false, true
 	s.rejected++
@@ -894,6 +1063,7 @@ func (e *Engine) applyTradeLocked(node *queueNode) (DispositionCode, Disposition
 		return DispositionTQFenced, ReasonHistoricalContext
 	}
 	if !m.tradeCoverage.active {
+		e.markTQTrustTransitionLocked()
 		start := v.ReceiptTime
 		if start.Before(e.state.binding.sessionStart) {
 			start = e.state.binding.sessionStart
@@ -927,6 +1097,7 @@ func (e *Engine) applyTradeLocked(node *queueNode) (DispositionCode, Disposition
 	}
 	limits := e.tqLimits
 	if len(m.trades) >= limits.tradesPerSymbol || len(m.fingerprints) >= limits.fingerprintsPerSymbol {
+		e.markTQTrustTransitionLocked()
 		m.bound = true
 		m.tradeCoverage.active, m.quoteCoverage.active = false, false
 		s.integrity++
@@ -960,6 +1131,7 @@ func (e *Engine) applyQuoteLocked(node *queueNode) (DispositionCode, Disposition
 		return DispositionTQFenced, ReasonHistoricalContext
 	}
 	if !m.quoteCoverage.active {
+		e.markTQTrustTransitionLocked()
 		m.quoteCoverage.active, m.quoteCoverage.greatest = true, v.Live
 		m.present, m.unknown = m.tradeCoverage.active, !m.tradeCoverage.active
 	} else {

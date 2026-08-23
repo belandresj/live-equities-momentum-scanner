@@ -69,12 +69,19 @@ func productionLiveQueueConfig() massive.LiveQueueConfig {
 }
 
 func main() {
+	installScannerSignalHandling()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, os.Args[1:]); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func installScannerSignalHandling() {
+	// A closed terminal is an observability failure, never a scanner lifecycle
+	// event. Ignore SIGPIPE so writes surface as ordinary failed descriptors.
+	signal.Ignore(syscall.SIGPIPE)
 }
 
 func run(ctx context.Context, arguments []string) error {
@@ -185,85 +192,66 @@ func run(ctx context.Context, arguments []string) error {
 	components := operations.LiveComponents{Adapter: adapter, Hydrator: hydrator, Store: store, Workers: *hydrationWorkers, RowsPerChunk: 256, MaximumResponseBytes: liveHydrationResponseByteBudget,
 		MaximumNormalizedRecords: maximumNormalizedRecords, MaximumResidentRecords: maximumResidentRecords,
 		Durations: massive.OperationalDurations{Dial: 10 * time.Second, HandshakeStep: 5 * time.Second, HandshakeTotal: 30 * time.Second, HeartbeatInterval: 15 * time.Second, HeartbeatDeadline: 5 * time.Second, Write: 5 * time.Second, Close: 5 * time.Second}}
-	api, err := snapshotapi.Listen(runtime, snapshotapi.ServerConfig{Address: *apiAddress, AllowedOrigins: []string(allowedOrigins)})
+	api, done, err := startLiveAfterAPI(func() (*apiSupervisor, error) {
+		return newAPISupervisor(runtime, snapshotapi.ServerConfig{Address: *apiAddress, AllowedOrigins: []string(allowedOrigins)}, func(source snapshotapi.CaptureSource, config snapshotapi.ServerConfig) (snapshotServer, error) {
+			return snapshotapi.Listen(source, config)
+		}, nil)
+	}, func() <-chan error {
+		done := make(chan error, 1)
+		go func() { done <- runtime.RunLive(runCtx, components) }()
+		return done
+	})
 	if err != nil {
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = runtime.Shutdown(shutdown)
 		return fmt.Errorf("start snapshot API: %w", err)
 	}
-	apiDone := api.Done()
-	done := make(chan error, 1)
-	go func() { done <- runtime.RunLive(runCtx, components) }()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
-	operator := newOperatorRenderer(os.Stdout, os.Stderr)
+	readinessTicker := time.NewTicker(watermarkStaleReadinessCadence)
+	defer readinessTicker.Stop()
+	stdout, stderr := newTerminalSinks(os.Stdout, os.Stderr)
+	operator := newOperatorRenderer(stdout, stderr)
+	watermarkStaleRecorder := &watermarkStaleDiagnosticRecorder{}
+	observeWatermarkStale := func() error {
+		// Status records the scanner-local observation. A concurrent /readyz
+		// capture records into the same bounded transition latch, so whichever
+		// path sees the crossing first cannot be erased by timer phase.
+		_ = runtime.Status()
+		transition, ok := runtime.ObserveWatermarkStaleTransition()
+		if !ok {
+			return nil
+		}
+		return watermarkStaleRecorder.observeTransition(transition, runtime.ObserveWatermarkStallEvidence, *diagnosticDirectory, stderr, persistWatermarkStaleDiagnostic)
+	}
 	if sample, err := captureLiveOperatorSample(runtime); err == nil {
-		if err := renderInitialOperator(operator, sample, func() error { return joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, false) }); err != nil {
-			return err
-		}
+		_ = observeWatermarkStale()
+		_ = operator.Render(sample, true)
 	}
-	diagnosticEncoder := json.NewEncoder(os.Stderr)
-	mappingFailures := api.MappingFailures()
+	diagnosticEncoder := json.NewEncoder(stderr)
 	diagnosticRecorder := ingressDiagnosticRecorder{}
-	for {
-		select {
-		case <-runCtx.Done():
-			diagnosticErr := diagnosticRecorder.record(*diagnosticDirectory, runtime.FirstIngressIncident(), os.Stderr, true, persistIngressIncident)
-			shutdownErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, false)
-			return errors.Join(runCtx.Err(), diagnosticErr, shutdownErr)
-		case err := <-done:
-			var diagnosticErr error
-			incident := runtime.FirstIngressIncident()
-			if sample, captureErr := captureLiveOperatorSample(runtime); captureErr == nil {
-				_ = operator.Render(sample, true)
-				incident = sample.IngressIncident
+	return superviseLive(liveSupervisorConfig{
+		context: runCtx, api: api, done: done, ticks: ticker.C, readinessTicks: readinessTicker.C,
+		capture:               func() (liveOperatorSample, error) { return captureLiveOperatorSample(runtime) },
+		observeWatermarkStale: observeWatermarkStale,
+		render:                operator.Render,
+		record: func(incident *operations.IngressIncident, final bool) error {
+			if incident == nil {
+				incident = runtime.FirstIngressIncident()
 			}
-			diagnosticErr = diagnosticRecorder.record(*diagnosticDirectory, incident, os.Stderr, true, persistIngressIncident)
-			if shutdownErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, true, false); shutdownErr != nil {
-				return shutdownErr
-			}
-			return errors.Join(err, diagnosticErr)
-		case err := <-apiDone:
-			diagnosticErr := diagnosticRecorder.record(*diagnosticDirectory, runtime.FirstIngressIncident(), os.Stderr, true, persistIngressIncident)
-			if shutdownErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, true); shutdownErr != nil {
-				return errors.Join(shutdownErr, diagnosticErr)
-			}
-			if err == nil {
-				return errors.Join(errors.New("snapshot API stopped unexpectedly"), diagnosticErr)
-			}
-			return errors.Join(fmt.Errorf("snapshot API: %w", err), diagnosticErr)
-		case failure := <-mappingFailures:
-			if err := encodeSnapshotMappingFailure(diagnosticEncoder, failure); err != nil {
-				if stopErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, false); stopErr != nil {
-					return stopErr
-				}
-				return errors.New("encode snapshot mapper diagnostic")
-			}
-		case <-ticker.C:
-			sample, err := captureLiveOperatorSample(runtime)
-			if err != nil {
-				if stopErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, false); stopErr != nil {
-					return stopErr
-				}
-				return errors.New("capture operational status")
-			}
-			_ = diagnosticRecorder.record(*diagnosticDirectory, sample.IngressIncident, os.Stderr, false, persistIngressIncident)
-			if err := operator.Render(sample, false); err != nil {
-				if stopErr := joinAndShutdown(runtime, api, done, apiDone, cancelRun, false, false); stopErr != nil {
-					return stopErr
-				}
-				return errors.New("write operational status")
-			}
-		}
-	}
-}
-
-func renderInitialOperator(renderer *operatorRenderer, sample liveOperatorSample, shutdown func() error) error {
-	if err := renderer.Render(sample, true); err != nil {
-		return errors.Join(errors.New("write operational status"), shutdown())
-	}
-	return nil
+			return diagnosticRecorder.record(*diagnosticDirectory, incident, stderr, final, persistIngressIncident)
+		},
+		encodeMapping: func(failure snapshotapi.MappingFailure) error {
+			return encodeSnapshotMappingFailure(diagnosticEncoder, failure)
+		},
+		shutdown: func(liveJoined bool) error {
+			return joinAndShutdownSupervisor(runtime, api, done, cancelRun, liveJoined)
+		},
+		onUnavailable: func(restartErr error) {
+			_, _ = fmt.Fprintf(stderr, "Snapshot API unavailable after bounded restart attempts: %v\n", restartErr)
+		},
+	})
 }
 
 func captureLiveOperatorSample(runtime *operations.Runtime) (liveOperatorSample, error) {
@@ -472,6 +460,25 @@ func joinAndShutdown(runtime *operations.Runtime, api *snapshotapi.Server, liveD
 		return liveJoinErr
 	}
 	return runtimeErr
+}
+
+func joinAndShutdownSupervisor(runtime *operations.Runtime, api *apiSupervisor, liveDone <-chan error, cancelRun context.CancelFunc, liveJoined bool) error {
+	cancelRun()
+	apiDeadline, cancelAPI := context.WithTimeout(context.Background(), 10*time.Second)
+	apiErr := api.Shutdown(apiDeadline)
+	cancelAPI()
+	liveDeadline, cancelLive := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelLive()
+	var liveErr error
+	if !liveJoined {
+		select {
+		case <-liveDone:
+		case <-liveDeadline.Done():
+			liveErr = errors.New("live composition shutdown deadline exceeded")
+		}
+	}
+	runtimeErr := runtime.Shutdown(liveDeadline)
+	return errors.Join(apiErr, liveErr, runtimeErr)
 }
 
 type originFlags []string

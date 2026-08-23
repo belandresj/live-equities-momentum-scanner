@@ -51,8 +51,9 @@ type Runtime struct {
 	metricsMu                  sync.Mutex
 	liveMu                     sync.Mutex
 	shutdownMu                 sync.Mutex
-	captureMu                  sync.Mutex
-	captureSequence            uint64
+	captureSequence            atomic.Uint64
+	diagnostics                atomic.Pointer[diagnosticsSample]
+	diagnosticCollections      atomic.Uint64
 	attempt                    *massive.LiveAttempt
 	adapter                    *massive.LiveAdapter
 	liveCancel                 context.CancelFunc
@@ -81,6 +82,8 @@ type Runtime struct {
 	ingressIncident            ingressIncidentLatch
 	recoveryAttempt            recoveryAttemptLatch
 	ingressHistory             ingressDiagnosticHistory
+	watermarkStallRing         watermarkStallRing
+	readinessObservations      atomic.Pointer[readinessObservationState]
 	// beforeHydrationPump is a package-private diagnostic-test seam. A nil
 	// hook is the complete production behavior; tests use it only to hold the
 	// consumer while exercising the fixed production queue ceiling.
@@ -93,6 +96,7 @@ type Runtime struct {
 type automaticTimerObservation struct {
 	disposition engine.TimerDisposition
 	timing      engine.EvaluationTimingView
+	cycleTime   time.Duration
 	capture     SnapshotCapture
 	captureErr  error
 }
@@ -115,7 +119,6 @@ func NewWithCheckpoint(ctx context.Context, binding reference.Binding, config Co
 		return nil, err
 	}
 	runtime := &Runtime{engine: owner, binding: binding, config: config, clock: clock, writer: writer, pressureSampler: defaultTQPressureSample, deliveryOneSecondMaxFamily: DeliveryLatencyUnknown}
-	runtime.metricsSnapshot = runtime.Metrics
 	admission, completion := owner.AdmitBinding(ctx, engine.BindingInstall{SchemaVersion: engine.BindingInstallSchemaV1, BindingIdentity: binding.Identity(), Binding: binding})
 	if admission != engine.AdmissionAdmitted || completion == nil {
 		owner.Close()
@@ -135,6 +138,11 @@ func NewWithCheckpoint(ctx context.Context, binding reference.Binding, config Co
 		}
 	}
 	runtime.processLive.Store(true)
+	// The API is not started until New returns. Establish the first immutable
+	// diagnostics sample synchronously so a served capture never has to invent
+	// process/queue/memory values while the sampler is still warming up.
+	runtime.storeDiagnosticsSample(runtime.Metrics())
+	runtime.metricsSnapshot = runtime.cachedMetrics
 	if writer != nil {
 		runtime.checkpointResultDone = make(chan struct{})
 		go runtime.runCheckpointResults()
@@ -167,33 +175,21 @@ func (r *Runtime) runCheckpointResults() {
 
 func (r *Runtime) runTimer(ctx context.Context) {
 	defer close(r.timerDone)
-	evaluationTicker := time.NewTicker(r.config.SampleCadence)
+	cycleAnchor := time.Now()
+	evaluationTimer := time.NewTimer(r.config.SampleCadence)
 	pressureTicker := time.NewTicker(time.Second)
-	defer evaluationTicker.Stop()
+	defer evaluationTimer.Stop()
 	defer pressureTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-evaluationTicker.C:
-			r.captureLiveCoverage(ctx)
-			started := time.Now()
-			admission, completion := r.engine.AdmitTimer(ctx)
-			if admission != engine.AdmissionAdmitted || completion == nil {
-				if ctx.Err() != nil {
-					return
-				}
-				continue
-			}
-			select {
-			case <-ctx.Done():
+		case <-evaluationTimer.C:
+			r.runEvaluationCycle(ctx)
+			if ctx.Err() != nil {
 				return
-			case disposition := <-completion:
-				r.recordDeliveryLatency(time.Since(started), DeliveryLatencyTimer)
-				r.captureAutomaticTimerObservation(disposition)
-				r.recordEngineDispositionIncident(disposition.Code, disposition.Reason)
-				r.syncTQCommand(ctx)
 			}
+			evaluationTimer.Reset(nextEvaluationCadenceDelay(cycleAnchor, r.config.SampleCadence, time.Now()))
 		case <-pressureTicker.C:
 			admission, completion := r.engine.AdmitTQPressureTick(ctx)
 			if admission != engine.AdmissionAdmitted || completion == nil {
@@ -210,6 +206,51 @@ func (r *Runtime) runTimer(ctx context.Context) {
 				r.syncTQCommand(ctx)
 			}
 		}
+	}
+}
+
+func nextEvaluationCadenceDelay(anchor time.Time, cadence time.Duration, now time.Time) time.Duration {
+	if cadence <= 0 || now.Before(anchor) {
+		return cadence
+	}
+	elapsed := now.Sub(anchor)
+	next := anchor.Add((elapsed/cadence + 1) * cadence)
+	return next.Sub(now)
+}
+
+func (r *Runtime) runEvaluationCycle(ctx context.Context) {
+	cycleStarted := time.Now()
+	cycleStartedAt := r.clock().UTC()
+	cycleBefore := r.engine.ObserveEvaluationCycle()
+	fenceDisposition := r.captureLiveCoverage(ctx)
+	fenceTiming := engine.FenceTimingView{}
+	if fenceDisposition == engine.DispositionLiveCoverageFenceApplied {
+		fenceTiming = r.engine.ObserveFenceTiming()
+	}
+	timerStarted := time.Now()
+	var admission engine.AdmissionResult
+	var completion <-chan engine.TimerDisposition
+	timerPolicy := WatermarkStallTimerEvaluationFallback
+	if fenceDisposition == engine.DispositionLiveCoverageFenceApplied {
+		timerPolicy = WatermarkStallTimerMaintenanceOnly
+		admission, completion = r.engine.AdmitMaintenanceTimer(ctx)
+	} else {
+		admission, completion = r.engine.AdmitTimer(ctx)
+	}
+	if admission != engine.AdmissionAdmitted || completion == nil {
+		return
+	}
+	select {
+	case <-ctx.Done():
+		return
+	case disposition := <-completion:
+		r.recordDeliveryLatency(time.Since(timerStarted), DeliveryLatencyTimer)
+		cycleCompletedAt := r.clock().UTC()
+		r.recordWatermarkStallCycle(cycleStartedAt, cycleCompletedAt, time.Since(cycleStarted), fenceDisposition, timerPolicy,
+			cycleBefore, r.engine.ObserveEvaluationCycle(), fenceTiming, disposition, r.engine.ObserveEvaluationTiming(), r.cachedMetrics())
+		r.captureAutomaticTimerObservation(disposition, time.Since(cycleStarted))
+		r.recordEngineDispositionIncident(disposition.Code, disposition.Reason)
+		r.syncTQCommand(ctx)
 	}
 }
 
@@ -264,7 +305,7 @@ func engineTerminalDisposition(code engine.DispositionCode) bool {
 
 func (r *Runtime) runIngressDiagnosticSampler(ctx context.Context) {
 	defer close(r.ingressSamplerDone)
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(r.config.SampleCadence)
 	defer ticker.Stop()
 	for {
 		select {
@@ -285,7 +326,7 @@ func (r *Runtime) setAutomaticTimerObserver(observer func(automaticTimerObservat
 	r.automaticTimerObserverMu.Unlock()
 }
 
-func (r *Runtime) captureAutomaticTimerObservation(disposition engine.TimerDisposition) {
+func (r *Runtime) captureAutomaticTimerObservation(disposition engine.TimerDisposition, cycleTime time.Duration) {
 	r.automaticTimerObserverMu.RLock()
 	observer := r.automaticTimerObserver
 	r.automaticTimerObserverMu.RUnlock()
@@ -296,6 +337,7 @@ func (r *Runtime) captureAutomaticTimerObservation(disposition engine.TimerDispo
 	observer(automaticTimerObservation{
 		disposition: disposition,
 		timing:      r.engine.ObserveEvaluationTiming(),
+		cycleTime:   cycleTime,
 		capture:     capture,
 		captureErr:  err,
 	})
@@ -432,7 +474,7 @@ func (r *Runtime) captureIngressDiagnosticSample() {
 	if r == nil {
 		return
 	}
-	metrics := r.Metrics()
+	metrics := r.collectDiagnosticsSample()
 	r.metricsMu.Lock()
 	attempt := r.attempt
 	r.metricsMu.Unlock()
@@ -441,6 +483,20 @@ func (r *Runtime) captureIngressDiagnosticSample() {
 		active = attempt.ActiveDeliveryDiagnostic()
 	}
 	r.ingressHistory.add(ingressDiagnosticSampleFromMetrics(metrics, active))
+}
+
+func (r *Runtime) collectDiagnosticsSample() Metrics {
+	metrics := r.Metrics()
+	r.storeDiagnosticsSample(metrics)
+	return metrics
+}
+
+func (r *Runtime) storeDiagnosticsSample(metrics Metrics) {
+	if r == nil {
+		return
+	}
+	stored := cloneMetrics(metrics)
+	r.diagnostics.Store(&diagnosticsSample{metrics: stored, collectedAt: metrics.SampledAt})
 }
 
 func ingressDiagnosticSampleFromMetrics(metrics Metrics, active massive.ActiveDeliveryDiagnostic) IngressDiagnosticSample {
@@ -539,28 +595,34 @@ func (r *Runtime) syncTQCommand(ctx context.Context) {
 	}
 }
 
-func (r *Runtime) captureLiveCoverage(ctx context.Context) {
+func (r *Runtime) captureLiveCoverage(ctx context.Context) engine.DispositionCode {
 	r.metricsMu.Lock()
 	attempt := r.attempt
 	r.metricsMu.Unlock()
 	if attempt == nil {
-		return
+		return ""
 	}
 	command, err := r.engine.IssueLiveCoverageFence()
 	if err != nil {
-		return
+		return ""
 	}
 	if err := attempt.CaptureLiveCoverageFence(ctx, r.engine, command); err != nil {
 		admission, completion := r.engine.AdmitLiveCoverageFenceCancellation(ctx, command)
 		if admission == engine.AdmissionAdmitted && completion != nil {
 			select {
 			case <-ctx.Done():
-			case <-completion:
+				return ""
+			case disposition := <-completion:
+				return disposition.Code
 			}
 		}
-		return
+		return ""
 	}
-	_, _ = command.Wait(ctx)
+	disposition, err := command.Wait(ctx)
+	if err != nil {
+		return ""
+	}
+	return disposition.Code
 }
 
 func (r *Runtime) Engine() *engine.Engine { return r.engine }
@@ -569,7 +631,9 @@ func (r *Runtime) Status() Status {
 	if r == nil || r.engine == nil {
 		return Status{Reason: ReasonRuntimeUnavailable}
 	}
-	return deriveStatus(r.processLive.Load() && !r.joined.Load(), r.binding, r.config, r.clock().UTC(), r.engine.ObserveOperational())
+	status := deriveStatus(r.processLive.Load() && !r.joined.Load(), r.binding, r.config, r.clock().UTC(), r.engine.ObserveOperational())
+	r.recordReadinessObservation(status)
+	return status
 }
 
 func (r *Runtime) Shutdown(ctx context.Context) error {

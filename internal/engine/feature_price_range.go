@@ -214,7 +214,13 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 		(node.kind == inputLiveCoverageFence && code == DispositionLiveCoverageFenceApplied) {
 		target, evaluate := e.aggregateEvaluationTargetLocked(node)
 		if !evaluate {
-			return nil
+			// Timer facts still own canonical compaction and other semantics-neutral
+			// maintenance even when the explicit aggregate projection gate is
+			// closed. Maintenance cannot consume pending projection work.
+			if node.kind != inputTimer || e.state.committedT == nil {
+				return nil
+			}
+			target = *e.state.committedT
 		}
 		maintenanceAt := target
 		if e.state.committedT != nil {
@@ -247,10 +253,17 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 		if e.hiddenReplayWarmupLocked(node) {
 			return nil
 		}
+		if !evaluate {
+			return nil
+		}
 		started := e.evaluationTimingStart()
+		e.recordAggregateEvaluationStartLocked(node, target)
 		staged := e.stageAggregateEvaluationAtLocked(target, node.admissionTime)
 		stageElapsed := e.evaluationTimingElapsed(started)
-		e.state.evaluationTiming = EvaluationTimingView{EngineSequence: node.engineSequence, Stage: stageElapsed}
+		e.state.evaluationTiming.EngineSequence = node.engineSequence
+		e.state.evaluationTiming.Stage = stageElapsed
+		e.state.evaluationTiming.Apply = 0
+		e.state.evaluationTiming.Publication = 0
 		if node.kind == inputAggregateIngressFence {
 			e.state.fenceTiming.Target = target
 			e.state.fenceTiming.SymbolMaintenance = maintenanceElapsed
@@ -321,8 +334,12 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 			return nil
 		}
 		started := e.evaluationTimingStart()
+		e.recordAggregateEvaluationStartLocked(node, *e.state.committedT)
 		staged := e.stageAggregateEvaluationAtLocked(*e.state.committedT, node.admissionTime)
-		e.state.evaluationTiming = EvaluationTimingView{EngineSequence: node.engineSequence, Stage: e.evaluationTimingElapsed(started)}
+		e.state.evaluationTiming.EngineSequence = node.engineSequence
+		e.state.evaluationTiming.Stage = e.evaluationTimingElapsed(started)
+		e.state.evaluationTiming.Apply = 0
+		e.state.evaluationTiming.Publication = 0
 		return &staged
 	}
 	if e.deferReplayAggregateProjectionLocked(node) {
@@ -345,13 +362,55 @@ func (e *Engine) aggregateEvaluationTargetLocked(node *queueNode) (time.Time, bo
 	if e.mode != RunModeLive || (node.kind != inputTimer && node.kind != inputAggregateIngressFence && node.kind != inputLiveCoverageFence) {
 		return time.Time{}, false
 	}
-	if e.state.latestTarget != nil && e.candidateTargetSupportedLocked(*e.state.latestTarget) {
+	if node.kind == inputTimer && node.timerPolicy == timerMaintenanceOnly {
+		terminalEvaluation := e.state.lifecycle == lifecycleEnded &&
+			(e.state.aggregateProjectionPending || e.state.aggregateEvaluator.current.mode != rankingUnavailable)
+		if !terminalEvaluation {
+			return time.Time{}, false
+		}
+	}
+	if node.kind != inputTimer && e.state.latestTarget != nil && e.candidateTargetSupportedLocked(*e.state.latestTarget) {
+		// An accepted ingress/live fence is itself the exact supporting prefix
+		// boundary and receives one evaluation opportunity even at committed T.
+		return *e.state.latestTarget, true
+	}
+	if e.state.latestTarget != nil && (e.state.committedT == nil || e.state.latestTarget.After(*e.state.committedT)) && e.candidateTargetSupportedLocked(*e.state.latestTarget) {
 		return *e.state.latestTarget, true
 	}
 	if e.state.aggregateProjectionPending && e.state.committedT != nil && e.candidateTargetSupportedLocked(*e.state.committedT) {
 		return *e.state.committedT, true
 	}
+	if node.kind == inputTimer && e.state.committedT != nil && e.candidateTargetSupportedLocked(*e.state.committedT) {
+		deadlineDue := e.state.aggregateEvaluationDeadline != nil && node.admissionTime.After(*e.state.aggregateEvaluationDeadline)
+		projectionMissing := !e.state.aggregateEvaluator.current.at.Equal(*e.state.committedT)
+		lifecycleEvaluationDue := e.state.lifecycle != lifecycleLive && e.state.lifecycle != lifecycleHydrating &&
+			e.state.lifecycle != lifecycleReplaying && e.state.aggregateEvaluator.current.mode != rankingUnavailable
+		finalEvaluationDue := e.state.lifecycle == lifecycleEnded &&
+			(e.state.evaluationTiming.Target.IsZero() || !e.state.evaluationTiming.Target.Equal(*e.state.committedT))
+		if deadlineDue || projectionMissing || lifecycleEvaluationDue || finalEvaluationDue {
+			return *e.state.committedT, true
+		}
+	}
 	return time.Time{}, false
+}
+
+func (e *Engine) recordAggregateEvaluationStartLocked(node *queueNode, target time.Time) {
+	view := &e.state.evaluationTiming
+	view.Target = target
+	switch node.kind {
+	case inputLiveCoverageFence:
+		view.Source = AggregateEvaluationLiveCoverageFence
+		view.Starts.LiveCoverageFence++
+	case inputAggregateIngressFence:
+		view.Source = AggregateEvaluationIngressFence
+		view.Starts.AggregateIngressFence++
+	case inputReplayGroup:
+		view.Source = AggregateEvaluationReplay
+		view.Starts.Replay++
+	default:
+		view.Source = AggregateEvaluationTimer
+		view.Starts.Timer++
+	}
 }
 
 func evaluatePriceRangeFeatures(binding *installedBinding, symbol *coreSymbol, at time.Time) priceRangeFeatureResult {
@@ -497,9 +556,7 @@ func priceRangeTailViewAt(state *symbolAggregateState, features *priceRangeFeatu
 				result.firstStart, result.firstOpen, result.hasFirst = record.windowStart.Unix(), record.values.Open, true
 			}
 		}
-		result.sessionLow, result.sessionHigh, result.hasSession = extremaEvidenceWithin(features.lows, features.highs, binding.sessionStart.Unix(), at.Unix())
-		result.rolling30Low, result.rolling30High, result.hasRolling30 = extremaEvidenceWithin(features.lows, features.highs, rolling30Start.Unix(), at.Unix())
-		result.rolling60Low, result.rolling60High, result.hasRolling60 = extremaEvidenceWithin(features.lows, features.highs, rolling60Start.Unix(), at.Unix())
+		populatePriceRangeTailExtrema(&result, features.lows, features.highs, binding.sessionStart.Unix(), rolling60Start.Unix(), rolling30Start.Unix(), at.Unix())
 		return result
 	}
 	// Compatibility/containment fallback for a pre-correction or malformed
@@ -522,6 +579,57 @@ func priceRangeTailViewAt(state *symbolAggregateState, features *priceRangeFeatu
 		}
 	}
 	return result
+}
+
+// populatePriceRangeTailExtrema answers the three nested as-of ranges in one
+// pass over each ordered extrema stream. The former implementation rescanned
+// the retained per-second tail independently for session, 60-minute, and
+// 30-minute results during every full-universe evaluation.
+func populatePriceRangeTailExtrema(result *priceRangeTailView, lows, highs []extremaPoint, sessionStart, rolling60Start, rolling30Start, upper int64) {
+	lowStart := sort.Search(len(lows), func(i int) bool { return lows[i].windowStart >= sessionStart })
+	lowEnd := sort.Search(len(lows), func(i int) bool { return lows[i].windowStart >= upper })
+	for _, point := range lows[lowStart:lowEnd] {
+		if !result.hasSession || point.value < result.sessionLow {
+			result.sessionLow = point.value
+		}
+		result.hasSession = true
+		if point.windowStart >= rolling60Start {
+			if !result.hasRolling60 || point.value < result.rolling60Low {
+				result.rolling60Low = point.value
+			}
+			result.hasRolling60 = true
+			if point.windowStart >= rolling30Start {
+				if !result.hasRolling30 || point.value < result.rolling30Low {
+					result.rolling30Low = point.value
+				}
+				result.hasRolling30 = true
+			}
+		}
+	}
+	hasSessionHigh, hasRolling60High, hasRolling30High := false, false, false
+	highStart := sort.Search(len(highs), func(i int) bool { return highs[i].windowStart >= sessionStart })
+	highEnd := sort.Search(len(highs), func(i int) bool { return highs[i].windowStart >= upper })
+	for _, point := range highs[highStart:highEnd] {
+		if !hasSessionHigh || point.value > result.sessionHigh {
+			result.sessionHigh = point.value
+		}
+		hasSessionHigh = true
+		if point.windowStart >= rolling60Start {
+			if !hasRolling60High || point.value > result.rolling60High {
+				result.rolling60High = point.value
+			}
+			hasRolling60High = true
+			if point.windowStart >= rolling30Start {
+				if !hasRolling30High || point.value > result.rolling30High {
+					result.rolling30High = point.value
+				}
+				hasRolling30High = true
+			}
+		}
+	}
+	result.hasSession = result.hasSession && hasSessionHigh
+	result.hasRolling60 = result.hasRolling60 && hasRolling60High
+	result.hasRolling30 = result.hasRolling30 && hasRolling30High
 }
 
 func mergeRangeEvidence(low, high float64, found bool, candidateLow, candidateHigh float64) (float64, float64, bool) {

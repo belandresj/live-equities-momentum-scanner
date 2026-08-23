@@ -29,7 +29,10 @@ const (
 	keychainAccount  = "joshuabelandres"
 	keychainService  = "momentum-scanner-massive-api"
 	preconnectLead   = 5 * time.Minute
+	dashboardRetries = 3
 )
+
+var dashboardRetryDelays = [...]time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
 
 // Run starts the private daily scanner workflow rooted at repoRoot. The
 // repository-owned wrapper resolves repoRoot from its own location so this
@@ -186,10 +189,36 @@ type dependencies struct {
 	dashboardShutdown     time.Duration
 }
 
+// safeOutput makes launcher progress reporting best effort. In particular, a
+// closed foreground pipe must not turn a reporting failure into child
+// containment. Returning a successful full write also keeps os/exec's output
+// copier draining child pipes after the terminal has gone away.
+type safeOutput struct {
+	mu       sync.Mutex
+	writer   io.Writer
+	disabled bool
+}
+
+func newSafeOutput(writer io.Writer) *safeOutput { return &safeOutput{writer: writer} }
+
+func (output *safeOutput) Write(data []byte) (int, error) {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	if output.disabled {
+		return len(data), nil
+	}
+	written, err := output.writer.Write(data)
+	if err != nil || written != len(data) {
+		output.disabled = true
+	}
+	return len(data), nil
+}
+
 func run(ctx context.Context, repoRoot string, arguments []string, stdout, stderr io.Writer, deps dependencies) error {
 	if ctx == nil || stdout == nil || stderr == nil {
 		return errors.New("private scanner launcher requires context and output streams")
 	}
+	stdout, stderr = newSafeOutput(stdout), newSafeOutput(stderr)
 	parsed, err := parseOptions(arguments)
 	if err != nil {
 		return err
@@ -221,6 +250,18 @@ func run(ctx context.Context, repoRoot string, arguments []string, stdout, stder
 	if err != nil {
 		return fmt.Errorf("preflight: %w", err)
 	}
+	// Preflight can compile both children and may cross the selected session's
+	// preconnect boundary. Re-resolve from the current wall clock before any
+	// optional dashboard work so it cannot delay the ordinary scanner start.
+	now = deps.now().In(location)
+	facts, err = resolveLaunchSession(schedule, now, parsed.tradingDate)
+	if err != nil {
+		return err
+	}
+	tradingDate = facts.TradingDate
+	sessionStart, sessionEnd = facts.SessionStart.In(location), facts.SessionEnd.In(location)
+	preconnectAt = sessionStart.Add(-preconnectLead)
+	standby = now.Before(preconnectAt)
 	baseEnvironment := deps.baseEnvironment()
 	dashboardArguments := []string{
 		"--address", dashboardAddress,
@@ -228,18 +269,33 @@ func run(ctx context.Context, repoRoot string, arguments []string, stdout, stder
 		"--assets", filepath.Join(repoRoot, "ui"),
 	}
 	var scanner, dashboard childProcess
+	dashboardRecovered := false
 	if standby {
 		fmt.Fprintf(stdout, "Overnight standby for trading session %s. Dashboard starts now; scanner credential, reference, and provider work begin at %s.\n", tradingDate, preconnectAt.Format("2006-01-02 15:04 MST"))
-		dashboard, err = deps.start(processSpec{name: "dashboard", path: paths.dashboardBinary, arguments: dashboardArguments,
-			environment: append([]string(nil), baseEnvironment...), workingDirectory: repoRoot, stdout: stdout, stderr: stderr})
-		if err != nil {
-			return fmt.Errorf("start dashboard: %w", err)
+		// Do not let a listener-health deadline cross the scanner's fixed
+		// preconnect boundary. A dashboard is optional during standby; once its
+		// full health budget no longer fits, scanner startup takes precedence.
+		if now.Add(dashboardStandbyBudget(deps)).Before(preconnectAt) {
+			dashboard, err = startDashboard(ctx, paths.dashboardBinary, dashboardArguments, baseEnvironment, repoRoot, stdout, stderr, deps)
+			if err != nil {
+				dashboardRecovered = true
+				fmt.Fprintf(stderr, "WARNING: dashboard unavailable during standby: %v; standby and the scheduled scanner start continue without a dashboard.\n", err)
+				if dashboard != nil {
+					if stopErr := signalAndWait(dashboard, containmentSignal(ctx), deps.dashboardShutdown, "dashboard"); stopErr == nil {
+						dashboard = nil
+					} else {
+						fmt.Fprintf(stderr, "WARNING: standby dashboard could not be reaped: %v; it remains supervised without a health claim.\n", stopErr)
+					}
+				}
+			}
+		} else {
+			dashboardRecovered = true
+			fmt.Fprintln(stderr, "WARNING: dashboard standby start deferred to preserve the scheduled scanner preconnect boundary.")
 		}
-		if err := waitForDashboard(ctx, dashboard, dashboardOrigin+"/", deps); err != nil {
-			return errors.Join(err, stopChildren(nil, dashboard, false, false, containmentSignal(ctx), deps))
+		if dashboard != nil {
+			fmt.Fprintf(stdout, "Scanner dashboard: %s (scanner disconnected during standby)\n", dashboardOrigin)
 		}
-		fmt.Fprintf(stdout, "Scanner dashboard: %s (scanner disconnected during standby)\n", dashboardOrigin)
-		if parsed.open {
+		if parsed.open && dashboard != nil && !dashboardRecovered {
 			if err := deps.open(ctx, dashboardOrigin, baseEnvironment, stdout, stderr); err != nil {
 				fmt.Fprintf(stderr, "WARNING: could not open the dashboard browser: %v; standby remains active.\n", err)
 			}
@@ -248,11 +304,17 @@ func run(ctx context.Context, repoRoot string, arguments []string, stdout, stder
 			priorTradingDate, priorPreconnectAt := tradingDate, preconnectAt
 			dashboardDone, waitErr := waitForPreconnect(ctx, dashboard, preconnectAt, deps)
 			if waitErr != nil {
-				stopErr := stopChildren(nil, dashboard, false, dashboardDone, containmentSignal(ctx), deps)
+				stopErr := stopChildren(nil, dashboard, false, dashboardDone || dashboard == nil, containmentSignal(ctx), deps)
 				if errors.Is(waitErr, context.Canceled) {
 					return stopErr
 				}
 				return errors.Join(waitErr, stopErr)
+			}
+			if dashboardDone {
+				dashboard = nil
+				dashboardRecovered = true
+				fmt.Fprintln(stderr, "WARNING: dashboard exited during standby; standby and the scheduled scanner start continue without a dashboard.")
+				continue
 			}
 			wakeNow := deps.now().In(location)
 			refreshed, refreshErr := resolveLaunchSession(schedule, wakeNow, parsed.tradingDate)
@@ -312,25 +374,29 @@ func run(ctx context.Context, repoRoot string, arguments []string, stdout, stder
 		return errors.Join(err, stopChildren(scanner, dashboard, false, false, containmentSignal(ctx), deps))
 	}
 	if dashboard == nil {
-		dashboard, err = deps.start(processSpec{name: "dashboard", path: paths.dashboardBinary, arguments: dashboardArguments,
-			environment: append([]string(nil), baseEnvironment...), workingDirectory: repoRoot, stdout: stdout, stderr: stderr})
+		dashboard, err = startDashboard(ctx, paths.dashboardBinary, dashboardArguments, baseEnvironment, repoRoot, stdout, stderr, deps)
 		if err != nil {
-			return errors.Join(fmt.Errorf("start dashboard: %w", err), stopChildren(scanner, nil, false, false, syscall.SIGTERM, deps))
+			dashboardRecovered = true
+			dashboard, err = recoverDashboardAfterFailure(ctx, scanner, dashboard, err, paths.dashboardBinary, dashboardArguments, baseEnvironment, repoRoot, stdout, stderr, deps)
 		}
-		if err := waitForDashboard(ctx, dashboard, dashboardOrigin+"/", deps); err != nil {
-			return errors.Join(err, stopChildren(scanner, dashboard, false, false, containmentSignal(ctx), deps))
+		if err != nil {
+			stopErr := stopChildren(scanner, dashboard, false, dashboard == nil, containmentSignal(ctx), deps)
+			if errors.Is(err, context.Canceled) {
+				return stopErr
+			}
+			return errors.Join(err, stopErr)
 		}
 	}
 
 	fmt.Fprintf(stdout, "Scanner snapshot: %s/api/v2/snapshot\n", scannerOrigin)
 	fmt.Fprintf(stdout, "Scanner liveness: %s/livez\n", scannerOrigin)
 	fmt.Fprintf(stdout, "Scanner readiness: %s/readyz\n", scannerOrigin)
-	if parsed.open && !standby {
+	if parsed.open && !standby && !dashboardRecovered && dashboard != nil {
 		if err := deps.open(ctx, dashboardOrigin, baseEnvironment, stdout, stderr); err != nil {
 			fmt.Fprintf(stderr, "WARNING: could not open the dashboard browser: %v; services remain running.\n", err)
 		}
 	}
-	return supervise(ctx, scanner, dashboard, sessionEnd, stdout, deps)
+	return supervise(ctx, scanner, dashboard, sessionEnd, paths.dashboardBinary, dashboardArguments, baseEnvironment, repoRoot, stdout, stderr, deps)
 }
 
 func resolveLaunchSession(schedule *session.Schedule, now time.Time, explicit string) (session.Facts, error) {
@@ -374,15 +440,19 @@ func waitForPreconnect(ctx context.Context, dashboard childProcess, target time.
 	if deps.standbyRecheck > 0 && delay > deps.standbyRecheck {
 		delay = deps.standbyRecheck
 	}
+	var dashboardDone <-chan error
+	if dashboard != nil {
+		dashboardDone = dashboard.Done()
+	}
 	select {
-	case err := <-dashboard.Done():
-		return true, fmt.Errorf("dashboard exited during overnight standby: %w", normalizeExit(err))
+	case <-dashboardDone:
+		return true, nil
 	case <-ctx.Done():
 		return false, ctx.Err()
 	case <-deps.after(delay):
 		select {
-		case err := <-dashboard.Done():
-			return true, fmt.Errorf("dashboard exited during overnight standby: %w", normalizeExit(err))
+		case <-dashboardDone:
+			return true, nil
 		default:
 			return false, nil
 		}
@@ -424,11 +494,21 @@ func waitForDashboard(ctx context.Context, child childProcess, url string, deps 
 	ticker := time.NewTicker(deps.pollInterval)
 	defer ticker.Stop()
 	for {
+		select {
+		case childErr := <-child.Done():
+			return fmt.Errorf("dashboard exited before its listener became healthy: %w", normalizeExit(childErr))
+		default:
+		}
 		probeCtx, cancel := context.WithTimeout(ctx, minDuration(2*time.Second, deps.pollInterval*4))
 		result, err := deps.probe(probeCtx, url)
 		cancel()
 		if err == nil && result.status == http.StatusOK {
-			return nil
+			select {
+			case childErr := <-child.Done():
+				return fmt.Errorf("dashboard exited before its listener became healthy: %w", normalizeExit(childErr))
+			default:
+				return nil
+			}
 		}
 		select {
 		case childErr := <-child.Done():
@@ -442,7 +522,86 @@ func waitForDashboard(ctx context.Context, child childProcess, url string, deps 
 	}
 }
 
-func supervise(ctx context.Context, scanner, dashboard childProcess, sessionEnd time.Time, stdout io.Writer, deps dependencies) error {
+func startDashboard(ctx context.Context, dashboardBinary string, dashboardArguments, baseEnvironment []string, repoRoot string, stdout, stderr io.Writer, deps dependencies) (childProcess, error) {
+	dashboard, err := deps.start(processSpec{name: "dashboard", path: dashboardBinary, arguments: append([]string(nil), dashboardArguments...),
+		environment: append([]string(nil), baseEnvironment...), workingDirectory: repoRoot, stdout: stdout, stderr: stderr})
+	if err != nil {
+		return nil, fmt.Errorf("start dashboard: %w", err)
+	}
+	if err := waitForDashboard(ctx, dashboard, dashboardOrigin+"/", deps); err != nil {
+		return dashboard, err
+	}
+	return dashboard, nil
+}
+
+func startDashboardWithRecovery(ctx context.Context, scanner childProcess, dashboardBinary string, dashboardArguments, baseEnvironment []string, repoRoot string, stdout, stderr io.Writer, deps dependencies) (childProcess, error) {
+	dashboard, err := startDashboard(ctx, dashboardBinary, dashboardArguments, baseEnvironment, repoRoot, stdout, stderr, deps)
+	if err == nil {
+		return dashboard, nil
+	}
+	return recoverDashboardAfterFailure(ctx, scanner, dashboard, err, dashboardBinary, dashboardArguments, baseEnvironment, repoRoot, stdout, stderr, deps)
+}
+
+// recoverDashboard starts at most dashboardRetries replacements after one
+// dashboard-local failure. It intentionally never contains the scanner: a
+// failed dashboard leaves the scanner running headless when recovery cannot
+// establish a healthy listener.
+func recoverDashboard(ctx context.Context, scanner, dashboard childProcess, dashboardBinary string, dashboardArguments, baseEnvironment []string, repoRoot string, stdout, stderr io.Writer, deps dependencies) (childProcess, error) {
+	return recoverDashboardAfterFailure(ctx, scanner, dashboard, errors.New("dashboard unavailable"), dashboardBinary, dashboardArguments, baseEnvironment, repoRoot, stdout, stderr, deps)
+}
+
+func recoverDashboardAfterFailure(ctx context.Context, scanner, dashboard childProcess, cause error, dashboardBinary string, dashboardArguments, baseEnvironment []string, repoRoot string, stdout, stderr io.Writer, deps dependencies) (childProcess, error) {
+	if dashboard != nil {
+		if err := ctx.Err(); err != nil {
+			return dashboard, err
+		}
+		if err := signalAndWait(dashboard, syscall.SIGTERM, deps.dashboardShutdown, "dashboard"); err != nil {
+			fmt.Fprintf(stderr, "WARNING: dashboard recovery could not reap the failed dashboard: %v; scanner remains supervised without a dashboard health claim.\n", err)
+			return dashboard, nil
+		}
+	}
+	fmt.Fprintf(stderr, "WARNING: dashboard unavailable: %v; retrying without interrupting the scanner.\n", cause)
+	for attempt, delay := range dashboardRetryDelays {
+		if err := waitForDashboardRetry(ctx, scanner, delay, deps); err != nil {
+			return nil, err
+		}
+		fmt.Fprintf(stderr, "WARNING: dashboard recovery attempt %d of %d.\n", attempt+1, dashboardRetries)
+		replacement, err := startDashboard(ctx, dashboardBinary, dashboardArguments, baseEnvironment, repoRoot, stdout, stderr, deps)
+		if err == nil {
+			fmt.Fprintln(stdout, "Scanner dashboard: available after local recovery.")
+			return replacement, nil
+		}
+		if replacement != nil {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return replacement, contextErr
+			}
+			if stopErr := signalAndWait(replacement, syscall.SIGTERM, deps.dashboardShutdown, "dashboard"); stopErr != nil {
+				fmt.Fprintf(stderr, "WARNING: dashboard recovery could not reap attempt %d: %v; scanner remains supervised without a dashboard health claim.\n", attempt+1, stopErr)
+				return replacement, nil
+			}
+		}
+		cause = err
+	}
+	fmt.Fprintf(stderr, "WARNING: dashboard recovery exhausted after %d attempts (%v); scanner remains running headless. Start cmd/dashboard independently after correcting the local dashboard failure.\n", dashboardRetries, cause)
+	return nil, nil
+}
+
+func waitForDashboardRetry(ctx context.Context, scanner childProcess, delay time.Duration, deps dependencies) error {
+	var scannerDone <-chan error
+	if scanner != nil {
+		scannerDone = scanner.Done()
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case scannerErr := <-scannerDone:
+		return fmt.Errorf("scanner exited unexpectedly: %w", normalizeExit(scannerErr))
+	case <-deps.after(delay):
+		return nil
+	}
+}
+
+func supervise(ctx context.Context, scanner, dashboard childProcess, sessionEnd time.Time, dashboardBinary string, dashboardArguments, baseEnvironment []string, repoRoot string, stdout, stderr io.Writer, deps dependencies) error {
 	ticker := time.NewTicker(deps.pollInterval)
 	defer ticker.Stop()
 	lastReadiness := ""
@@ -475,6 +634,10 @@ func supervise(ctx context.Context, scanner, dashboard childProcess, sessionEnd 
 	}
 	reportReadiness()
 	for {
+		var dashboardDone <-chan error
+		if dashboard != nil {
+			dashboardDone = dashboard.Done()
+		}
 		select {
 		case <-ctx.Done():
 			return stopChildren(scanner, dashboard, false, false, containmentSignal(ctx), deps)
@@ -484,8 +647,17 @@ func supervise(ctx context.Context, scanner, dashboard childProcess, sessionEnd 
 				return stopErr
 			}
 			return errors.Join(fmt.Errorf("scanner exited unexpectedly: %w", normalizeExit(err)), stopErr)
-		case err := <-dashboard.Done():
-			return errors.Join(fmt.Errorf("dashboard exited unexpectedly: %w", normalizeExit(err)), stopChildren(scanner, dashboard, false, true, syscall.SIGTERM, deps))
+		case err := <-dashboardDone:
+			fmt.Fprintf(stderr, "WARNING: dashboard exited unexpectedly: %v; scanner supervision continues.\n", normalizeExit(err))
+			dashboard = nil
+			var recoveryErr error
+			dashboard, recoveryErr = recoverDashboard(ctx, scanner, nil, dashboardBinary, dashboardArguments, baseEnvironment, repoRoot, stdout, stderr, deps)
+			if recoveryErr != nil {
+				if errors.Is(recoveryErr, context.Canceled) {
+					return stopChildren(scanner, dashboard, false, dashboard == nil, containmentSignal(ctx), deps)
+				}
+				return errors.Join(recoveryErr, stopChildren(scanner, dashboard, false, dashboard == nil, syscall.SIGTERM, deps))
+			}
 		case <-ticker.C:
 			reportReadiness()
 		}
@@ -517,7 +689,18 @@ func stopChildren(scanner, dashboard childProcess, scannerDone, dashboardDone bo
 
 func signalAndWait(child childProcess, signal os.Signal, limit time.Duration, name string) error {
 	if err := child.Signal(signal); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		return fmt.Errorf("signal %s: %w", name, err)
+		// A failed graceful signal must not discard the only handle to a live
+		// dashboard. Attempt bounded forced termination and reap it before
+		// reporting the original signal failure.
+		if killErr := child.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+			return fmt.Errorf("signal %s: %w; forced termination failed: %v", name, err, killErr)
+		}
+		select {
+		case <-child.Done():
+			return fmt.Errorf("signal %s: %w; forcibly terminated and reaped", name, err)
+		case <-time.After(time.Second):
+			return fmt.Errorf("signal %s: %w; could not be reaped after forced termination", name, err)
+		}
 	}
 	timer := time.NewTimer(limit)
 	defer timer.Stop()
@@ -549,6 +732,14 @@ func minDuration(left, right time.Duration) time.Duration {
 		return left
 	}
 	return right
+}
+
+func dashboardStandbyBudget(deps dependencies) time.Duration {
+	probeBudget := minDuration(2*time.Second, deps.pollInterval*4)
+	if probeBudget <= 0 {
+		probeBudget = 2 * time.Second
+	}
+	return deps.dashboardStartup + probeBudget + deps.dashboardShutdown
 }
 
 func zeroString(value *string) {

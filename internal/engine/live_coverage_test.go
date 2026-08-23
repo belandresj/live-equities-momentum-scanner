@@ -243,14 +243,14 @@ func TestSlice1LiveCoverageFenceRetainsInvalidMarkEvidence(t *testing.T) {
 				t.Fatalf("post-fence invalid=%+v present=%t absent=%t exact=%t coverage=%+v", retainedAfterFence, retainedAfterFenceOK, absentAfterFence, exactAfterFence, coverageAfterFence)
 			}
 
-			admission, timer := e.AdmitTimer(context.Background())
+			admission, timer := e.AdmitMaintenanceTimer(context.Background())
 			if admission != AdmissionAdmitted || awaitTimerDisposition(t, timer).Code != DispositionTimerApplied {
 				t.Fatal("post-fence timer was not applied")
 			}
 			final := e.ObserveReplayDeterministic()
 			operational := e.ObserveOperational()
 			evaluation := final.Evaluation
-			if final.Publication.Watermark == nil || *final.Publication.Watermark != now || final.Publication.LastDisposition != DispositionTimerApplied ||
+			if final.Publication.Watermark == nil || *final.Publication.Watermark != now || final.Publication.LastDisposition != DispositionLiveCoverageFenceApplied ||
 				final.Publication.Suppression != "" || final.Publication.Lifecycle != "live" {
 				t.Fatalf("incoherent post-fence publication=%+v", final.Publication)
 			}
@@ -341,14 +341,14 @@ func TestSlice1LiveCoverageHalfOpenBoundaryMatrix(t *testing.T) {
 				// causally precede a fence captured at T1+delay whose target is T1.
 				now = t1.Add(delay)
 				applySlice1CoverageFence(t, e, frame, 2, now)
-				if admission, timer := e.AdmitTimer(context.Background()); admission != AdmissionAdmitted || awaitTimerDisposition(t, timer).Code != DispositionTimerApplied {
+				if admission, timer := e.AdmitMaintenanceTimer(context.Background()); admission != AdmissionAdmitted || awaitTimerDisposition(t, timer).Code != DispositionTimerApplied {
 					t.Fatal("T1 timer was not applied")
 				}
 
 				view := e.ObserveReplayDeterministic()
 				operational := e.ObserveOperational()
 				if view.Publication.Watermark == nil || *view.Publication.Watermark != t1 || view.Publication.Suppression != "" ||
-					view.Publication.LastDisposition != DispositionTimerApplied || operational.Suppression != "" {
+					view.Publication.LastDisposition != DispositionLiveCoverageFenceApplied || operational.Suppression != "" {
 					t.Fatalf("T1 publication was not coherent: publication=%+v operational=%+v", view.Publication, operational)
 				}
 				if !operational.Admissions.Reconciles(operational.QueueOccupancy) || !operational.Transitions.Reconciles() || !operational.Aggregates.Reconciles() {

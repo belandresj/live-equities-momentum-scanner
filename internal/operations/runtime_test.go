@@ -69,6 +69,11 @@ func TestC8RUNTIME01LifecycleReadinessShutdown(t *testing.T) {
 		staleView.Status.BackendReady || staleView.Status.Reason != ReasonWatermarkStale {
 		t.Fatalf("unchanged-publication readiness expiry = first=%+v stale=%+v err=%v", firstView, staleView, err)
 	}
+	transition, transitionOK := runtime.ObserveWatermarkStaleTransition()
+	if !transitionOK || !transition.Previous.BackendReady || transition.Current.BackendReady ||
+		transition.Current.Reason != ReasonWatermarkStale || !transition.Current.SampledAt.Equal(staleView.SampledAt) {
+		t.Fatalf("snapshot capture did not retain readiness crossing: ok=%t transition=%+v", transitionOK, transition)
+	}
 	now = now.Add(-3 * time.Second)
 	applyControl(t, owner, binding, engine.ConnectionLost, 1, 0, engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 2}, now)
 	if got := runtime.Status(); got.BackendReady || got.RankingCurrent || got.Reason != ReasonLifecycle || got.Lifecycle != "recovering" {

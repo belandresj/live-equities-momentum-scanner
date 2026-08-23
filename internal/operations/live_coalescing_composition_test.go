@@ -66,14 +66,32 @@ func TestProductionCompositionCoalescesThousandAcceptedAggregates(t *testing.T) 
 	if middleOps.Admissions.Invalid != beforeOps.Admissions.Invalid || middleOps.Admissions.Canceled != beforeOps.Admissions.Canceled || middleOps.Admissions.Closed != beforeOps.Admissions.Closed || middleOps.Admissions.SequenceExhausted != beforeOps.Admissions.SequenceExhausted {
 		t.Fatalf("queue rejection changed: before=%+v after=%+v", beforeOps.Admissions, middleOps.Admissions)
 	}
-	admission, timer := owner.AdmitTimer(context.Background())
-	if admission != engine.AdmissionAdmitted || timer == nil || (<-timer).Code != engine.DispositionTimerApplied {
-		t.Fatal("coalescing timer was not applied")
-	}
+	run.runEvaluationCycle(context.Background())
 	after := owner.ObserveSnapshot()
 	afterOps := owner.ObserveOperational()
+	timing := owner.ObserveEvaluationTiming()
 	population := after.Publication.AggregateEvaluation.Population
 	if after.Publication.PublicationID != middle.Publication.PublicationID+1 || population.UniverseTotal != 1 || population.ValidPriorClose != 1 || population.TrustedRankableMark != 1 || population.CoveredPopulation != 1 || population.UnresolvedPopulation != 0 || !afterOps.Admissions.Reconciles(afterOps.QueueOccupancy) || !afterOps.Aggregates.Reconciles() {
 		t.Fatalf("timer publication=%+v operations=%+v", after.Publication, afterOps)
+	}
+	if timing.Source != engine.AggregateEvaluationTimer || timing.Starts.Timer != 1 {
+		t.Fatalf("no-fence runtime fallback timing=%+v", timing)
+	}
+}
+
+func TestEvaluationCadenceSkipsMissedTicks(t *testing.T) {
+	anchor := time.Unix(100, 0)
+	cadence := time.Second
+	for _, tc := range []struct {
+		now  time.Time
+		want time.Duration
+	}{
+		{anchor, time.Second},
+		{anchor.Add(500 * time.Millisecond), 500 * time.Millisecond},
+		{anchor.Add(3*time.Second + 250*time.Millisecond), 750 * time.Millisecond},
+	} {
+		if got := nextEvaluationCadenceDelay(anchor, cadence, tc.now); got != tc.want {
+			t.Fatalf("now=%s delay=%s want=%s", tc.now, got, tc.want)
+		}
 	}
 }

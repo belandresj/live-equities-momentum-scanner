@@ -5,11 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/belandresj/live-equities-momentum-scanner/internal/privatelauncher"
 )
 
 func main() {
+	// Launcher reporting is best effort. Preserve the supervisor when its
+	// foreground terminal has gone away; Run latches the failed writers.
+	signal.Ignore(syscall.SIGPIPE)
 	ctx, stop := privatelauncher.NotifyContext(context.Background())
 	defer stop()
 	root := os.Getenv("PRIVATE_SCANNER_REPO_ROOT")

@@ -43,13 +43,7 @@ func deriveStatus(processLive bool, binding reference.Binding, config Config, no
 		Watermark: cloneTime(view.Watermark), QueueCapacity: view.QueueCapacity, QueueOccupancy: view.QueueOccupancy,
 		RankingCurrent: view.CurrentMarketClaim, TQAvailable: false}
 	result.IntegrityFailure = cloneIntegrityFailure(view.IntegrityFailure)
-	target := now.Truncate(time.Second).Add(-config.EvaluationDelay)
-	if target.Before(binding.SessionStart()) {
-		target = binding.SessionStart()
-	}
-	if target.After(binding.SessionEnd()) {
-		target = binding.SessionEnd()
-	}
+	target := readinessCausalTarget(binding, config, now)
 	result.CausalTarget = &target
 	result.AccountingValid = operationalAccountingValid(view)
 	switch {
@@ -83,6 +77,17 @@ func deriveStatus(processLive bool, binding reference.Binding, config Config, no
 		result.WatermarkLag = target.Sub(*view.Watermark)
 	}
 	return result
+}
+
+func readinessCausalTarget(binding reference.Binding, config Config, now time.Time) time.Time {
+	target := now.UTC().Truncate(time.Second).Add(-config.EvaluationDelay)
+	if target.Before(binding.SessionStart()) {
+		target = binding.SessionStart()
+	}
+	if target.After(binding.SessionEnd()) {
+		target = binding.SessionEnd()
+	}
+	return target
 }
 
 func operationalAccountingValid(view engine.OperationalView) bool {

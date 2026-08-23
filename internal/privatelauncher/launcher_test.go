@@ -155,7 +155,7 @@ func newLauncherFixture(t *testing.T, at time.Time) *launcherFixture {
 		},
 		available:      func(string) error { return nil },
 		standbyRecheck: 24 * time.Hour,
-		scannerStartup: 20 * time.Millisecond, dashboardStartup: 20 * time.Millisecond, pollInterval: time.Millisecond,
+		scannerStartup: 250 * time.Millisecond, dashboardStartup: 250 * time.Millisecond, pollInterval: time.Millisecond,
 		scannerShutdown: 20 * time.Millisecond, dashboardShutdown: 20 * time.Millisecond,
 	}
 	return fixture
@@ -349,92 +349,299 @@ func TestStartupAndFailureContainmentPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("dashboard start failure", func(t *testing.T) {
-		fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 3, 55))
+	t.Run("scanner later failure", func(t *testing.T) {
+		fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 12, 0))
 		fixture.deps.start = func(spec processSpec) (childProcess, error) {
-			if spec.name == "dashboard" {
-				return nil, errors.New("dashboard start failed")
-			}
 			child := newFakeChild()
 			fixture.starts = append(fixture.starts, spec)
 			fixture.children = append(fixture.children, child)
+			if spec.name == "dashboard" {
+				fixture.children[0].exit(errors.New("scanner failure"))
+			}
 			return child, nil
 		}
-		if err := run(context.Background(), "/repo", nil, &fixture.stdout, &fixture.stderr, fixture.deps); err == nil || fixture.children[0].signalCount() != 1 {
-			t.Fatalf("dashboard start containment err=%v signals=%d", err, fixture.children[0].signalCount())
+		err := run(context.Background(), "/repo", nil, &fixture.stdout, &fixture.stderr, fixture.deps)
+		if err == nil || !strings.Contains(err.Error(), "scanner exited unexpectedly") {
+			t.Fatalf("later failure err=%v", err)
+		}
+		if fixture.children[1].signalCount() != 1 {
+			t.Fatalf("dashboard was not stopped: signals=%d", fixture.children[1].signalCount())
+		}
+	})
+}
+
+func TestDashboardFailuresRemainLocalToScannerSupervision(t *testing.T) {
+	t.Run("start failure retries three times without signalling scanner", func(t *testing.T) {
+		fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 12, 0))
+		scanner := newFakeChild()
+		var dashboardSpecs []processSpec
+		var delays []time.Duration
+		fixture.deps.after = func(delay time.Duration) <-chan time.Time {
+			delays = append(delays, delay)
+			fired := make(chan time.Time, 1)
+			fired <- fixture.deps.now().Add(delay)
+			return fired
+		}
+		fixture.deps.start = func(spec processSpec) (childProcess, error) {
+			if spec.name != "dashboard" {
+				t.Fatalf("unexpected child %q", spec.name)
+			}
+			dashboardSpecs = append(dashboardSpecs, spec)
+			return nil, errors.New("listener bind failed")
+		}
+		dashboard, err := startDashboardWithRecovery(context.Background(), scanner, "/dashboard", []string{"--address", dashboardAddress}, []string{"PATH=/usr/bin"}, "/repo", &fixture.stdout, &fixture.stderr, fixture.deps)
+		if err != nil || dashboard != nil {
+			t.Fatalf("dashboard=%v err=%v", dashboard, err)
+		}
+		if scanner.signalCount() != 0 {
+			t.Fatalf("dashboard failure signalled scanner %d times", scanner.signalCount())
+		}
+		if !reflect.DeepEqual(delays, []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}) || len(dashboardSpecs) != 4 {
+			t.Fatalf("delays=%v dashboard_starts=%d", delays, len(dashboardSpecs))
+		}
+		for _, spec := range dashboardSpecs {
+			if !reflect.DeepEqual(spec.arguments, []string{"--address", dashboardAddress}) || environmentValueMustNotExist(spec.environment, "MASSIVE_API_KEY") {
+				t.Fatalf("dashboard spec=%+v", spec)
+			}
+		}
+		if !strings.Contains(fixture.stderr.String(), "recovery exhausted") {
+			t.Fatalf("missing headless warning: %q", fixture.stderr.String())
 		}
 	})
 
-	t.Run("dashboard early exit", func(t *testing.T) {
-		fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 3, 55))
+	t.Run("listener timeout is reaped before each replacement", func(t *testing.T) {
+		fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 12, 0))
+		fixture.deps.dashboardStartup = 0
+		fixture.deps.pollInterval = time.Millisecond
 		fixture.deps.probe = func(_ context.Context, url string) (probeResult, error) {
-			if url == scannerOrigin+"/livez" {
-				return probeResult{status: http.StatusOK, body: []byte(`{"process_live":true}`)}, nil
+			if url != dashboardOrigin+"/" {
+				t.Fatalf("unexpected probe %q", url)
 			}
-			return probeResult{}, errors.New("dashboard unavailable")
+			return probeResult{}, errors.New("not healthy")
 		}
+		var dashboards []*fakeChild
+		fixture.deps.start = func(spec processSpec) (childProcess, error) {
+			child := newFakeChild()
+			dashboards = append(dashboards, child)
+			return child, nil
+		}
+		dashboard, err := startDashboardWithRecovery(context.Background(), newFakeChild(), "/dashboard", nil, nil, "/repo", &fixture.stdout, &fixture.stderr, fixture.deps)
+		if err != nil || dashboard != nil || len(dashboards) != 4 {
+			t.Fatalf("dashboard=%v err=%v starts=%d", dashboard, err, len(dashboards))
+		}
+		for index, child := range dashboards {
+			if child.signalCount() != 1 {
+				t.Fatalf("dashboard %d was not reaped before recovery: signals=%d", index, child.signalCount())
+			}
+		}
+	})
+
+	for _, exit := range []error{errors.New("dashboard failure"), nil} {
+		name := "nonzero exit"
+		if exit == nil {
+			name = "unexpected zero exit"
+		}
+		t.Run(name, func(t *testing.T) {
+			fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 12, 0))
+			scanner, failedDashboard, replacement := newFakeChild(), newFakeChild(), newFakeChild()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			fixture.deps.start = func(spec processSpec) (childProcess, error) {
+				if spec.name != "dashboard" {
+					t.Fatalf("unexpected child %q", spec.name)
+				}
+				if scanner.signalCount() != 0 {
+					t.Fatalf("scanner was signalled before dashboard replacement")
+				}
+				cancel()
+				return replacement, nil
+			}
+			failedDashboard.exit(exit)
+			err := supervise(ctx, scanner, failedDashboard, nyTime(t, 2026, 8, 10, 20, 0), "/dashboard", nil, nil, "/repo", &fixture.stdout, &fixture.stderr, fixture.deps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if scanner.signalCount() != 1 || replacement.signalCount() != 1 {
+				t.Fatalf("controlled shutdown did not reap scanner/replacement: scanner=%d replacement=%d", scanner.signalCount(), replacement.signalCount())
+			}
+		})
+	}
+
+	t.Run("standby exhaustion preserves the scheduled single scanner start", func(t *testing.T) {
+		fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 21, 0))
+		fixture.cancel = nil
+		var scannerStarts int
+		fixture.deps.start = func(spec processSpec) (childProcess, error) {
+			switch spec.name {
+			case "dashboard":
+				if len(fixture.starts) == 0 {
+					child := newFakeChild()
+					fixture.starts = append(fixture.starts, spec)
+					fixture.children = append(fixture.children, child)
+					child.exit(errors.New("standby dashboard failure"))
+					return child, nil
+				}
+				return nil, errors.New("dashboard unavailable")
+			case "scanner":
+				if fixture.credentials != 1 || fixture.environmentReads != 1 {
+					t.Fatalf("standby acquired credential before preconnect: credentials=%d environment_reads=%d", fixture.credentials, fixture.environmentReads)
+				}
+				scannerStarts++
+				child := newFakeChild()
+				fixture.starts = append(fixture.starts, spec)
+				fixture.children = append(fixture.children, child)
+				child.exit(nil)
+				return child, nil
+			default:
+				t.Fatalf("unexpected child %q", spec.name)
+				return nil, nil
+			}
+		}
+		err := run(context.Background(), "/repo", nil, &fixture.stdout, &fixture.stderr, fixture.deps)
+		if err == nil || !strings.Contains(err.Error(), "scanner exited unexpectedly") {
+			t.Fatalf("run error=%v", err)
+		}
+		if scannerStarts != 1 || fixture.credentials != 1 || strings.Contains(fixture.stdout.String(), "Scanner dashboard:") {
+			t.Fatalf("scanner_starts=%d credentials=%d stdout=%q", scannerStarts, fixture.credentials, fixture.stdout.String())
+		}
+	})
+
+	t.Run("near-boundary standby defers dashboard health work until scanner starts", func(t *testing.T) {
+		initial := nyTime(t, 2026, 8, 10, 3, 50)
+		fixture := newLauncherFixture(t, initial)
+		fixture.cancel = nil
+		fixture.deps.dashboardStartup = 2 * time.Minute
+		current := initial
+		fixture.deps.now = func() time.Time { return current }
+		fixture.deps.after = func(delay time.Duration) <-chan time.Time {
+			current = current.Add(delay)
+			fired := make(chan time.Time, 1)
+			fired <- current
+			return fired
+		}
+		originalPreflight := fixture.deps.preflight
+		fixture.deps.preflight = func(ctx context.Context, root string, stdout, stderr io.Writer) (launchPaths, error) {
+			paths, err := originalPreflight(ctx, root, stdout, stderr)
+			current = nyTime(t, 2026, 8, 10, 3, 54)
+			return paths, err
+		}
+		var started []string
+		fixture.deps.start = func(spec processSpec) (childProcess, error) {
+			started = append(started, spec.name)
+			if spec.name == "dashboard" {
+				return nil, errors.New("dashboard unavailable")
+			}
+			child := newFakeChild()
+			child.exit(nil)
+			return child, nil
+		}
+		err := run(context.Background(), "/repo", nil, &fixture.stdout, &fixture.stderr, fixture.deps)
+		if err == nil || !strings.Contains(err.Error(), "scanner exited unexpectedly") {
+			t.Fatalf("run error=%v", err)
+		}
+		if len(started) == 0 || started[0] != "scanner" {
+			t.Fatalf("startup order=%v", started)
+		}
+	})
+
+	t.Run("operator shutdown cancels dashboard backoff and stops scanner", func(t *testing.T) {
+		fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 12, 0))
+		fixture.cancel = nil
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		retryWaiting := make(chan struct{})
+		fixture.deps.after = func(delay time.Duration) <-chan time.Time {
+			if delay == time.Second {
+				close(retryWaiting)
+				return make(chan time.Time)
+			}
+			fired := make(chan time.Time, 1)
+			fired <- fixture.deps.now().Add(delay)
+			return fired
+		}
+		var scanner *fakeChild
 		fixture.deps.start = func(spec processSpec) (childProcess, error) {
 			child := newFakeChild()
 			fixture.starts = append(fixture.starts, spec)
 			fixture.children = append(fixture.children, child)
-			if spec.name == "dashboard" {
+			if spec.name == "scanner" {
+				scanner = child
+			} else {
 				child.exit(errors.New("dashboard failed"))
 			}
 			return child, nil
 		}
-		if err := run(context.Background(), "/repo", nil, &fixture.stdout, &fixture.stderr, fixture.deps); err == nil || fixture.children[0].signalCount() != 1 {
-			t.Fatalf("dashboard early-exit containment err=%v scanner_signals=%d", err, fixture.children[0].signalCount())
+		done := make(chan error, 1)
+		go func() { done <- run(ctx, "/repo", nil, &fixture.stdout, &fixture.stderr, fixture.deps) }()
+		<-retryWaiting
+		if scanner == nil || scanner.signalCount() != 0 {
+			t.Fatalf("scanner was not live and unsignalled during backoff")
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("shutdown error=%v", err)
+		}
+		if scanner.signalCount() != 1 {
+			t.Fatalf("scanner was not stopped on controlled shutdown: signals=%d", scanner.signalCount())
 		}
 	})
+}
 
-	t.Run("dashboard listener timeout", func(t *testing.T) {
-		fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 3, 55))
-		fixture.deps.probe = func(_ context.Context, url string) (probeResult, error) {
-			if url == scannerOrigin+"/livez" {
-				return probeResult{status: http.StatusOK, body: []byte(`{"process_live":true}`)}, nil
-			}
-			return probeResult{}, errors.New("dashboard unavailable")
-		}
-		if err := run(context.Background(), "/repo", nil, &fixture.stdout, &fixture.stderr, fixture.deps); err == nil || !strings.Contains(err.Error(), "30 seconds") {
-			t.Fatalf("dashboard timeout err=%v", err)
-		}
-		if fixture.children[0].signalCount() != 1 || fixture.children[1].signalCount() != 1 {
-			t.Fatal("dashboard timeout did not reap both children")
-		}
-	})
+func environmentValueMustNotExist(environment []string, name string) bool {
+	_, exists := environmentValue(environment, name)
+	return exists
+}
 
-	for _, failedName := range []string{"scanner", "dashboard"} {
-		t.Run(failedName+" later failure", func(t *testing.T) {
-			fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 12, 0))
-			fixture.deps.start = func(spec processSpec) (childProcess, error) {
-				child := newFakeChild()
-				fixture.starts = append(fixture.starts, spec)
-				fixture.children = append(fixture.children, child)
-				if spec.name == "dashboard" {
-					go func() {
-						time.Sleep(2 * time.Millisecond)
-						index := 0
-						if failedName == "dashboard" {
-							index = 1
-						}
-						fixture.children[index].exit(errors.New(failedName + " failure"))
-					}()
-				}
-				return child, nil
-			}
-			err := run(context.Background(), "/repo", nil, &fixture.stdout, &fixture.stderr, fixture.deps)
-			if err == nil || !strings.Contains(err.Error(), failedName+" exited unexpectedly") {
-				t.Fatalf("later failure err=%v", err)
-			}
-			other := 1
-			if failedName == "dashboard" {
-				other = 0
-			}
-			if fixture.children[other].signalCount() != 1 {
-				t.Fatalf("other child was not stopped: signals=%d", fixture.children[other].signalCount())
-			}
-		})
+func TestSafeOutputLatchesBrokenTerminalWithoutReportingFailure(t *testing.T) {
+	broken := &failingWriter{}
+	output := newSafeOutput(broken)
+	if _, err := output.Write([]byte("first")); err != nil {
+		t.Fatal(err)
 	}
+	if _, err := output.Write([]byte("second")); err != nil {
+		t.Fatal(err)
+	}
+	if broken.writes != 1 || !output.disabled {
+		t.Fatalf("writes=%d disabled=%t", broken.writes, output.disabled)
+	}
+}
+
+func TestBrokenLauncherOutputDoesNotEndSupervision(t *testing.T) {
+	fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 12, 0))
+	scanner, dashboard := newFakeChild(), newFakeChild()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reporting := make(chan struct{})
+	fixture.deps.probe = func(_ context.Context, url string) (probeResult, error) {
+		if url == scannerOrigin+"/readyz" {
+			select {
+			case <-reporting:
+			default:
+				close(reporting)
+			}
+		}
+		return probeResult{}, errors.New("unavailable")
+	}
+	output := newSafeOutput(&failingWriter{})
+	done := make(chan error, 1)
+	go func() {
+		done <- supervise(ctx, scanner, dashboard, nyTime(t, 2026, 8, 10, 20, 0), "/dashboard", nil, nil, "/repo", output, output, fixture.deps)
+	}()
+	<-reporting
+	if scanner.signalCount() != 0 || dashboard.signalCount() != 0 {
+		t.Fatalf("broken output signalled child before operator shutdown: scanner=%d dashboard=%d", scanner.signalCount(), dashboard.signalCount())
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+type failingWriter struct{ writes int }
+
+func (writer *failingWriter) Write([]byte) (int, error) {
+	writer.writes++
+	return 0, errors.New("broken pipe")
 }
 
 func TestOpenFailureIsNonfatalAfterBothServicesAreHealthy(t *testing.T) {
@@ -633,21 +840,25 @@ func TestStandbyShutdownAndWakePortConflictContainDashboard(t *testing.T) {
 		fixture := newLauncherFixture(t, nyTime(t, 2026, 8, 10, 21, 0))
 		fixture.deps.after = func(time.Duration) <-chan time.Time { return make(chan time.Time) }
 		fixture.cancel = nil
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		failed := make(chan struct{})
 		fixture.deps.start = func(spec processSpec) (childProcess, error) {
 			child := newFakeChild()
 			fixture.starts = append(fixture.starts, spec)
 			fixture.children = append(fixture.children, child)
 			if spec.name == "dashboard" {
-				go func() {
-					time.Sleep(2 * time.Millisecond)
-					child.exit(errors.New("dashboard failed"))
-				}()
+				child.exit(errors.New("dashboard failed"))
+				close(failed)
 			}
 			return child, nil
 		}
-		err := run(context.Background(), "/repo", nil, &fixture.stdout, &fixture.stderr, fixture.deps)
-		if err == nil || !strings.Contains(err.Error(), "dashboard exited during overnight standby") {
-			t.Fatalf("dashboard exit error=%v", err)
+		done := make(chan error, 1)
+		go func() { done <- run(ctx, "/repo", nil, &fixture.stdout, &fixture.stderr, fixture.deps) }()
+		<-failed
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("dashboard-backoff shutdown error=%v", err)
 		}
 		if fixture.credentials != 0 || len(fixture.starts) != 1 {
 			t.Fatalf("starts=%v credentials=%d", processNames(fixture.starts), fixture.credentials)
@@ -898,7 +1109,7 @@ func TestPublicWrapperForwardsAndReapsSignalDuringBootstrapBuild(t *testing.T) {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
 	}
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if _, err := os.Stat(started); err == nil {
 			break

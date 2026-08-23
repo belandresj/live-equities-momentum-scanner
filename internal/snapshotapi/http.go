@@ -27,6 +27,10 @@ type handler struct {
 	source      CaptureSource
 	origins     map[string]struct{}
 	diagnostics *MappingDiagnostics
+	// These hooks are nil in production. Focused package tests use them to
+	// cancel at the exact capture/mapping boundaries without timing sleeps.
+	testAfterCapture func(*http.Request)
+	testAfterMapping func(*http.Request)
 }
 
 func NewHandler(source CaptureSource, config HandlerConfig) (http.Handler, error) {
@@ -47,14 +51,17 @@ func NewHandler(source CaptureSource, config HandlerConfig) (http.Handler, error
 }
 
 func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if request == nil || request.Context().Err() != nil {
+		return
+	}
 	origin, allowed, preflight := h.authorizeOrigin(request)
 	if !allowed {
-		h.write(writer, request.Method, http.StatusForbidden, errorResponse{Error: "forbidden"}, "")
+		h.write(writer, request, http.StatusForbidden, errorResponse{Error: "forbidden"}, "")
 		return
 	}
 	if preflight {
 		if !productRoute(request.URL.Path) || request.URL.RawQuery != "" || request.ContentLength > 0 {
-			h.write(writer, request.Method, http.StatusForbidden, errorResponse{Error: "forbidden"}, "")
+			h.write(writer, request, http.StatusForbidden, errorResponse{Error: "forbidden"}, "")
 			return
 		}
 		h.preflight(writer, origin)
@@ -62,15 +69,15 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
 		writer.Header().Set("Allow", "GET, HEAD")
-		h.write(writer, request.Method, http.StatusMethodNotAllowed, errorResponse{Error: "method_not_allowed"}, origin)
+		h.write(writer, request, http.StatusMethodNotAllowed, errorResponse{Error: "method_not_allowed"}, origin)
 		return
 	}
 	if request.URL.RawQuery != "" || request.ContentLength > 0 {
-		h.write(writer, request.Method, http.StatusBadRequest, errorResponse{Error: "invalid_request"}, origin)
+		h.write(writer, request, http.StatusBadRequest, errorResponse{Error: "invalid_request"}, origin)
 		return
 	}
 	if !productRoute(request.URL.Path) {
-		h.write(writer, request.Method, http.StatusNotFound, errorResponse{Error: "not_found"}, origin)
+		h.write(writer, request, http.StatusNotFound, errorResponse{Error: "not_found"}, origin)
 		return
 	}
 	if request.Context().Err() != nil {
@@ -78,12 +85,21 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	capture, err := h.source.CaptureSnapshot()
 	if err != nil {
-		h.write(writer, request.Method, http.StatusServiceUnavailable, errorResponse{Error: "capture_unavailable"}, origin)
+		h.write(writer, request, http.StatusServiceUnavailable, errorResponse{Error: "capture_unavailable"}, origin)
 		return
 	}
 	view, ok := operations.InspectSnapshotCapture(capture)
 	if !ok {
-		h.write(writer, request.Method, http.StatusServiceUnavailable, errorResponse{Error: "capture_unavailable"}, origin)
+		h.write(writer, request, http.StatusServiceUnavailable, errorResponse{Error: "capture_unavailable"}, origin)
+		return
+	}
+	if request.Context().Err() != nil {
+		return
+	}
+	if h.testAfterCapture != nil {
+		h.testAfterCapture(request)
+	}
+	if request.Context().Err() != nil {
 		return
 	}
 	switch request.URL.Path {
@@ -93,12 +109,18 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		if !view.ProcessLive {
 			reason, status = "runtime_unavailable", http.StatusServiceUnavailable
 		}
-		h.write(writer, request.Method, status, livenessResponse{SchemaVersion: "scanner.liveness.v1", SampleID: decimal(view.SampleID), SampledAt: timestamp(view.SampledAt), ProcessLive: view.ProcessLive, Reason: reason}, origin)
+		h.write(writer, request, status, livenessResponse{SchemaVersion: "scanner.liveness.v1", SampleID: decimal(view.SampleID), SampledAt: timestamp(view.SampledAt), ProcessLive: view.ProcessLive, Reason: reason}, origin)
 	case "/readyz":
 		snapshot, mapErr := Map(capture)
+		if h.testAfterMapping != nil {
+			h.testAfterMapping(request)
+		}
 		response := readinessResponse{SchemaVersion: "scanner.readiness.v1", SampleID: decimal(view.SampleID), SampledAt: timestamp(view.SampledAt), ProcessLive: view.ProcessLive}
 		status := http.StatusServiceUnavailable
 		if mapErr != nil {
+			if request.Context().Err() != nil {
+				return
+			}
 			h.recordMappingFailure(request.URL.Path, view, mapErr)
 			response.Reason = "publication_unavailable"
 		} else {
@@ -108,15 +130,27 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 				status = http.StatusOK
 			}
 		}
-		h.write(writer, request.Method, status, response, origin)
-	default:
-		snapshot, mapErr := Map(capture)
-		if mapErr != nil {
-			h.recordMappingFailure(request.URL.Path, view, mapErr)
-			h.write(writer, request.Method, http.StatusServiceUnavailable, errorResponse{Error: "snapshot_unavailable"}, origin)
+		if request.Context().Err() != nil {
 			return
 		}
-		h.write(writer, request.Method, http.StatusOK, snapshot, origin)
+		h.write(writer, request, status, response, origin)
+	default:
+		snapshot, mapErr := Map(capture)
+		if h.testAfterMapping != nil {
+			h.testAfterMapping(request)
+		}
+		if mapErr != nil {
+			if request.Context().Err() != nil {
+				return
+			}
+			h.recordMappingFailure(request.URL.Path, view, mapErr)
+			h.write(writer, request, http.StatusServiceUnavailable, errorResponse{Error: "snapshot_unavailable"}, origin)
+			return
+		}
+		if request.Context().Err() != nil {
+			return
+		}
+		h.write(writer, request, http.StatusOK, snapshot, origin)
 	}
 }
 
@@ -162,11 +196,17 @@ func (h *handler) preflight(writer http.ResponseWriter, origin string) {
 	writer.WriteHeader(http.StatusNoContent)
 }
 
-func (h *handler) write(writer http.ResponseWriter, method string, status int, value any, origin string) {
+func (h *handler) write(writer http.ResponseWriter, request *http.Request, status int, value any, origin string) {
+	if request == nil || request.Context().Err() != nil {
+		return
+	}
 	body, err := marshalBounded(value)
 	if err != nil {
 		status = http.StatusServiceUnavailable
 		body = []byte(`{"error":"response_unavailable"}`)
+	}
+	if request.Context().Err() != nil {
+		return
 	}
 	headers := writer.Header()
 	standardHeaders(headers)
@@ -176,9 +216,10 @@ func (h *handler) write(writer http.ResponseWriter, method string, status int, v
 	}
 	headers.Set("Content-Length", strconv.Itoa(len(body)))
 	writer.WriteHeader(status)
-	if method != http.MethodHead {
-		_, _ = writer.Write(body)
+	if request.Context().Err() != nil || request.Method == http.MethodHead {
+		return
 	}
+	_, _ = writer.Write(body)
 }
 
 func standardHeaders(headers http.Header) {

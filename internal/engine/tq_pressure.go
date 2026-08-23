@@ -319,6 +319,10 @@ func (e *Engine) setTQPressureModeLocked(mode TQPressureMode, now time.Time, cau
 	if p.mode == mode {
 		return
 	}
+	// Pressure-mode transitions change the protection/trust state visible to a
+	// trader. The ordinary sample that led to an unchanged mode remains
+	// cadence-coalesced; only this transition is immediate.
+	e.markTQTrustTransitionLocked()
 	p.mode, p.transitions = mode, p.transitions+1
 	if mode == TQPressureNormal {
 		p.cause = TQPressureCauseNone

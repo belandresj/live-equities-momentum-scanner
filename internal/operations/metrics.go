@@ -34,8 +34,24 @@ type Metrics struct {
 	HeapAllocBytes              uint64
 	HeapInUseBytes              uint64
 	Goroutines                  int
+	GCCycles                    uint32
+	GCPauseTotalNS              uint64
+	LastGCPauseNS               uint64
 	AccountingValid             bool
 	deliveryWindowVersion       uint64
+	// diagnosticSampledAt is the collection time of the cached diagnostic
+	// sample. SampledAt is rewritten to the capture clock when a cached sample
+	// is composed with a current immutable engine publication; retaining this
+	// separate timestamp prevents an old sample from appearing newly collected.
+	diagnosticSampledAt time.Time
+}
+
+// diagnosticsSample is immutable after publication through Runtime's atomic
+// pointer. The Metrics copy is detached from the runtime's engine view before
+// it is stored, so a capture or diagnostic reader cannot mutate the cache.
+type diagnosticsSample struct {
+	metrics     Metrics
+	collectedAt time.Time
 }
 
 // DeliveryLatencyFamily is the closed, symbol-free attribution vocabulary for
@@ -221,7 +237,8 @@ func (r *Runtime) Metrics() Metrics {
 }
 
 func (r *Runtime) metricsFromPublication(sampledAt time.Time, processLive bool, view engine.OperationalView) Metrics {
-	result := Metrics{SampledAt: sampledAt, Engine: view}
+	r.diagnosticCollections.Add(1)
+	result := Metrics{SampledAt: sampledAt, Engine: view, diagnosticSampledAt: sampledAt}
 	r.metricsMu.Lock()
 	if r.attempt != nil {
 		result.LiveQueue = r.attempt.QueueAccounting()
@@ -266,8 +283,81 @@ func (r *Runtime) metricsFromPublication(sampledAt time.Time, processLive bool, 
 	var memory runtime.MemStats
 	runtime.ReadMemStats(&memory)
 	result.HeapAllocBytes, result.HeapInUseBytes = memory.HeapAlloc, memory.HeapInuse
+	result.GCCycles, result.GCPauseTotalNS = memory.NumGC, memory.PauseTotalNs
+	if memory.NumGC > 0 {
+		result.LastGCPauseNS = memory.PauseNs[(memory.NumGC-1)%uint32(len(memory.PauseNs))]
+	}
 	result.Goroutines = runtime.NumGoroutine()
 	result.AccountingValid = operationalAccountingValid(result.Engine) && result.LiveQueue.Reconciles() && result.Adapter.Reconciles() && result.TQNormalization.Reconciles() && result.CheckpointEngine.Reconciles() &&
 		(r.writer == nil || result.Checkpoint.Reconciles()) && result.DeliveryLatencyAttribution.Reconciles(result.Deliveries)
+	return result
+}
+
+// cachedMetrics returns the latest fixed-cardinality diagnostic sample for
+// existing runtime-owned samplers. It is intentionally not used to compose a
+// public snapshot: a public capture replaces Engine with the one
+// ObserveSnapshot result that also supplies publication and T/Q state.
+func (r *Runtime) cachedMetrics() Metrics {
+	if r == nil {
+		return Metrics{DeliveryLatencyAttribution: DeliveryLatencyAttribution{MaximumFamily: DeliveryLatencyUnknown}}
+	}
+	sample := r.diagnostics.Load()
+	if sample == nil {
+		return Metrics{DeliveryLatencyAttribution: DeliveryLatencyAttribution{MaximumFamily: DeliveryLatencyUnknown}}
+	}
+	result := cloneMetrics(sample.metrics)
+	// Pressure sampling can reset the one-second delivery window between two
+	// diagnostics collections. Overlay these atomic/window facts so the
+	// existing pressure boundary remains exact without reacquiring the queue,
+	// adapter, writer, checkpoint-engine, or runtime memory sampling locks.
+	r.deliveryWindowMu.Lock()
+	result.Deliveries = r.deliveryCount.Load()
+	if result.Deliveries != 0 {
+		result.MeanProcessingDelay = time.Duration(r.deliveryTotalNanos.Load() / result.Deliveries)
+	}
+	result.MaxProcessingDelay = time.Duration(r.deliveryMaxNanos.Load())
+	result.MaxProcessingDelayOneSecond = time.Duration(r.deliveryOneSecondMaxNanos)
+	result.DeliveryLatencyAttribution = deliveryLatencyAttribution(r.deliveryFamilyCounts, result.MaxProcessingDelayOneSecond, r.deliveryOneSecondMaxFamily, r.deliveryWindowNonempty)
+	result.deliveryWindowVersion = r.deliveryWindowVersion
+	r.deliveryWindowMu.Unlock()
+	result.ConsumerDeferred = r.consumerDeferred.Load()
+	return result
+}
+
+// metricsFromDiagnostics composes one current immutable engine view with one
+// cached diagnostic sample. The engine view is never observed separately for
+// publication, operational, or T/Q fields on the HTTP path.
+func (r *Runtime) metricsFromDiagnostics(sampledAt time.Time, processLive bool, view engine.SnapshotView) Metrics {
+	result := Metrics{SampledAt: sampledAt, Engine: view.Operational,
+		DeliveryLatencyAttribution: DeliveryLatencyAttribution{MaximumFamily: DeliveryLatencyUnknown}}
+	sample := r.diagnostics.Load()
+	if sample != nil {
+		result = cloneMetrics(sample.metrics)
+		result.SampledAt = sampledAt
+		result.diagnosticSampledAt = sample.collectedAt
+		result.Engine = view.Operational
+	}
+	status := deriveStatus(processLive, r.binding, r.config, sampledAt, view.Operational)
+	result.WatermarkLag = status.WatermarkLag
+	result.AccountingValid = sample != nil && sample.metrics.AccountingValid &&
+		diagnosticSampleFresh(sample.collectedAt, sampledAt, r.config.SampleCadence) &&
+		operationalAccountingValid(view.Operational) && result.LiveQueue.Reconciles() && result.Adapter.Reconciles() &&
+		result.TQNormalization.Reconciles() && result.CheckpointEngine.Reconciles() &&
+		(r.writer == nil || result.Checkpoint.Reconciles()) && result.DeliveryLatencyAttribution.Reconciles(result.Deliveries)
+	return result
+}
+
+func diagnosticSampleFresh(collectedAt, captureAt time.Time, cadence time.Duration) bool {
+	if collectedAt.IsZero() || captureAt.IsZero() || cadence <= 0 || collectedAt.After(captureAt) {
+		return false
+	}
+	return captureAt.Sub(collectedAt) <= 2*cadence
+}
+
+func cloneMetrics(value Metrics) Metrics {
+	result := value
+	result.Engine.Watermark = cloneTime(value.Engine.Watermark)
+	result.Engine.Hydration.SupportedThrough = cloneTime(value.Engine.Hydration.SupportedThrough)
+	result.Engine.IntegrityFailure = cloneIntegrityFailure(value.Engine.IntegrityFailure)
 	return result
 }

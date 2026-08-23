@@ -115,7 +115,7 @@ function validateTape(value, name) {
     case "unselected": legal = !value.trade_coverage && value.reason === ""; break;
     case "warming": legal = value.trade_coverage && ["coverage_warming", "five_second_warming"].includes(value.reason); break;
     case "current": legal = value.trade_coverage && value.reason === "qualifying_original_prints"; break;
-    case "unavailable": legal = ["coverage", "replay_unavailable"].includes(value.reason); break;
+    case "unavailable": legal = ["coverage", "channel_unconfirmed", "control_error", "replay_unavailable"].includes(value.reason); break;
     case "invalid": legal = value.trade_coverage && value.reason === "unequal_repeat"; break;
     case "pressure_shed": legal = value.reason === "pressure"; break;
   }
@@ -141,7 +141,7 @@ function validateSpread(value, name, replay) {
     case "current": legal = value.quote_coverage && value.reason === ""; break;
     case "stale": legal = value.quote_coverage && value.reason === "stale_quote"; break;
     case "invalid": legal = value.quote_coverage && value.reason === "crossed_quote"; break;
-    case "unavailable": legal = value.reason === "coverage" || value.reason === "replay_unavailable" || value.quote_coverage && value.reason === "one_sided_quote"; break;
+    case "unavailable": legal = ["coverage", "channel_unconfirmed", "control_error", "replay_unavailable"].includes(value.reason) || value.quote_coverage && value.reason === "one_sided_quote"; break;
     case "pressure_shed": legal = value.reason === "pressure"; break;
   }
   if (!legal) fail(`${name} trust tuple conflict`);
@@ -563,19 +563,23 @@ export class PollController {
   start() { if (this.timer !== null) return; this.stopped = false; void this.tick(); this.timer = setInterval(() => void this.tick(), this.pollMilliseconds); }
   stop() { this.stopped = true; if (this.timer !== null) clearInterval(this.timer); this.timer = null; this.active?.controller.abort(); }
   async tick() {
+    if (this.stopped) return;
     if (this.active) { this.onUpdate({ kind: "transport", transport: "refresh_delayed", model: this.lastModel }); return; }
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMilliseconds);
-    const operation = { controller }; this.active = operation;
+    const operation = { controller, timedOut: false }; this.active = operation;
+    const timeout = setTimeout(() => { operation.timedOut = true; controller.abort(); }, this.requestTimeoutMilliseconds);
     try {
       const response = await this.fetchImpl(this.url, { method: "GET", mode: "cors", cache: "no-store", credentials: "omit", signal: controller.signal, headers: { Accept: "application/json" } });
+      if (operation.timedOut) fail("snapshot request deadline exceeded");
       if (!response.ok) fail(`snapshot HTTP ${response.status}`);
       const snapshot = await readBoundedJSON(response);
+      if (operation.timedOut) fail("snapshot request deadline exceeded");
       const model = this.rankHistory.apply(buildViewModel(snapshot, "connected"));
       if (!this.stopped) { this.onUpdate({ kind: "snapshot", transport: "connected", model }); this.lastModel = model; }
     } catch (error) {
       if (!this.stopped) {
-        try { this.onUpdate({ kind: "error", transport: "disconnected", error: error instanceof Error ? error.message : "request failed", model: this.lastModel }); } catch { /* detached renderer preserves the prior committed DOM */ }
+        const transport = operation.timedOut ? "refresh_delayed" : "api_unavailable";
+        try { this.onUpdate({ kind: "error", transport, error: error instanceof Error ? error.message : "request failed", model: this.lastModel }); } catch { /* detached renderer preserves the prior committed DOM */ }
       }
     } finally {
       clearTimeout(timeout); if (this.active === operation) this.active = null;

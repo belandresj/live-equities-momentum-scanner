@@ -96,10 +96,9 @@ func TestLiveRetainedTailSixtyOneSecondCycles(t *testing.T) {
 	var stageTotal, applyTotal, total time.Duration
 	var maximum time.Duration
 	for cycle := 1; cycle <= 60; cycle++ {
-		// Match the accepted mature-cycle methodology: discarded candidate
-		// images are collected outside the evaluator timing. Allocation remains
-		// measured by the single-boundary proof.
-		runtime.GC()
+		// Let the runtime pace collection as it does in the scanner. Forcing a
+		// full collection immediately before every one-second cycle leaves the
+		// scavenger competing with the evaluator and is not a production cadence.
 		at := initial.Add(time.Duration(cycle) * time.Second)
 		started := time.Now()
 		e.mu.Lock()
@@ -310,6 +309,15 @@ func installLiveRetainedTailShape(t *testing.T, e *Engine, target time.Time, uni
 			records = stale
 		}
 		state.tail = make(map[int64]*canonicalAggregate, len(records))
+		// Replace the folded control's mutable-tail index rather than appending to
+		// it. Production mutation maintains exactly one extrema point per
+		// canonical tail identity; a mismatched length deliberately selects the
+		// containment fallback and is not a valid production-shape capacity proof.
+		features := ensurePriceRangeState(state)
+		features.highs = nil
+		features.lows = nil
+		measurements := ensureMVPMeasurementState(state)
+		measurements.tail = nil
 		var owned []canonicalAggregate
 		if uniqueRecords {
 			owned = make([]canonicalAggregate, len(records))
@@ -323,7 +331,8 @@ func installLiveRetainedTailShape(t *testing.T, e *Engine, target time.Time, uni
 				record = &owned[recordIndex]
 			}
 			state.tail[record.identity.start] = record
-			retainMutablePriceRangeEvidence(ensurePriceRangeState(state), *record)
+			retainMutablePriceRangeEvidence(features, *record)
+			retainMutableMVPMeasurement(state, *record)
 			state.presence.clear(sessionSlot(e.state.binding, record.windowStart))
 			latest = record
 		}

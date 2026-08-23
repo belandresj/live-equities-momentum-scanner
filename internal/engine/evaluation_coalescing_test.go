@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -91,6 +92,23 @@ func TestLiveAggregateEvaluationCoalescing(t *testing.T) {
 		}
 		if record := aggregateRecord(t, e, "AAA", start.Add(time.Second)); record.values.Close != 12 {
 			t.Fatalf("canonical correction not synchronous: %+v", record.values)
+		}
+		fallbackTiming := e.ObserveEvaluationTiming()
+		cancelCommand, err := e.IssueLiveCoverageFence()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, canceled := e.AdmitLiveCoverageFenceCancellation(context.Background(), cancelCommand)
+		if got := <-canceled; got.Code != DispositionLiveCoverageFenceRejected || e.ObserveEvaluationTiming() != fallbackTiming || !e.state.aggregateProjectionPending {
+			t.Fatalf("canceled fence changed pending evaluation got=%+v timing=%+v pending=%t", got, e.ObserveEvaluationTiming(), e.state.aggregateProjectionPending)
+		}
+		staleFact, err := NewLiveCoverageFenceInput(cancelCommand, LiveCoverageFenceComplete, frame, frame+1, t1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, fenced := e.AdmitLiveCoverageFence(context.Background(), staleFact)
+		if got := <-fenced; got.Code != DispositionLiveCoverageFenceFenced || e.ObserveEvaluationTiming() != fallbackTiming || !e.state.aggregateProjectionPending {
+			t.Fatalf("fenced fence changed pending evaluation got=%+v timing=%+v pending=%t", got, e.ObserveEvaluationTiming(), e.state.aggregateProjectionPending)
 		}
 
 		// latestTarget=t1 is unsupported, so pending work must evaluate at t0.
@@ -228,19 +246,67 @@ func TestLiveAggregateEvaluationCoalescing(t *testing.T) {
 			t.Fatalf("coverage disposition = %+v", disposition)
 		}
 		afterFence := e.observePublication()
+		fenceTiming := e.ObserveEvaluationTiming()
 		if afterFence.watermark == nil || !afterFence.watermark.Equal(fenceTarget) || afterFence.aggregateEvaluation.at != fenceTarget ||
-			afterFence.lastEngineSequence != disposition.EngineSequence || afterFence.publicationID != initial.publicationID+1 {
+			afterFence.lastEngineSequence != disposition.EngineSequence || afterFence.publicationID != initial.publicationID+1 ||
+			fenceTiming.Source != AggregateEvaluationLiveCoverageFence || !fenceTiming.Target.Equal(fenceTarget) {
 			t.Fatalf("accepted fence did not commit its exact target: initial=%+v after=%+v", initial, afterFence)
 		}
 
-		admission, timer = e.AdmitTimer(context.Background())
+		admission, timer = e.AdmitMaintenanceTimer(context.Background())
 		if admission != AdmissionAdmitted || awaitTimerDisposition(t, timer).Code != DispositionTimerApplied {
 			t.Fatal("post-fence timer was not applied")
 		}
 		afterUnsupportedTimer := e.observePublication()
 		if afterUnsupportedTimer.watermark == nil || !afterUnsupportedTimer.watermark.Equal(fenceTarget) ||
-			afterUnsupportedTimer.aggregateEvaluation.at != fenceTarget {
+			afterUnsupportedTimer.aggregateEvaluation.at != fenceTarget || e.ObserveEvaluationTiming() != fenceTiming {
 			t.Fatalf("unsupported later timer changed the committed boundary: %+v", afterUnsupportedTimer)
+		}
+	})
+
+	t.Run("post-fence correction remains pending through maintenance and is consumed by next fence", func(t *testing.T) {
+		binding := hydrationPopulationBinding(t, []string{"AAA"})
+		start := binding.SessionStart()
+		t0, t1 := start.Add(2*time.Second), start.Add(3*time.Second)
+		now := t0
+		e := acknowledgedHydrationEngine(t, binding, &now, t0, lifecycleLive)
+		defer closeAndWait(t, e)
+		e.mu.Lock()
+		e.state.hydration.fenceReconciled, e.state.hydration.fenceEpoch = true, 1
+		e.state.hydration.fenceThrough, e.state.hydration.fenceMarkerOrdinal = 1, 1
+		e.state.hydration.supportedThrough = immutableTime(t0)
+		state := ensureAggregateState(&e.state.binding.symbols[0])
+		if !installExactCoverage(state, e.state.binding, start, t0, nil) {
+			e.mu.Unlock()
+			t.Fatal("initial coverage")
+		}
+		e.mu.Unlock()
+
+		_, initialTimer := e.AdmitTimer(context.Background())
+		if awaitTimerDisposition(t, initialTimer).Code != DispositionTimerApplied {
+			t.Fatal("initial timer")
+		}
+		now = t1
+		applyLiveCoverageFenceForCoalescing(t, e, 1, 2, t1)
+		f1Timing := e.ObserveEvaluationTiming()
+		correction := liveAggregate(binding, "AAA", start.Add(time.Second), 1, 2)
+		correction.Values.Close, correction.Values.High = 13, 13
+		if got := admitProductionAggregate(t, e, correction); got.Code != DispositionAggregateInserted {
+			t.Fatalf("post-fence aggregate=%+v", got)
+		}
+		if !e.state.aggregateProjectionPending {
+			t.Fatal("post-fence aggregate did not remain pending")
+		}
+		_, maintenance := e.AdmitMaintenanceTimer(context.Background())
+		if awaitTimerDisposition(t, maintenance).Code != DispositionTimerApplied || e.ObserveEvaluationTiming() != f1Timing || !e.state.aggregateProjectionPending {
+			t.Fatalf("maintenance consumed pending work timing=%+v pending=%t", e.ObserveEvaluationTiming(), e.state.aggregateProjectionPending)
+		}
+		applyLiveCoverageFenceForCoalescing(t, e, 2, 3, t1)
+		f2Timing := e.ObserveEvaluationTiming()
+		committed := e.state.binding.symbols[0].aggregates.committedLatest
+		if f2Timing.Starts.LiveCoverageFence != f1Timing.Starts.LiveCoverageFence+1 || f2Timing.Starts.Timer != f1Timing.Starts.Timer ||
+			e.state.aggregateProjectionPending || committed == nil || committed.values.Close != 13 {
+			t.Fatalf("second fence timing=%+v pending=%t evaluation=%+v", f2Timing, e.state.aggregateProjectionPending, e.observePublication().aggregateEvaluation)
 		}
 	})
 
@@ -263,8 +329,10 @@ func TestLiveAggregateEvaluationCoalescing(t *testing.T) {
 		e.state.hydration.fenceReconciled, e.state.hydration.fenceEpoch, e.state.hydration.fenceThrough = true, 1, 1
 		e.state.hydration.fenceMarkerOrdinal = 1
 		e.state.hydration.supportedThrough = immutableTime(target)
+		deadline := target.Add(correctionHorizon)
+		e.state.aggregateEvaluationDeadline = immutableTime(deadline)
 		e.mu.Unlock()
-		now = target.Add(correctionHorizon + time.Nanosecond)
+		now = deadline.Add(time.Nanosecond)
 
 		qualification := e.state.binding.symbols[0].aggregates.qualification
 		if qualification.finalized || qualification.result.status != qualificationProvisional {
@@ -281,6 +349,37 @@ func TestLiveAggregateEvaluationCoalescing(t *testing.T) {
 		}
 	})
 
+	t.Run("session-end maintenance timer flushes pending same-target work exactly once", func(t *testing.T) {
+		binding := hydrationPopulationBinding(t, []string{"AAA"})
+		target := binding.SessionEnd()
+		now := target.Add(-time.Second)
+		e := aggregateEngine(t, binding, RunModeLive, &now)
+		defer closeAndWait(t, e)
+		e.mu.Lock()
+		e.state.lifecycle = lifecycleLive
+		installEvaluatorMarkOnSymbol(&e.state.binding.symbols[0], target, 12, qualificationFinalized)
+		e.state.binding.symbols[0].prior = frozenPriorClose{symbol: "AAA", status: reference.PriorCloseValid, close: 10}
+		e.state.committedT, e.state.latestTarget = immutableTime(target), immutableTime(target)
+		e.state.aggregateEvaluator.current = e.stageAggregateEvaluationAtLocked(target, target)
+		e.state.aggregateProjectionPending = true
+		e.state.liveEpoch, e.state.liveEpochActive, e.state.aggregateAcknowledged = 1, true, true
+		e.state.aggregateAckPosition = LivePosition{ConnectionEpoch: 1, FrameSequence: 1}
+		e.state.hydration.fenceReconciled, e.state.hydration.fenceEpoch, e.state.hydration.fenceThrough = true, 1, 1
+		e.state.hydration.fenceMarkerOrdinal = 1
+		e.state.hydration.supportedThrough = immutableTime(target)
+		starts := e.state.evaluationTiming.Starts
+		e.mu.Unlock()
+		now = target.Add(4 * time.Second)
+
+		admission, timer := e.AdmitMaintenanceTimer(context.Background())
+		disposition := awaitTimerDisposition(t, timer)
+		timing := e.ObserveEvaluationTiming()
+		if admission != AdmissionAdmitted || disposition.Code != DispositionTimerApplied || e.state.aggregateProjectionPending ||
+			timing.Source != AggregateEvaluationTimer || timing.Starts.Timer != starts.Timer+1 || e.state.lifecycle != lifecycleEnded {
+			t.Fatalf("session-end flush admission=%s disposition=%+v timing=%+v pending=%t lifecycle=%s", admission, disposition, timing, e.state.aggregateProjectionPending, e.state.lifecycle)
+		}
+	})
+
 	t.Run("invalid candidate retains pending work", func(t *testing.T) {
 		at := time.Date(2026, 8, 6, 15, 0, 0, 0, time.UTC)
 		e := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationFinalized}})
@@ -293,4 +392,182 @@ func TestLiveAggregateEvaluationCoalescing(t *testing.T) {
 			t.Fatal("invalid candidate consumed pending projection work")
 		}
 	})
+}
+
+func applyLiveCoverageFenceForCoalescing(t *testing.T, e *Engine, through, marker uint64, capturedAt time.Time) {
+	t.Helper()
+	command, err := e.IssueLiveCoverageFence()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fact, err := NewLiveCoverageFenceInput(command, LiveCoverageFenceComplete, through, marker, capturedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, completion := e.AdmitLiveCoverageFence(context.Background(), fact)
+	if admission != AdmissionAdmitted || completion == nil {
+		t.Fatalf("live fence admission=%s", admission)
+	}
+	if got := <-completion; got.Code != DispositionLiveCoverageFenceApplied {
+		t.Fatalf("live fence=%+v", got)
+	}
+}
+
+func TestEvaluationCoalescingSemanticDifferential(t *testing.T) {
+	binding := hydrationPopulationBinding(t, []string{"AAA", "BBB"})
+	start := binding.SessionStart()
+	target := start.Add(20 * time.Minute)
+	now := target.Add(time.Nanosecond)
+	e := aggregateEngine(t, binding, RunModeLive, &now)
+	defer closeAndWait(t, e)
+	historical := historicalAggregate(binding, "BBB", start.Add(time.Minute), 1)
+	proof := proofFor(binding, historical, start, target)
+	applyHistorical(t, e, historical, proof, DispositionAggregateInserted, ReasonNone)
+	conflict := changedClose(historical, historical.Values.Close+1)
+	applyHistorical(t, e, conflict, proof, DispositionAggregateWithdrawn, ReasonHistoricalHistoricalConflict)
+
+	e.mu.Lock()
+	e.state.lifecycle = lifecycleHydrating
+	e.state.liveEpoch, e.state.liveEpochActive, e.state.aggregateAcknowledged = 1, true, true
+	e.state.aggregateAckPosition = LivePosition{ConnectionEpoch: 1, FrameSequence: 1}
+	e.state.hydration.fenceReconciled, e.state.hydration.fenceEpoch = true, 1
+	e.state.hydration.fenceThrough, e.state.hydration.fenceMarkerOrdinal = 1, 1
+	e.state.hydration.supportedThrough = immutableTime(target)
+	e.mu.Unlock()
+
+	insert := liveAggregate(binding, "AAA", target.Add(-2*time.Second), 1, 2)
+	insert.Values.Close, insert.Values.High = 11, 11
+	if got := admitProductionAggregate(t, e, insert); got.Code != DispositionAggregateInserted {
+		t.Fatalf("insert=%+v", got)
+	}
+	revision := insert
+	revision.Live.FrameSequence = 3
+	revision.Values.Close, revision.Values.High = 12, 12
+	if got := admitProductionAggregate(t, e, revision); got.Code != DispositionAggregateRevised {
+		t.Fatalf("revision=%+v", got)
+	}
+	e.mu.Lock()
+	e.state.lifecycle = lifecycleLive
+	for index := range e.state.binding.symbols {
+		state := ensureAggregateState(&e.state.binding.symbols[index])
+		if !installExactCoverage(state, e.state.binding, start, target, nil) {
+			e.mu.Unlock()
+			t.Fatalf("coverage index=%d", index)
+		}
+	}
+	qualification := ensureQualificationState(e.state.binding.symbols[0].aggregates)
+	proofEnd := target.Add(-correctionHorizon)
+	qualification.proofs[proofEnd.Unix()] = struct{}{}
+	qualification.accountedThrough = target
+	qualification.result = qualificationResult{at: target, status: qualificationProvisional, currentProofCount: 1}
+	oracle := e.stageAggregateEvaluationAtLocked(target, now)
+	if validation := validateAggregateEvaluation(oracle); validation != nil {
+		e.mu.Unlock()
+		t.Fatalf("oracle=%v", validation)
+	}
+	accountingBefore := e.state.aggregates
+	e.mu.Unlock()
+
+	applyLiveCoverageFenceForCoalescing(t, e, 3, 2, now)
+	e.mu.Lock()
+	actual := cloneAggregateEvaluation(e.state.aggregateEvaluator.current)
+	accountingAfter := e.state.aggregates
+	e.mu.Unlock()
+	if !aggregateEvaluationEqual(actual, oracle) || accountingAfter != accountingBefore {
+		t.Fatalf("coalesced/oracle mismatch actual=%+v oracle=%+v accounting=%+v/%+v", actual, oracle, accountingBefore, accountingAfter)
+	}
+	if actual.qualification.finalized != 1 || actual.population.trustedRankableMark != 1 || actual.population.unknownDueFailureOrFence != 1 || actual.uncertainty.localInvalid != 1 {
+		t.Fatalf("trace outcomes=%+v", actual)
+	}
+	timing := e.ObserveEvaluationTiming()
+	publication := e.observePublication()
+	_, maintenance := e.AdmitMaintenanceTimer(context.Background())
+	if awaitTimerDisposition(t, maintenance).Code != DispositionTimerApplied || e.ObserveEvaluationTiming() != timing {
+		t.Fatal("maintenance timer repeated semantic-differential evaluation")
+	}
+	after := e.observePublication()
+	if !aggregateEvaluationEqual(after.aggregateEvaluation, publication.aggregateEvaluation) || after.watermark == nil || !after.watermark.Equal(target) {
+		t.Fatalf("maintenance changed market meaning before=%+v after=%+v", publication, after)
+	}
+	if !slices.Equal(e.ObserveTQ().Desired, evaluationOracleDesired(oracle)) {
+		t.Fatalf("target T/Q desired=%v oracle=%v", e.ObserveTQ().Desired, evaluationOracleDesired(oracle))
+	}
+
+	// Advance through quiet/no-print seconds. The fence owns the one oracle
+	// projection at the required target; its following timer retains T/Q/time
+	// maintenance without replacing that market evaluation.
+	quietTarget := target.Add(5 * time.Second)
+	now = quietTarget.Add(time.Nanosecond)
+	e.mu.Lock()
+	for index := range e.state.binding.symbols {
+		if !installExactCoverage(e.state.binding.symbols[index].aggregates, e.state.binding, start, quietTarget, nil) {
+			e.mu.Unlock()
+			t.Fatalf("quiet coverage index=%d", index)
+		}
+	}
+	e.state.hydration.supportedThrough = immutableTime(quietTarget)
+	quietOracle := e.stageAggregateEvaluationAtLocked(quietTarget, now)
+	e.mu.Unlock()
+	applyLiveCoverageFenceForCoalescing(t, e, 4, 3, quietTarget)
+	quietPublication := e.observePublication()
+	quietTiming := e.ObserveEvaluationTiming()
+	if !aggregateEvaluationEqual(quietPublication.aggregateEvaluation, quietOracle) || quietPublication.watermark == nil || !quietPublication.watermark.Equal(quietTarget) ||
+		!quietPublication.aggregateEvaluation.at.Equal(quietTarget) || !slices.Equal(e.ObserveTQ().Desired, evaluationOracleDesired(quietOracle)) {
+		t.Fatalf("quiet coalesced/oracle mismatch publication=%+v oracle=%+v tq=%v", quietPublication, quietOracle, e.ObserveTQ().Desired)
+	}
+	_, maintenance = e.AdmitMaintenanceTimer(context.Background())
+	if awaitTimerDisposition(t, maintenance).Code != DispositionTimerApplied || e.ObserveEvaluationTiming() != quietTiming {
+		t.Fatal("quiet maintenance timer repeated aggregate evaluation")
+	}
+
+	// The final fence still evaluates its captured market target while live.
+	// Its following maintenance timer owns the ordered session-end transition
+	// and the required same-target terminal evaluation.
+	sessionEnd := binding.SessionEnd()
+	now = sessionEnd.Add(4 * time.Second)
+	e.mu.Lock()
+	for index := range e.state.binding.symbols {
+		if !installExactCoverage(e.state.binding.symbols[index].aggregates, e.state.binding, start, sessionEnd, nil) {
+			e.mu.Unlock()
+			t.Fatalf("session-end coverage index=%d", index)
+		}
+	}
+	e.state.hydration.supportedThrough = immutableTime(sessionEnd)
+	endFenceOracle := e.stageAggregateEvaluationAtLocked(sessionEnd, now)
+	e.mu.Unlock()
+	priorPublicationID := e.observePublication().publicationID
+	applyLiveCoverageFenceForCoalescing(t, e, 5, 4, sessionEnd)
+	endPublication := e.observePublication()
+	endTiming := e.ObserveEvaluationTiming()
+	if e.state.lifecycle != lifecycleLive || !aggregateEvaluationEqual(endPublication.aggregateEvaluation, endFenceOracle) ||
+		endPublication.watermark == nil || !endPublication.watermark.Equal(sessionEnd) || endPublication.publicationID <= priorPublicationID ||
+		!slices.Equal(e.ObserveTQ().Desired, evaluationOracleDesired(endFenceOracle)) {
+		t.Fatalf("session-end fence/oracle mismatch lifecycle=%s publication=%+v oracle=%+v tq=%v", e.state.lifecycle, endPublication, endFenceOracle, e.ObserveTQ().Desired)
+	}
+	e.mu.Lock()
+	e.state.lifecycle = lifecycleEnded
+	endTimerOracle := e.stageAggregateEvaluationAtLocked(sessionEnd, now)
+	e.state.lifecycle = lifecycleLive
+	e.mu.Unlock()
+	_, maintenance = e.AdmitMaintenanceTimer(context.Background())
+	if awaitTimerDisposition(t, maintenance).Code != DispositionTimerApplied || e.state.lifecycle != lifecycleEnded ||
+		e.ObserveEvaluationTiming().Starts.Timer != endTiming.Starts.Timer+1 ||
+		!aggregateEvaluationEqual(e.observePublication().aggregateEvaluation, endTimerOracle) ||
+		!slices.Equal(e.ObserveTQ().Desired, evaluationOracleDesired(endTimerOracle)) {
+		t.Fatalf("session-end timer/oracle mismatch lifecycle=%s publication=%+v oracle=%+v timing=%+v tq=%v", e.state.lifecycle, e.observePublication(), endTimerOracle, e.ObserveEvaluationTiming(), e.ObserveTQ().Desired)
+	}
+}
+
+func evaluationOracleDesired(result aggregateEvaluationResult) []string {
+	if result.mode != rankingQualifiedCurrent {
+		return nil
+	}
+	desired := make([]string, 0, min(len(result.rows), maximumTQSymbols))
+	for _, row := range result.rows {
+		if len(desired) == maximumTQSymbols {
+			break
+		}
+		desired = append(desired, row.symbol)
+	}
+	return desired
 }

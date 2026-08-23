@@ -36,16 +36,16 @@ const (
 )
 
 type publicationFingerprint struct {
-	bindingIdentity    string
-	lifecycle          lifecycle
-	exposedRevision    uint64
-	aggregateIntegrity bool
-	clockMonotonic     bool
-	globalFailure      bool
-	evaluationRevision uint64
-	controlRevision    uint64
-	hydrationRevision  uint64
-	tqRevision         uint64
+	bindingIdentity      string
+	lifecycle            lifecycle
+	exposedRevision      uint64
+	aggregateIntegrity   bool
+	clockMonotonic       bool
+	globalFailure        bool
+	evaluationRevision   uint64
+	controlRevision      uint64
+	hydrationRevision    uint64
+	tqProjectionRevision uint64
 }
 
 type privatePublication struct {
@@ -206,10 +206,10 @@ func (e *Engine) publicationFingerprintLocked() publicationFingerprint {
 		lifecycle: e.state.lifecycle, exposedRevision: e.state.exposedRevision,
 		aggregateIntegrity: e.state.aggregateIntegrity,
 		clockMonotonic:     e.state.clockMonotonic, globalFailure: e.state.globalFailure,
-		evaluationRevision: e.state.evaluationRevision,
-		controlRevision:    e.state.connectionControl.revision,
-		hydrationRevision:  e.state.hydration.revision,
-		tqRevision:         e.state.tq.revision,
+		evaluationRevision:   e.state.evaluationRevision,
+		controlRevision:      e.state.connectionControl.revision,
+		hydrationRevision:    e.state.hydration.revision,
+		tqProjectionRevision: e.state.tq.publicProjectionRevision,
 	}
 	if e.state.binding != nil {
 		result.bindingIdentity = e.state.binding.identity
@@ -292,7 +292,9 @@ func (e *Engine) completePublicationDecisionLocked(node *queueNode, disposition 
 				publicationStarted := e.evaluationTimingStart()
 				candidate, err = e.buildPublicationLocked(nextID, node.engineSequence, disposition, generatedAt,
 					prospectiveAdmission, prospectiveTransitions, prospectivePublications)
-				e.state.evaluationTiming.Publication = e.evaluationTimingElapsed(publicationStarted)
+				if e.state.evaluationTiming.EngineSequence == node.engineSequence {
+					e.state.evaluationTiming.Publication = e.evaluationTimingElapsed(publicationStarted)
+				}
 				if node.kind == inputAggregateIngressFence {
 					e.state.fenceTiming.Publication = e.state.evaluationTiming.Publication
 				}
@@ -336,6 +338,7 @@ func (e *Engine) completePublicationDecisionLocked(node *queueNode, disposition 
 	case decisionReplaced:
 		e.lastPubID = candidate.publicationID
 		e.storePublication(candidate)
+		e.flushTQProjectionLocked()
 		if candidate.lifecycle != lifecycleSuppressed && candidate.kind == publicationNormal {
 			e.state.lastCoherentPublication = candidate
 		}

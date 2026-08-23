@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,8 +29,8 @@ import (
 )
 
 const (
-	cachedFenceArtifact        = "/Users/joshuabelandres/Dev/live-equities-momentum-scanner/var/aggregate-replay/aggregate-replay-fce95a904bb37c3d63bfe0a2988ac78aa0e0a2ee4c8d171bdca27fcd00f8808a.jsonl"
-	cachedFenceReference       = "/Users/joshuabelandres/Dev/live-equities-momentum-scanner/var/reference"
+	cachedFenceArtifact        = "/Users/joshuabelandres/Dev/live-equities-momentum-scanner-replay-archive/runtime-var-20260814/aggregate-replay/aggregate-replay-fce95a904bb37c3d63bfe0a2988ac78aa0e0a2ee4c8d171bdca27fcd00f8808a.jsonl"
+	cachedFenceReference       = "/Users/joshuabelandres/Dev/live-equities-momentum-scanner-replay-archive/runtime-var-20260814/reference"
 	cachedFenceArtifactID      = "sha256:fce95a904bb37c3d63bfe0a2988ac78aa0e0a2ee4c8d171bdca27fcd00f8808a"
 	cachedFenceRowsPerChunk    = 256
 	cachedFenceObservedPeriod  = 30 * time.Second / 5_798
@@ -59,9 +60,11 @@ type cachedFenceRunResult struct {
 	heapBefore, heapAtFence, heapAfter                          uint64
 	tq                                                          engine.TQView
 	fenceTiming                                                 engine.FenceTimingView
-	cycleStage, cycleApply, cyclePublication, cycleLock         [10]time.Duration
-	cycleAlloc                                                  [10]uint64
-	cyclePublicationID                                          [10]uint64
+	cycleStage, cycleApply, cyclePublication, cycleLock         [60]time.Duration
+	cycleAlloc                                                  [60]uint64
+	cyclePublicationID                                          [60]uint64
+	evaluationStarts                                            engine.AggregateEvaluationStartsView
+	maximumOldestFrameAge                                       time.Duration
 }
 
 type cachedArtifactLine struct {
@@ -593,10 +596,11 @@ func (c *cachedFenceRuntimeCleanup) shutdown(t *testing.T) {
 }
 
 type cachedFenceCycle struct {
-	timing        engine.EvaluationTimingView
-	total         time.Duration
-	publicationID uint64
-	capture       SnapshotCaptureView
+	timing         engine.EvaluationTimingView
+	total          time.Duration
+	oldestFrameAge time.Duration
+	publicationID  uint64
+	capture        SnapshotCaptureView
 }
 
 func observeCachedFenceAutomaticTimers(run *Runtime) <-chan automaticTimerObservation {
@@ -649,12 +653,19 @@ func awaitCachedFenceAutomaticCycle(ctx context.Context, run *Runtime, clock *ca
 		if operational.Lifecycle == "suppressed" || operational.Lifecycle == "ended" || operational.Suppression != "" {
 			return cachedFenceCycle{}, fmt.Errorf("automatic timer reached terminal lifecycle=%s reason=%s suppression=%s", operational.Lifecycle, operational.LifecycleReason, operational.Suppression)
 		}
-		if observation.captureErr == nil && captureOK && observation.disposition.Code == engine.DispositionTimerApplied &&
-			observation.disposition.EngineSequence == timing.EngineSequence && publication.Watermark != nil && publication.Watermark.Equal(target) &&
-			publication.LastDisposition == engine.DispositionTimerApplied && publication.LastEngineSequence == timing.EngineSequence &&
+		// A successful live fence owns the cadence publication. The runtime's
+		// following maintenance timer still completes, but must not create a
+		// second publication merely to expose the same aggregate boundary. A
+		// fallback evaluation timer remains the publication owner when no fence
+		// can publish.
+		publicationOwner := timing.Source == engine.AggregateEvaluationLiveCoverageFence && publication.LastDisposition == engine.DispositionLiveCoverageFenceApplied ||
+			timing.Source == engine.AggregateEvaluationTimer && publication.LastDisposition == engine.DispositionTimerApplied
+		if observation.captureErr == nil && captureOK && observation.disposition.Code == engine.DispositionTimerApplied && publicationOwner &&
+			timing.Target.Equal(target) && publication.Watermark != nil && publication.Watermark.Equal(target) &&
+			publication.LastEngineSequence == timing.EngineSequence &&
 			publication.LastEngineSequence > priorTimingSequence && publication.PublicationID > priorPublicationID &&
 			operational.PublicationID == publication.PublicationID && operational.LastEngineSequence == publication.LastEngineSequence {
-			return cachedFenceCycle{timing: timing, total: timing.Stage + timing.Apply + timing.Publication, publicationID: publication.PublicationID, capture: captured}, nil
+			return cachedFenceCycle{timing: timing, total: observation.cycleTime, oldestFrameAge: captured.Engine.TQ.PressureSample.OldestWaitingFrameAge, publicationID: publication.PublicationID, capture: captured}, nil
 		}
 	}
 }
@@ -1085,10 +1096,10 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 	result.tailDrain = time.Since(tailStarted)
 	priorTimingSequence := run.Engine().ObserveEvaluationTiming().EngineSequence
 	priorPublicationID := run.Engine().ObserveOperational().PublicationID
+	startsBefore := run.Engine().ObserveEvaluationTiming().Starts
 	automaticTimer := observeCachedFenceAutomaticTimers(run)
 	defer run.setAutomaticTimerObserver(nil)
-	for cycle := 0; cycle < 10; cycle++ {
-		runtime.GC()
+	for cycle := 0; cycle < len(result.cycleLock); cycle++ {
 		var beforeCycle, afterCycle runtime.MemStats
 		runtime.ReadMemStats(&beforeCycle)
 		cycleCtx, stopCycle := context.WithTimeout(ctx, 5*time.Second)
@@ -1099,6 +1110,7 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 		}
 		timing := automatic.timing
 		result.cycleLock[cycle] = automatic.total
+		result.maximumOldestFrameAge = max(result.maximumOldestFrameAge, automatic.oldestFrameAge)
 		result.cycleStage[cycle], result.cycleApply[cycle], result.cyclePublication[cycle] = timing.Stage, timing.Apply, timing.Publication
 		view := automatic.capture
 		result.cyclePublicationID[cycle] = view.Engine.Publication.PublicationID
@@ -1109,6 +1121,13 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 		runtime.ReadMemStats(&afterCycle)
 		result.cycleAlloc[cycle] = afterCycle.TotalAlloc - beforeCycle.TotalAlloc
 		t.Logf("GATE_E cycle=%d stage=%s apply=%s publication=%s total_lock=%s allocated_bytes=%d publication_id=%d", cycle+1, timing.Stage, timing.Apply, timing.Publication, result.cycleLock[cycle], result.cycleAlloc[cycle], result.cyclePublicationID[cycle])
+	}
+	startsAfter := run.Engine().ObserveEvaluationTiming().Starts
+	result.evaluationStarts = engine.AggregateEvaluationStartsView{
+		LiveCoverageFence:     startsAfter.LiveCoverageFence - startsBefore.LiveCoverageFence,
+		Timer:                 startsAfter.Timer - startsBefore.Timer,
+		AggregateIngressFence: startsAfter.AggregateIngressFence - startsBefore.AggregateIngressFence,
+		Replay:                startsAfter.Replay - startsBefore.Replay,
 	}
 	runtime.GC()
 	var after runtime.MemStats
@@ -1162,6 +1181,16 @@ func assertCachedFence(t *testing.T, manifest cachedFenceManifest, result cached
 			problems = append(problems, fmt.Sprintf("cycle %d lock=%s publication=%d", cycle+1, result.cycleLock[cycle], result.cyclePublicationID[cycle]))
 		}
 	}
+	orderedCycles := append([]time.Duration(nil), result.cycleLock[:]...)
+	sort.Slice(orderedCycles, func(i, j int) bool { return orderedCycles[i] < orderedCycles[j] })
+	p99 := orderedCycles[int(0.99*float64(len(orderedCycles)-1))]
+	maximumCycle := orderedCycles[len(orderedCycles)-1]
+	if p99 >= 750*time.Millisecond || maximumCycle >= time.Second || result.evaluationStarts.LiveCoverageFence != uint64(len(result.cycleLock)) ||
+		result.evaluationStarts.Timer != 0 || result.evaluationStarts.AggregateIngressFence != 0 || result.evaluationStarts.Replay != 0 {
+		problems = append(problems, fmt.Sprintf("coalesced cycles p99=%s maximum=%s starts=%+v", p99, maximumCycle, result.evaluationStarts))
+	}
+	t.Logf("LIVE_EVALUATION_COALESCING cycles=%d p99=%s maximum=%s starts=%+v allocated_bytes=%v heap_before=%d heap_after=%d queue_high=%d maximum_oldest_frame_age=%s",
+		len(result.cycleLock), p99, maximumCycle, result.evaluationStarts, result.cycleAlloc, result.heapBefore, result.heapAfter, result.maximumQueued, result.maximumOldestFrameAge)
 	if len(problems) != 0 {
 		t.Fatalf("cached hydration fence acceptance failed: %s", strings.Join(problems, "; "))
 	}

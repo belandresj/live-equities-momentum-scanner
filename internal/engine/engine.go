@@ -118,6 +118,29 @@ type TimerDisposition struct {
 type EvaluationTimingView struct {
 	EngineSequence            uint64
 	Stage, Apply, Publication time.Duration
+	Source                    AggregateEvaluationSource
+	Target                    time.Time
+	Starts                    AggregateEvaluationStartsView
+}
+
+// AggregateEvaluationSource is the fixed-cardinality origin of a full-universe
+// aggregate projection. It is diagnostic only and owns no evaluation policy.
+type AggregateEvaluationSource string
+
+const (
+	AggregateEvaluationLiveCoverageFence AggregateEvaluationSource = "live_coverage_fence"
+	AggregateEvaluationTimer             AggregateEvaluationSource = "timer"
+	AggregateEvaluationIngressFence      AggregateEvaluationSource = "aggregate_ingress_fence"
+	AggregateEvaluationReplay            AggregateEvaluationSource = "replay"
+)
+
+// AggregateEvaluationStartsView counts full-universe evaluation starts without
+// retaining targets, symbols, or an unbounded event history.
+type AggregateEvaluationStartsView struct {
+	LiveCoverageFence     uint64
+	Timer                 uint64
+	AggregateIngressFence uint64
+	Replay                uint64
 }
 
 // FenceTimingView partitions the most recent aggregate-ingress fence handled
@@ -312,6 +335,7 @@ type queueNode struct {
 	completion             chan Disposition
 	aggregateCompletion    chan AggregateDisposition
 	timerCompletion        chan TimerDisposition
+	timerPolicy            timerEvaluationPolicy
 	replayStart            playback.StartEvidence
 	replayGroup            playback.GroupEvidence
 	replayEnd              playback.EndEvidence
@@ -344,53 +368,61 @@ type queueNode struct {
 }
 
 type engineState struct {
-	lifecycle                  lifecycle
-	binding                    *installedBinding
-	aggregates                 aggregateAccounting
-	liveEpoch                  uint64
-	liveEpochActive            bool
-	aggregateWriteToken        uint64
-	aggregateAcknowledged      bool
-	aggregateAckPosition       LivePosition
-	aggregateAckReceivedAt     time.Time
-	greatestIngressPosition    LivePosition
-	connectionControl          connectionControlState
-	connectionAccounting       connectionControlAccounting
-	replayArtifact             string
-	aggregateIntegrity         bool
-	globalFailure              bool
-	exposedRevision            uint64
-	evaluationRevision         uint64
-	aggregateEvaluator         aggregateEvaluatorState
-	aggregateProjectionPending bool
-	evaluatorIntegrity         *EvaluatorIntegrityView
-	clockMonotonic             bool
-	committedT                 *time.Time
-	latestTarget               *time.Time
-	latestTransition           *transitionRecord
-	suppressionDisposition     SuppressionDisposition
-	replay                     replayState
-	hydration                  hydrationState
-	scheduledRecovery          scheduledRecoveryState
-	liveCoverage               liveCoverageState
-	checkpointSequence         uint64
-	installedCheckpoint        *InstalledCheckpointFact
-	checkpointLastSubmitted    *time.Time
-	checkpointLastAttempted    *time.Time
-	checkpointRequestSequence  uint64
-	checkpointOutstanding      map[uint64]checkpointRequestIdentity
-	checkpointOperations       CheckpointOperations
-	checkpointProjectionActive bool
-	checkpointProjectionDirty  bool
-	checkpointProjectionT0     time.Time
-	checkpointProjectionQueued bool
-	checkpointProjection       *checkpointProjectionWork
-	tq                         tqState
-	evaluationTiming           EvaluationTimingView
-	fenceTiming                FenceTimingView
-	fenceTimingStarted         time.Time
-	lastCoherentPublication    *privatePublication
+	lifecycle                   lifecycle
+	binding                     *installedBinding
+	aggregates                  aggregateAccounting
+	liveEpoch                   uint64
+	liveEpochActive             bool
+	aggregateWriteToken         uint64
+	aggregateAcknowledged       bool
+	aggregateAckPosition        LivePosition
+	aggregateAckReceivedAt      time.Time
+	greatestIngressPosition     LivePosition
+	connectionControl           connectionControlState
+	connectionAccounting        connectionControlAccounting
+	replayArtifact              string
+	aggregateIntegrity          bool
+	globalFailure               bool
+	exposedRevision             uint64
+	evaluationRevision          uint64
+	aggregateEvaluator          aggregateEvaluatorState
+	aggregateProjectionPending  bool
+	aggregateEvaluationDeadline *time.Time
+	evaluatorIntegrity          *EvaluatorIntegrityView
+	clockMonotonic              bool
+	committedT                  *time.Time
+	latestTarget                *time.Time
+	latestTransition            *transitionRecord
+	suppressionDisposition      SuppressionDisposition
+	replay                      replayState
+	hydration                   hydrationState
+	scheduledRecovery           scheduledRecoveryState
+	liveCoverage                liveCoverageState
+	checkpointSequence          uint64
+	installedCheckpoint         *InstalledCheckpointFact
+	checkpointLastSubmitted     *time.Time
+	checkpointLastAttempted     *time.Time
+	checkpointRequestSequence   uint64
+	checkpointOutstanding       map[uint64]checkpointRequestIdentity
+	checkpointOperations        CheckpointOperations
+	checkpointProjectionActive  bool
+	checkpointProjectionDirty   bool
+	checkpointProjectionT0      time.Time
+	checkpointProjectionQueued  bool
+	checkpointProjection        *checkpointProjectionWork
+	tq                          tqState
+	evaluationTiming            EvaluationTimingView
+	fenceTiming                 FenceTimingView
+	fenceTimingStarted          time.Time
+	lastCoherentPublication     *privatePublication
 }
+
+type timerEvaluationPolicy uint8
+
+const (
+	timerEvaluationEnabled timerEvaluationPolicy = iota
+	timerMaintenanceOnly
+)
 
 func (e *Engine) ObserveEvaluationTiming() EvaluationTimingView {
 	if e == nil {
@@ -594,11 +626,23 @@ func (e *Engine) AdmitAggregate(ctx context.Context, input AggregateInput) (Admi
 // AdmitTimer admits intent to evaluate engine time. The engine supplies the
 // serialized time sample, binding context, and positive run-local position.
 func (e *Engine) AdmitTimer(ctx context.Context) (AdmissionResult, <-chan TimerDisposition) {
+	return e.admitTimer(ctx, timerEvaluationEnabled)
+}
+
+// AdmitMaintenanceTimer admits the same ordered engine-time fact as
+// AdmitTimer, but makes this transition ineligible to start a full-universe
+// aggregate projection. Lifecycle, T/Q, quiet-window, and session-end timer
+// maintenance remain unchanged.
+func (e *Engine) AdmitMaintenanceTimer(ctx context.Context) (AdmissionResult, <-chan TimerDisposition) {
+	return e.admitTimer(ctx, timerMaintenanceOnly)
+}
+
+func (e *Engine) admitTimer(ctx context.Context, policy timerEvaluationPolicy) (AdmissionResult, <-chan TimerDisposition) {
 	e.beginAdmission()
 	if ctx == nil {
 		return e.finishNonAdmission(AdmissionNotAdmittedInvalid), nil
 	}
-	node := &queueNode{kind: inputTimer}
+	node := &queueNode{kind: inputTimer, timerPolicy: policy}
 	result := e.admitNode(ctx, node, false)
 	if result != AdmissionAdmitted {
 		return result, nil
@@ -1217,8 +1261,8 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		e.enterSuppressionLocked(lifecycleEventAccountingIntegrity, node, lifecycleReasonAccountingIntegrity)
 	}
 	e.reconcileTQLocked(node.admissionTime)
-	if tqPublicationInput(node.kind) {
-		e.state.tq.revision++
+	if tqProjectionInput(node.kind) || e.state.tq.immediateProjectionPending {
+		e.recordTQProjectionInputLocked()
 	}
 	disposition := transitionDisposition{EngineSequence: node.engineSequence, Code: code, Reason: reason,
 		hydrationPlan: stagedHydrationPlan, hydrationRows: stagedHydrationRows, hydrationAccounting: stagedHydrationAccounting,
@@ -1238,7 +1282,11 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 	return final
 }
 
-func tqPublicationInput(kind inputKind) bool {
+// tqProjectionInput identifies ordered inputs that can mutate or reclassify
+// canonical T/Q state, including timer-driven field aging/pruning. It does not
+// imply an immediate publication; the public projection decides that from the
+// trust-transition marker and existing global cadence.
+func tqProjectionInput(kind inputKind) bool {
 	switch kind {
 	case inputTimer, inputTQCommandResult, inputTQControlQuarantine, inputTrade, inputQuote, inputTQDrop, inputTQPressureResult, inputTQPressureTick:
 		return true

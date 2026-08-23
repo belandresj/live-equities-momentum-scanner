@@ -680,7 +680,7 @@ provenance remain focus-accessible on their relevant table cells.
 
 The compact top-right status control is the sole primary status surface. Its
 always-visible summary translates the validated primary publication/transport
-state into `CONNECTING`, `WAITING FOR SESSION`, `STARTING`, `LIVE`, `PARTIAL`,
+state into `CONNECTING`, `WAITING FOR SESSION`, `WARMING UP`, `LIVE`, `PARTIAL`,
 `RECOVERING`, `DELAYED`, `DISCONNECTED`, `UNAVAILABLE`, `SESSION ENDED`, or
 `HISTORICAL` and omits the redundant displayed-row count. `LIVE` requires
 connected exact qualified-current output; an exact zero-row result remains
@@ -718,7 +718,7 @@ specific trader-facing step. Active work shows exact terminal/planned progress.
 A retained inactive prior ledger is never shown as current progress, and
 recovery never becomes `LIVE` until the ordinary backend readiness fact does.
 The summary similarly consolidates connection, subscription, hydration, and
-fence finalization as `STARTING`, with the specific step in Aggregates.
+fence finalization as `WARMING UP`, with the specific step in Aggregates.
 During an independent rolling update, a v2 response that predates
 `generation_active` is conservatively treated as inactive and presented as
 preparing rather than fabricated progress. These labels add no browser-owned
@@ -1012,7 +1012,7 @@ concurrency, API, or cross-component boundary change.
 ### 20.11 Trader-facing status vocabulary correction acceptance — 2026-08-17
 
 The compact summary now maps validated lifecycle and transport facts to
-`CONNECTING`, `WAITING FOR SESSION`, `STARTING`, `LIVE`, `PARTIAL`,
+`CONNECTING`, `WAITING FOR SESSION`, `WARMING UP`, `LIVE`, `PARTIAL`,
 `RECOVERING`, `DELAYED`, `DISCONNECTED`, `UNAVAILABLE`, `SESSION ENDED`, or
 `HISTORICAL`. `LIVE` requires connected exact qualified-current output and
 remains correct for a resolved empty table. The displayed-row count and raw

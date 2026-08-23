@@ -362,6 +362,9 @@ func (e *Engine) ArmEvaluatorAccountingFaultForTest() {
 	}
 	e.mu.Lock()
 	e.evaluationFault = true
+	// The fault targets the next evaluator validation, so expose one explicit
+	// pending projection opportunity instead of relying on periodic rescans.
+	e.state.aggregateProjectionPending = true
 	e.mu.Unlock()
 }
 
@@ -419,8 +422,10 @@ func (e *Engine) applyAggregateCandidateLocked(at, engineTime time.Time) {
 func (e *Engine) applyStagedAggregateCandidateLocked(staged aggregateEvaluationResult, engineTime time.Time) {
 	if len(staged.updates) != len(e.state.binding.symbols) {
 		e.applyAggregateCandidateLocked(staged.at, engineTime)
+		e.refreshAggregateEvaluationDeadlineLocked()
 		return
 	}
+	var nextDeadline *time.Time
 	for index := range e.state.binding.symbols {
 		update := staged.updates[index]
 		state := e.state.binding.symbols[index].aggregates
@@ -432,8 +437,34 @@ func (e *Engine) applyStagedAggregateCandidateLocked(staged aggregateEvaluationR
 		ensurePriceRangeState(state).result = update.priceRange
 		applyActivityResult(state, e.state.binding, update.activity)
 		ensureMVPMeasurementState(state).result = update.mvpMeasurements
+		if qualification := state.qualification; qualification != nil && !qualification.finalized {
+			for proof := range qualification.proofs {
+				deadline := time.Unix(proof, 0).UTC().Add(correctionHorizon)
+				if nextDeadline == nil || deadline.Before(*nextDeadline) {
+					nextDeadline = immutableTime(deadline)
+				}
+			}
+		}
 	}
+	e.state.aggregateEvaluationDeadline = nextDeadline
 	e.commitAggregateTargetLocked(staged.at)
+}
+
+func (e *Engine) refreshAggregateEvaluationDeadlineLocked() {
+	var nextDeadline *time.Time
+	for index := range e.state.binding.symbols {
+		state := e.state.binding.symbols[index].aggregates
+		if state == nil || state.qualification == nil || state.qualification.finalized {
+			continue
+		}
+		for proof := range state.qualification.proofs {
+			deadline := time.Unix(proof, 0).UTC().Add(correctionHorizon)
+			if nextDeadline == nil || deadline.Before(*nextDeadline) {
+				nextDeadline = immutableTime(deadline)
+			}
+		}
+	}
+	e.state.aggregateEvaluationDeadline = nextDeadline
 }
 
 func (e *Engine) commitAggregateTargetLocked(at time.Time) {

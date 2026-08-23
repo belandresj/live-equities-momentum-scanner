@@ -49,6 +49,33 @@ test("P-MVP-UI preserves v2 server order, exact rows, signed units, compact shar
   assert.deepEqual([formatShares(999), formatShares(1_250), formatShares(999_999), formatShares(999_999_999), formatShares(12_000_000), formatShares(2_500_000_000)], ["999", "1.3K", "1M", "1B", "12M", "2.5B"]);
 });
 
+test("P2 accepts independently unconfirmed T/Q channels without invalidating aggregate ranking", () => {
+  const snapshot = snapshotFixtureV2(2);
+  snapshot.tq.known_present = 0; snapshot.tq.unknown = 2;
+  snapshot.rows[0].tape_5s = { status: "unavailable", reason: "channel_unconfirmed", trade_coverage: false, trades_per_second: null, timestamp_basis: "", lifecycle_records_observed: false };
+  snapshot.rows[0].tq_membership = { desired: true, provider_present: false, provider_membership_unknown: true };
+  snapshot.rows[1].spread = { status: "unavailable", reason: "channel_unconfirmed", quote_coverage: false, cents: null, basis_points: null, quote_age_ms: 0, quality: "" };
+  snapshot.rows[1].tq_membership = { desired: true, provider_present: false, provider_membership_unknown: true };
+
+  const model = buildViewModel(snapshot);
+  assert.equal(model.current, true);
+  assert.equal(model.rows[0].tape.state, "unavailable");
+  assert.equal(model.rows[0].spread.state, "current");
+  assert.equal(model.rows[1].tape.state, "current");
+  assert.equal(model.rows[1].spread.state, "unavailable");
+});
+
+test("P3 accepts explicit T/Q control-error containment without invalidating aggregate ranking", () => {
+  const snapshot = snapshotFixtureV2(1);
+  snapshot.rows[0].tape_5s = { status: "unavailable", reason: "control_error", trade_coverage: true, trades_per_second: null, timestamp_basis: "", lifecycle_records_observed: false };
+  snapshot.rows[0].spread = { status: "unavailable", reason: "control_error", quote_coverage: true, cents: null, basis_points: null, quote_age_ms: 0, quality: "" };
+
+  const model = buildViewModel(snapshot);
+  assert.equal(model.current, true);
+  assert.equal(model.rows[0].tape.state, "unavailable");
+  assert.equal(model.rows[0].spread.state, "unavailable");
+});
+
 function sampledAt(snapshot, seconds) {
   snapshot.sample.id = String(10 + seconds);
   snapshot.sample.sampled_at = new Date(Date.parse("2026-08-08T16:00:00Z") + seconds * 1000).toISOString().replace(".000Z", "Z");
@@ -417,7 +444,7 @@ test("P-MVP-RECOVERY-OBS distinguishes reconnect, active retry, and final fence 
   const hydratingModel = buildViewModel(hydrating);
   assert.equal(hydratingModel.phase, "hydrating");
   const hydratingDocument = new FakeDocument(); renderDashboard(hydratingDocument, { transport: "connected", model: hydratingModel });
-  assert.equal(hydratingDocument.getElementById("status-live").textContent, "STARTING");
+  assert.equal(hydratingDocument.getElementById("status-live").textContent, "WARMING UP");
   assert.match(hydratingDocument.getElementById("aggregate-status").textContent, /Syncing history.*17 \/ 5,522/);
   assert.equal(find(hydratingDocument.body, node => node.className === "message").length, 0);
 
@@ -435,7 +462,53 @@ test("P-MVP-UI bounded poller skips overlap, freezes, resamples, replaces, and r
   const first = controller.tick(); await controller.tick(); assert.equal(updates.at(-1).transport, "refresh_delayed"); resolveFirst(new Response(JSON.stringify(snapshotFixtureV2()))); await first;
   const same = snapshotFixtureV2(); same.sample.id = "11"; same.sample.sampled_at = "2026-08-08T16:00:01Z"; controller.fetchImpl = () => Promise.resolve(new Response(JSON.stringify(same))); await controller.tick(); assert.equal(updates.at(-1).model.sampleID, "11");
   const next = snapshotFixtureV2(); next.publication.id = "21"; next.rows[0].symbol = "REPLACED"; next.tq.desired_symbols[0] = "REPLACED"; controller.fetchImpl = () => Promise.resolve(new Response(JSON.stringify(next))); await controller.tick(); assert.equal(updates.at(-1).model.rows[0].symbol, "REPLACED");
-  controller.fetchImpl = () => Promise.resolve(new Response("{}", { status: 503 })); await controller.tick(); assert.equal(updates.at(-1).transport, "disconnected"); assert.equal(updates.at(-1).model.publicationID, "21"); controller.fetchImpl = () => Promise.resolve(new Response(JSON.stringify(snapshotFixtureV2()))); await controller.tick(); assert.equal(updates.at(-1).transport, "connected");
+  controller.fetchImpl = () => Promise.resolve(new Response("{}", { status: 503 })); await controller.tick(); assert.equal(updates.at(-1).transport, "api_unavailable"); assert.equal(updates.at(-1).model.publicationID, "21"); controller.fetchImpl = () => Promise.resolve(new Response(JSON.stringify(snapshotFixtureV2()))); await controller.tick(); assert.equal(updates.at(-1).transport, "connected");
+});
+
+test("P5 poller separates self-timeout, API failure, and stop cancellation", async () => {
+  const validResponse = () => new Response(JSON.stringify(snapshotFixtureV2()));
+  const timeoutUpdates = []; let timeoutMode = "timeout";
+  const timeoutController = new PollController({ url: "http://127.0.0.1/api/v2/snapshot", requestTimeoutMilliseconds: 5,
+    fetchImpl: (_, options) => timeoutMode === "success" ? Promise.resolve(validResponse()) : new Promise((_, reject) => options.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true })),
+    onUpdate: update => timeoutUpdates.push(update) });
+  await timeoutController.tick(); assert.equal(timeoutUpdates.at(-1).transport, "refresh_delayed");
+  const timeoutDocument = new FakeDocument(); renderDashboard(timeoutDocument, timeoutUpdates.at(-1));
+  assert.equal(timeoutDocument.getElementById("status-live").textContent, "DELAYED");
+  assert.ok(timeoutUpdates.every(update => update.transport !== "disconnected"));
+  timeoutMode = "success"; await timeoutController.tick(); assert.equal(timeoutUpdates.at(-1).transport, "connected");
+  timeoutMode = "timeout"; await timeoutController.tick();
+  assert.equal(timeoutUpdates.at(-1).transport, "refresh_delayed"); assert.equal(timeoutUpdates.at(-1).model.current, true);
+  const retainedDocument = new FakeDocument(); renderDashboard(retainedDocument, timeoutUpdates.at(-1));
+  assert.equal(retainedDocument.getElementById("status-live").textContent, "DELAYED"); assert.equal(retainedDocument.getElementById("scanner-table").dataset.publicationState, "noncurrent");
+  assert.ok(find(retainedDocument.body, node => node.tagName === "TD").every(cell => cell.dataset.state === "retained"));
+  timeoutMode = "success"; await timeoutController.tick(); assert.equal(timeoutUpdates.at(-1).transport, "connected");
+  const recoveredDocument = new FakeDocument(); renderDashboard(recoveredDocument, timeoutUpdates.at(-1));
+  assert.equal(recoveredDocument.getElementById("status-live").textContent, "LIVE"); assert.equal(recoveredDocument.getElementById("scanner-table").dataset.publicationState, "current");
+
+  const failureUpdates = []; let failureMode = "network";
+  const failureController = new PollController({ url: "http://127.0.0.1/api/v2/snapshot", fetchImpl: () => failureMode === "network" ? Promise.reject(new Error("network down")) : validResponse(), onUpdate: update => failureUpdates.push(update) });
+  await failureController.tick(); assert.equal(failureUpdates.at(-1).transport, "api_unavailable");
+  const failureDocument = new FakeDocument(); renderDashboard(failureDocument, failureUpdates.at(-1));
+  assert.equal(failureDocument.getElementById("status-live").textContent, "UNAVAILABLE");
+  assert.ok(failureUpdates.every(update => update.transport !== "disconnected"));
+  failureMode = "success"; await failureController.tick(); assert.equal(failureUpdates.at(-1).transport, "connected");
+
+  const unavailableUpdates = []; let unavailableMode = "503";
+  const unavailableController = new PollController({ url: "http://127.0.0.1/api/v2/snapshot", fetchImpl: () => unavailableMode === "503" ? Promise.resolve(new Response("{}", { status: 503 })) : Promise.resolve(validResponse()), onUpdate: update => unavailableUpdates.push(update) });
+  await unavailableController.tick(); assert.equal(unavailableUpdates.at(-1).transport, "api_unavailable"); assert.ok(unavailableUpdates.every(update => update.transport !== "disconnected"));
+  unavailableMode = "success"; await unavailableController.tick(); assert.equal(unavailableUpdates.at(-1).transport, "connected");
+
+  const recoveringDocument = new FakeDocument(); renderDashboard(recoveringDocument, { transport: "connected", model: buildViewModel(recoverySnapshot({ active: true, connected: true, acknowledged: true, open: "5520" })) });
+  assert.equal(recoveringDocument.getElementById("status-live").textContent, "RECOVERING");
+
+  const stopUpdates = [];
+  let stoppedSignal;
+  const stopController = new PollController({ url: "http://127.0.0.1/api/v2/snapshot", fetchImpl: (_, options) => {
+    stoppedSignal = options.signal;
+    return new Promise((_, reject) => options.signal.addEventListener("abort", () => reject(new Error("stopped")), { once: true }));
+  }, onUpdate: update => stopUpdates.push(update) });
+  const stopped = stopController.tick(); stopController.stop(); await stopped;
+  assert.equal(stoppedSignal.aborted, true); assert.equal(stopUpdates.length, 0);
 });
 
 test("P-MVP-UI enforces streamed response bound", async () => {
@@ -495,7 +568,7 @@ test("P-MVP-UI maps scanner lifecycle to trader-facing status without a row coun
     [{ transport: "connected", model: null }, "CONNECTING"],
     [{ transport: "disconnected", model: null, error: "offline" }, "DISCONNECTED"],
     [{ transport: "connected", model: { ...current, current: false, backendReady: false, lifecycle: "awaiting_session" } }, "WAITING FOR SESSION"],
-    [{ transport: "connected", model: { ...current, current: false, backendReady: false, lifecycle: "initializing" } }, "STARTING"],
+    [{ transport: "connected", model: { ...current, current: false, backendReady: false, lifecycle: "initializing" } }, "WARMING UP"],
     [{ transport: "connected", model: current }, "LIVE"],
     [{ transport: "connected", model: { ...current, current: false, partial: true, rankingMode: "degraded_current" } }, "PARTIAL"],
     [{ transport: "connected", model: { ...current, current: false, backendReady: false, lifecycle: "recovering", recovering: true } }, "RECOVERING"],

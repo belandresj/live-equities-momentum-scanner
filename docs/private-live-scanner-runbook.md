@@ -115,13 +115,33 @@ in-use bytes, goroutine count, and at most 60 one-second samples. It contains no
 credentials, provider URLs/prose, symbols, or raw payloads. Later incidents in
 the same process do not overwrite the first-cause record.
 
+The scanner also retains at most 120 ordinary live evaluation-cycle records for
+the separate watermark-staleness diagnostic. It writes
+`watermark-stale-<UTC timestamp>.json` only when a sampled transition is exactly
+`backend_ready=true` to `backend_ready=false` with reason `watermark_stale`.
+The record distinguishes live-coverage fence timing, timer/evaluator timing,
+publication and queue delay, T/Q pressure, and cached heap/goroutine/GC facts;
+it contains no symbols, provider frames, payloads, credentials, or API capture.
+One process makes at most one persistence attempt, including when that attempt
+fails. A missing file therefore means this exact transition was not observed or
+the best-effort diagnostic write failed; it is not evidence that the backend
+remained ready. Preserve the file with the terminal output during an owner-
+authorized soak, and do not treat it as a root-cause or stability proof.
+
 ## URLs and status interpretation
 
 In immediate mode the launcher starts the dashboard after scanner `/livez`
 succeeds. In overnight standby the dashboard starts first, reports the scanner
 as disconnected, and keeps polling until the scanner starts at 03:55. The
 dashboard prints its listener once; the launcher prints the scanner URLs once
-the real API is live:
+the real API is live. A dashboard start failure, unhealthy listener, or
+unexpected exit never stops or restarts a healthy scanner. The launcher waits
+1, 2, then 4 seconds before at most three serialized dashboard replacements.
+Each replacement uses the same loopback arguments and credential-free
+environment and must pass the listener check. If all three fail, the launcher
+reports dashboard unavailable and continues supervising the scanner headless;
+the operator may start `cmd/dashboard` independently. It does not reopen the
+browser automatically after a replacement.
 
 - dashboard: `http://127.0.0.1:4173`;
 - scanner snapshot: `http://127.0.0.1:8080/api/v2/snapshot`;
@@ -209,10 +229,12 @@ edge, or executable expectancy.
 
 Press Ctrl-C once. The launcher forwards SIGINT; a directed SIGTERM is likewise
 forwarded exactly. It allows the scanner's existing bounded graceful-shutdown
-path to finish, then stops and reaps the dashboard. An unexpected exit of
-either process stops the other and makes the launcher exit nonzero. It never
-silently restarts a failed child and never kills a process merely because a
-required port is occupied.
+path to finish, then stops and reaps the dashboard. Scanner startup/terminal
+failure retains the existing bounded containment and no-auto-restart behavior.
+Dashboard failure is different: it is recovered locally under the finite policy
+above and never signals a healthy scanner. A shutdown during dashboard backoff
+cancels that wait and still follows scanner-then-dashboard cleanup. It never
+kills a process merely because a required port is occupied.
 
 The current private path does not write or restore checkpoints. On failure:
 

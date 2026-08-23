@@ -40,22 +40,37 @@ func (r *Runtime) CaptureSnapshot() (SnapshotCapture, error) {
 	if r == nil || r.engine == nil || r.clock == nil {
 		return SnapshotCapture{}, errors.New("runtime snapshot unavailable")
 	}
-	r.captureMu.Lock()
-	defer r.captureMu.Unlock()
-	if r.captureSequence == math.MaxUint64 {
-		return SnapshotCapture{}, errors.New("runtime snapshot sequence exhausted")
+	sequence, err := r.nextCaptureSequence()
+	if err != nil {
+		return SnapshotCapture{}, err
 	}
-	r.captureSequence++
 	sampledAt := r.clock().UTC()
 	processLive := r.processLive.Load() && !r.joined.Load()
 	view := r.engine.ObserveSnapshot()
-	metrics := r.metricsFromPublication(sampledAt, processLive, view.Operational)
+	status := deriveStatus(processLive, r.binding, r.config, sampledAt, view.Operational)
+	// Retain the readiness observation immediately after the one atomic engine
+	// read, before even bounded diagnostics composition can allow a later
+	// scanner sample to overtake this chronology.
+	r.recordReadinessObservation(status)
+	metrics := r.metricsFromDiagnostics(sampledAt, processLive, view)
 	return SnapshotCapture{sealed: &sealedSnapshotCapture{view: SnapshotCaptureView{
-		SampleID: r.captureSequence, SampledAt: sampledAt, ProcessLive: processLive,
-		Engine: view, Status: deriveStatus(processLive, r.binding, r.config, sampledAt, view.Operational), Metrics: metrics,
-		IngressIncident: r.FirstIngressIncident(),
-		RecoveryAttempt: r.LatestRecoveryAttempt(),
+		SampleID: sequence, SampledAt: sampledAt, ProcessLive: processLive,
+		Engine: view, Status: status, Metrics: metrics,
+		IngressIncident: r.ingressIncident.get(),
+		RecoveryAttempt: r.recoveryAttempt.get(),
 	}}}, nil
+}
+
+func (r *Runtime) nextCaptureSequence() (uint64, error) {
+	for {
+		current := r.captureSequence.Load()
+		if current == math.MaxUint64 {
+			return 0, errors.New("runtime snapshot sequence exhausted")
+		}
+		if r.captureSequence.CompareAndSwap(current, current+1) {
+			return current + 1, nil
+		}
+	}
 }
 
 func cloneSnapshotCaptureView(value SnapshotCaptureView) SnapshotCaptureView {

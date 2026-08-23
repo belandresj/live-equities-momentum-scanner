@@ -13,7 +13,8 @@ h1 { margin: 0; padding-bottom: 10px; color: #a7b4be; font-size: 18px; letter-sp
 .status-summary:hover { border-color: #7890a1; background: #0d1b26; }
 .status-summary:focus-visible { outline: 2px solid #88c9ff; outline-offset: 2px; }
 .status-alert { padding-left: 10px; border-left: 1px solid #3a4e5d; white-space: nowrap; }
-.status-chevron { color: #819bad; font-size: 14px; line-height: 1; transition: transform 120ms ease; }
+.status-chevron { display: inline-flex; flex: 0 0 20px; width: 20px; height: 20px; align-items: center; justify-content: center; color: #819bad; transition: transform 120ms ease; }
+.status-chevron::before { width: 7px; height: 7px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; content: ""; transform: translateY(-1px) rotate(45deg); }
 .system-status[open] .status-chevron { transform: rotate(180deg); }
 .status-panel { position: absolute; top: calc(100% + 7px); right: 0; z-index: 8; width: min(520px, calc(100vw - 40px)); padding: 5px; border: 1px solid #456073; border-radius: 6px; background: #0c1822; box-shadow: 0 12px 30px rgb(0 0 0 / 45%); }
 .status-detail { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 12px; padding: 8px 9px; align-items: start; }

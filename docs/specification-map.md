@@ -106,6 +106,10 @@ and review records.
 | Document | Status and role |
 | --- | --- |
 | [`live-feature-mvp-program.md`](live-feature-mvp-program.md) | Current owner-approved delivery authority, 2026-08-14: smallest sequential live feature cutover; explicit backend/API/UI slices; replay unverified and non-gating; checkpoints disabled and non-gating. |
+| [`live-evaluation-cycle-coalescing-correction.md`](live-evaluation-cycle-coalescing-correction.md) | Implementation-ready scanner-stability step 1: an accepted ordinary live-coverage fence owns the cycle's full-universe aggregate evaluation; its following timer is maintenance-only, fallback/finalization scans remain explicit, and missed ticks coalesce. Offline proof precedes any combined market-hours test. |
+| [`tq-publication-coalescing-correction.md`](tq-publication-coalescing-correction.md) | Implementation-ready scanner-stability step 2: preserve synchronous canonical T/Q mutation while coalescing ordinary T/Q projection into the existing one-second combined publication; coverage/pressure/quarantine trust transitions remain immediate. |
+| [`snapshot-capture-and-dashboard-transport-isolation-correction.md`](snapshot-capture-and-dashboard-transport-isolation-correction.md) | Implementation-ready scanner-stability step 3: make API capture engine-lock-independent with asynchronously cached diagnostics, stop canceled-request work, and distinguish dashboard delay/API unavailability from provider disconnection. Owns the combined offline and later market-hours acceptance. |
+| [`live-watermark-stall-diagnostic.md`](live-watermark-stall-diagnostic.md) | Focused diagnostic correction: bounded ordinary-cycle evidence and one private ready-to-`watermark_stale` incident record; diagnostic-only, no readiness or market-semantics change. |
 | [`live-aggregate-heartbeat-and-resubscription-correction.md`](live-aggregate-heartbeat-and-resubscription-correction.md) | Accepted focused correction, 2026-08-17: ordered one-at-a-time aggregate attempt retirement, individually paced finite recovery, preserved redacted handshake facts, inbound-aware heartbeat evidence, and startup/post-live return to current only through the existing hydration fence. Deterministic acceptance and final read-only review passed; credentialed provider chronology remains unobserved and separately authorized. |
 | [`v1-release-program.md`](v1-release-program.md) | Accepted 2026-08-07 authority and evidence for the former C7-C11 field set. Its conflicting delivery gates are superseded for the current live feature-set MVP; still-compatible architecture and proof decisions remain usable evidence. |
 | [`implementation-process.md`](implementation-process.md) | Owner-approved process, revised 2026-08-14: contract-first capability/component planning, correction/reopening, bounded verification, risk-based review, integration, and final validation under the current delivery program. |
@@ -142,6 +146,22 @@ The [`Version 1 Release Program`](v1-release-program.md) remains an accepted
 record of the former feature-set delivery and reusable evidence. It is not the
 current execution plan and cannot require replay proof, checkpoint repair, or
 unrelated repository cleanup before the revised live product works.
+
+### Scanner stability correction sequence
+
+The 2026-08-19 owner direction adds three sequential corrective slices to the
+current private/live MVP after repeated two-to-three-second watermark lag and
+dashboard status flapping. Keep one write-capable implementation slice:
+
+1. [coalesce the live evaluation cycle](live-evaluation-cycle-coalescing-correction.md);
+2. [coalesce ordinary T/Q publication](tq-publication-coalescing-correction.md);
+3. [isolate snapshot capture and dashboard transport status](snapshot-capture-and-dashboard-transport-isolation-correction.md).
+
+Because the market is closed, each slice is accepted first from its named
+deterministic proofs. Do not run a credentialed provider check between slices.
+After all three are offline complete, the third specification owns one combined
+market-hours soak under a separate exact authorization. Offline completion must
+not be described as live stability confirmation.
 
 ## Phase 2 focused component sequence
 
