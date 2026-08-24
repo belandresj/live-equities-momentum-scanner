@@ -740,7 +740,7 @@ permitted ticket and remains inactive for a fresh task.
   queue behavior, whole-process heap/RSS, or live-provider chronology. `LBR-C2`
   remains coherent and is next but inactive pending its pre-assignment audit.
 
-#### `LBR-C2` — accepted 2026-08-23
+#### `LBR-C2` — accepted then reopened by final review 2026-08-23
 
 - **Coherent behavior:** the engine snapshots additions only at the accepted
   one-second combined cadence, issues one sorted full batch for a fresh epoch,
@@ -781,6 +781,18 @@ permitted ticket and remains inactive for a fresh task.
   acceptance, credentialed behavior, final D2 queue replacement, whole-process
   resources, or live-market chronology. Both C slices are ready for the
   required Capability C final read-only review; `LBR-D1` remains inactive.
+- **Final-review reopening:** the required Capability C review found that the
+  production live loop could deliver raw frame `B+1` concurrently after the
+  successful write captured boundary `B` but before the command result reached
+  the engine. That frame was then fenced as unrequested and could leave an
+  otherwise valid quiet channel unconfirmed. This invalidates only the claimed
+  command-result/data linearization and its split proof; C1, C2 cadence,
+  pressure, accounting, status removal, aggregate independence, and all
+  unrelated final-byte evidence remain accepted. Reacceptance requires the
+  same implementer to serialize write, exact `B` capture, and command-result
+  engine completion against raw dequeue while still allowing reads to queue,
+  plus a deterministic `B`/`B+1` overtaking proof and affected final-byte
+  verification. `LBR-D1` remains inactive.
 
 ### Owner-approved E2 duration and manifest revision — 2026-08-23
 
@@ -808,7 +820,7 @@ but copy no status.
 | Capability A — canonical state and hydration | `finally_accepted` | A1/A2 proofs, verification, corrections, and Capability A final review are clean; accepted dependency for Capability B. |
 | `LBR-B3` removal slice | `accepted` | Commit `f697288`; removal proof, resource evidence, focused corrections, and final focused re-review are clean. |
 | Capability B — evaluation and publication | `finally_accepted` | B1/B2/B3 accepted; required final read-only review returned `CLEAN/PASS`. Next permitted ticket is C1, which is inactive. |
-| Capability C — selected-row T/Q | `lbr_c1_c2_accepted_final_review_pending` | C1/C2 primary proofs and allocated final-byte gates pass; bounded retention, exact horizons, cadence batching, data-confirmed coverage, direct pressure, immediate trust closure, status-model removal, and aggregate independence are accepted at slice level. Run the required final read-only Capability C review; `LBR-D1` remains inactive. |
+| Capability C — selected-row T/Q | `lbr_c2_reopened_command_data_linearization` | Final review found that raw `B+1` could overtake command-result installation after exact boundary `B` was captured, falsely fencing the only valid confirming event. C1 and unaffected C2 evidence remain accepted. Correct and prove that one ordering seam, then focused re-review; `LBR-D1` remains inactive. |
 | Capability D — live ingress | `not_started` | Requires accepted state/TQ input interface |
 | Capability E — integration/removal/acceptance | `not_started` | Requires Capabilities A-D accepted |
 | E2 deterministic duration/manifest revision | `owner_approved` | Exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |
