@@ -449,8 +449,8 @@ func pressureProofEngine(t *testing.T) (*Engine, reference.Binding, *atomic.Int6
 	e.state.aggregateEvaluator.current = pressureQualifiedEvaluation(start)
 	coverage := tqCoverage{active: true, epoch: 1, start: start.Add(-10 * time.Second), ack: LivePosition{ConnectionEpoch: 1, FrameSequence: 1}, greatest: LivePosition{ConnectionEpoch: 1, FrameSequence: 10}}
 	e.state.tq = tqState{epoch: 1, nextToken: 1, desired: []string{"AAA", "MISSING"}, members: map[string]*tqSymbolState{
-		"AAA":     {present: true, tradeCoverage: coverage, quoteCoverage: coverage, fingerprints: make(map[string]tqFingerprint)},
-		"MISSING": {present: true, tradeCoverage: coverage, quoteCoverage: coverage, fingerprints: make(map[string]tqFingerprint)},
+		"AAA":     {present: true, tradeCoverage: coverage, quoteCoverage: coverage, fingerprints: make(map[tqTradeIdentity]tqFingerprint)},
+		"MISSING": {present: true, tradeCoverage: coverage, quoteCoverage: coverage, fingerprints: make(map[tqTradeIdentity]tqFingerprint)},
 	}, pressure: tqPressureState{mode: TQPressureNormal, nextSequence: 1}}
 	e.mu.Unlock()
 	return e, binding, clockNanos, start

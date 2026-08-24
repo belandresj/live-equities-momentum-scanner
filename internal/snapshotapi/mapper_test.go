@@ -260,7 +260,6 @@ func TestPMVPAPISchemaAvailabilityProvenanceOrderingAndBounds(t *testing.T) {
 		row.Activity30s = engine.ReplayFieldView{Status: "current", Value: 0}
 		row.Move30s = engine.ReplayFieldView{Status: "unavailable", Reason: "no_aggregate_in_target"}
 		capture.Engine.TQ.Rows[0].Tape.Status, capture.Engine.TQ.Rows[0].Tape.Reason = engine.TQWarming, "five_second_warming"
-		capture.Engine.TQ.Rows[0].Tape.FiveSecondStatus, capture.Engine.TQ.Rows[0].Tape.FiveSecondReason = engine.TQWarming, "five_second_warming"
 		capture.Engine.TQ.Rows[0].Spread.Status = engine.TQStale
 		capture.Engine.TQ.Rows[0].Spread.Reason = "stale_quote"
 		capture.Engine.TQ.Rows[0].Spread.Cents = 1.5
@@ -507,7 +506,7 @@ func TestPC10SchemaPublicationStateCorpus(t *testing.T) {
 			v.Engine.TQ.ShedTradesQuotes = true
 			v.Engine.TQ.PressureSample.WaitingFrames = 52
 			v.Engine.TQ.PressureSample.RecoveryHealthy = false
-			v.Engine.TQ.Rows[0].Tape = engine.TapeRateView{Status: engine.TQPressureShed, Reason: "pressure", OneSecondStatus: engine.TQPressureShed, OneSecondReason: "pressure", FiveSecondStatus: engine.TQPressureShed, FiveSecondReason: "pressure"}
+			v.Engine.TQ.Rows[0].Tape = engine.TapeRateView{Status: engine.TQPressureShed, Reason: "pressure"}
 			v.Engine.TQ.Rows[0].Spread = engine.SpreadView{Status: engine.TQPressureShed, Reason: "pressure"}
 		}, "qualified_current", 1},
 		{"stale", func(v *operations.SnapshotCaptureView) {
@@ -711,8 +710,7 @@ func schemaCapture() operations.SnapshotCaptureView {
 			Accounting: engine.HydrationAccounting{Planned: 2, CompletedValue: 1, CompletedEmpty: 1}, Rows: engine.HydrationRowAccounting{Consumed: 2, Inserted: 1, Duplicate: 1},
 			FenceReconciled: true, FenceEpoch: 4, FenceThrough: 20, FenceMarkerOrdinal: 9, SupportedThrough: &supported}, InstalledCheckpoint: true}
 	tq := engine.TQView{PublicationID: operational.PublicationID, Desired: []string{"AAA"}, Rows: []engine.TQSymbolView{{Symbol: "AAA", Desired: true, ProviderPresent: true, TradeCoverage: true, QuoteCoverage: true,
-		Tape: engine.TapeRateView{Status: engine.TQCurrent, Reason: "qualifying_original_prints", OneSecondStatus: engine.TQCurrent, OneSecondReason: "qualifying_original_prints",
-			FiveSecondStatus: engine.TQCurrent, FiveSecondReason: "qualifying_original_prints", TimestampBasis: "none"},
+		Tape:   engine.TapeRateView{Status: engine.TQCurrent, Reason: "qualifying_original_prints", TimestampBasis: "none"},
 		Spread: engine.SpreadView{Status: engine.TQCurrent, QuoteAge: time.Second, Quality: "reviewed_ordinary"}}}, Pressure: engine.TQPressureNormal,
 		PressureSample: engine.TQPressureSampleView{Observed: true, WaitingFrames: 2, FrameCapacity: 512, WaitingBytes: 100, ByteCapacity: 64 << 20,
 			OldestWaitingFrameAge: 500 * time.Millisecond, RecoveryHealthy: true}, RecoveryRequiredSamples: 5,

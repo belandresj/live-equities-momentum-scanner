@@ -5,7 +5,6 @@ import (
 	"errors"
 	"math"
 	"sort"
-	"strconv"
 	"time"
 )
 
@@ -42,19 +41,30 @@ type frozenTQControlQuarantineInput struct{ TQControlQuarantineInput }
 
 const (
 	maximumTQSymbols          = 20
-	maximumTradesPerSymbol    = 50_000
-	maximumTradeFingerprints  = 100_000
-	maximumTradesGlobal       = 500_000
-	maximumFingerprintsGlobal = 1_000_000
+	maximumTradesPerSymbol    = 10_000
+	maximumTradeFingerprints  = 25_000
+	maximumTradesGlobal       = 100_000
+	maximumFingerprintsGlobal = 400_000
+	maximumTQBytesPerSymbol   = 4 << 20
+	maximumTQBytesGlobal      = 64 << 20
+	tqMemberByteCharge        = 1 << 10
+	tqTradeByteCharge         = 64
+	tqFingerprintByteCharge   = 384
+	tqQuoteByteCharge         = 192
 	spreadStaleAge            = 2 * time.Second
 )
 
 type tqRetentionLimits struct {
 	tradesPerSymbol, tradesGlobal, fingerprintsPerSymbol, fingerprintsGlobal int
+	bytesPerSymbol, bytesGlobal                                              int64
 }
 
 func defaultTQRetentionLimits() tqRetentionLimits {
-	return tqRetentionLimits{maximumTradesPerSymbol, maximumTradesGlobal, maximumTradeFingerprints, maximumFingerprintsGlobal}
+	return tqRetentionLimits{
+		tradesPerSymbol: maximumTradesPerSymbol, tradesGlobal: maximumTradesGlobal,
+		fingerprintsPerSymbol: maximumTradeFingerprints, fingerprintsGlobal: maximumFingerprintsGlobal,
+		bytesPerSymbol: maximumTQBytesPerSymbol, bytesGlobal: maximumTQBytesGlobal,
+	}
 }
 
 type TQAction string
@@ -147,16 +157,31 @@ type tqCoverage struct {
 }
 
 type tqTrade struct {
-	key, fingerprint string
-	at               time.Time
-	qualifying       bool
-	basis            string
-	lifecycle        bool
+	at         time.Time
+	qualifying bool
+	basis      string
+	lifecycle  bool
+}
+
+type tqTradeIdentity struct {
+	exchange   int64
+	trfID      int64
+	tradeID    string
+	trfPresent bool
+}
+
+type tqTradeFingerprint struct {
+	eventUnixNano                    int64
+	priceBits, economicSizeBits      uint64
+	conditions                       [16]int64
+	conditionCount                   uint8
+	basis, lifecycle                 uint8
+	conditionsClassified, identified bool
 }
 
 type tqFingerprint struct {
-	value string
-	at    time.Time
+	value        tqTradeFingerprint
+	firstReceipt time.Time
 }
 
 type tqQuote struct {
@@ -177,8 +202,9 @@ type tqSymbolState struct {
 	tradeCoverage, quoteCoverage                  tqCoverage
 	trades                                        []tqTrade
 	latestQuote, latestValidQuote                 *tqQuote
-	fingerprints                                  map[string]tqFingerprint
-	unequalRepeat, lifecycleObserved              bool
+	fingerprints                                  map[tqTradeIdentity]tqFingerprint
+	unequalRepeat                                 bool
+	retainedBytes                                 int64
 }
 
 type tqState struct {
@@ -211,6 +237,7 @@ type tqState struct {
 	integrity                                                                                                   uint64
 	tradeCount, quoteCount                                                                                      int
 	fingerprintCount                                                                                            int
+	retainedBytes                                                                                               int64
 	globalBound                                                                                                 bool
 	aggregateOnly                                                                                               bool
 	pressure                                                                                                    tqPressureState
@@ -238,13 +265,11 @@ const (
 )
 
 type TapeRateView struct {
-	Status                            TQFieldStatus
-	Reason                            string
-	OneSecondStatus, FiveSecondStatus TQFieldStatus
-	OneSecondReason, FiveSecondReason string
-	OneSecond, FiveSecond             float64
-	TimestampBasis                    string
-	LifecycleRecordsObserved          bool
+	Status                   TQFieldStatus
+	Reason                   string
+	FiveSecond               float64
+	TimestampBasis           string
+	LifecycleRecordsObserved bool
 }
 
 type SpreadView struct {
@@ -269,6 +294,7 @@ type TQAccountingView struct {
 	AppliedTrades, AppliedQuotes, PressureShedTrades, PressureShedQuotes    uint64
 	KnownPresent, KnownAbsent, Unknown                                      int
 	RetainedTrades, RetainedQuotes, RetainedFingerprints                    int
+	RetainedBytes                                                           int64
 }
 
 type TQCommandAccountingView struct {
@@ -536,7 +562,7 @@ func (e *Engine) reconcileTQLocked(now time.Time) {
 			if !member.requested {
 				member.bound = false
 				if len(member.trades) == 0 && member.latestQuote == nil && member.latestValidQuote == nil && len(member.fingerprints) == 0 {
-					delete(s.members, symbol)
+					s.deleteMember(symbol)
 				}
 			}
 		}
@@ -610,10 +636,22 @@ func (e *Engine) reconcileTQLocked(now time.Time) {
 func (s *tqState) member(symbol string) *tqSymbolState {
 	m := s.members[symbol]
 	if m == nil {
-		m = &tqSymbolState{fingerprints: make(map[string]tqFingerprint)}
+		m = &tqSymbolState{fingerprints: make(map[tqTradeIdentity]tqFingerprint), retainedBytes: tqMemberByteCharge}
 		s.members[symbol] = m
+		s.retainedBytes += tqMemberByteCharge
 	}
 	return m
+}
+
+func (s *tqState) deleteMember(symbol string) {
+	m := s.members[symbol]
+	if m == nil {
+		return
+	}
+	s.releaseMember(m)
+	s.retainedBytes -= m.retainedBytes
+	m.retainedBytes = 0
+	delete(s.members, symbol)
 }
 
 func previousTQPublicationState(s tqState) bool {
@@ -686,26 +724,43 @@ func (s *tqState) releaseMember(m *tqSymbolState) {
 	s.tradeCount -= len(m.trades)
 	s.quoteCount -= retainedQuoteCount(m)
 	s.fingerprintCount -= len(m.fingerprints)
+	released := int64(len(m.trades))*tqTradeByteCharge + int64(len(m.fingerprints))*tqFingerprintByteCharge + int64(retainedQuoteCount(m))*tqQuoteByteCharge
+	s.retainedBytes -= released
+	m.retainedBytes -= released
 	m.trades, m.latestQuote, m.latestValidQuote = nil, nil, nil
-	m.fingerprints = make(map[string]tqFingerprint)
+	m.fingerprints = make(map[tqTradeIdentity]tqFingerprint)
 }
 
 func (s *tqState) prune(target, engineTime time.Time) {
-	tradeCutoff, fingerprintCutoff := target.Add(-6*time.Second), engineTime.Add(-16*time.Minute)
+	tradeCutoff := target.Add(-5 * time.Second)
+	// A stalled aggregate watermark cannot pin future-to-T contributions
+	// forever. Thirty seconds is the maximum accepted T/Q disorder horizon;
+	// once monotonic engine time passes it, an event cannot participate in the
+	// next honest five-second projection after recovery.
+	engineTradeCutoff := engineTime.Add(-30 * time.Second)
+	if engineTradeCutoff.After(tradeCutoff) {
+		tradeCutoff = engineTradeCutoff
+	}
 	for _, m := range s.members {
 		trades := m.trades[:0]
 		for _, item := range m.trades {
 			if item.at.Before(tradeCutoff) {
 				s.tradeCount--
+				s.retainedBytes -= tqTradeByteCharge
+				m.retainedBytes -= tqTradeByteCharge
 				continue
 			}
 			trades = append(trades, item)
 		}
 		m.trades = trades
 		for key, item := range m.fingerprints {
-			if item.at.Before(fingerprintCutoff) {
+			// Equality remains retained. Cleanup occurs only on the first engine
+			// tick strictly after first receipt plus thirty seconds.
+			if engineTime.After(item.firstReceipt.Add(30 * time.Second)) {
 				delete(m.fingerprints, key)
 				s.fingerprintCount--
+				s.retainedBytes -= tqFingerprintByteCharge
+				m.retainedBytes -= tqFingerprintByteCharge
 			}
 		}
 	}
@@ -846,9 +901,9 @@ func (e *Engine) applyTQCommandResultLocked(node *queueNode) (DispositionCode, D
 			m.requested = false
 			m.resetRequired = false
 			s.releaseMember(m)
-			m.unequalRepeat, m.lifecycleObserved = false, false
+			m.unequalRepeat = false
 			if !s.desiredContains(symbol) {
-				delete(s.members, symbol)
+				s.deleteMember(symbol)
 			}
 		}
 	} else {
@@ -870,7 +925,7 @@ func (e *Engine) applyTQCommandResultLocked(node *queueNode) (DispositionCode, D
 			m.tradeCoverage = tqCoverage{epoch: v.command.connectionEpoch, boundary: v.position}
 			m.quoteCoverage = tqCoverage{epoch: v.command.connectionEpoch, boundary: v.position}
 			s.releaseMember(m)
-			m.unequalRepeat, m.lifecycleObserved = false, false
+			m.unequalRepeat = false
 		}
 	}
 	s.applied++
@@ -1055,9 +1110,14 @@ func (e *Engine) applyTQDropLocked(node *queueNode) (DispositionCode, Dispositio
 func (e *Engine) applyTradeLocked(node *queueNode) (DispositionCode, DispositionReason) {
 	v, s := node.trade.TradeInput, &e.state.tq
 	s.consumed++
+	cleanupTarget := node.admissionTime
+	if e.state.committedT != nil {
+		cleanupTarget = *e.state.committedT
+	}
+	s.prune(cleanupTarget, node.admissionTime)
 	m, ok := s.members[v.Symbol]
 	if e.state.binding == nil || v.BindingIdentity != e.state.binding.identity || v.TradingDate != e.state.binding.tradingDate || !ok || (!m.requested && !m.present && !m.unknown) || !s.desiredContains(v.Symbol) ||
-		v.Live.ConnectionEpoch != m.tradeCoverage.epoch || compareLive(v.Live, m.tradeCoverage.boundary) <= 0 ||
+		v.Live.ConnectionEpoch != m.tradeCoverage.epoch || v.Live.FrameSequence <= m.tradeCoverage.boundary.FrameSequence ||
 		m.tradeCoverage.active && compareLive(v.Live, m.tradeCoverage.greatest) <= 0 {
 		s.fenced++
 		return DispositionTQFenced, ReasonHistoricalContext
@@ -1076,48 +1136,71 @@ func (e *Engine) applyTradeLocked(node *queueNode) (DispositionCode, Disposition
 	} else {
 		m.tradeCoverage.greatest = v.Live
 	}
-	key := v.TradingDate + "\x00" + v.Symbol + "\x00" + strconv.FormatInt(v.Exchange, 10) + "\x00" + v.TradeID
-	if v.TRFPresent {
-		key += "\x00" + strconv.FormatInt(v.TRFID, 10)
+	if v.EventTime.Before(e.state.binding.sessionStart) || !v.EventTime.Before(e.state.binding.sessionEnd) ||
+		e.state.committedT != nil && v.EventTime.Before(e.state.committedT.Add(-30*time.Second)) {
+		s.rejected++
+		return DispositionTQRejected, ReasonHistoricalContext
 	}
-	fingerprint := key + "\x00" + v.EventTime.Format(time.RFC3339Nano) + "\x00" + v.TimestampBasis + "\x00" +
-		strconv.FormatFloat(v.Price, 'g', -1, 64) + "\x00" + strconv.FormatFloat(v.EconomicSize, 'g', -1, 64) + "\x00" +
-		strconv.FormatBool(v.ConditionsClassified) + "\x00" + strconv.FormatBool(v.IdentityClassified) + "\x00" + v.Lifecycle
-	for _, condition := range v.Conditions {
-		fingerprint += "\x00" + strconv.FormatInt(condition, 10)
-	}
+	key := makeTQTradeIdentity(v)
+	fingerprint := makeTQTradeFingerprint(v)
 	if prior, exists := m.fingerprints[key]; exists {
 		if prior.value == fingerprint {
 			s.duplicate++
 			return DispositionTQDuplicate, ReasonNone
 		}
+		e.markTQTrustTransitionLocked()
 		m.unequalRepeat = true
 		s.rejected++
 		return DispositionTQRejected, ReasonStructural
 	}
 	limits := e.tqLimits
-	if len(m.trades) >= limits.tradesPerSymbol || len(m.fingerprints) >= limits.fingerprintsPerSymbol {
+	incomingBytes := int64(tqTradeByteCharge + tqFingerprintByteCharge)
+	if len(m.trades) >= limits.tradesPerSymbol || len(m.fingerprints) >= limits.fingerprintsPerSymbol || m.retainedBytes+incomingBytes > limits.bytesPerSymbol {
 		e.markTQTrustTransitionLocked()
 		m.bound = true
 		m.tradeCoverage.active, m.quoteCoverage.active = false, false
 		s.integrity++
 		return DispositionTQRejected, ReasonAccounting
 	}
-	if s.tradeCount >= limits.tradesGlobal || s.fingerprintCount >= limits.fingerprintsGlobal {
+	if s.tradeCount >= limits.tradesGlobal || s.fingerprintCount >= limits.fingerprintsGlobal || s.retainedBytes+incomingBytes > limits.bytesGlobal {
 		e.enterTQGlobalBoundLocked()
 		s.integrity++
 		return DispositionTQRejected, ReasonAccounting
 	}
 	conditionClassified, conditionEligible := classifyTradeConditionEvidence(v.ConditionsClassified, v.Conditions)
 	lifecycleObserved := v.Lifecycle != "original"
-	m.fingerprints[key] = tqFingerprint{value: fingerprint, at: node.admissionTime}
-	m.trades = append(m.trades, tqTrade{key: key, fingerprint: fingerprint, at: v.EventTime, qualifying: v.Lifecycle == "original" && v.IdentityClassified && conditionClassified && conditionEligible, basis: v.TimestampBasis, lifecycle: lifecycleObserved})
-	m.lifecycleObserved = m.lifecycleObserved || lifecycleObserved
+	m.fingerprints[key] = tqFingerprint{value: fingerprint, firstReceipt: v.ReceiptTime}
+	m.trades = append(m.trades, tqTrade{at: v.EventTime, qualifying: v.Lifecycle == "original" && v.IdentityClassified && conditionClassified && conditionEligible, basis: v.TimestampBasis, lifecycle: lifecycleObserved})
 	s.tradeCount++
 	s.fingerprintCount++
+	m.retainedBytes += incomingBytes
+	s.retainedBytes += incomingBytes
 	s.applied++
 	s.tradeApplied++
 	return DispositionTQApplied, ReasonNone
+}
+
+func makeTQTradeIdentity(v TradeInput) tqTradeIdentity {
+	result := tqTradeIdentity{exchange: v.Exchange, tradeID: v.TradeID, trfPresent: v.TRFPresent}
+	if v.TRFPresent {
+		result.trfID = v.TRFID
+	}
+	return result
+}
+
+func makeTQTradeFingerprint(v TradeInput) tqTradeFingerprint {
+	result := tqTradeFingerprint{
+		eventUnixNano: v.EventTime.UnixNano(), priceBits: math.Float64bits(v.Price), economicSizeBits: math.Float64bits(v.EconomicSize),
+		conditionCount: uint8(len(v.Conditions)), conditionsClassified: v.ConditionsClassified, identified: v.IdentityClassified,
+	}
+	if v.TimestampBasis == "sip_fallback" {
+		result.basis = 1
+	}
+	if v.Lifecycle == "unsupported_lifecycle" {
+		result.lifecycle = 1
+	}
+	copy(result.conditions[:], v.Conditions)
+	return result
 }
 
 func (e *Engine) applyQuoteLocked(node *queueNode) (DispositionCode, DispositionReason) {
@@ -1125,7 +1208,7 @@ func (e *Engine) applyQuoteLocked(node *queueNode) (DispositionCode, Disposition
 	s.consumed++
 	m, ok := s.members[v.Symbol]
 	if e.state.binding == nil || v.BindingIdentity != e.state.binding.identity || v.TradingDate != e.state.binding.tradingDate || !ok || (!m.requested && !m.present && !m.unknown) || !s.desiredContains(v.Symbol) ||
-		v.Live.ConnectionEpoch != m.quoteCoverage.epoch || compareLive(v.Live, m.quoteCoverage.boundary) <= 0 ||
+		v.Live.ConnectionEpoch != m.quoteCoverage.epoch || v.Live.FrameSequence <= m.quoteCoverage.boundary.FrameSequence ||
 		m.quoteCoverage.active && compareLive(v.Live, m.quoteCoverage.greatest) <= 0 {
 		s.fenced++
 		return DispositionTQFenced, ReasonHistoricalContext
@@ -1137,18 +1220,42 @@ func (e *Engine) applyQuoteLocked(node *queueNode) (DispositionCode, Disposition
 	} else {
 		m.quoteCoverage.greatest = v.Live
 	}
-	if v.SIPTime.Before(e.state.binding.sessionStart) || v.SIPTime.After(e.state.binding.sessionEnd) {
+	if v.SIPTime.Before(e.state.binding.sessionStart) || !v.SIPTime.Before(e.state.binding.sessionEnd) ||
+		e.state.committedT != nil && v.SIPTime.Before(e.state.committedT.Add(-30*time.Second)) {
 		s.rejected++
 		return DispositionTQRejected, ReasonHistoricalContext
 	}
+	priorStatus := spreadView(m, e.state.committedT).Status
 	quality := quoteQuality(v.ConditionsClassified, v.IndicatorsClassified, v.Conditions, v.Indicators)
 	quote := &tqQuote{at: v.SIPTime, receipt: v.ReceiptTime, position: v.Live, bid: v.BidPrice, ask: v.AskPrice, bidPresent: v.BidPresent, askPresent: v.AskPresent, quality: quality}
 	before := retainedQuoteCount(m)
+	previousLatest, previousValid := m.latestQuote, m.latestValidQuote
 	m.latestQuote = quote
 	if quote.bidPresent && quote.askPresent && quote.ask >= quote.bid {
 		m.latestValidQuote = quote
 	}
-	s.quoteCount += retainedQuoteCount(m) - before
+	after := retainedQuoteCount(m)
+	quoteDelta := after - before
+	limits := e.tqLimits
+	if quoteDelta > 0 && (m.retainedBytes+int64(quoteDelta)*tqQuoteByteCharge > limits.bytesPerSymbol || s.retainedBytes+int64(quoteDelta)*tqQuoteByteCharge > limits.bytesGlobal) {
+		m.latestQuote, m.latestValidQuote = previousLatest, previousValid
+		if m.retainedBytes+int64(quoteDelta)*tqQuoteByteCharge > limits.bytesPerSymbol {
+			m.bound = true
+			m.tradeCoverage.active, m.quoteCoverage.active = false, false
+			e.markTQTrustTransitionLocked()
+		} else {
+			e.enterTQGlobalBoundLocked()
+		}
+		s.integrity++
+		return DispositionTQRejected, ReasonAccounting
+	}
+	s.quoteCount += quoteDelta
+	m.retainedBytes += int64(quoteDelta) * tqQuoteByteCharge
+	s.retainedBytes += int64(quoteDelta) * tqQuoteByteCharge
+	newStatus := spreadView(m, e.state.committedT).Status
+	if (priorStatus == TQCurrent || priorStatus == TQStale) && newStatus != TQCurrent && newStatus != TQStale {
+		e.markTQTrustTransitionLocked()
+	}
 	s.applied++
 	s.quoteApplied++
 	return DispositionTQApplied, ReasonNone
@@ -1211,7 +1318,7 @@ func (e *Engine) tqViewLocked() TQView {
 	}
 	for _, symbol := range s.desired {
 		m := s.members[symbol]
-		row := TQSymbolView{Symbol: symbol, Desired: true, Tape: TapeRateView{Status: TQUnselected, OneSecondStatus: TQUnselected, FiveSecondStatus: TQUnselected}, Spread: SpreadView{Status: TQUnselected}}
+		row := TQSymbolView{Symbol: symbol, Desired: true, Tape: TapeRateView{Status: TQUnselected}, Spread: SpreadView{Status: TQUnselected}}
 		if m != nil {
 			row.ProviderPresent, row.ProviderMembershipUnknown = m.present, m.unknown
 			row.TradeCoverage, row.QuoteCoverage = m.tradeCoverage.active, m.quoteCoverage.active
@@ -1219,12 +1326,11 @@ func (e *Engine) tqViewLocked() TQView {
 			row.Spread = spreadView(m, e.state.committedT)
 		}
 		if s.quarantined {
-			row.Tape = TapeRateView{Status: TQUnavailable, Reason: "control_error", OneSecondStatus: TQUnavailable, FiveSecondStatus: TQUnavailable, OneSecondReason: "control_error", FiveSecondReason: "control_error"}
+			row.Tape = TapeRateView{Status: TQUnavailable, Reason: "control_error"}
 			row.Spread = SpreadView{Status: TQUnavailable, Reason: "control_error"}
 		}
 		if shedding {
-			row.Tape = TapeRateView{Status: TQPressureShed, Reason: "pressure", OneSecondStatus: TQPressureShed, FiveSecondStatus: TQPressureShed,
-				OneSecondReason: "pressure", FiveSecondReason: "pressure", LifecycleRecordsObserved: row.Tape.LifecycleRecordsObserved}
+			row.Tape = TapeRateView{Status: TQPressureShed, Reason: "pressure", LifecycleRecordsObserved: row.Tape.LifecycleRecordsObserved}
 			row.Spread = SpreadView{Status: TQPressureShed, Reason: "pressure"}
 		}
 		result.Rows = append(result.Rows, row)
@@ -1240,7 +1346,8 @@ func (e *Engine) tqViewLocked() TQView {
 	}
 	result.Accounting = TQAccountingView{Consumed: s.consumed, Applied: s.applied, Duplicate: s.duplicate, Rejected: s.rejected, Fenced: s.fenced, PressureShed: s.pressureShed, Integrity: s.integrity,
 		AppliedTrades: s.tradeApplied, AppliedQuotes: s.quoteApplied, PressureShedTrades: s.tradePressureShed, PressureShedQuotes: s.quotePressureShed,
-		KnownPresent: knownPresent, KnownAbsent: len(s.members) - knownPresent - unknown, Unknown: unknown, RetainedTrades: s.tradeCount, RetainedQuotes: s.quoteCount, RetainedFingerprints: s.fingerprintCount}
+		KnownPresent: knownPresent, KnownAbsent: len(s.members) - knownPresent - unknown, Unknown: unknown, RetainedTrades: s.tradeCount, RetainedQuotes: s.quoteCount, RetainedFingerprints: s.fingerprintCount,
+		RetainedBytes: s.retainedBytes}
 	pending := uint64(0)
 	if s.pending != nil {
 		pending = 1
@@ -1264,7 +1371,7 @@ func cloneTQView(value TQView) TQView {
 func validTQPublication(value TQView, publicationID uint64, evaluation aggregateEvaluationResult) bool {
 	pressureSample := value.PressureSample
 	if value.PublicationID == 0 || value.PublicationID != publicationID || len(value.Desired) > maximumTQSymbols || len(value.Rows) != len(value.Desired) || value.Accounting.KnownPresent < 0 || value.Accounting.KnownAbsent < 0 || value.Accounting.Unknown < 0 ||
-		value.Accounting.RetainedTrades < 0 || value.Accounting.RetainedQuotes < 0 || value.Accounting.RetainedFingerprints < 0 ||
+		value.Accounting.RetainedTrades < 0 || value.Accounting.RetainedQuotes < 0 || value.Accounting.RetainedFingerprints < 0 || value.Accounting.RetainedBytes < 0 ||
 		value.Accounting.Consumed != value.Accounting.Applied+value.Accounting.Duplicate+value.Accounting.Rejected+value.Accounting.Fenced+value.Accounting.PressureShed+value.Accounting.Integrity ||
 		value.Commands.Pending > 1 || value.Commands.Issued != value.Commands.Pending+value.Commands.Written+value.Commands.Failed+value.Commands.Fenced ||
 		value.CommandPending != (value.Commands.Pending == 1) || value.Bounds && !value.AggregateOnly || value.Quarantined && !value.AggregateOnly ||
@@ -1288,7 +1395,8 @@ func validTQPublication(value TQView, publicationID uint64, evaluation aggregate
 		return false
 	}
 	if value.Accounting.KnownPresent+value.Accounting.KnownAbsent+value.Accounting.Unknown > 2*maximumTQSymbols ||
-		value.Accounting.RetainedTrades > maximumTradesGlobal || value.Accounting.RetainedQuotes > 2*maximumTQSymbols || value.Accounting.RetainedFingerprints > maximumFingerprintsGlobal {
+		value.Accounting.RetainedTrades > maximumTradesGlobal || value.Accounting.RetainedQuotes > 2*maximumTQSymbols || value.Accounting.RetainedFingerprints > maximumFingerprintsGlobal ||
+		value.Accounting.RetainedBytes > maximumTQBytesGlobal {
 		return false
 	}
 	wantDesired := evaluation.mode == rankingQualifiedCurrent
@@ -1305,10 +1413,8 @@ func validTQPublication(value TQView, publicationID uint64, evaluation aggregate
 		}
 		seen[symbol] = struct{}{}
 		row := value.Rows[index]
-		if !validTQFieldStatus(row.Tape.Status) || !validTQFieldStatus(row.Tape.OneSecondStatus) || !validTQFieldStatus(row.Tape.FiveSecondStatus) ||
-			!validTQFieldStatus(row.Spread.Status) || !finiteTQ(row.Tape.OneSecond) || !finiteTQ(row.Tape.FiveSecond) ||
-			!finiteTQ(row.Spread.Cents) || !finiteTQ(row.Spread.BasisPoints) || row.Spread.QuoteAge < 0 ||
-			row.Tape.Status != row.Tape.FiveSecondStatus || row.Tape.Reason != row.Tape.FiveSecondReason {
+		if !validTQFieldStatus(row.Tape.Status) || !validTQFieldStatus(row.Spread.Status) || !finiteTQ(row.Tape.FiveSecond) ||
+			!finiteTQ(row.Spread.Cents) || !finiteTQ(row.Spread.BasisPoints) || row.Spread.QuoteAge < 0 {
 			return false
 		}
 	}
@@ -1346,45 +1452,39 @@ func (s *tqState) desiredContains(symbol string) bool {
 }
 
 func tapeView(m *tqSymbolState, target *time.Time) TapeRateView {
-	v := TapeRateView{Status: TQUnavailable, Reason: "channel_unconfirmed", OneSecondStatus: TQUnavailable, FiveSecondStatus: TQUnavailable, OneSecondReason: "channel_unconfirmed", FiveSecondReason: "channel_unconfirmed", LifecycleRecordsObserved: m.lifecycleObserved}
+	v := TapeRateView{Status: TQUnavailable, Reason: "channel_unconfirmed"}
 	if !m.tradeCoverage.active || target == nil {
 		if !m.requested {
-			v.Reason, v.OneSecondReason, v.FiveSecondReason = "coverage", "coverage", "coverage"
+			v.Reason = "coverage"
 		}
 		return v
 	}
 	if m.unequalRepeat {
 		v.Status, v.Reason = TQInvalid, "unequal_repeat"
-		v.OneSecondStatus, v.FiveSecondStatus = TQInvalid, TQInvalid
-		v.OneSecondReason, v.FiveSecondReason = "unequal_repeat", "unequal_repeat"
 		return v
 	}
 	age := target.Sub(m.tradeCoverage.start)
 	if age < time.Second {
 		v.Status, v.Reason = TQWarming, "coverage_warming"
-		v.OneSecondStatus, v.FiveSecondStatus = TQWarming, TQWarming
-		v.OneSecondReason, v.FiveSecondReason = "coverage_warming", "coverage_warming"
 		return v
 	}
-	one, five, participant, sip := 0, 0, false, false
+	five, participant, sip := 0, false, false
 	for _, trade := range m.trades {
-		if !trade.qualifying || trade.at.Before(target.Add(-5*time.Second)) || !trade.at.Before(*target) {
+		if trade.at.Before(target.Add(-5*time.Second)) || !trade.at.Before(*target) {
+			continue
+		}
+		v.LifecycleRecordsObserved = v.LifecycleRecordsObserved || trade.lifecycle
+		if !trade.qualifying {
 			continue
 		}
 		five++
-		if !trade.at.Before(target.Add(-time.Second)) {
-			one++
-		}
 		participant = participant || trade.basis == "participant"
 		sip = sip || trade.basis == "sip_fallback"
 	}
-	v.OneSecondStatus, v.OneSecondReason, v.OneSecond = TQCurrent, "qualifying_original_prints", float64(one)
 	if age < 5*time.Second {
 		v.Status, v.Reason = TQWarming, "five_second_warming"
-		v.FiveSecondStatus, v.FiveSecondReason = TQWarming, "five_second_warming"
 	} else {
 		v.Status, v.Reason = TQCurrent, "qualifying_original_prints"
-		v.FiveSecondStatus, v.FiveSecondReason = TQCurrent, "qualifying_original_prints"
 		v.FiveSecond = float64(five) / 5
 	}
 	switch {

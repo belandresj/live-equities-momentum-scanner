@@ -703,6 +703,43 @@ replacement, whole-process E2 stability, replay/checkpoint support, provider
 availability, live stability, or trading expectancy. `LBR-C1` is the next
 permitted ticket and remains inactive for a fresh task.
 
+#### `LBR-C1` — accepted 2026-08-23
+
+- **Coherent behavior:** the sole engine owner now retains only five-second
+  Tape contribution/lifecycle evidence, a receipt-bounded exact duplicate
+  ledger, and latest/latest-valid O(1) quote state for selected symbols.
+  Post-write trade/quote channels confirm independently only from complete
+  frames strictly after `B`; one-second Tape state and projection fields are
+  deleted. T/Q mutations and containment remain unable to change aggregate
+  canonical state, qualification, ranking, watermark, or readiness.
+- **Bounds and trust:** event time exactly `T-30s` is accepted and one
+  nanosecond older is counted/rejected. Duplicate evidence remains through
+  first receipt+30s equality and is evicted only later by monotonic engine
+  cleanup. Production limits are 10,000/100,000 retained contributions,
+  25,000/400,000 duplicate identities, two quotes per desired symbol, a 4 MiB
+  symbol charge, and a 64 MiB global charge. Symbol bounds close only that
+  symbol; global bounds enter aggregate-only intent. Unequal repeats, quote
+  quality loss, gaps, rank removal, and epoch loss close affected trust
+  immediately.
+- **Proof:** `P-LBR-C1-TQ-STATE` passes strict whole-frame `B`, independent
+  confirmation, Tape warming/current/covered-zero, locked/one-sided/crossed/
+  stale Spread, condition-qualified exact/unequal/lifecycle evidence,
+  conditional TRF identity, both 30-second ties, a committed-time stall beyond
+  both owned horizons, gap/removal/replacement, O(1) quotes, every count/byte
+  containment branch, immediate trust publication, and byte-for-byte aggregate
+  canonical/evaluation equivalence. The dangerous absent-TRF counterexample
+  normalizes irrelevant TRF IDs while present TRF IDs remain distinguishing.
+- **Verification/review:** primary/direct proofs, affected engine/API/
+  operations/scanner short and race suites, focused vet, diff hygiene, and
+  exact ordinary repository verification pass on final bytes. No narrow review
+  was triggered; the compact-identity ambiguity found by orchestrator diff
+  inspection was corrected by the same implementer and the full allocated
+  final-byte gates were rerun.
+- **Limitation/next gate:** deterministic evidence does not establish provider
+  acceptance or socket writes, C2 cadence/churn/pressure policy, final ingress
+  queue behavior, whole-process heap/RSS, or live-provider chronology. `LBR-C2`
+  remains coherent and is next but inactive pending its pre-assignment audit.
+
 ### Owner-approved E2 duration and manifest revision — 2026-08-23
 
 The owner revised E2 to exactly one 10-minute deterministic acceptance run. The
@@ -729,7 +766,7 @@ but copy no status.
 | Capability A — canonical state and hydration | `finally_accepted` | A1/A2 proofs, verification, corrections, and Capability A final review are clean; accepted dependency for Capability B. |
 | `LBR-B3` removal slice | `accepted` | Commit `f697288`; removal proof, resource evidence, focused corrections, and final focused re-review are clean. |
 | Capability B — evaluation and publication | `finally_accepted` | B1/B2/B3 accepted; required final read-only review returned `CLEAN/PASS`. Next permitted ticket is C1, which is inactive. |
-| Capability C — selected-row T/Q | `lbr_c1_active` | Capability B is finally accepted. The C1 pre-assignment audit found one production T/Q constructor/owner and one publication/API consumer path, with no T/Q-specific wrapper default or alternate live fallback. The allocated proof distinguishes strict post-`B` data confirmation, exact `T-30s` and receipt+30s ties, cleanup after committed time stalls beyond both owned horizons, every count/byte bound, immediate field-local trust closure, aggregate byte equivalence, and removal of the separate one-second Tape projection. Implement only [`LBR-C1`](tickets/lbr-c1-bounded-tape-and-spread-state.md). |
+| Capability C — selected-row T/Q | `lbr_c1_accepted_c2_next_inactive` | `LBR-C1` primary/direct proofs and affected short/race/vet/diff/ordinary gates pass on final bytes; compact retention, exact horizon ties, immediate trust closure, aggregate independence, and one-second Tape removal are accepted. Audit [`LBR-C2`](tickets/lbr-c2-cadence-membership-and-trust.md) before activation; C2 is not active. |
 | Capability D — live ingress | `not_started` | Requires accepted state/TQ input interface |
 | Capability E — integration/removal/acceptance | `not_started` | Requires Capabilities A-D accepted |
 | E2 deterministic duration/manifest revision | `owner_approved` | Exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |

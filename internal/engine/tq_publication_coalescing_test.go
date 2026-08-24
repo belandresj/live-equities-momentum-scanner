@@ -135,17 +135,19 @@ func TestTQPublicationCoalescingDirtyCadence(t *testing.T) {
 	afterFacts := fixture.e.ObserveSnapshot()
 	current := fixture.e.ObserveTQ()
 	accounting := fixture.e.ObserveTQPublicationAccounting()
-	if afterFacts.Publication.PublicationID != before.Publication.PublicationID ||
-		afterFacts.TQ.Accounting != before.TQ.Accounting ||
+	if afterFacts.Publication.PublicationID != before.Publication.PublicationID+1 ||
+		afterFacts.TQ.Rows[0].Tape.Status != TQInvalid || afterFacts.TQ.Rows[0].Tape.Reason != "unequal_repeat" ||
 		current.Accounting.Consumed != beforeCurrent.Accounting.Consumed+4 ||
 		current.Rows[0].Tape.Status != TQInvalid || current.Rows[0].Tape.Reason != "unequal_repeat" {
 		t.Fatalf("ordinary facts replaced or escaped immutable publication: before=%+v after=%+v current=%+v", before, afterFacts, current)
 	}
 	if accounting.CanonicalMutations != beforeAccounting.CanonicalMutations+4 ||
 		accounting.ProjectionDirtied != beforeAccounting.ProjectionDirtied+4 ||
-		accounting.CoalescedOrdinaryMutations != beforeAccounting.CoalescedOrdinaryMutations+4 ||
+		accounting.CoalescedOrdinaryMutations != beforeAccounting.CoalescedOrdinaryMutations+3 ||
+		accounting.ImmediateTrustTransitionMutations != beforeAccounting.ImmediateTrustTransitionMutations+1 ||
+		accounting.ImmediateTrustTransitionPublications != beforeAccounting.ImmediateTrustTransitionPublications+1 ||
 		accounting.CanonicalMutations != accounting.ImmediateTrustTransitionMutations+accounting.CoalescedOrdinaryMutations ||
-		!accounting.ProjectionDirty || accounting.PendingProjectionMutations != 4 {
+		!accounting.ProjectionDirty || accounting.PendingProjectionMutations != 1 {
 		t.Fatalf("ordinary mutation accounting = before=%+v after=%+v", beforeAccounting, accounting)
 	}
 
@@ -155,7 +157,7 @@ func TestTQPublicationCoalescingDirtyCadence(t *testing.T) {
 	}
 	maintenanceAfter := fixture.e.ObserveSnapshot().Publication.PublicationID
 	maintenanceAccounting := fixture.e.ObserveTQPublicationAccounting()
-	if maintenanceAfter != maintenanceBefore || !maintenanceAccounting.ProjectionDirty || maintenanceAccounting.PendingProjectionMutations != 5 {
+	if maintenanceAfter != maintenanceBefore || !maintenanceAccounting.ProjectionDirty || maintenanceAccounting.PendingProjectionMutations != 2 {
 		t.Fatalf("maintenance timer flushed dirty T/Q projection: publication=%d/%d accounting=%+v", maintenanceBefore, maintenanceAfter, maintenanceAccounting)
 	}
 
@@ -169,7 +171,7 @@ func TestTQPublicationCoalescingDirtyCadence(t *testing.T) {
 	final := fixture.e.ObserveSnapshot()
 	finalCurrent := fixture.e.ObserveTQ()
 	finalAccounting := fixture.e.ObserveTQPublicationAccounting()
-	if final.Publication.PublicationID != before.Publication.PublicationID+1 ||
+	if final.Publication.PublicationID != before.Publication.PublicationID+2 ||
 		final.Publication.PublicationID != final.TQ.PublicationID ||
 		!reflect.DeepEqual(final.TQ, finalCurrent) || final.TQ.Rows[0].Tape.Status != TQInvalid ||
 		final.TQ.Rows[0].Tape.Reason != "unequal_repeat" || finalAccounting.ProjectionDirty || finalAccounting.PendingProjectionMutations != 0 ||

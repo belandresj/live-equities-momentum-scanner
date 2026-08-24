@@ -141,7 +141,7 @@ func TestPV1RCVertical(t *testing.T) {
 	close(facts)
 	v1RCWaitFor(t, proof, liveDone, func() bool {
 		rows := restarted.Engine().ObserveTQ().Rows
-		return len(rows) == 1 && rows[0].TradeCoverage && rows[0].QuoteCoverage && rows[0].Tape.FiveSecondStatus == engine.TQCurrent && rows[0].Spread.Status == engine.TQCurrent
+		return len(rows) == 1 && rows[0].TradeCoverage && rows[0].QuoteCoverage && rows[0].Tape.Status == engine.TQCurrent && rows[0].Spread.Status == engine.TQCurrent
 	}, "production T/Q facts and feature timer")
 	if got := restarted.Status(); !got.BackendReady || !got.RankingCurrent || got.Lifecycle != "live" {
 		t.Fatalf("restarted scanner not ready: %+v", got)
@@ -151,7 +151,7 @@ func TestPV1RCVertical(t *testing.T) {
 		t.Fatalf("checkpoint/catch-up facts not preserved: %+v", operational)
 	}
 	tq := restarted.Engine().ObserveTQ()
-	if len(tq.Rows) != 1 || tq.Rows[0].Symbol != "AAA" || !tq.Rows[0].TradeCoverage || !tq.Rows[0].QuoteCoverage || tq.Rows[0].Tape.FiveSecondStatus != engine.TQCurrent || tq.Rows[0].Spread.Status != engine.TQCurrent {
+	if len(tq.Rows) != 1 || tq.Rows[0].Symbol != "AAA" || !tq.Rows[0].TradeCoverage || !tq.Rows[0].QuoteCoverage || tq.Rows[0].Tape.Status != engine.TQCurrent || tq.Rows[0].Spread.Status != engine.TQCurrent {
 		t.Fatalf("T/Q enrichment not current: %+v", tq)
 	}
 

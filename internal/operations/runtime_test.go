@@ -1207,7 +1207,7 @@ func TestPC9TAQOpaqueEngineCommandThroughC5Ack(t *testing.T) {
 		t.Fatal("T/Q feature timer")
 	}
 	view = run.Engine().ObserveTQ()
-	if view.Rows[0].Tape.OneSecond != 1 || view.Rows[0].Tape.OneSecondStatus != engine.TQCurrent || view.Rows[0].Spread.Quality != "known_special" {
+	if view.Rows[0].Tape.Status != engine.TQCurrent || view.Rows[0].Spread.Quality != "known_special" {
 		t.Fatalf("C5 semantic evidence = %+v", view.Rows[0])
 	}
 	foreignBinding := binding.Identity()[:len(binding.Identity())-1] + "0"

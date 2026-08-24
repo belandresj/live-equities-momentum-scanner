@@ -193,8 +193,8 @@ func TestPC9TAQ(t *testing.T) {
 	}
 	applyTQTimer(t, e)
 	view = e.ObserveTQ()
-	if len(view.Rows) != 1 || !view.Rows[0].TradeCoverage || !view.Rows[0].QuoteCoverage || view.Rows[0].Tape.OneSecond != 1 ||
-		view.Rows[0].Tape.FiveSecond != .2 || view.Rows[0].Tape.OneSecondStatus != TQCurrent || view.Rows[0].Tape.FiveSecondStatus != TQCurrent ||
+	if len(view.Rows) != 1 || !view.Rows[0].TradeCoverage || !view.Rows[0].QuoteCoverage ||
+		view.Rows[0].Tape.FiveSecond != .2 || view.Rows[0].Tape.Status != TQCurrent ||
 		view.Rows[0].Spread.Status != TQCurrent || math.Abs(view.Rows[0].Spread.Cents-2) > 1e-9 || view.Rows[0].Spread.QuoteAge != time.Second || view.Rows[0].Spread.Quality != "reviewed_ordinary" {
 		t.Fatalf("feature view = %+v", view.Rows)
 	}
@@ -381,13 +381,13 @@ func TestTape5sStatusReasonBoundaries(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := tapeView(tc.state, tc.target)
-			if got.Status != tc.status || got.Reason != tc.reason || got.FiveSecondStatus != tc.status || got.FiveSecondReason != tc.reason || got.FiveSecond != tc.value {
+			if got.Status != tc.status || got.Reason != tc.reason || got.FiveSecond != tc.value {
 				t.Fatalf("Tape 5s boundary = %+v", got)
 			}
 		})
 	}
 
-	pressure := TapeRateView{Status: TQPressureShed, Reason: "pressure", FiveSecondStatus: TQPressureShed, FiveSecondReason: "pressure"}
+	pressure := TapeRateView{Status: TQPressureShed, Reason: "pressure"}
 	if pressure.Status != TQPressureShed || pressure.Reason != "pressure" {
 		t.Fatalf("pressure Tape 5s = %+v", pressure)
 	}
@@ -491,8 +491,8 @@ func TestSpreadViewRetainsLatestValidQuoteWithAge(t *testing.T) {
 }
 
 func TestPC9TAQScaledGlobalBoundContainment(t *testing.T) {
-	if maximumTradesPerSymbol != 50_000 || maximumTradesGlobal != 500_000 || maximumTradeFingerprints != 100_000 || maximumFingerprintsGlobal != 1_000_000 ||
-		spreadStaleAge != 2*time.Second {
+	if maximumTradesPerSymbol != 10_000 || maximumTradesGlobal != 100_000 || maximumTradeFingerprints != 25_000 || maximumFingerprintsGlobal != 400_000 ||
+		maximumTQBytesGlobal != 64<<20 || spreadStaleAge != 2*time.Second {
 		t.Fatal("production T/Q bounds changed")
 	}
 	now := time.Date(2026, 7, 29, 15, 0, 0, 0, time.UTC)
@@ -503,7 +503,7 @@ func TestPC9TAQScaledGlobalBoundContainment(t *testing.T) {
 		"AAA": {present: true, tradeCoverage: tqCoverage{active: true, epoch: 1, start: now.Add(-time.Minute), ack: LivePosition{ConnectionEpoch: 1, FrameSequence: 1}, greatest: LivePosition{ConnectionEpoch: 1, FrameSequence: 1}}, quoteCoverage: tqCoverage{active: true}},
 		"BBB": {present: true, tradeCoverage: tqCoverage{active: true}, quoteCoverage: tqCoverage{active: true}},
 	}, tradeCount: 1}
-	e.tqLimits = tqRetentionLimits{tradesPerSymbol: 2, tradesGlobal: 1, fingerprintsPerSymbol: 2, fingerprintsGlobal: 2}
+	e.tqLimits = tqRetentionLimits{tradesPerSymbol: 2, tradesGlobal: 1, fingerprintsPerSymbol: 2, fingerprintsGlobal: 2, bytesPerSymbol: maximumTQBytesPerSymbol, bytesGlobal: maximumTQBytesGlobal}
 	input := baseTrade(testTQBinding{"proof-binding", "2026-07-29"}, now.Add(-time.Second), LivePosition{ConnectionEpoch: 1, FrameSequence: 2})
 	node := &queueNode{trade: frozenTradeInput{input}, admissionTime: now}
 	if code, reason := e.applyTradeLocked(node); code != DispositionTQRejected || reason != ReasonAccounting {
@@ -538,7 +538,7 @@ func TestPC9TAQAggregateOnlyRetiresPendingAdditions(t *testing.T) {
 		e.state.tq.members = map[string]*tqSymbolState{"AAA": {present: true,
 			tradeCoverage: tqCoverage{active: true, epoch: 1, greatest: LivePosition{ConnectionEpoch: 1, FrameSequence: 10}},
 			quoteCoverage: tqCoverage{active: true, epoch: 1, greatest: LivePosition{ConnectionEpoch: 1, FrameSequence: 10}},
-			fingerprints:  make(map[string]tqFingerprint)}}
+			fingerprints:  make(map[tqTradeIdentity]tqFingerprint)}}
 		e.state.tq.epoch, e.state.tq.nextToken = 1, 1
 		e.reconcileTQLocked(now)
 		e.mu.Unlock()
@@ -640,7 +640,7 @@ func TestPC9TAQScaledSymbolBoundUnsubscribes(t *testing.T) {
 	e.state.tq = tqState{epoch: 1, nextToken: 1, desired: []string{"AAA"}, members: map[string]*tqSymbolState{
 		"AAA": {present: true, tradeCoverage: tqCoverage{active: true, epoch: 1, start: now.Add(-time.Minute), ack: position, greatest: position}, quoteCoverage: tqCoverage{active: true, epoch: 1, ack: position, greatest: position}},
 	}}
-	e.tqLimits = tqRetentionLimits{tradesPerSymbol: 0, tradesGlobal: 10, fingerprintsPerSymbol: 10, fingerprintsGlobal: 10}
+	e.tqLimits = tqRetentionLimits{tradesPerSymbol: 0, tradesGlobal: 10, fingerprintsPerSymbol: 10, fingerprintsGlobal: 10, bytesPerSymbol: maximumTQBytesPerSymbol, bytesGlobal: maximumTQBytesGlobal}
 	input := baseTrade(testTQBinding{"proof-binding", "2026-07-29"}, now.Add(-time.Second), LivePosition{ConnectionEpoch: 1, FrameSequence: 2})
 	if code, reason := e.applyTradeLocked(&queueNode{trade: frozenTradeInput{input}, admissionTime: now}); code != DispositionTQRejected || reason != ReasonAccounting {
 		t.Fatalf("symbol overflow = %s/%s", code, reason)
