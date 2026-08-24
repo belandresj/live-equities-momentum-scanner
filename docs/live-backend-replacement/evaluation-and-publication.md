@@ -180,7 +180,7 @@ recurring readiness flap, and usable one-second polling are hard.
 | --- | --- | --- | --- |
 | `LBR-B1` | `P-LBR-B1-SELECTION` | A deterministic engine trace covers the approved qualification gate, multiple provisional proofs, correction revocation at every strict/equality boundary, finalization, first later print, quiet timers, fewer-than-20, exact ties, invalid prior/mark, incomplete population, and T/Q/display-field absence. It compares qualification classes, Day-%, order, watermark, and primary accounting with the approved semantic oracle and counts full-population cycles. It detects cloned/rescanned proof state and T/Q-dependent ranking. It does not prove display fields or publication capture. |
 | `LBR-B2` | `P-LBR-B2-PUBLICATION` | Keep a symbol unselected for more than 330 seconds while its aggregate state advances, select it solely through Day-%, and require immediate exact aggregate fields with only T/Q warming. Compose corrections, field-local failures, genuine zero, no-print, a same-`T` trust closure, concurrent immutable API captures, and slow/canceled clients. Observe one coherent publication identity, exact API-v2 semantic projection, accounting, lock independence, and no duplicated cycle. It does not prove T/Q formulas or HTTP/browser presentation. |
-| `LBR-B3` | `P-LBR-B3-REMOVAL` | A source-and-behavior exclusion proof asserts the supported live build has no active HOD drawdown, rolling 30/60-minute range, old transaction/range Activity, old Tape-burst, legacy full-population evaluator, qualification clone, or redundant aggregate-derived owner. The approved current-product corpus and API-v2 golden stay unchanged, and the mature cycle records latency/allocation versus the frozen baseline. It detects dead fallback code that still mutates or publishes. It is not the final whole-process resource acceptance. |
+| `LBR-B3` | `P-LBR-B3-REMOVAL` | A source-and-behavior exclusion proof asserts the supported live build has no active HOD drawdown, rolling 30/60-minute range, old transaction/range Activity, legacy full-population evaluator, qualification clone, or redundant aggregate-derived owner. The approved current-product corpus and API-v2 golden stay unchanged, and the mature cycle records latency/allocation versus the frozen baseline. It detects dead fallback code that still mutates or publishes. One-second Tape-burst state remains unchanged for its sole `LBR-C1` removal allocation. This is not the final whole-process resource acceptance. |
 
 `LBR-B1` installs incremental qualification and exact compact selection. It
 makes old qualification-map cloning and full-history qualification scans
@@ -193,9 +193,10 @@ capture path removable.
 
 `LBR-B3` deletes the superseded evaluator and feature state, including active
 code/tests for HOD drawdown, rolling 30/60-minute ranges, the old Activity
-composite, old Tape burst, and temporary Capability A projection adapters. It
-does not delete the compact T/Q implementation owned by Capability C or make
-the final replay/checkpoint/tooling decision owned by `LBR-E1`.
+composite, and temporary Capability A projection adapters. It preserves the
+accepted T/Q implementation and its separate one-second Tape-burst state until
+their sole `LBR-C1` removal allocation. It does not make the final replay/
+checkpoint tooling decision owned by `LBR-E1`.
 
 ## 9. Verification, review, and discretion
 

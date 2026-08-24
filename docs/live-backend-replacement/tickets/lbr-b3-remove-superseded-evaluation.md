@@ -26,12 +26,14 @@ projection. `LBR-ARCH-13` final conformance remains allocated to `LBR-E1`.
 Delete the old full-population evaluator, redundant aggregate-derived state,
 and every active removed-product feature path after B1/B2 provide the sole live
 behavior. The supported engine retains no HOD drawdown, rolling 30/60-minute
-range, transaction/range-expansion Activity, one-second Tape burst, qualification
-clone, or legacy evaluation fallback.
+range, transaction/range-expansion Activity, qualification clone, or legacy
+evaluation fallback.
 
-The currently accepted T/Q/Tape 5s behavior must remain intact for later
-replacement by Capability C; Capability C is not a prerequisite for `LBR-B3`.
-Final runtime cutover and replay/checkpoint source disposition remain `LBR-E1`.
+The currently accepted T/Q/Tape 5s behavior and separate one-second Tape-burst
+state remain intact for their sole Capability C replacement/removal allocation;
+Capability C is not a prerequisite for `LBR-B3`. Final runtime cutover and the
+replay/checkpoint source deletion-versus-separated-tooling disposition remain
+`LBR-E1`.
 
 ## 3. Allowed implementation boundary
 
@@ -42,23 +44,43 @@ when no retained behavior imports them. Do not rewrite historical documents or
 change UI/API fields. Do not edit massive ingress/TQ policy except to remove an
 already-unused compile dependency.
 
+Narrow replay/checkpoint/test-tool edits are allowed only to sever or adapt
+their dependencies on removed live-engine structs, modes, constructors, and
+fallbacks. Unsupported tools may continue to compile against a clearly
+separated non-live seam, but cannot force legacy feature fields, evaluation
+branches, mutable owners, or runtime selection to remain in `internal/engine`,
+`internal/operations` live composition, or `cmd/scanner`. This slice neither
+deletes those tools nor repairs, validates, or chooses their final E1 source
+disposition.
+
 ## 4. Evidence and source whitelist
 
 Predecessor V2 whitelist: empty. The accepted A1/B1/B2 proofs and current API-v2
 golden are authority for behavior. Baseline old-feature tests are exclusion
-evidence only. Reuse the focused contract's mature evaluator diagnostic routes
-for before/after measurement; do not preserve private structures just to keep
-old tests compiling.
+evidence only. The post-removal mature comparison must use the frozen
+5,694-symbol manifest in
+[`baseline-characterization.md`](../baseline-characterization.md), SHA-256
+`3a70dda5bc040d1a77fbe3e114d788d3fc04c93fbb51ff2e5eec646f4c10e6e3`, and
+its current-product cycle route. Legacy diagnostics that directly construct
+removed price-range/Activity state are not a valid post-removal measurement
+implementation. Do not preserve private structures just to keep old tests
+compiling.
 
 ## 5. Required removal behavior
 
 - Remove active state, mutation, evaluation, publication, mapper, tests, and
-  fixtures for the four removed product feature families.
+  fixtures for HOD drawdown, rolling 30/60-minute ranges, and the old Activity
+  composite. Preserve one-second Tape-burst/Tape 5s/Spread state unchanged for
+  `LBR-C1`.
 - Remove qualification cloning/full-history rescans and old full-universe
   display-field evaluation rather than leaving unreachable alternative calls.
 - Remove A1 temporary legacy projections when no accepted consumer remains.
-- Prove the production dependency graph cannot construct, mutate, publish, or
-  select the old evaluator/state; test-only semantic oracles remain isolated.
+- Prove the ordinary live roots—`cmd/scanner`, `operations.RunLive`, the live
+  `ScannerStateEngine`, immutable publication/capture, and snapshot API—cannot
+  construct, mutate, publish, or select the old evaluator/state. Any retained
+  replay/checkpoint/test-tool roots must use a separated non-live seam with no
+  import/call path that restores legacy state or mode selection to those live
+  roots; test-only semantic oracles remain isolated.
 - Preserve exact qualification, Day-%/symbol ordering, Volume, From Open, Day
   Range, Activity 30s, Move 30s, availability/accounting, publication, and API
   v2.
@@ -71,12 +93,16 @@ old tests compiling.
 current-product semantic/API corpus. It must fail if the supported live build
 still contains an active removed field, legacy evaluator call, qualification
 clone, redundant owner, runtime compatibility selection, or temporary adapter.
+It inspects the named ordinary live roots and any retained separated tooling
+roots in both dependency directions. One-second Tape-burst/Tape 5s/Spread is an
+explicit exclusion from this removal proof and remains allocated to `LBR-C1`.
 
 Observe unchanged current-product outputs/accounting and recorded mature
-cycle/allocation differential. The dangerous counterexample is dead-looking
-code that still mutates or remains selectable. This proof is not the E2
-30-minute whole-process resource acceptance and does not decide final
-replay/checkpoint tooling.
+cycle/allocation differential on the exact frozen 5,694-symbol manifest and
+checksum. The dangerous counterexample is dead-looking code that still mutates
+or remains selectable, or unsupported tooling that imports a legacy live owner
+back into the ordinary scanner. This proof is not the E2 30-minute whole-process
+resource acceptance and does not decide final replay/checkpoint tooling.
 
 ## 7. Verification and timeout policy
 
@@ -98,9 +124,10 @@ read-only review before Capability C can activate.
 ## 9. Implementer discretion and prohibited changes
 
 File consolidation, private helper deletion, test-oracle isolation, and the
-smallest mechanical interface cleanup are delegated. Do not change product/API
-meaning, T/Q Tape 5s/Spread, canonical state, ingress, readiness, or use this
-slice for broad renaming, historical-doc cleanup, replay/checkpoint repair, or
+smallest mechanical unsupported-tool dependency separation are delegated. Do
+not change product/API meaning, T/Q Tape 5s/Spread or one-second Tape-burst
+state, canonical state, ingress, readiness, or use this slice for broad
+renaming, historical-doc cleanup, replay/checkpoint repair or disposition, or
 speculative performance work.
 
 ## 10. Containment, review, and correction
