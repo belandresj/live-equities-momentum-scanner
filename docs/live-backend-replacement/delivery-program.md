@@ -686,6 +686,23 @@ cross-boundary counterexample audit and final-byte-only expensive verification.
   whole-process stability or provider evidence. Capability B now requires its
   final read-only review; C1 remains inactive.
 
+#### Capability B — finally accepted 2026-08-23
+
+All B1/B2/B3 primary proofs, affected short/race/vet/diff/API gates, ordinary
+repository verification, focused correction re-reviews, and the required final
+read-only capability review are clean. The accepted interface is one exact
+candidate-relative qualification/ranking pass, selected-only five-field
+enrichment for at most 20 rows, one immutable evaluation/TQ publication and
+one-load capture, with old HOD/rolling/Activity/full-population fallback state
+deleted. The final review returned `CLEAN/PASS` with no unresolved product,
+architecture, ownership, ordering, trust, accounting, publication, API, or
+deletion conflict.
+
+Capability B does not establish final T/Q formulas/membership, ingress
+replacement, whole-process E2 stability, replay/checkpoint support, provider
+availability, live stability, or trading expectancy. `LBR-C1` is the next
+permitted ticket and remains inactive for a fresh task.
+
 ### Owner-approved E2 duration and manifest revision — 2026-08-23
 
 The owner revised E2 to exactly one 10-minute deterministic acceptance run. The
@@ -706,14 +723,16 @@ but copy no status.
 
 | Item | State | Gate / next action |
 | --- | --- | --- |
-| Parent architecture | `approved` | Current replacement architecture |
-| Delivery program | `approved` | Current replacement delivery authority |
+| Parent architecture | `approved_owner_revised_e2_10m` | Current replacement architecture; E2 is exactly one 10-minute deterministic run. |
+| Delivery program | `approved_owner_revised_e2_10m` | Current replacement delivery authority; no optional/fallback/diagnostic repeat run exists. |
 | `LBR-P1` focused contracts and characterization | `accepted_owner_revised_e2_10m` | Five-spec review/owner acceptance remain valid. Owner-revised [`baseline-characterization.md`](baseline-characterization.md), SHA-256 `5745a6eed3e25891f61f58b40b06a4e9733c7b3f7d0914d411b142fe3ad8d62d`, freezes baseline `0d043c1`, the semantic/API/UI corpus, durable evidence, and exact 5,694-symbol/600-second/180,000-frame E2 manifest with recomputed event counts and digests. Comparable baseline CPU/RSS remain explicitly unknown. |
-| Capability A — canonical state and hydration | `finally_accepted` | A1/A2 proofs, verification, two A1 re-reviews, the A2 long-stall/launcher correction, and Capability A final focused re-review are clean. Next: activate only [`LBR-B1`](tickets/lbr-b1-incremental-qualification-and-selection.md). |
-| Capability B — evaluation and publication | `slices_accepted_final_review_next` | `LBR-B1`, `LBR-B2`, and `LBR-B3` proofs, verification, corrections, and focused re-reviews are clean. Run the required Capability B final read-only review; C1 remains inactive. |
-| Capability C — selected-row T/Q | `not_started` | Requires Capability B publication/selection interface |
+| Capability A — canonical state and hydration | `finally_accepted` | A1/A2 proofs, verification, corrections, and Capability A final review are clean; accepted dependency for Capability B. |
+| `LBR-B3` removal slice | `accepted` | Commit `f697288`; removal proof, resource evidence, focused corrections, and final focused re-review are clean. |
+| Capability B — evaluation and publication | `finally_accepted` | B1/B2/B3 accepted; required final read-only review returned `CLEAN/PASS`. Next permitted ticket is C1, which is inactive. |
+| Capability C — selected-row T/Q | `not_started_c1_next_inactive` | [`LBR-C1`](tickets/lbr-c1-bounded-tape-and-spread-state.md) is next but must be audited and activated by a fresh task; do not begin C1 from this handoff. |
 | Capability D — live ingress | `not_started` | Requires accepted state/TQ input interface |
 | Capability E — integration/removal/acceptance | `not_started` | Requires Capabilities A-D accepted |
+| E2 deterministic duration/manifest revision | `owner_approved` | Exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |
 | Deterministic replacement | `not_started` | Requires `LBR-E1` and `LBR-E2` |
 | Live stability confirmation | `not_authorized` | `LBR-E3` requires separate exact-date authorization or owner execution |
 
