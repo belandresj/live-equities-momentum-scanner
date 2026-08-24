@@ -19,7 +19,7 @@ import (
 
 type ingressReproducerFault string
 
-const ingressReproducerFrameSlots = 8192
+const ingressReproducerFrameSlots = massive.MaximumLiveFrameSlots
 
 const (
 	ingressHealthy          ingressReproducerFault = "healthy_concurrent"

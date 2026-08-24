@@ -1122,15 +1122,8 @@ func TestPC9TAQOpaqueEngineCommandThroughC5Ack(t *testing.T) {
 	if result, err := massive.DeliverToEngine(context.Background(), run.Engine(), startDelivery); err != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
 		t.Fatalf("start = %+v/%v", result, err)
 	}
-	handshake, err := attempt.Handshake(context.Background())
-	if err != nil {
+	if err := attempt.HandshakeAndDeliver(context.Background(), run.Engine()); err != nil {
 		t.Fatal(err)
-	}
-	for _, delivery := range handshake {
-		result, err := massive.DeliverToEngine(context.Background(), run.Engine(), delivery)
-		if err != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
-			t.Fatalf("handshake = %+v/%v", result, err)
-		}
 	}
 	completeHydration(t, run.Engine(), binding, engine.HydrationFreshBootstrap, attempt.Epoch(), now)
 	base := now
@@ -1313,15 +1306,8 @@ func TestPC9TQFreshEpochSubscribesAllRankedRowsInOneCommand(t *testing.T) {
 	if result, deliverErr := massive.DeliverToEngine(context.Background(), run.Engine(), started); deliverErr != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
 		t.Fatalf("start = %+v/%v", result, deliverErr)
 	}
-	handshake, err := attempt.Handshake(context.Background())
-	if err != nil {
+	if err := attempt.HandshakeAndDeliver(context.Background(), run.Engine()); err != nil {
 		t.Fatal(err)
-	}
-	for _, delivery := range handshake {
-		result, deliverErr := massive.DeliverToEngine(context.Background(), run.Engine(), delivery)
-		if deliverErr != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
-			t.Fatalf("handshake = %+v/%v", result, deliverErr)
-		}
 	}
 	completeHydration(t, run.Engine(), binding, engine.HydrationFreshBootstrap, attempt.Epoch(), now)
 

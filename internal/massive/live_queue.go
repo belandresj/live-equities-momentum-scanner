@@ -6,11 +6,14 @@ import (
 	"time"
 
 	"github.com/belandresj/live-equities-momentum-scanner/internal/engine"
+	"github.com/belandresj/live-equities-momentum-scanner/internal/reference"
 )
 
 const (
-	MaximumLiveFrameSlots = 32768
-	MaximumLiveQueueBytes = 128 << 20
+	MaximumLiveFrameSlots  = 4096
+	MaximumLiveQueueBytes  = 64 << 20
+	liveMarkerReserveSlots = 8
+	liveMarkerReserveBytes = 64 << 10
 )
 
 type LiveQueueConfig struct {
@@ -28,41 +31,47 @@ const (
 	FrameRejectedByteCapacity FrameAdmissionReason = "rejected_byte_capacity"
 	FrameRejectedReceipt      FrameAdmissionReason = "rejected_receipt"
 	FrameRejectedGate         FrameAdmissionReason = "rejected_gate_or_close"
+	FrameShedTQCapacity       FrameAdmissionReason = "shed_tq_only_capacity"
 )
 
 type LiveQueueAccounting struct {
-	FramesRead, FramesAdmitted                                                      uint64
-	FramesRejectedOversize, FramesRejectedCapacity, FramesRejectedReceipt           uint64
-	FramesRejectedSlotCapacity, FramesRejectedByteCapacity                          uint64
-	FramesRejectedGateOrClose                                                       uint64
-	FramesQueued, FramesClassifying, FramesDispositioned, FramesFenced              uint64
-	QueuedBytes                                                                     int
-	HighFramesQueued                                                                uint64
-	HighQueuedBytes                                                                 int
-	TerminalMarkersQueued, TerminalMarkersClassifying, TerminalMarkersDispositioned uint64
-	IngressFencesStarted                                                            uint64
-	IngressFencesQueued, IngressFencesClassifying, IngressFencesDispositioned       uint64
-	CapacityFrames, CapacityBytes                                                   int
-	OldestWaitingFrameAge, ActiveFrameAge                                           time.Duration
+	FramesRead, FramesAdmitted, FramesShedTQCapacity                                                                uint64
+	FramesRejectedOversize, FramesRejectedCapacity, FramesRejectedReceipt                                           uint64
+	FramesRejectedSlotCapacity, FramesRejectedByteCapacity                                                          uint64
+	FramesRejectedGateOrClose                                                                                       uint64
+	FramesDecoding, FramesQueued, FramesClassifying, FramesDispositioned, FramesFenced                              uint64
+	QueuedBytes                                                                                                     int
+	HighFramesQueued                                                                                                uint64
+	HighQueuedBytes                                                                                                 int
+	TerminalMarkersQueued, TerminalMarkersClassifying, TerminalMarkersDispositioned                                 uint64
+	IngressFencesStarted                                                                                            uint64
+	IngressFencesQueued, IngressFencesClassifying, IngressFencesDispositioned                                       uint64
+	TQCapacityMarkersStarted, TQCapacityMarkersQueued, TQCapacityMarkersClassifying, TQCapacityMarkersDispositioned uint64
+	TQCapacityShedTrades, TQCapacityShedQuotes                                                                      uint64
+	CapacityFrames, CapacityBytes                                                                                   int
+	OldestWaitingFrameAge, ActiveFrameAge                                                                           time.Duration
 }
 
 func (a LiveQueueAccounting) Reconciles() bool {
-	return a.FramesRead == a.FramesAdmitted+a.FramesRejectedOversize+
+	return a.FramesRead == a.FramesDecoding+a.FramesAdmitted+a.FramesShedTQCapacity+a.FramesRejectedOversize+
 		a.FramesRejectedCapacity+a.FramesRejectedReceipt+a.FramesRejectedGateOrClose &&
 		a.FramesRejectedCapacity == a.FramesRejectedSlotCapacity+a.FramesRejectedByteCapacity &&
 		a.FramesAdmitted == a.FramesQueued+a.FramesClassifying+a.FramesDispositioned+a.FramesFenced &&
 		a.TerminalMarkersQueued+a.TerminalMarkersClassifying+a.TerminalMarkersDispositioned <= 1 &&
 		a.IngressFencesStarted == a.IngressFencesQueued+a.IngressFencesClassifying+a.IngressFencesDispositioned &&
-		a.IngressFencesQueued+a.IngressFencesClassifying <= 1
+		a.IngressFencesQueued+a.IngressFencesClassifying <= 1 &&
+		a.TQCapacityMarkersStarted == a.TQCapacityMarkersQueued+a.TQCapacityMarkersClassifying+a.TQCapacityMarkersDispositioned &&
+		a.TQCapacityMarkersQueued+a.TQCapacityMarkersClassifying <= 1
 }
 
 type queuedLiveKind uint8
 
 const (
-	queuedLiveRaw queuedLiveKind = iota + 1
+	queuedLiveDecodedBatch queuedLiveKind = iota + 1
 	queuedLiveTerminal
 	queuedLiveIngressFence
 	queuedLiveCoverageFence
+	queuedLiveTQCapacity
 )
 
 type socketMessageType uint8
@@ -73,32 +82,36 @@ const (
 )
 
 type queuedLiveFrame struct {
-	epoch, sequence   uint64
-	receivedAt        time.Time
-	messageType       socketMessageType
-	data              []byte
-	terminal          bool
-	kind              queuedLiveKind
-	ingressFence      AggregateIngressFenceFact
-	liveCoverageFence LiveCoverageFenceFact
+	epoch, sequence    uint64
+	receivedAt         time.Time
+	batch              DecodedBatch
+	terminal           bool
+	kind               queuedLiveKind
+	ingressFence       AggregateIngressFenceFact
+	liveCoverageFence  LiveCoverageFenceFact
+	tqCapacityPosition engine.LivePosition
 }
 
 type liveFrameQueue struct {
-	mu              sync.Mutex
-	changed         chan struct{}
-	recheck         chan struct{}
-	config          LiveQueueConfig
-	frames          []queuedLiveFrame
-	head, count     int
-	bytes           int
-	next            uint64
-	lastReceipt     time.Time
-	classifyingAt   time.Time
-	greatestRaw     uint64
-	nextFenceMarker uint64
-	now             func() time.Time
-	gateOpen        bool
-	accounting      LiveQueueAccounting
+	mu                          sync.Mutex
+	changed                     chan struct{}
+	recheck                     chan struct{}
+	config                      LiveQueueConfig
+	binding                     reference.Binding
+	frames                      []queuedLiveFrame
+	head, count                 int
+	bytes                       int
+	next                        uint64
+	lastReceipt                 time.Time
+	classifyingAt               time.Time
+	greatestRaw                 uint64
+	greatestAdmitted            uint64
+	decoding                    bool
+	tqCapacityMarkerOutstanding bool
+	nextFenceMarker             uint64
+	now                         func() time.Time
+	gateOpen                    bool
+	accounting                  LiveQueueAccounting
 }
 
 func validateLiveQueueConfig(config LiveQueueConfig) bool {
@@ -107,8 +120,30 @@ func validateLiveQueueConfig(config LiveQueueConfig) bool {
 		config.TotalFrameBytes >= config.MaxFrameBytes && config.TotalFrameBytes <= MaximumLiveQueueBytes
 }
 
-func newLiveFrameQueue(config LiveQueueConfig) *liveFrameQueue {
-	return &liveFrameQueue{config: config, frames: make([]queuedLiveFrame, config.FrameSlots+2), changed: make(chan struct{}), recheck: make(chan struct{}), gateOpen: true, next: 1, nextFenceMarker: 1, now: func() time.Time { return time.Now().UTC() }}
+func newLiveFrameQueue(config LiveQueueConfig, binding ...reference.Binding) *liveFrameQueue {
+	ringEntries := config.FrameSlots + liveMarkerReserveSlots
+	if config.FrameSlots == MaximumLiveFrameSlots {
+		ringEntries = MaximumLiveFrameSlots
+	}
+	q := &liveFrameQueue{config: config, frames: make([]queuedLiveFrame, ringEntries), changed: make(chan struct{}), recheck: make(chan struct{}), gateOpen: true, next: 1, nextFenceMarker: 1, now: func() time.Time { return time.Now().UTC() }}
+	if len(binding) == 1 {
+		q.binding = binding[0]
+	}
+	return q
+}
+
+func (q *liveFrameQueue) decodedSlotCapacity() int {
+	if q.config.FrameSlots == MaximumLiveFrameSlots {
+		return q.config.FrameSlots - liveMarkerReserveSlots
+	}
+	return q.config.FrameSlots
+}
+
+func (q *liveFrameQueue) decodedByteCapacity() int {
+	if q.config.TotalFrameBytes == MaximumLiveQueueBytes {
+		return q.config.TotalFrameBytes - liveMarkerReserveBytes
+	}
+	return q.config.TotalFrameBytes
 }
 
 func (q *liveFrameQueue) appendLocked(frame queuedLiveFrame) {
@@ -139,43 +174,80 @@ func (q *liveFrameQueue) requestRecheck() {
 	q.mu.Unlock()
 }
 
-func (q *liveFrameQueue) tryEnqueue(epoch uint64, messageType socketMessageType, receivedAt time.Time, data []byte) (queuedLiveFrame, FrameAdmissionReason, LiveQueueAccounting) {
+func (q *liveFrameQueue) beginDecode(epoch uint64, messageType socketMessageType, receivedAt time.Time, encodedBytes int) (uint64, FrameAdmissionReason, LiveQueueAccounting) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.accounting.FramesRead++
-	if !q.gateOpen || epoch == 0 || q.next == 0 {
+	if !q.gateOpen || q.decoding || epoch == 0 || q.next == 0 {
 		q.accounting.FramesRejectedGateOrClose++
-		return queuedLiveFrame{}, FrameRejectedGate, q.admissionSnapshotLocked()
+		return 0, FrameRejectedGate, q.admissionSnapshotLocked()
 	}
 	if messageType != socketMessageText && messageType != socketMessageBinary {
 		q.accounting.FramesRejectedGateOrClose++
-		return queuedLiveFrame{}, FrameRejectedGate, q.admissionSnapshotLocked()
+		return 0, FrameRejectedGate, q.admissionSnapshotLocked()
 	}
-	if len(data) > q.config.MaxFrameBytes {
+	if encodedBytes > q.config.MaxFrameBytes || encodedBytes < 0 {
 		q.accounting.FramesRejectedOversize++
-		return queuedLiveFrame{}, FrameRejectedOversize, q.admissionSnapshotLocked()
+		return 0, FrameRejectedOversize, q.admissionSnapshotLocked()
 	}
 	if receivedAt.IsZero() || receivedAt != receivedAt.UTC() || (!q.lastReceipt.IsZero() && receivedAt.Before(q.lastReceipt)) {
 		q.accounting.FramesRejectedReceipt++
-		return queuedLiveFrame{}, FrameRejectedReceipt, q.admissionSnapshotLocked()
+		return 0, FrameRejectedReceipt, q.admissionSnapshotLocked()
 	}
-	if q.accounting.FramesQueued >= uint64(q.config.FrameSlots) {
+	sequence := q.next
+	q.next++
+	q.greatestRaw = sequence
+	q.lastReceipt = receivedAt
+	q.decoding = true
+	q.accounting.FramesDecoding++
+	q.classifyingAt = receivedAt
+	return sequence, FrameAdmitted, LiveQueueAccounting{}
+}
+
+func (q *liveFrameQueue) tryEnqueueDecoded(epoch uint64, sequence uint64, receivedAt time.Time, encodedBytes int, batch DecodedBatch) (queuedLiveFrame, FrameAdmissionReason, LiveQueueAccounting) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if !q.decoding || sequence == 0 || sequence != q.greatestRaw || !q.gateOpen {
+		if q.decoding {
+			q.decoding = false
+			q.classifyingAt = time.Time{}
+			q.accounting.FramesDecoding--
+			q.accounting.FramesRejectedGateOrClose++
+		}
+		q.notifyLocked()
+		return queuedLiveFrame{}, FrameRejectedGate, q.admissionSnapshotLocked()
+	}
+	q.decoding = false
+	q.accounting.FramesDecoding--
+	q.classifyingAt = time.Time{}
+	if batch.EncodedBytes != encodedBytes || batch.ConnectionEpoch != epoch || batch.FrameSequence != sequence || batch.ReceivedAt != receivedAt || batch.RetainedCharge < 0 || batch.RetainedCharge > MaximumDecodedBatchCharge || batch.Len() > MaximumDecodedBatchElements {
+		q.accounting.FramesRejectedOversize++
+		q.notifyLocked()
+		return queuedLiveFrame{}, FrameRejectedOversize, q.admissionSnapshotLocked()
+	}
+	if q.accounting.FramesQueued >= uint64(q.decodedSlotCapacity()) {
+		if q.shedTQOnlyLocked(epoch, sequence, receivedAt, batch) {
+			return queuedLiveFrame{}, FrameShedTQCapacity, LiveQueueAccounting{}
+		}
 		q.accounting.FramesRejectedCapacity++
 		q.accounting.FramesRejectedSlotCapacity++
+		q.notifyLocked()
 		return queuedLiveFrame{}, FrameRejectedSlotCapacity, q.admissionSnapshotLocked()
 	}
-	if len(data) > q.config.TotalFrameBytes-q.bytes {
+	if batch.RetainedCharge > q.decodedByteCapacity()-q.bytes {
+		if q.shedTQOnlyLocked(epoch, sequence, receivedAt, batch) {
+			return queuedLiveFrame{}, FrameShedTQCapacity, LiveQueueAccounting{}
+		}
 		q.accounting.FramesRejectedCapacity++
 		q.accounting.FramesRejectedByteCapacity++
+		q.notifyLocked()
 		return queuedLiveFrame{}, FrameRejectedByteCapacity, q.admissionSnapshotLocked()
 	}
-	frame := queuedLiveFrame{epoch: epoch, sequence: q.next, receivedAt: receivedAt, messageType: messageType, data: append([]byte(nil), data...), kind: queuedLiveRaw}
-	q.next++
-	q.greatestRaw = frame.sequence
-	q.lastReceipt = receivedAt
+	frame := queuedLiveFrame{epoch: epoch, sequence: sequence, receivedAt: receivedAt, batch: batch, kind: queuedLiveDecodedBatch}
 	q.appendLocked(frame)
-	q.bytes += len(frame.data)
+	q.bytes += frame.batch.RetainedCharge
 	q.accounting.FramesAdmitted++
+	q.greatestAdmitted = sequence
 	q.accounting.FramesQueued++
 	q.accounting.QueuedBytes = q.bytes
 	if q.accounting.FramesQueued > q.accounting.HighFramesQueued {
@@ -190,12 +262,49 @@ func (q *liveFrameQueue) tryEnqueue(epoch uint64, messageType socketMessageType,
 	return frame, FrameAdmitted, LiveQueueAccounting{}
 }
 
+func (q *liveFrameQueue) shedTQOnlyLocked(epoch, sequence uint64, receivedAt time.Time, batch DecodedBatch) bool {
+	trades, quotes := uint64(0), uint64(0)
+	for _, result := range batch.results {
+		switch result.Kind {
+		case LiveResultTrade:
+			trades++
+		case LiveResultQuote:
+			quotes++
+		case LiveResultRejected:
+			if result.Rejection.Family == LiveFamilyTrade {
+				trades++
+			} else if result.Rejection.Family == LiveFamilyQuote {
+				quotes++
+			} else {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	if trades+quotes == 0 || q.count >= len(q.frames) {
+		return false
+	}
+	q.accounting.FramesShedTQCapacity++
+	q.accounting.TQCapacityShedTrades += trades
+	q.accounting.TQCapacityShedQuotes += quotes
+	if !q.tqCapacityMarkerOutstanding {
+		q.appendLocked(queuedLiveFrame{epoch: epoch, sequence: sequence, receivedAt: receivedAt, kind: queuedLiveTQCapacity,
+			tqCapacityPosition: engine.LivePosition{ConnectionEpoch: epoch, FrameSequence: sequence}})
+		q.tqCapacityMarkerOutstanding = true
+		q.accounting.TQCapacityMarkersStarted++
+		q.accounting.TQCapacityMarkersQueued = 1
+	}
+	q.notifyLocked()
+	return true
+}
+
 func (q *liveFrameQueue) admissionSnapshotLocked() LiveQueueAccounting {
 	result := q.accounting
 	result.CapacityFrames, result.CapacityBytes = q.config.FrameSlots, q.config.TotalFrameBytes
 	for offset := 0; offset < q.count; offset++ {
 		frame := q.frameLocked(offset)
-		if frame.kind == queuedLiveRaw {
+		if frame.kind == queuedLiveDecodedBatch {
 			// Raw receipts are monotonic and the queue is FIFO. The first raw
 			// frame is therefore the oldest; only bounded fence markers can
 			// precede it. Do not turn a pressure snapshot into an O(queue) lock.
@@ -229,7 +338,17 @@ func (q *liveFrameQueue) enqueueIngressFence(ctx context.Context, fact Aggregate
 			q.mu.Unlock()
 			return AggregateIngressFenceFact{}, false
 		}
-		if q.gateOpen && q.accounting.FramesQueued < uint64(q.config.FrameSlots) {
+		if q.decoding {
+			changed := q.changed
+			q.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return AggregateIngressFenceFact{}, false
+			case <-changed:
+			}
+			continue
+		}
+		if q.gateOpen && q.count < len(q.frames) {
 			fact.ThroughFrameSequence = q.greatestRaw
 			fact.MarkerOrdinal = q.nextFenceMarker
 			q.nextFenceMarker++
@@ -267,7 +386,17 @@ func (q *liveFrameQueue) enqueueLiveCoverageFence(ctx context.Context, fact Live
 			q.mu.Unlock()
 			return LiveCoverageFenceFact{}, false
 		}
-		if q.accounting.FramesQueued < uint64(q.config.FrameSlots) {
+		if q.decoding {
+			changed := q.changed
+			q.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return LiveCoverageFenceFact{}, false
+			case <-changed:
+			}
+			continue
+		}
+		if q.count < len(q.frames) {
 			fact.ThroughFrameSequence = q.greatestRaw
 			fact.MarkerOrdinal = q.nextFenceMarker
 			q.nextFenceMarker++
@@ -311,40 +440,48 @@ func (q *liveFrameQueue) closeGate() {
 	q.mu.Unlock()
 }
 
-func (q *liveFrameQueue) enqueueTerminal(ctx context.Context, epoch uint64, at time.Time) (queuedLiveFrame, bool) {
+func (q *liveFrameQueue) enqueueTerminal(ctx context.Context, epoch uint64, at time.Time, through uint64) (queuedLiveFrame, bool) {
 	for {
+		if ctx == nil || ctx.Err() != nil {
+			return queuedLiveFrame{}, false
+		}
 		q.mu.Lock()
-		if q.accounting.FramesQueued < uint64(q.config.FrameSlots) && q.next != 0 {
-			var retained [2]queuedLiveFrame
-			retainedCount := 0
+		if q.count < len(q.frames) && q.next != 0 {
+			retained := make([]queuedLiveFrame, 0, q.count+1)
 			for offset := 0; offset < q.count; offset++ {
 				item := q.frameLocked(offset)
 				if item.kind == queuedLiveIngressFence {
 					item.ingressFence.State = engine.AggregateIngressFenceCanceled
-					retained[retainedCount] = item
-					retainedCount++
+					retained = append(retained, item)
 					continue
 				}
 				if item.kind == queuedLiveCoverageFence {
 					item.liveCoverageFence.State = engine.LiveCoverageFenceCanceled
-					retained[retainedCount] = item
-					retainedCount++
+					retained = append(retained, item)
+					continue
+				}
+				if item.kind == queuedLiveTQCapacity {
+					retained = append(retained, item)
 					continue
 				}
 				if item.terminal {
 					q.mu.Unlock()
 					return item, true
 				}
+				if item.kind == queuedLiveDecodedBatch && item.sequence <= through {
+					retained = append(retained, item)
+					continue
+				}
 				q.accounting.FramesQueued--
 				q.accounting.FramesFenced++
+				q.bytes -= item.batch.RetainedCharge
 			}
 			clear(q.frames)
 			q.head, q.count = 0, 0
-			for index := 0; index < retainedCount; index++ {
-				q.appendLocked(retained[index])
+			for _, item := range retained {
+				q.appendLocked(item)
 			}
-			q.bytes = 0
-			q.accounting.QueuedBytes = 0
+			q.accounting.QueuedBytes = q.bytes
 			frame := queuedLiveFrame{epoch: epoch, sequence: q.next, receivedAt: at.UTC(), terminal: true, kind: queuedLiveTerminal}
 			q.next++
 			q.appendLocked(frame)
@@ -381,6 +518,11 @@ func (q *liveFrameQueue) fenceQueuedAndEnqueueTerminal(epoch uint64, at time.Tim
 		}
 		if frame.kind == queuedLiveCoverageFence {
 			frame.liveCoverageFence.State = engine.LiveCoverageFenceCanceled
+			retained[retainedCount] = frame
+			retainedCount++
+			continue
+		}
+		if frame.kind == queuedLiveTQCapacity {
 			retained[retainedCount] = frame
 			retainedCount++
 			continue
@@ -438,8 +580,11 @@ func (q *liveFrameQueue) popOrRecheck(ctx context.Context) (queuedLiveFrame, boo
 			} else if frame.kind == queuedLiveIngressFence || frame.kind == queuedLiveCoverageFence {
 				q.accounting.IngressFencesQueued--
 				q.accounting.IngressFencesClassifying++
+			} else if frame.kind == queuedLiveTQCapacity {
+				q.accounting.TQCapacityMarkersQueued = 0
+				q.accounting.TQCapacityMarkersClassifying = 1
 			} else {
-				q.bytes -= len(frame.data)
+				q.bytes -= frame.batch.RetainedCharge
 				q.accounting.FramesQueued--
 				q.accounting.FramesClassifying++
 				q.accounting.QueuedBytes = q.bytes
@@ -474,6 +619,10 @@ func (q *liveFrameQueue) complete(frame queuedLiveFrame, fenced bool) {
 	} else if frame.kind == queuedLiveIngressFence || frame.kind == queuedLiveCoverageFence {
 		q.accounting.IngressFencesClassifying--
 		q.accounting.IngressFencesDispositioned++
+	} else if frame.kind == queuedLiveTQCapacity {
+		q.accounting.TQCapacityMarkersClassifying = 0
+		q.accounting.TQCapacityMarkersDispositioned++
+		q.tqCapacityMarkerOutstanding = false
 	} else {
 		q.accounting.FramesClassifying--
 		q.classifyingAt = time.Time{}
@@ -500,4 +649,10 @@ func (q *liveFrameQueue) lastRawPosition(epoch uint64) (engine.LivePosition, boo
 		return engine.LivePosition{}, false
 	}
 	return engine.LivePosition{ConnectionEpoch: epoch, FrameSequence: q.greatestRaw}, true
+}
+
+func (q *liveFrameQueue) lastAdmittedSequence() uint64 {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.greatestAdmitted
 }

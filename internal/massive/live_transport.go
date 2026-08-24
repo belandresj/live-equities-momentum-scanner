@@ -147,6 +147,7 @@ const (
 type DeliveryKind string
 
 const (
+	DeliveryDecodedBatch          DeliveryKind = "decoded_batch"
 	DeliveryControl               DeliveryKind = "control"
 	DeliveryAggregate             DeliveryKind = "aggregate"
 	DeliveryTrade                 DeliveryKind = "trade_consumer_deferred"
@@ -388,7 +389,7 @@ func (a *LiveAdapter) Start(ctx context.Context, command OpenAggregateEpoch) (*L
 	attempt := &LiveAttempt{
 		adapter: a, binding: a.binding, epoch: a.nextEpoch, openToken: command.CommandToken,
 		durations: command.Durations, endpoint: a.endpoint, credential: a.credential,
-		connector: a.connector, queue: newLiveFrameQueue(a.queue), cleanupDone: make(chan struct{}), handshakeDone: make(chan struct{}), openCommandPending: true,
+		connector: a.connector, queue: newLiveFrameQueue(a.queue, a.binding), cleanupDone: make(chan struct{}), handshakeStart: make(chan handshakeRequest), handshakeOwnerDone: make(chan struct{}), openCommandPending: true,
 		classificationClock: time.Now,
 	}
 	attempt.queue.now = a.now
@@ -397,7 +398,8 @@ func (a *LiveAdapter) Start(ctx context.Context, command OpenAggregateEpoch) (*L
 	a.active = attempt
 	at := a.now()
 	delivery := controlDelivery(a.binding.Identity(), attempt.epoch, engine.ConnectionAttempt, command.CommandToken, engine.ControlSucceeded, engine.LivePosition{}, at)
-	go attempt.runHandshake()
+	attempt.workers.Add(1)
+	go attempt.runHandshakeOwner()
 	return attempt, delivery, nil
 }
 
@@ -410,6 +412,11 @@ type pendingCommand struct {
 	action        TQCommandAction
 	symbols       []string
 	engineCommand engine.TQCommand
+}
+
+type handshakeRequest struct {
+	state    *engine.Engine
+	complete chan error
 }
 
 type terminalCause struct {
@@ -433,8 +440,8 @@ type terminalCause struct {
 
 type LiveAttempt struct {
 	mu         sync.Mutex
-	nextMu     sync.Mutex
 	deliveryMu sync.Mutex
+	writeMu    sync.Mutex
 	adapter    *LiveAdapter
 	binding    reference.Binding
 	epoch      uint64
@@ -453,9 +460,6 @@ type LiveAttempt struct {
 	terminal                      *terminalCause
 	cleanupDone                   chan struct{}
 	pending                       *pendingCommand
-	currentFrame                  *queuedLiveFrame
-	currentCursor                 *liveBatchCursor
-	currentFrameCompleted         bool
 	openCommandPending            bool
 	openCommandPendingAck         bool
 	connected                     bool
@@ -466,9 +470,9 @@ type LiveAttempt struct {
 	activeDeliveryStartedAt       time.Time
 	beforeEngineDelivery          func(AdapterDelivery)
 	captureToken                  uint64
-	handshakeDone                 chan struct{}
-	handshakeDeliveries           []AdapterDelivery
-	handshakeErr                  error
+	handshakeStart                chan handshakeRequest
+	handshakeOwnerDone            chan struct{}
+	handshakeClaimed              bool
 	shedTQ                        atomic.Bool
 	tqAccountingMu                sync.Mutex
 	tqAccounting                  TQNormalizationAccounting
@@ -535,45 +539,69 @@ func (a *LiveAttempt) accountTQ(family LiveFamily, normalized, pressureShed bool
 	a.tqAccountingMu.Unlock()
 }
 
-func (a *LiveAttempt) runHandshake() {
-	deliveries, err := a.performHandshake()
+func (a *LiveAttempt) accountTQCapacityShed(trades, quotes uint64) {
+	a.tqAccountingMu.Lock()
+	total := trades + quotes
+	a.tqAccounting.Classified += total
+	a.tqAccounting.Rejected += total
+	a.tqAccounting.PressureShed += total
+	a.tqAccounting.ClassifiedTrades += trades
+	a.tqAccounting.RejectedTrades += trades
+	a.tqAccounting.PressureShedTrades += trades
+	a.tqAccounting.ClassifiedQuotes += quotes
+	a.tqAccounting.RejectedQuotes += quotes
+	a.tqAccounting.PressureShedQuotes += quotes
+	a.tqAccountingMu.Unlock()
+}
+
+func (a *LiveAttempt) HandshakeAndDeliver(ctx context.Context, state *engine.Engine) error {
+	if ctx == nil || state == nil {
+		return errAttemptState
+	}
 	a.mu.Lock()
-	a.handshakeDeliveries = append([]AdapterDelivery(nil), deliveries...)
-	a.handshakeErr = err
-	close(a.handshakeDone)
+	if a.handshakeClaimed {
+		a.mu.Unlock()
+		return errAttemptState
+	}
+	a.handshakeClaimed = true
 	a.mu.Unlock()
-}
-
-func (a *LiveAttempt) Handshake(ctx context.Context) ([]AdapterDelivery, error) {
-	if ctx == nil {
-		return nil, errAttemptState
-	}
+	stopOperation := context.AfterFunc(ctx, a.cancel)
+	defer stopOperation()
+	request := handshakeRequest{state: state, complete: make(chan error)}
 	select {
-	case <-ctx.Done():
-		// Establishment cancellation retires the attempt, then joins the sole
-		// handshake producer so every already-classified prefix fact is returned
-		// before the terminal can be drained by operations.
-		a.cancel()
-		<-a.handshakeDone
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		return append([]AdapterDelivery(nil), a.handshakeDeliveries...), errors.Join(ctx.Err(), a.handshakeErr)
-	case <-a.handshakeDone:
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		return append([]AdapterDelivery(nil), a.handshakeDeliveries...), a.handshakeErr
+	case <-a.ctx.Done():
+		return errTransportFailed
+	case a.handshakeStart <- request:
 	}
+	return <-request.complete
 }
 
-func (a *LiveAttempt) performHandshake() ([]AdapterDelivery, error) {
+func (a *LiveAttempt) runHandshakeOwner() {
+	defer a.workers.Done()
+	defer close(a.handshakeOwnerDone)
+	select {
+	case request, ok := <-a.handshakeStart:
+		if !ok {
+			return
+		}
+		request.complete <- a.performHandshakeAndDeliver(request.state)
+	case <-a.ctx.Done():
+		a.triggerTerminal(TerminalReader, TerminalContextCanceled, 0, false)
+	}
+}
+func (a *LiveAttempt) performHandshakeAndDeliver(state *engine.Engine) error {
 	totalCtx, totalCancel := context.WithTimeout(a.ctx, a.durations.HandshakeTotal)
 	defer totalCancel()
 	dialCtx, dialCancel := context.WithTimeout(totalCtx, a.durations.Dial)
 	connection, err := a.connector.Dial(dialCtx, a.endpoint, int64(a.queue.config.MaxFrameBytes))
 	dialCancel()
 	if err != nil {
-		a.triggerTerminal(TerminalReader, TerminalDialFailed, 0, false)
-		return nil, errTransportFailed
+		reason := TerminalDialFailed
+		if a.ctx.Err() != nil {
+			reason = TerminalContextCanceled
+		}
+		a.triggerTerminal(TerminalReader, reason, 0, false)
+		return errTransportFailed
 	}
 	a.mu.Lock()
 	if a.terminal != nil || a.finished {
@@ -581,19 +609,16 @@ func (a *LiveAttempt) performHandshake() ([]AdapterDelivery, error) {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), a.durations.Close)
 		_ = connection.Close(closeCtx)
 		closeCancel()
-		return nil, errTransportFailed
+		return errTransportFailed
 	}
 	a.connection = connection
 	a.startWorkers()
 	a.mu.Unlock()
 
-	deliveries := make([]AdapterDelivery, 0, 4)
-	connected, err := a.awaitHandshakeStatus(totalCtx, StatusContext{ConnectionEpoch: a.epoch, ExpectedPhase: StatusPhaseConnected, CommandKind: CommandConnection, CommandToken: strconv.FormatUint(a.openToken, 10), ExpectedCount: 1}, engine.ConnectionEstablished)
-	if err != nil {
-		deliveries = append(deliveries, connected...)
-		return deliveries, err
+	connectedContext := StatusContext{ConnectionEpoch: a.epoch, ExpectedPhase: StatusPhaseConnected, CommandKind: CommandConnection, CommandToken: strconv.FormatUint(a.openToken, 10), ExpectedCount: 1}
+	if err := a.awaitHandshakeStatusAndDeliver(totalCtx, state, connectedContext, engine.ConnectionEstablished); err != nil {
+		return err
 	}
-	deliveries = append(deliveries, connected...)
 	a.accountConnected()
 
 	authPayload, _ := json.Marshal(struct {
@@ -602,38 +627,39 @@ func (a *LiveAttempt) performHandshake() ([]AdapterDelivery, error) {
 	}{Action: "auth", Params: a.credential})
 	if err := a.write(totalCtx, authPayload); err != nil {
 		a.triggerTerminal(TerminalWriter, TerminalAuthenticationFailed, 0, false)
-		return deliveries, errCommandWrite
+		return errCommandWrite
 	}
-	authenticated, err := a.awaitHandshakeStatus(totalCtx, StatusContext{ConnectionEpoch: a.epoch, ExpectedPhase: StatusPhaseAuthSuccess, CommandKind: CommandAuthentication, CommandToken: strconv.FormatUint(a.openToken, 10), ExpectedCount: 1}, engine.AuthenticationResult)
-	if err != nil {
-		deliveries = append(deliveries, authenticated...)
-		return deliveries, err
+	authContext := StatusContext{ConnectionEpoch: a.epoch, ExpectedPhase: StatusPhaseAuthSuccess, CommandKind: CommandAuthentication, CommandToken: strconv.FormatUint(a.openToken, 10), ExpectedCount: 1}
+	if err := a.awaitHandshakeStatusAndDeliver(totalCtx, state, authContext, engine.AuthenticationResult); err != nil {
+		return err
 	}
-	deliveries = append(deliveries, authenticated...)
 
 	aggregatePayload, _ := json.Marshal(struct {
 		Action string `json:"action"`
 		Params string `json:"params"`
 	}{Action: "subscribe", Params: "A.*"})
 	if err := a.write(totalCtx, aggregatePayload); err != nil {
-		deliveries = append(deliveries, controlDelivery(a.binding.Identity(), a.epoch, engine.AggregateCommandWriteResult, a.openToken, engine.ControlFailed, engine.LivePosition{}, a.adapter.now()))
+		failed := controlDelivery(a.binding.Identity(), a.epoch, engine.AggregateCommandWriteResult, a.openToken, engine.ControlFailed, engine.LivePosition{}, a.adapter.now())
+		_, _ = DeliverToEngine(context.Background(), state, failed)
 		a.accountOpenCommand(engine.ControlFailed, false)
 		a.triggerTerminal(TerminalWriter, TerminalAggregateSubscribeFailed, 0, false)
-		return deliveries, errCommandWrite
+		return errCommandWrite
 	}
 	a.accountOpenWriteSucceeded()
-	deliveries = append(deliveries, controlDelivery(a.binding.Identity(), a.epoch, engine.AggregateCommandWriteResult, a.openToken, engine.ControlSucceeded, engine.LivePosition{}, a.adapter.now()))
-	acknowledged, err := a.awaitHandshakeStatus(totalCtx, StatusContext{ConnectionEpoch: a.epoch, ExpectedPhase: StatusPhaseSuccess, CommandKind: CommandAggregateSubscribe, CommandToken: strconv.FormatUint(a.openToken, 10), ExpectedCount: 1}, engine.AggregateSubscriptionResult)
-	if err != nil {
-		deliveries = append(deliveries, acknowledged...)
-		return deliveries, err
+	written := controlDelivery(a.binding.Identity(), a.epoch, engine.AggregateCommandWriteResult, a.openToken, engine.ControlSucceeded, engine.LivePosition{}, a.adapter.now())
+	if result, err := DeliverToEngine(context.Background(), state, written); err != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
+		a.triggerTerminal(TerminalWriter, TerminalAggregateSubscribeFailed, 0, false)
+		return errTransportFailed
 	}
-	deliveries = append(deliveries, acknowledged...)
+	ackContext := StatusContext{ConnectionEpoch: a.epoch, ExpectedPhase: StatusPhaseSuccess, CommandKind: CommandAggregateSubscribe, CommandToken: strconv.FormatUint(a.openToken, 10), ExpectedCount: 1}
+	if err := a.awaitHandshakeStatusAndDeliver(totalCtx, state, ackContext, engine.AggregateSubscriptionResult); err != nil {
+		return err
+	}
 	a.accountOpenCommand(engine.ControlSucceeded, true)
 	a.mu.Lock()
 	a.handshaken = true
 	a.mu.Unlock()
-	return deliveries, nil
+	return nil
 }
 
 func (a *LiveAttempt) accountConnected() {
@@ -715,23 +741,49 @@ func (a *LiveAttempt) readWorker() {
 			return
 		}
 		if kind != socketMessageText && kind != socketMessageBinary {
-			_, _, _ = a.queue.tryEnqueue(a.epoch, kind, a.adapter.now(), nil)
+			_, _, _ = a.queue.beginDecode(a.epoch, kind, a.adapter.now(), len(data))
 			a.triggerTerminal(TerminalProtocol, TerminalUnsupportedMessage, 0, false)
 			return
 		}
 		receivedAt := a.adapter.now()
+		sequence, reason, accountingAtCause := a.queue.beginDecode(a.epoch, kind, receivedAt, len(data))
+		if reason != FrameAdmitted {
+			position, applicable := a.queue.lastRawPosition(a.epoch)
+			switch reason {
+			case FrameRejectedOversize:
+				a.triggerTerminalAt(TerminalProtocol, TerminalFrameOversize, 0, true, position, applicable, false)
+			case FrameRejectedReceipt:
+				a.triggerTerminalAt(TerminalProtocol, TerminalReceiptRegression, 0, true, position, applicable, false)
+			default:
+				if a.ctx.Err() == nil {
+					a.triggerTerminal(TerminalProtocol, TerminalContextCanceled, 0, false)
+				}
+			}
+			return
+		}
+		shed := a.shedTQ.Load()
+		batch := decodeLiveFrame(LiveFrame{Binding: a.binding, ConnectionEpoch: a.epoch, FrameSequence: sequence, ReceivedAt: receivedAt, Data: data}, nil,
+			LiveNormalizationOptions{ShedTradesQuotes: shed, ClassificationClock: a.classificationClock, FrameTQBudget: FrameLocalTQBudget})
+		data = nil
 		// The attempt lock is the active-delivery ownership boundary. Hold it
 		// across queue admission and capacity-cause construction so a concurrent
 		// engine delivery cannot finish or change between rejection and capture.
 		a.mu.Lock()
-		_, reason, accountingAtCause := a.queue.tryEnqueue(a.epoch, kind, receivedAt, data)
+		beforeQueue := a.queue.snapshot()
+		_, reason, accountingAtCause = a.queue.tryEnqueueDecoded(a.epoch, sequence, receivedAt, batch.EncodedBytes, batch)
+		if reason == FrameShedTQCapacity {
+			afterQueue := a.queue.snapshot()
+			a.accountTQCapacityShed(afterQueue.TQCapacityShedTrades-beforeQueue.TQCapacityShedTrades, afterQueue.TQCapacityShedQuotes-beforeQueue.TQCapacityShedQuotes)
+			a.mu.Unlock()
+			continue
+		}
 		if reason == FrameRejectedSlotCapacity || reason == FrameRejectedByteCapacity {
 			position, applicable := a.queue.lastRawPosition(a.epoch)
 			terminalReason := TerminalFrameSlotCapacity
 			if reason == FrameRejectedByteCapacity {
 				terminalReason = TerminalFrameByteCapacity
 			}
-			cause := a.reserveCapacityTerminalLocked(terminalReason, len(data), position, applicable, accountingAtCause)
+			cause := a.reserveCapacityTerminalLocked(terminalReason, batch.EncodedBytes, position, applicable, accountingAtCause)
 			a.mu.Unlock()
 			a.completeReservedTerminal(cause)
 			return
@@ -766,7 +818,7 @@ func (a *LiveAttempt) heartbeatWorker() {
 			startedAt := time.Now().UTC()
 			capturedSequence := a.queue.snapshot().FramesRead
 			pingCtx, cancel := context.WithTimeout(a.ctx, a.durations.HeartbeatDeadline)
-			err := a.connection.Ping(pingCtx)
+			err := a.ping(pingCtx)
 			deadline := errors.Is(pingCtx.Err(), context.DeadlineExceeded)
 			cancel()
 			if err != nil {
@@ -813,6 +865,8 @@ func (a *LiveAttempt) write(parent context.Context, payload []byte) error {
 	if parent == nil {
 		return errCommandWrite
 	}
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
 	writeCtx, cancel := context.WithTimeout(a.ctx, a.durations.Write)
 	stopParent := context.AfterFunc(parent, cancel)
 	defer stopParent()
@@ -823,83 +877,166 @@ func (a *LiveAttempt) write(parent context.Context, payload []byte) error {
 	return nil
 }
 
-func (a *LiveAttempt) awaitHandshakeStatus(parent context.Context, status StatusContext, kind engine.ConnectionControlKind) ([]AdapterDelivery, error) {
+func (a *LiveAttempt) ping(ctx context.Context) error {
+	if ctx == nil {
+		return errCommandWrite
+	}
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
+	return a.connection.Ping(ctx)
+}
+
+func (a *LiveAttempt) awaitHandshakeStatusAndDeliver(parent context.Context, state *engine.Engine, status StatusContext, kind engine.ConnectionControlKind) error {
 	stepCtx, cancel := context.WithTimeout(parent, a.durations.HandshakeStep)
 	defer cancel()
-	deliveries := make([]AdapterDelivery, 0, 4)
 	for {
 		frame, ok := a.queue.pop(stepCtx)
 		if !ok {
 			a.triggerTerminal(TerminalProtocol, handshakeTerminalReason(status.ExpectedPhase, engine.ControlAmbiguous, true), 0, false)
-			return deliveries, errTransportFailed
+			return errTransportFailed
 		}
 		if frame.terminal {
-			return append(deliveries, a.finishTerminal(frame)), errTransportFailed
+			delivery := a.finishTerminal(frame)
+			_, _ = DeliverToEngine(context.Background(), state, delivery)
+			return errTransportFailed
 		}
-		cursor := newLiveFrameCursor(LiveFrame{Binding: a.binding, ConnectionEpoch: a.epoch, FrameSequence: frame.sequence, ReceivedAt: frame.receivedAt, Data: frame.data}, &status, LiveNormalizationOptions{})
-		frame.data = nil
+
+		inputs := make([]engine.LiveInput, 0, frame.batch.Len())
+		controlInputs := make(map[int]bool)
 		found, failed := false, false
-		for {
-			result, ok := cursor.Next()
-			if !ok {
-				break
-			}
-			switch result.Kind {
-			case LiveResultStatus:
+		failureOutcome := engine.ControlAmbiguous
+		var ingressAmbiguity *engine.LivePosition
+		for _, decoded := range frame.batch.results {
+			if decoded.Kind == LiveResultStatus {
+				decoded.Status.CommandKind, decoded.Status.CommandToken = status.CommandKind, status.CommandToken
+				if validStatusContext(&status, a.epoch) && decoded.Status.Phase == status.ExpectedPhase && decoded.Status.ObservedCount <= status.ExpectedCount {
+					decoded.Status.Disposition, decoded.Status.Reason = StatusAcknowledged, ""
+				}
 				a.adapter.mu.Lock()
 				a.adapter.accounting.HandshakeStatuses++
 				a.adapter.mu.Unlock()
 				outcome := engine.ControlSucceeded
-				if result.Status.Disposition == StatusFailed {
+				if decoded.Status.Disposition == StatusFailed {
 					outcome = engine.ControlFailed
-				} else if result.Status.Disposition != StatusAcknowledged || found {
+				} else if decoded.Status.Disposition != StatusAcknowledged || found {
 					outcome = engine.ControlAmbiguous
 				}
-				deliveries = append(deliveries, controlDelivery(a.binding.Identity(), a.epoch, kind, a.openToken, outcome, result.Position, result.Status.ReceiptTime))
-				found = outcome == engine.ControlSucceeded
-				failed = outcome != engine.ControlSucceeded
-			case LiveResultAggregate:
-				deliveries = append(deliveries, AdapterDelivery{Kind: DeliveryAggregate, Position: result.Position, Aggregate: result.Aggregate})
-			case LiveResultTrade:
-				a.accountTQ(LiveFamilyTrade, true, false)
-				deliveries = append(deliveries, AdapterDelivery{Kind: DeliveryTrade, Position: result.Position, Trade: result.Trade})
-			case LiveResultQuote:
-				a.accountTQ(LiveFamilyQuote, true, false)
-				deliveries = append(deliveries, AdapterDelivery{Kind: DeliveryQuote, Position: result.Position, Quote: result.Quote})
-			case LiveResultRejected:
-				if result.Rejection.Family == LiveFamilyTrade || result.Rejection.Family == LiveFamilyQuote {
-					a.accountTQ(result.Rejection.Family, false, result.Rejection.Reason == LiveRejectOptionalShed)
-				} else if result.Rejection.Family == LiveFamilyUnsupported {
-					a.adapter.mu.Lock()
-					a.adapter.accounting.UnsupportedFamilies++
-					a.adapter.mu.Unlock()
+				control := controlDelivery(a.binding.Identity(), a.epoch, kind, a.openToken, outcome, decoded.Position, decoded.Status.ReceiptTime)
+				input, inputErr := engine.NewLiveConnectionControl(control.Control)
+				if inputErr != nil {
+					a.queue.complete(frame, false)
+					return inputErr
 				}
-				deliveries = append(deliveries, AdapterDelivery{Kind: DeliveryNormalizationDrop, Position: result.Position, Rejection: result.Rejection})
-			case LiveResultAmbiguous:
-				deliveries = append(deliveries, controlDelivery(a.binding.Identity(), a.epoch, engine.IngressIntegrityFailure, 0, engine.ControlAmbiguous, result.Position, frame.receivedAt))
-				a.triggerTerminalAt(TerminalProtocol, TerminalIngressAmbiguity, frame.sequence, true, result.Position, true, true)
-				failed = true
+				controlInputs[len(inputs)] = false
+				inputs = append(inputs, input)
+				found = outcome == engine.ControlSucceeded
+				if outcome != engine.ControlSucceeded {
+					failed, failureOutcome = true, outcome
+				}
+				continue
+			}
+
+			input, emit, inputErr := a.decodedLiveInput(decoded, frame)
+			if inputErr != nil {
+				a.queue.complete(frame, false)
+				return inputErr
+			}
+			if emit {
+				if decoded.Kind == LiveResultAmbiguous {
+					controlInputs[len(inputs)] = true
+				}
+				inputs = append(inputs, input)
+			}
+			if decoded.Kind == LiveResultAmbiguous {
+				failed, failureOutcome = true, engine.ControlAmbiguous
+				position := decoded.Position
+				ingressAmbiguity = &position
+			}
+		}
+		if !frame.batch.Accounting().Reconciles() {
+			a.queue.complete(frame, false)
+			a.triggerTerminalAt(TerminalProtocol, TerminalIngressAmbiguity, frame.sequence, true, engine.LivePosition{ConnectionEpoch: a.epoch, FrameSequence: frame.sequence}, true, false)
+			return errTransportFailed
+		}
+		if len(inputs) > 0 {
+			results, err := state.ConsumeLiveBatch(context.Background(), inputs)
+			if err != nil || len(results) != len(inputs) {
+				a.queue.complete(frame, false)
+				if err != nil {
+					return err
+				}
+				return errTransportFailed
+			}
+			for index, result := range results {
+				if result.Admission != engine.AdmissionAdmitted {
+					a.queue.complete(frame, false)
+					a.triggerTerminal(TerminalProtocol, handshakeTerminalReason(status.ExpectedPhase, engine.ControlAmbiguous, false), frame.sequence, false)
+					return errTransportFailed
+				}
+				integrity, control := controlInputs[index]
+				validControl := !integrity && (result.Control.Code == engine.DispositionConnectionControlApplied || result.Control.Code == engine.DispositionConnectionControlDeferred) ||
+					integrity && result.Control.Code == engine.DispositionIngressIntegrity
+				if control && !validControl {
+					a.queue.complete(frame, false)
+					a.triggerTerminal(TerminalProtocol, handshakeTerminalReason(status.ExpectedPhase, engine.ControlAmbiguous, false), frame.sequence, false)
+					return errTransportFailed
+				}
 			}
 		}
 		a.queue.complete(frame, false)
-		if !cursor.Accounting().Reconciles() {
-			a.triggerTerminalAt(TerminalProtocol, TerminalIngressAmbiguity, frame.sequence, true, engine.LivePosition{ConnectionEpoch: a.epoch, FrameSequence: frame.sequence}, true, false)
-			return deliveries, errTransportFailed
+		if ingressAmbiguity != nil {
+			a.triggerTerminalAt(TerminalProtocol, TerminalIngressAmbiguity, frame.sequence, true, *ingressAmbiguity, true, true)
+			return errTransportFailed
 		}
 		if failed {
-			outcome := engine.ControlAmbiguous
-			if len(deliveries) > 0 {
-				last := deliveries[len(deliveries)-1]
-				if last.Kind == DeliveryControl && last.Control.Kind == kind {
-					outcome = last.Control.Outcome
-				}
-			}
-			a.triggerTerminal(TerminalProtocol, handshakeTerminalReason(status.ExpectedPhase, outcome, false), frame.sequence, false)
-			return deliveries, errTransportFailed
+			a.triggerTerminal(TerminalProtocol, handshakeTerminalReason(status.ExpectedPhase, failureOutcome, false), frame.sequence, false)
+			return errTransportFailed
 		}
 		if found {
-			return deliveries, nil
+			return nil
 		}
+	}
+}
+
+func (a *LiveAttempt) decodedLiveInput(result LiveResult, frame queuedLiveFrame) (engine.LiveInput, bool, error) {
+	switch result.Kind {
+	case LiveResultAggregate:
+		input, err := engine.NewLiveAggregate(result.Aggregate)
+		return input, true, err
+	case LiveResultTrade:
+		a.accountTQ(LiveFamilyTrade, true, false)
+		input, err := engine.NewLiveTrade(engine.TradeInput{SchemaVersion: engine.TQSchemaV1, BindingIdentity: result.Trade.BindingIdentity, TradingDate: result.Trade.TradingDate,
+			Symbol: result.Trade.Symbol, TradeID: result.Trade.TradeID, Exchange: result.Trade.Exchange, TRFPresent: result.Trade.TRFPresent, TRFID: result.Trade.TRFID,
+			Price: result.Trade.Price, EconomicSize: result.Trade.EconomicSize, EventTime: result.Trade.EventTime, ReceiptTime: result.Trade.ReceiptTime,
+			TimestampBasis: string(result.Trade.TimestampBasis), Conditions: result.Trade.Conditions.Slice(), ConditionsClassified: result.Trade.Conditions.Classified,
+			IdentityClassified: result.Trade.IdentityClassified, Lifecycle: string(result.Trade.Lifecycle), Live: result.Trade.Live})
+		return input, true, err
+	case LiveResultQuote:
+		a.accountTQ(LiveFamilyQuote, true, false)
+		input, err := engine.NewLiveQuote(engine.QuoteInput{SchemaVersion: engine.TQSchemaV1, BindingIdentity: result.Quote.BindingIdentity, TradingDate: result.Quote.TradingDate, Symbol: result.Quote.Symbol,
+			SIPTime: result.Quote.SIPTime, ReceiptTime: result.Quote.ReceiptTime, BidPrice: result.Quote.BidPrice, AskPrice: result.Quote.AskPrice,
+			BidPresent: result.Quote.BidPresent, AskPresent: result.Quote.AskPresent, Conditions: result.Quote.Conditions.Slice(), Indicators: result.Quote.Indicators.Slice(),
+			ConditionsClassified: result.Quote.Conditions.Classified, IndicatorsClassified: result.Quote.Indicators.Classified, Live: result.Quote.Live})
+		return input, true, err
+	case LiveResultRejected:
+		if result.Rejection.Family == LiveFamilyTrade || result.Rejection.Family == LiveFamilyQuote {
+			a.accountTQ(result.Rejection.Family, false, result.Rejection.Reason == LiveRejectOptionalShed)
+			input, err := engine.NewLiveTQDrop(engine.TQDropInput{SchemaVersion: engine.TQSchemaV1, BindingIdentity: result.Rejection.BindingIdentity, TradingDate: result.Rejection.TradingDate,
+				Family: string(result.Rejection.Family), Symbol: result.Rejection.Symbol, DropReason: string(result.Rejection.Reason), Live: result.Rejection.Position})
+			return input, true, err
+		}
+		if result.Rejection.Family == LiveFamilyUnsupported {
+			a.adapter.mu.Lock()
+			a.adapter.accounting.UnsupportedFamilies++
+			a.adapter.mu.Unlock()
+		}
+		return engine.LiveInput{}, false, nil
+	case LiveResultAmbiguous:
+		control := controlDelivery(a.binding.Identity(), a.epoch, engine.IngressIntegrityFailure, 0, engine.ControlAmbiguous, result.Position, frame.receivedAt)
+		input, err := engine.NewLiveConnectionControl(control.Control)
+		return input, true, err
+	default:
+		return engine.LiveInput{}, false, nil
 	}
 }
 
@@ -1038,7 +1175,7 @@ func (a *LiveAttempt) ChangeTQAndDeliver(ctx context.Context, state *engine.Engi
 	if beforeEngineDelivery != nil {
 		beforeEngineDelivery(delivery)
 	}
-	result, deliveryErr := DeliverToEngine(context.Background(), state, delivery)
+	result, deliveryErr := a.deliverOneThroughHandoff(state, delivery)
 	if deliveryErr != nil {
 		return result, true, errors.Join(writeErr, deliveryErr)
 	}
@@ -1110,87 +1247,42 @@ func validCloseCause(cause CloseCause) bool {
 	return cause == CloseSessionEnd || cause == CloseControlledStop || cause == CloseSuperseded || cause == CloseIntegrityLoss
 }
 
-// next is deliberately package-private. Production delivery must use
-// DeliverNextToEngine so dequeue, engine admission, and completion are one
-// serialized causal operation.
-func (a *LiveAttempt) next(ctx context.Context) (AdapterDelivery, bool) {
-	if ctx == nil || ctx.Err() != nil {
-		return AdapterDelivery{}, false
-	}
-	a.nextMu.Lock()
-	defer a.nextMu.Unlock()
+// nextBatch transfers exactly one complete decoded batch or causal marker.
+// deliveryMu prevents another consumer from splitting the handoff.
+func (a *LiveAttempt) nextBatch(ctx context.Context) (queuedLiveFrame, bool) {
 	for {
-		if a.currentCursor != nil {
-			result, ok := a.currentCursor.Next()
-			if ok {
-				delivery, emit := a.mapResult(result, *a.currentFrame)
-				if emit {
-					return delivery, true
-				}
-				continue
-			}
-			if !a.currentFrameCompleted {
-				a.queue.complete(*a.currentFrame, false)
-			}
-			a.currentFrame, a.currentCursor, a.currentFrameCompleted = nil, nil, false
-			continue
-		}
 		a.mu.Lock()
 		if a.finished && a.terminalReturned {
 			a.mu.Unlock()
-			return AdapterDelivery{}, false
+			return queuedLiveFrame{}, false
 		}
 		if !a.handshaken && a.terminal == nil {
 			a.mu.Unlock()
-			return AdapterDelivery{}, false
+			return queuedLiveFrame{}, false
 		}
 		terminal := a.terminal
 		a.mu.Unlock()
-
 		frame, ok, recheck := a.queue.popOrRecheck(ctx)
 		if recheck {
 			continue
 		}
 		if !ok {
-			a.mu.Lock()
-			terminalNow := a.terminal != nil
-			a.mu.Unlock()
-			if terminalNow {
-				a.nextMu.Unlock()
-				select {
-				case <-ctx.Done():
-					a.nextMu.Lock()
-					return AdapterDelivery{}, false
-				case <-a.cleanupDone:
-				}
-				a.nextMu.Lock()
-				marker, markerOK := a.queue.pop(ctx)
-				if markerOK && marker.terminal {
-					return a.finishTerminal(marker), true
-				}
-				return AdapterDelivery{}, false
+			if terminal == nil {
+				return queuedLiveFrame{}, false
 			}
-			return AdapterDelivery{}, false
+			select {
+			case <-ctx.Done():
+				return queuedLiveFrame{}, false
+			case <-a.cleanupDone:
+			}
+			frame, ok = a.queue.pop(ctx)
+			return frame, ok
 		}
-		if frame.terminal {
-			return a.finishTerminal(frame), true
-		}
-		if frame.kind == queuedLiveIngressFence {
-			a.queue.complete(frame, false)
-			return AdapterDelivery{Kind: DeliveryAggregateIngressFence, AggregateIngressFence: frame.ingressFence}, true
-		}
-		if frame.kind == queuedLiveCoverageFence {
-			a.queue.complete(frame, false)
-			return AdapterDelivery{Kind: DeliveryLiveCoverageFence, LiveCoverageFence: frame.liveCoverageFence}, true
-		}
-		if terminal != nil && terminal.fenceAfter > 0 && frame.sequence > terminal.fenceAfter {
+		if terminal != nil && terminal.fenceAfter > 0 && frame.kind == queuedLiveDecodedBatch && frame.sequence > terminal.fenceAfter {
 			a.queue.complete(frame, true)
 			continue
 		}
-		a.currentCursor = newLiveFrameCursor(LiveFrame{Binding: a.binding, ConnectionEpoch: a.epoch, FrameSequence: frame.sequence, ReceivedAt: frame.receivedAt, Data: frame.data}, nil, LiveNormalizationOptions{ShedTradesQuotes: a.shedTQ.Load(), ClassificationClock: a.classificationClock, FrameTQBudget: FrameLocalTQBudget})
-		frame.data = nil
-		a.currentFrame = &frame
-		a.currentFrameCompleted = false
+		return frame, true
 	}
 }
 
@@ -1199,45 +1291,186 @@ func (a *LiveAttempt) next(ctx context.Context) (AdapterDelivery, bool) {
 func (a *LiveAttempt) DeliverNextToEngine(ctx context.Context, state *engine.Engine) (EngineDeliveryResult, bool, error) {
 	a.deliveryMu.Lock()
 	defer a.deliveryMu.Unlock()
-	var delivery AdapterDelivery
+	var frame queuedLiveFrame
 	var ok bool
-	trace.WithRegion(ctx, "websocket_dequeue_normalization", func() {
-		delivery, ok = a.next(ctx)
-	})
+	trace.WithRegion(ctx, "websocket_decoded_batch_dequeue", func() { frame, ok = a.nextBatch(ctx) })
 	if !ok {
 		return EngineDeliveryResult{}, false, nil
 	}
+	if frame.terminal {
+		delivery := a.finishTerminal(frame)
+		result, err := a.deliverOneThroughHandoff(state, delivery)
+		return result, true, err
+	}
+	deliveryKind := DeliveryDecodedBatch
+	if frame.kind == queuedLiveTQCapacity {
+		deliveryKind = DeliveryTQControlError
+	} else if frame.kind == queuedLiveIngressFence {
+		deliveryKind = DeliveryAggregateIngressFence
+	} else if frame.kind == queuedLiveCoverageFence {
+		deliveryKind = DeliveryLiveCoverageFence
+	}
 	a.mu.Lock()
-	a.activeDeliveryKind, a.activeDeliveryStartedAt = delivery.Kind, time.Now()
-	if delivery.Kind == DeliveryAggregateIngressFence {
-		delivery.AggregateIngressFence.deliveryStartedAt = a.activeDeliveryStartedAt
-	}
-	beforeEngineDelivery := a.beforeEngineDelivery
+	a.activeDeliveryKind, a.activeDeliveryStartedAt = deliveryKind, time.Now()
 	a.mu.Unlock()
-	if beforeEngineDelivery != nil {
-		beforeEngineDelivery(delivery)
-	}
-	terminalObservationPending := false
 	defer func() {
-		if terminalObservationPending {
-			return
-		}
 		a.mu.Lock()
 		a.activeDeliveryKind, a.activeDeliveryStartedAt = "", time.Time{}
 		a.mu.Unlock()
 	}()
-	// Once dequeue succeeds, ownership has transferred. A separate internal
-	// lifetime guarantees admission and completion; caller cancellation may
-	// stop waiting for the next item but cannot drop this causal predecessor.
-	var result EngineDeliveryResult
-	var err error
-	trace.WithRegion(context.Background(), "engine_owner_wait", func() {
-		result, err = DeliverToEngine(context.Background(), state, delivery)
-	})
-	if result.Terminal != nil {
-		terminalObservationPending = true
-	}
+	result, err := a.consumeQueuedEntry(state, frame)
+	a.queue.complete(frame, false)
 	return result, true, err
+}
+
+func (a *LiveAttempt) consumeQueuedEntry(state *engine.Engine, frame queuedLiveFrame) (EngineDeliveryResult, error) {
+	inputs := make([]engine.LiveInput, 0, max(1, frame.batch.Len()))
+	kinds := make([]DeliveryKind, 0, cap(inputs))
+	appendInput := func(input engine.LiveInput, kind DeliveryKind) {
+		inputs, kinds = append(inputs, input), append(kinds, kind)
+	}
+	if frame.kind == queuedLiveTQCapacity {
+		input := engine.TQControlErrorInput{SchemaVersion: engine.TQSchemaV1, BindingIdentity: a.binding.Identity(), ConnectionEpoch: a.epoch,
+			Position: frame.tqCapacityPosition, ReceiptTime: frame.receivedAt.UTC()}
+		live, err := engine.NewLiveTQControlError(input)
+		if err != nil {
+			return EngineDeliveryResult{}, err
+		}
+		appendInput(live, DeliveryTQControlError)
+	} else if frame.kind == queuedLiveIngressFence {
+		frame.ingressFence.deliveryStartedAt = a.activeDeliveryStartedAt
+		a.mu.Lock()
+		beforeEngineDelivery := a.beforeEngineDelivery
+		a.mu.Unlock()
+		if beforeEngineDelivery != nil {
+			beforeEngineDelivery(AdapterDelivery{Kind: DeliveryAggregateIngressFence, AggregateIngressFence: frame.ingressFence})
+		}
+		input, err := EngineAggregateIngressFence(frame.ingressFence)
+		if err != nil {
+			return EngineDeliveryResult{}, err
+		}
+		live, err := engine.NewLiveAggregateIngressFence(input)
+		if err != nil {
+			return EngineDeliveryResult{}, err
+		}
+		appendInput(live, DeliveryAggregateIngressFence)
+	} else if frame.kind == queuedLiveCoverageFence {
+		a.mu.Lock()
+		beforeEngineDelivery := a.beforeEngineDelivery
+		a.mu.Unlock()
+		if beforeEngineDelivery != nil {
+			beforeEngineDelivery(AdapterDelivery{Kind: DeliveryLiveCoverageFence, LiveCoverageFence: frame.liveCoverageFence})
+		}
+		input, err := EngineLiveCoverageFence(frame.liveCoverageFence)
+		if err != nil {
+			return EngineDeliveryResult{}, err
+		}
+		live, err := engine.NewLiveCoverageFence(input)
+		if err != nil {
+			return EngineDeliveryResult{}, err
+		}
+		appendInput(live, DeliveryLiveCoverageFence)
+	} else {
+		for _, decoded := range frame.batch.results {
+			delivery, emit := a.mapResult(decoded, frame)
+			if !emit {
+				continue
+			}
+			if delivery.Kind == DeliveryNormalizationDrop && delivery.Rejection.Family != LiveFamilyTrade && delivery.Rejection.Family != LiveFamilyQuote {
+				continue
+			}
+			a.mu.Lock()
+			beforeEngineDelivery := a.beforeEngineDelivery
+			a.mu.Unlock()
+			if beforeEngineDelivery != nil {
+				beforeEngineDelivery(delivery)
+			}
+			live, err := engineLiveInput(delivery)
+			if err != nil {
+				return EngineDeliveryResult{}, err
+			}
+			appendInput(live, delivery.Kind)
+		}
+		if !frame.batch.Accounting().Reconciles() {
+			return EngineDeliveryResult{}, errTransportFailed
+		}
+	}
+	if len(inputs) == 0 {
+		return EngineDeliveryResult{}, nil
+	}
+	var results []engine.LiveResult
+	var err error
+	trace.WithRegion(context.Background(), "engine_live_batch_handoff", func() { results, err = state.ConsumeLiveBatch(context.Background(), inputs) })
+	if err != nil {
+		return EngineDeliveryResult{}, err
+	}
+	combined := EngineDeliveryResult{}
+	for index, item := range results {
+		combined.Admission = item.Admission
+		switch kinds[index] {
+		case DeliveryAggregate:
+			combined.AggregateDisposition = item.Aggregate
+		case DeliveryControl:
+			combined.ControlDisposition = item.Control
+		case DeliveryAggregateIngressFence:
+			combined.HydrationDisposition = item.Hydration
+		case DeliveryLiveCoverageFence:
+			combined.LiveCoverageDisposition = item.LiveCoverage
+		default:
+			combined.TQDisposition = item.Disposition
+		}
+	}
+	return combined, nil
+}
+
+func (a *LiveAttempt) deliverOneThroughHandoff(state *engine.Engine, delivery AdapterDelivery) (EngineDeliveryResult, error) {
+	return DeliverToEngine(context.Background(), state, delivery)
+}
+
+func engineLiveInput(delivery AdapterDelivery) (engine.LiveInput, error) {
+	switch delivery.Kind {
+	case DeliveryAggregate:
+		return engine.NewLiveAggregate(delivery.Aggregate)
+	case DeliveryTrade:
+		return engine.NewLiveTrade(engine.TradeInput{SchemaVersion: engine.TQSchemaV1, BindingIdentity: delivery.Trade.BindingIdentity, TradingDate: delivery.Trade.TradingDate,
+			Symbol: delivery.Trade.Symbol, TradeID: delivery.Trade.TradeID, Exchange: delivery.Trade.Exchange, TRFPresent: delivery.Trade.TRFPresent, TRFID: delivery.Trade.TRFID,
+			Price: delivery.Trade.Price, EconomicSize: delivery.Trade.EconomicSize, EventTime: delivery.Trade.EventTime, ReceiptTime: delivery.Trade.ReceiptTime,
+			TimestampBasis: string(delivery.Trade.TimestampBasis), Conditions: delivery.Trade.Conditions.Slice(), ConditionsClassified: delivery.Trade.Conditions.Classified,
+			IdentityClassified: delivery.Trade.IdentityClassified, Lifecycle: string(delivery.Trade.Lifecycle), Live: delivery.Trade.Live})
+	case DeliveryQuote:
+		return engine.NewLiveQuote(engine.QuoteInput{SchemaVersion: engine.TQSchemaV1, BindingIdentity: delivery.Quote.BindingIdentity, TradingDate: delivery.Quote.TradingDate, Symbol: delivery.Quote.Symbol,
+			SIPTime: delivery.Quote.SIPTime, ReceiptTime: delivery.Quote.ReceiptTime, BidPrice: delivery.Quote.BidPrice, AskPrice: delivery.Quote.AskPrice,
+			BidPresent: delivery.Quote.BidPresent, AskPresent: delivery.Quote.AskPresent, Conditions: delivery.Quote.Conditions.Slice(), Indicators: delivery.Quote.Indicators.Slice(),
+			ConditionsClassified: delivery.Quote.Conditions.Classified, IndicatorsClassified: delivery.Quote.Indicators.Classified, Live: delivery.Quote.Live})
+	case DeliveryNormalizationDrop:
+		return engine.NewLiveTQDrop(engine.TQDropInput{SchemaVersion: engine.TQSchemaV1, BindingIdentity: delivery.Rejection.BindingIdentity, TradingDate: delivery.Rejection.TradingDate,
+			Family: string(delivery.Rejection.Family), Symbol: delivery.Rejection.Symbol, DropReason: string(delivery.Rejection.Reason), Live: delivery.Rejection.Position})
+	case DeliveryTQControlError:
+		return engine.NewLiveTQControlError(delivery.TQControlError)
+	case DeliveryAggregateIngressFence:
+		input, err := EngineAggregateIngressFence(delivery.AggregateIngressFence)
+		if err != nil {
+			return engine.LiveInput{}, err
+		}
+		return engine.NewLiveAggregateIngressFence(input)
+	case DeliveryLiveCoverageFence:
+		input, err := EngineLiveCoverageFence(delivery.LiveCoverageFence)
+		if err != nil {
+			return engine.LiveInput{}, err
+		}
+		return engine.NewLiveCoverageFence(input)
+	case DeliveryControl, DeliveryTerminal:
+		if delivery.Control.Kind == engine.TradeQuoteCommandWriteResult && len(delivery.TQSymbols) > 0 {
+			input, err := engine.NewTQCommandResultInput(delivery.tqCommand, delivery.TQWriteBoundary, delivery.Control.ReceiptTime, delivery.Control.Outcome)
+			if err != nil {
+				return engine.LiveInput{}, err
+			}
+			return engine.NewLiveTQCommandResult(input)
+		}
+		return engine.NewLiveConnectionControl(delivery.Control)
+	default:
+		return engine.LiveInput{}, errAttemptState
+	}
 }
 
 // AcknowledgeTerminalObservation closes the diagnostic interval only after
@@ -1251,10 +1484,6 @@ func (a *LiveAttempt) AcknowledgeTerminalObservation() {
 	a.activeDeliveryKind, a.activeDeliveryStartedAt = "", time.Time{}
 	a.mu.Unlock()
 }
-
-// nextForProof preserves the accepted C5 adapter-boundary tests without
-// exposing an unsafe production dequeue API.
-func (a *LiveAttempt) nextForProof(ctx context.Context) (AdapterDelivery, bool) { return a.next(ctx) }
 
 func (a *LiveAttempt) mapResult(result LiveResult, frame queuedLiveFrame) (AdapterDelivery, bool) {
 	switch result.Kind {
@@ -1324,7 +1553,7 @@ func (a *LiveAttempt) triggerTerminalAt(source TerminalSource, reason TerminalRe
 // still holding the same lock that covered queue rejection, making the active
 // engine delivery fields exact at the capacity-cause linearization point.
 func (a *LiveAttempt) reserveCapacityTerminalLocked(reason TerminalReason, incomingFrameBytes int, position engine.LivePosition, positionApplicable bool, queueAtCause LiveQueueAccounting) *terminalCause {
-	return a.reserveTerminalCauseLocked(TerminalProtocol, reason, 0, true, position, positionApplicable, false, incomingFrameBytes, &queueAtCause)
+	return a.reserveTerminalCauseLocked(TerminalProtocol, reason, a.queue.lastAdmittedSequence(), true, position, positionApplicable, false, incomingFrameBytes, &queueAtCause)
 }
 
 func (a *LiveAttempt) triggerTerminalAtWithCapacity(source TerminalSource, reason TerminalReason, fenceAfter uint64, ingress bool, position engine.LivePosition, positionApplicable, arrayIndexApplicable bool, incomingFrameBytes int, queueAtCause *LiveQueueAccounting) *TerminalResult {
@@ -1337,6 +1566,9 @@ func (a *LiveAttempt) triggerTerminalAtWithCapacity(source TerminalSource, reaso
 func (a *LiveAttempt) reserveTerminalCauseLocked(source TerminalSource, reason TerminalReason, fenceAfter uint64, ingress bool, position engine.LivePosition, positionApplicable, arrayIndexApplicable bool, incomingFrameBytes int, queueAtCause *LiveQueueAccounting) *terminalCause {
 	if a.terminal != nil || a.finished {
 		return nil
+	}
+	if fenceAfter == 0 {
+		fenceAfter = a.queue.lastAdmittedSequence()
 	}
 	cause := &terminalCause{source: source, reason: reason, fenceAfter: fenceAfter, ingressIntegrity: ingress, at: a.adapter.now(),
 		position: position, positionApplicable: positionApplicable, arrayIndexApplicable: arrayIndexApplicable,
@@ -1403,15 +1635,8 @@ func (a *LiveAttempt) cleanupTerminal(cause *terminalCause) {
 		cancel()
 	}
 	a.workers.Wait()
-	a.nextMu.Lock()
-	if a.currentFrame != nil && !a.currentFrameCompleted {
-		a.queue.complete(*a.currentFrame, true)
-		a.currentFrameCompleted = true
-	}
-	a.currentFrame, a.currentCursor = nil, nil
-	a.nextMu.Unlock()
 	markerCtx, markerCancel := context.WithTimeout(context.Background(), a.durations.Close)
-	marker, admitted := a.queue.enqueueTerminal(markerCtx, a.epoch, cause.at)
+	marker, admitted := a.queue.enqueueTerminal(markerCtx, a.epoch, cause.at, cause.fenceAfter)
 	markerCancel()
 	if !admitted {
 		marker = a.queue.fenceQueuedAndEnqueueTerminal(a.epoch, cause.at)
@@ -1550,165 +1775,37 @@ func DeliverToEngine(ctx context.Context, state *engine.Engine, delivery Adapter
 	if ctx == nil || state == nil {
 		return EngineDeliveryResult{}, errAttemptState
 	}
-	switch delivery.Kind {
-	case DeliveryTQControlError:
-		admission, completion := state.AdmitTQControlError(ctx, delivery.TQControlError)
-		result := EngineDeliveryResult{Admission: admission}
-		if admission != engine.AdmissionAdmitted || completion == nil {
-			return result, nil
-		}
-		select {
-		case <-ctx.Done():
-			return result, ctx.Err()
-		case result.TQDisposition = <-completion:
-			return result, nil
-		}
-	case DeliveryControl, DeliveryTerminal:
-		priorEngine := engine.OperationalView{}
-		priorPublication := engine.ReplayPublicationView{}
-		priorEngineApplicable := false
-		if delivery.Terminal.Reason != "" {
-			prior := state.ObserveSnapshot()
-			priorEngine = prior.Operational
-			priorPublication = prior.Publication
-			priorEngineApplicable = true
-		}
-		terminalResult := func(result EngineDeliveryResult) EngineDeliveryResult {
-			if delivery.Terminal.Reason != "" {
-				terminal := delivery.Terminal
-				result.Terminal = &terminal
-				result.PriorEngine = priorEngine
-				result.PriorEngineApplicable = priorEngineApplicable
-				result.PriorPublication = priorPublication
-			}
-			return result
-		}
-		if delivery.Control.Kind == engine.TradeQuoteCommandWriteResult && len(delivery.TQSymbols) > 0 {
-			input, inputErr := engine.NewTQCommandResultInput(delivery.tqCommand, delivery.TQWriteBoundary, delivery.Control.ReceiptTime, delivery.Control.Outcome)
-			if delivery.tqCommand.CommandToken() != 0 && inputErr != nil {
-				return EngineDeliveryResult{}, inputErr
-			}
-			if inputErr == nil {
-				admission, completion := state.AdmitTQCommandResult(ctx, input)
-				result := terminalResult(EngineDeliveryResult{Admission: admission})
-				if admission != engine.AdmissionAdmitted || completion == nil {
-					return result, nil
-				}
-				select {
-				case <-ctx.Done():
-					return result, ctx.Err()
-				case result.TQDisposition = <-completion:
-					return result, nil
-				}
-			}
-		}
-		admission, completion := state.AdmitConnectionControl(ctx, delivery.Control)
-		result := terminalResult(EngineDeliveryResult{Admission: admission})
-		if admission != engine.AdmissionAdmitted || completion == nil {
-			return result, nil
-		}
-		select {
-		case <-ctx.Done():
-			return result, ctx.Err()
-		case result.ControlDisposition = <-completion:
-			return result, nil
-		}
-	case DeliveryAggregate:
-		admission, completion := state.AdmitAggregate(ctx, delivery.Aggregate)
-		result := EngineDeliveryResult{Admission: admission}
-		if admission != engine.AdmissionAdmitted || completion == nil {
-			return result, nil
-		}
-		select {
-		case <-ctx.Done():
-			return result, ctx.Err()
-		case result.AggregateDisposition = <-completion:
-			return result, nil
-		}
-	case DeliveryAggregateIngressFence:
-		input, err := EngineAggregateIngressFence(delivery.AggregateIngressFence)
-		if err != nil {
-			return EngineDeliveryResult{}, err
-		}
-		admission, completion := state.AdmitAggregateIngressFence(ctx, input)
-		result := EngineDeliveryResult{Admission: admission}
-		if admission != engine.AdmissionAdmitted || completion == nil {
-			return result, nil
-		}
-		select {
-		case <-ctx.Done():
-			return result, ctx.Err()
-		case result.HydrationDisposition = <-completion:
-			return result, nil
-		}
-	case DeliveryLiveCoverageFence:
-		input, err := EngineLiveCoverageFence(delivery.LiveCoverageFence)
-		if err != nil {
-			return EngineDeliveryResult{}, err
-		}
-		admission, completion := state.AdmitLiveCoverageFence(ctx, input)
-		result := EngineDeliveryResult{Admission: admission}
-		if admission != engine.AdmissionAdmitted || completion == nil {
-			return result, nil
-		}
-		select {
-		case <-ctx.Done():
-			return result, ctx.Err()
-		case result.LiveCoverageDisposition = <-completion:
-			return result, nil
-		}
-	case DeliveryTrade:
-		input := engine.TradeInput{SchemaVersion: engine.TQSchemaV1, BindingIdentity: delivery.Trade.BindingIdentity, TradingDate: delivery.Trade.TradingDate,
-			Symbol: delivery.Trade.Symbol, TradeID: delivery.Trade.TradeID, Exchange: delivery.Trade.Exchange, TRFPresent: delivery.Trade.TRFPresent, TRFID: delivery.Trade.TRFID,
-			Price: delivery.Trade.Price, EconomicSize: delivery.Trade.EconomicSize, EventTime: delivery.Trade.EventTime, ReceiptTime: delivery.Trade.ReceiptTime,
-			TimestampBasis: string(delivery.Trade.TimestampBasis), Conditions: delivery.Trade.Conditions.Slice(), ConditionsClassified: delivery.Trade.Conditions.Classified,
-			IdentityClassified: delivery.Trade.IdentityClassified, Lifecycle: string(delivery.Trade.Lifecycle), Live: delivery.Trade.Live}
-		admission, completion := state.AdmitTrade(ctx, input)
-		result := EngineDeliveryResult{Admission: admission}
-		if admission != engine.AdmissionAdmitted || completion == nil {
-			return result, nil
-		}
-		select {
-		case <-ctx.Done():
-			return result, ctx.Err()
-		case result.TQDisposition = <-completion:
-			return result, nil
-		}
-	case DeliveryQuote:
-		input := engine.QuoteInput{SchemaVersion: engine.TQSchemaV1, BindingIdentity: delivery.Quote.BindingIdentity, TradingDate: delivery.Quote.TradingDate, Symbol: delivery.Quote.Symbol,
-			SIPTime: delivery.Quote.SIPTime, ReceiptTime: delivery.Quote.ReceiptTime, BidPrice: delivery.Quote.BidPrice, AskPrice: delivery.Quote.AskPrice,
-			BidPresent: delivery.Quote.BidPresent, AskPresent: delivery.Quote.AskPresent, Conditions: delivery.Quote.Conditions.Slice(), Indicators: delivery.Quote.Indicators.Slice(),
-			ConditionsClassified: delivery.Quote.Conditions.Classified, IndicatorsClassified: delivery.Quote.Indicators.Classified, Live: delivery.Quote.Live}
-		admission, completion := state.AdmitQuote(ctx, input)
-		result := EngineDeliveryResult{Admission: admission}
-		if admission != engine.AdmissionAdmitted || completion == nil {
-			return result, nil
-		}
-		select {
-		case <-ctx.Done():
-			return result, ctx.Err()
-		case result.TQDisposition = <-completion:
-			return result, nil
-		}
-	case DeliveryNormalizationDrop:
-		if delivery.Rejection.Family == LiveFamilyTrade || delivery.Rejection.Family == LiveFamilyQuote {
-			input := engine.TQDropInput{SchemaVersion: engine.TQSchemaV1, BindingIdentity: delivery.Rejection.BindingIdentity, TradingDate: delivery.Rejection.TradingDate,
-				Family: string(delivery.Rejection.Family), Symbol: delivery.Rejection.Symbol,
-				DropReason: string(delivery.Rejection.Reason), Live: delivery.Rejection.Position}
-			admission, completion := state.AdmitTQDrop(ctx, input)
-			result := EngineDeliveryResult{Admission: admission}
-			if admission != engine.AdmissionAdmitted || completion == nil {
-				return result, nil
-			}
-			select {
-			case <-ctx.Done():
-				return result, ctx.Err()
-			case result.TQDisposition = <-completion:
-				return result, nil
-			}
-		}
+	if delivery.Kind == DeliveryNormalizationDrop && delivery.Rejection.Family != LiveFamilyTrade && delivery.Rejection.Family != LiveFamilyQuote {
 		return EngineDeliveryResult{ConsumerDeferred: true}, nil
-	default:
+	}
+
+	prior := state.ObserveSnapshot()
+	input, err := engineLiveInput(delivery)
+	if err != nil {
+		return EngineDeliveryResult{}, err
+	}
+	results, err := state.ConsumeLiveBatch(ctx, []engine.LiveInput{input})
+	if err != nil {
+		return EngineDeliveryResult{}, err
+	}
+	if len(results) != 1 {
 		return EngineDeliveryResult{}, errAttemptState
 	}
+	item := results[0]
+	result := EngineDeliveryResult{
+		Admission:               item.Admission,
+		ControlDisposition:      item.Control,
+		AggregateDisposition:    item.Aggregate,
+		HydrationDisposition:    item.Hydration,
+		LiveCoverageDisposition: item.LiveCoverage,
+		TQDisposition:           item.Disposition,
+	}
+	if delivery.Terminal.Reason != "" {
+		terminal := delivery.Terminal
+		result.Terminal = &terminal
+		result.PriorEngine = prior.Operational
+		result.PriorEngineApplicable = true
+		result.PriorPublication = prior.Publication
+	}
+	return result, nil
 }

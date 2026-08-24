@@ -125,15 +125,8 @@ func runLiveAggregateCostEndToEnd(t *testing.T, ctx context.Context, binding ref
 	if delivered, err := massive.DeliverToEngine(ctx, run.Engine(), started); err != nil || delivered.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
 		t.Fatalf("connection attempt=%+v err=%v", delivered, err)
 	}
-	handshake, err := attempt.Handshake(ctx)
-	if err != nil {
+	if err := attempt.HandshakeAndDeliver(ctx, run.Engine()); err != nil {
 		t.Fatal(err)
-	}
-	for _, delivery := range handshake {
-		result, deliverErr := massive.DeliverToEngine(ctx, run.Engine(), delivery)
-		if deliverErr != nil || (result.ControlDisposition.Code != engine.DispositionConnectionControlApplied && result.ControlDisposition.Code != engine.DispositionConnectionControlDeferred) {
-			t.Fatalf("handshake=%+v err=%v", result, deliverErr)
-		}
 	}
 	run.setLiveSources(attempt, adapter)
 	queueBaseline := attempt.QueueAccounting()

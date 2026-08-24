@@ -520,6 +520,7 @@ type Engine struct {
 	internalQueued int
 	changed        chan struct{}
 	done           chan struct{}
+	liveHandoff    chan liveHandoffRequest
 	sealed         bool
 	exhausted      bool
 
@@ -599,7 +600,7 @@ func New(config Config) (*Engine, error) {
 	}
 	e := &Engine{
 		mode: config.Mode, clock: config.Clock, capacity: config.Capacity, reserve: config.RequiredReserve, delay: *config.EvaluationDelay,
-		queue: make([]*queueNode, 0, config.Capacity), changed: make(chan struct{}), done: make(chan struct{}),
+		queue: make([]*queueNode, 0, config.Capacity), changed: make(chan struct{}), done: make(chan struct{}), liveHandoff: make(chan liveHandoffRequest),
 		nextSequence: 1, state: &engineState{lifecycle: lifecycleInitializing, clockMonotonic: true},
 		checkpointSubmitter: config.CheckpointSubmitter,
 		tqLimits:            defaultTQRetentionLimits(),
@@ -849,11 +850,16 @@ func (e *Engine) consume() {
 	defer close(e.done)
 	for {
 		e.mu.Lock()
-		for len(e.queue) == 0 && !e.sealed {
+		if len(e.queue) == 0 && !e.sealed {
 			changed := e.changed
 			e.mu.Unlock()
-			<-changed
-			e.mu.Lock()
+			select {
+			case <-changed:
+				continue
+			case request := <-e.liveHandoff:
+				e.consumeLiveHandoff(request)
+				continue
+			}
 		}
 		if len(e.queue) == 0 && e.sealed {
 			if e.exhausted {

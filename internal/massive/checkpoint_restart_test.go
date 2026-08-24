@@ -458,7 +458,9 @@ func startAggregateEpochAtContext(t *testing.T, ctx context.Context, state *engi
 	if err != nil {
 		t.Fatal(err)
 	}
+	attempt.queue.mu.Lock()
 	attempt.queue.now = func() time.Time { return acknowledgement }
+	attempt.queue.mu.Unlock()
 	if result, err := DeliverToEngine(ctx, state, started); err != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
 		t.Fatalf("attempt=%+v err=%v", result, err)
 	}

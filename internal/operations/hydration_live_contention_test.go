@@ -104,15 +104,8 @@ func runHydrationLiveContention(t *testing.T, rate int) hydrationContentionResul
 	if delivered, deliverErr := massive.DeliverToEngine(ctx, run.Engine(), started); deliverErr != nil || delivered.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
 		t.Fatalf("connection start=%+v err=%v", delivered, deliverErr)
 	}
-	handshake, err := attempt.Handshake(ctx)
-	if err != nil {
+	if err := attempt.HandshakeAndDeliver(ctx, run.Engine()); err != nil {
 		t.Fatal(err)
-	}
-	for _, delivery := range handshake {
-		got, deliverErr := massive.DeliverToEngine(ctx, run.Engine(), delivery)
-		if deliverErr != nil || (got.ControlDisposition.Code != engine.DispositionConnectionControlApplied && got.ControlDisposition.Code != engine.DispositionConnectionControlDeferred) {
-			t.Fatalf("handshake=%+v err=%v", got, deliverErr)
-		}
 	}
 	run.setLiveSources(attempt, adapter)
 	queueBase := attempt.QueueAccounting()

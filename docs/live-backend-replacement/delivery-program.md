@@ -1141,6 +1141,159 @@ committed.
   parent-authorized decoded-batch FIFO and causal-fence handoff with preserved
   connection semantics.
 
+#### `LBR-D2` pre-assignment audit and activation — 2026-08-24
+
+- **Authority and dependency audit:** `AGENTS.md`, the repository guide and
+  specification map, the replacement parent/program, the D2 ticket, the
+  complete ingress contract, accepted canonical, evaluation/publication, and
+  T/Q contracts, the D1 handoff, provider-normalization and transport/epoch
+  evidence, the heartbeat and data-confirmed-subscription corrections, and the
+  routed `DTE-*`/`LIFE-RECOVER-01` meanings agree on one ownership boundary.
+  D2 may replace only live transport ordering and its handoff: one bounded
+  decoded-batch/causal-marker FIFO transfers immutable ownership from the sole
+  socket reader to serial engine consumption. The engine remains the only
+  market-state, sequence, lifecycle, currentness, recovery, T/Q, watermark,
+  evaluation, and publication owner. Hydration results and timers remain the
+  only parent-allowed owner-local paths.
+- **Production-constructor and fallback audit:** the ordinary scanner has one
+  `massive.NewLiveAdapter` production constructor and one queue-default path in
+  `cmd/scanner`; tests and unsupported tools construct the same adapter type
+  and reach its final validator. The accepted code still constructs
+  `liveFrameQueue`, copies raw bytes at admission, decodes after dequeue,
+  expands a `DecodedBatch` through `liveBatchCursor` into one
+  `AdapterDelivery` per result, and admits each result into the engine's
+  general FIFO while waiting on a per-result completion. D2 must remove those
+  three temporary stages from the supported path rather than retain a flag,
+  alternate constructor, test-only production fallback, or completion
+  backlog. Replay/checkpoint sources may continue to compile but cannot
+  construct a second live ingress path.
+- **Boundary and false-success audit:** the fixed constructor is 4,096 total
+  entries/64 MiB retained charge, source frame at most 8 MiB, decoded batch at
+  most 65,536 elements/32 MiB, with eight entries/64 KiB reserved for required
+  markers; incoherent count/byte/reserve combinations fail before I/O. The
+  exact 500-ms decoder budget, strict 749/750-ms T/Q pressure recovery tie,
+  whole-frame subscribe boundary `B`, and recovery ordinals 1–5 at
+  1/2/4/8/16 seconds remain unchanged. Empty, malformed, duplicate, mixed,
+  T/Q-only, oversize, capacity, cancellation, replacement-epoch, heartbeat,
+  handshake, read-failure, marker, and terminal paths require one closed
+  disposition. The smallest false success is an aggregate/control-bearing
+  batch or required marker omitted before a current fence or successful retry
+  reset; construction therefore reserves marker capacity, T/Q-only work sheds
+  first with exact facts, and aggregate/control admission failure retires the
+  epoch and requires gap recovery.
+- **Ordering, command, and long-stall audit:** a frame is decoded once
+  immediately after its complete read and receives its immutable epoch/frame/
+  array positions before ring admission. Dequeue consumes one complete batch
+  synchronously; no later batch, fence, terminal, or `B+1` event may overtake
+  its predecessor. Fence capture uses the greatest complete frame already read
+  and appends behind every admitted batch through that frame. Socket writes use
+  one critical section and at most one dynamic command; successful subscribe
+  completion returns the greatest complete read frame `B`, failure returns no
+  boundary, and generic status never completes the command. A committed-time
+  stall beyond all aggregate/T/Q retention horizons followed by epoch loss
+  remains an accepted A/B/C recovery case; D2 preserves its exact gap/fence
+  inputs and the watermark diagnostic's engine-completion correlation.
+- **Attempt, shutdown, and accounting audit:** process start performs one
+  immediate dial, then recovery attempts 1–5 are individually paced after the
+  prior attempt is fully retired and joined; loss/failure of attempt 5 reaches
+  stable exhaustion with no attempt 6. Only an accepted reconciled hydration
+  fence resets that budget. One reader and one heartbeat operation are owned by
+  the attempt; inbound progress after heartbeat failure is diagnostic, while
+  read/fatal/no-progress failure retires the epoch. Retirement accepts one
+  first terminal, cancels pending work, closes the socket, drains or fences
+  admitted causal predecessors, reconciles queue/family/command counts, and
+  joins before redial or return.
+- **Proof and review decision:** `P-LBR-D2-HANDOFF` must compose the real ring,
+  sole engine consumer, fake socket, and deterministic clock across mixed
+  ordering, marker placement, T/Q-first shedding, T/Q-only and mixed
+  saturation, aggregate/control overflow recovery, `B`/`B+1`, handshake and
+  heartbeat branches, read loss, stale epochs, exact retry pacing/exhaustion,
+  cancellation, and joined shutdown. Queue saturation, marker linearization,
+  attempt retirement, and removal of the second live FIFO are consequential
+  concurrency/false-success boundaries, so the required user-requested final
+  read-only Capability D review will inspect the complete D1+D2 result before
+  acceptance and commit; any finding reopens the smallest D2 boundary.
+- **Activation:** `LBR-D2` is the sole active write-capable slice. E1,
+  credentials/provider requests, the private scanner, replay/checkpoint work,
+  and every market, readiness, T/Q-formula, queue-owner, decoder-owner, or
+  additional-handoff change remain inactive.
+
+#### `LBR-D2` acceptance and Capability D final acceptance — 2026-08-24
+
+- **Coherent behavior and ownership:** the sole socket reader now reserves one
+  complete-frame causal sequence, decodes that frame once, releases the source
+  bytes, and transfers one immutable `DecodedBatch` into the only buffered live
+  ordering structure. The physical ring is exactly 4,096 entries/64 MiB: 4,088
+  decoded entries/63.9375 MiB plus eight entries/64 KiB reserved for causal
+  markers. Dequeue transfers one complete entry through an unbuffered request/
+  completion rendezvous to the existing sole engine loop; every contained fact
+  is consumed serially before another live entry, and none enters the engine's
+  general FIFO or creates a per-result completion backlog. Startup, handshake,
+  dynamic command results, hydration/live-coverage fences, capacity closure,
+  and terminals use the same owner handoff.
+- **Ordering, capacity, and failure behavior:** frame/array order and immutable
+  positions remain exact. Fence capture waits for any active decode, records
+  the greatest complete frame read, and appends behind every admitted causal
+  predecessor. Successful subscribe write completion still captures whole-
+  frame `B`, and the shared delivery lock keeps the command result ahead of
+  `B+1`. T/Q-only ring saturation emits one compact ordered trust-closure
+  marker with exact trade/quote shed accounting; aggregate/control-bearing
+  saturation records the exact slot/byte cause, retires the epoch, drains every
+  admitted predecessor, and requires gap recovery. The raw-frame queue,
+  production per-result cursor/handshake accumulator, result-at-a-time bridge,
+  and production Massive-to-engine `Admit*` live path are deleted; historical
+  cursor/call-shape compatibility exists only in `_test.go` files.
+- **Attempt, heartbeat, and shutdown preservation:** one pre-reserved attempt-
+  owned worker owns dial and all handshake phases and joins before cleanup can
+  clear the active attempt or permit replacement. Reader and heartbeat work
+  remain attempt-owned and joined. Auth, aggregate subscribe, dynamic T/Q
+  writes, and heartbeat ping share one attempt-local write mutex while reads
+  remain independent. Heartbeat inbound-progress/no-progress behavior, one
+  immediate process-start dial, exact 1/2/4/8/16-second recovery attempts 1–5,
+  no attempt 6, and reset only after an accepted recovery fence remain exact.
+  Cancellation during decode reconciles queue accounting; cancellation during
+  dial retains `context_canceled`, genuine connector failure retains
+  `dial_failed`; handshake decode ambiguity applies its valid prefix plus
+  ingress-integrity fact before preserving the exact ambiguity terminal.
+- **Primary proof, counterexample, and construction guarantees:**
+  `P-LBR-D2-HANDOFF` is composed by `TestPLBRD2Handoff`,
+  `TestPLBRD2ProductionTopology`,
+  `TestPLBRD2HandoffUnbufferedBatchBypassesGeneralFIFO`, the exact dial/
+  handshake ambiguity/write-serialization proofs, and retained focused
+  heartbeat, `B`/`B+1`, capacity, fence, retry, recovery, exhaustion, and join
+  regressions. It distinguishes the dangerous aggregate/control-loss-then-
+  current-fence case, an unbounded handshake delivery slice, stuck decode
+  accounting, concurrent socket writes, an unjoined old dial overlapping a
+  replacement, overwritten ingress ambiguity, and cancellation mislabeled as
+  dial failure. One ring, one reader, one active attempt, immutable batch
+  ownership, marker reserve, and unbuffered owner handoff are construction
+  guarantees; stale epochs/tokens, malformed input, bounds, transport failure,
+  and terminal duplication remain runtime validations.
+- **Verification on final bytes:** the direct D2/command/heartbeat/reconnect
+  selection passed in engine 0.646s and Massive 0.555s; affected short engine,
+  Massive, operations, and scanner packages passed during final correction;
+  affected race passed in 69.806s, 4.359s, 86.553s, and 2.960s respectively;
+  focused vet and `git diff --check` passed. After the final test-only cursor
+  relocation, the uncached ordinary repository command
+  `go test -count=1 -short -timeout 2m ./...` passed, with operations longest at
+  85.410s; focused proof/vet/diff reruns also passed.
+- **Independent review and corrections:** the required read-only
+  `gpt-5.6-sol` medium review first found an unbounded handshake per-result
+  accumulator, decode-cancel accounting leak, and unsynchronized ping/write.
+  Re-review then found unjoined dial/handshake work and overwritten handshake
+  ingress ambiguity, followed by one adjacent dial-cancellation first-cause
+  error. Each reopened only its narrow D2 boundary; the corrections above and
+  their distinguishing proofs passed focused re-review. Final complete and
+  mechanical-removal re-reviews returned `CLEAN/PASS` with no P1/P2/P3
+  finding. Reviewers made no writes.
+- **Limitations and next gate:** this is deterministic fake-transport and
+  bounded local evidence, not credentialed provider conformance, market-hours
+  continuity, the E2 whole-process resource plateau, replay/checkpoint support,
+  or trading expectancy. No credentials/provider request/private scanner were
+  used. D1 and D2 now complete Capability D with its required final review;
+  `LBR-E1` is the next permitted slice but remains inactive pending its own
+  fresh pre-assignment audit.
+
 ### Owner-approved E2 duration and manifest revision — 2026-08-23
 
 The owner revised E2 to exactly one 10-minute deterministic acceptance run. The
@@ -1170,7 +1323,7 @@ but copy no status.
 | `LBR-B3` removal slice | `accepted` | Commit `f697288`; removal proof, resource evidence, focused corrections, and final focused re-review are clean. |
 | Capability B — evaluation and publication | `finally_accepted` | B1/B2/B3 and the required final read-only review remain accepted and unaffected by A3. |
 | Capability C — selected-row T/Q | `finally_accepted` | C1/C2 remain accepted and unaffected by the A3 hydration-topology revision. |
-| Capability D — live ingress | `lbr_d1_accepted_d2_next` | D1's single-pass bounded batch, primary proof, final-byte gates, and read-only review are accepted. D2 is next but inactive pending its fresh pre-assignment audit. |
+| Capability D — live ingress | `finally_accepted` | D1/D2, one decoded-batch FIFO/owner handoff, exact connection semantics, final-byte gates, corrections, and final read-only review are clean. `LBR-E1` is next but inactive pending its fresh audit. |
 | Capability E — integration/removal/acceptance | `not_started` | Requires Capabilities A-D accepted |
 | E2 deterministic duration/manifest revision | `owner_approved` | Exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |
 | Deterministic replacement | `not_started` | Requires `LBR-E1` and `LBR-E2` |

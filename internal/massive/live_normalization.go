@@ -297,26 +297,6 @@ func ConsumeLiveFrameForAttribution(frame LiveFrame, statusContext *StatusContex
 	return batch.accounting, len(batch.results)
 }
 
-type liveBatchCursor struct {
-	batch DecodedBatch
-	index int
-}
-
-func newLiveFrameCursor(frame LiveFrame, statusContext *StatusContext, options LiveNormalizationOptions) *liveBatchCursor {
-	return &liveBatchCursor{batch: decodeLiveFrame(frame, statusContext, options)}
-}
-
-func (c *liveBatchCursor) Next() (LiveResult, bool) {
-	if c == nil || c.index >= len(c.batch.results) {
-		return LiveResult{}, false
-	}
-	result := c.batch.results[c.index]
-	c.index++
-	return result, true
-}
-
-func (c *liveBatchCursor) Accounting() LiveFrameAccounting { return c.batch.accounting }
-
 type wireValue struct {
 	shape      MetadataShape
 	kind       wireValueKind

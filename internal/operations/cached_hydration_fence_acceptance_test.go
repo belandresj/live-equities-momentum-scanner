@@ -237,15 +237,8 @@ func TestCachedHydrationFenceAutomaticTimerRehearsal(t *testing.T) {
 	if delivered, err := massive.DeliverToEngine(ctx, run.Engine(), started); err != nil || delivered.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
 		t.Fatalf("rehearsal open delivery=%+v err=%v", delivered, err)
 	}
-	handshake, err := attempt.Handshake(ctx)
-	if err != nil {
+	if err := attempt.HandshakeAndDeliver(ctx, run.Engine()); err != nil {
 		t.Fatal(err)
-	}
-	for _, delivery := range handshake {
-		got, deliveryErr := massive.DeliverToEngine(ctx, run.Engine(), delivery)
-		if deliveryErr != nil || (got.ControlDisposition.Code != engine.DispositionConnectionControlApplied && got.ControlDisposition.Code != engine.DispositionConnectionControlDeferred) {
-			t.Fatalf("rehearsal handshake delivery=%+v err=%v", got, deliveryErr)
-		}
 	}
 	run.setLiveSources(attempt, adapter)
 	queueBase := attempt.QueueAccounting()
@@ -865,15 +858,8 @@ func runCachedFence(t *testing.T, parent context.Context, manifest cachedFenceMa
 	if delivered, err := massive.DeliverToEngine(ctx, run.Engine(), started); err != nil || delivered.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
 		t.Fatalf("open delivery=%+v err=%v", delivered, err)
 	}
-	handshake, err := attempt.Handshake(ctx)
-	if err != nil {
+	if err := attempt.HandshakeAndDeliver(ctx, run.Engine()); err != nil {
 		t.Fatal(err)
-	}
-	for _, delivery := range handshake {
-		got, deliverErr := massive.DeliverToEngine(ctx, run.Engine(), delivery)
-		if deliverErr != nil || (got.ControlDisposition.Code != engine.DispositionConnectionControlApplied && got.ControlDisposition.Code != engine.DispositionConnectionControlDeferred) {
-			t.Fatalf("handshake delivery=%+v err=%v", got, deliverErr)
-		}
 	}
 	run.setLiveSources(attempt, adapter)
 	queueBase := attempt.QueueAccounting()

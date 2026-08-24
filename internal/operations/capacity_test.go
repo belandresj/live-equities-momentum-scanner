@@ -82,14 +82,8 @@ func TestC8LOAD01CurrentHostMixedLoad(t *testing.T) {
 	if result, err := massive.DeliverToEngine(ctx, run.Engine(), started); err != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
 		t.Fatalf("connection attempt=%+v err=%v", result, err)
 	}
-	handshake, err := attempt.Handshake(ctx)
-	if err != nil {
+	if err := attempt.HandshakeAndDeliver(ctx, run.Engine()); err != nil {
 		t.Fatal(err)
-	}
-	for _, delivery := range handshake {
-		if result, err := massive.DeliverToEngine(ctx, run.Engine(), delivery); err != nil || (result.ControlDisposition.Code != engine.DispositionConnectionControlApplied && result.ControlDisposition.Code != engine.DispositionConnectionControlDeferred) {
-			t.Fatalf("handshake=%+v err=%v", result, err)
-		}
 	}
 	adapterNanos.Store(now.UnixNano())
 	completeCapacityHydration(t, ctx, run, attempt, binding, now)

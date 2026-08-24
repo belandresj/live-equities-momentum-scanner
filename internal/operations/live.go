@@ -440,22 +440,8 @@ func (r *Runtime) openAttempt(lifetime, operation context.Context, components Li
 	if result, err := massive.DeliverToEngine(operation, r.engine, started); err != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
 		return attempt, errors.New("aggregate connection attempt was not installed")
 	}
-	deliveries, handshakeErr := attempt.Handshake(operation)
-	for _, delivery := range deliveries {
-		deliveryCtx := operation
-		if operation.Err() != nil {
-			// The establishment deadline may retire transport I/O, but it cannot
-			// discard a prefix fact already classified by the adapter. Engine
-			// admission is local and must precede the terminal retirement.
-			deliveryCtx = context.Background()
-		}
-		result, err := massive.DeliverToEngine(deliveryCtx, r.engine, delivery)
-		if err != nil || (result.ControlDisposition.Code != engine.DispositionConnectionControlApplied && result.ControlDisposition.Code != engine.DispositionConnectionControlDeferred) {
-			return attempt, errors.New("aggregate handshake was not accepted")
-		}
-	}
-	if handshakeErr != nil {
-		return attempt, handshakeErr
+	if err := attempt.HandshakeAndDeliver(operation, r.engine); err != nil {
+		return attempt, err
 	}
 	return attempt, nil
 }

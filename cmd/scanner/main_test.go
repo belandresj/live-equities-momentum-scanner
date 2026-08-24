@@ -22,7 +22,7 @@ import (
 
 func TestProductionLiveQueueUsesOwnerSelectedRetryHeadroom(t *testing.T) {
 	config := productionLiveQueueConfig()
-	if config.FrameSlots != 32768 || config.TotalFrameBytes != 128<<20 || config.MaxFrameBytes != 8<<20 {
+	if config.FrameSlots != 4096 || config.TotalFrameBytes != 64<<20 || config.MaxFrameBytes != 8<<20 {
 		t.Fatalf("production live queue=%+v", config)
 	}
 	if config.FrameSlots != massive.MaximumLiveFrameSlots || config.TotalFrameBytes != massive.MaximumLiveQueueBytes {
