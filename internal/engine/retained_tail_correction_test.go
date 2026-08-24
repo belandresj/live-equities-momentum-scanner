@@ -24,7 +24,7 @@ func TestLatestMarkBeforeMaintainedLatestFastPath(t *testing.T) {
 			latest:          &latestAggregateMark{record: *selected},
 			committedLatest: committedMark(*old),
 		}
-		got, ok := latestMarkBefore(state, boundary.windowStart)
+		got, ok := latestMarkBeforeCompact(state, boundary.windowStart)
 		if !ok || got != *selected {
 			t.Fatalf("latest=%+v available=%t want=%+v", got, ok, *selected)
 		}
@@ -37,7 +37,7 @@ func TestLatestMarkBeforeMaintainedLatestFastPath(t *testing.T) {
 		}
 		recomputeLatest(state)
 		advanceSelectionMark(state, nil, boundary.windowStart)
-		got, ok := latestMarkBefore(state, boundary.windowStart)
+		got, ok := latestMarkBeforeCompact(state, boundary.windowStart)
 		if !ok || got != *selected {
 			t.Fatalf("latest=%+v available=%t want prior=%+v", got, ok, *selected)
 		}
@@ -50,7 +50,7 @@ func TestLatestMarkBeforeMaintainedLatestFastPath(t *testing.T) {
 		}
 		recomputeLatest(state)
 		advanceSelectionMark(state, nil, boundary.windowStart)
-		got, ok := latestMarkBefore(state, boundary.windowStart)
+		got, ok := latestMarkBeforeCompact(state, boundary.windowStart)
 		if !ok || got != *selected {
 			t.Fatalf("latest=%+v available=%t want as-of=%+v", got, ok, *selected)
 		}
@@ -62,7 +62,7 @@ func TestLatestMarkBeforeMaintainedLatestFastPath(t *testing.T) {
 			latest: &latestAggregateMark{record: *future}, olderLatest: selected,
 			committedLatest: committedMark(*old),
 		}
-		got, ok := latestMarkBefore(state, boundary.windowStart)
+		got, ok := latestMarkBeforeCompact(state, boundary.windowStart)
 		if !ok || got != *selected {
 			t.Fatalf("latest=%+v available=%t want folded=%+v", got, ok, *selected)
 		}
@@ -243,66 +243,4 @@ func firstBitmapSecond(bitmap *slotBitmap, binding *installedBinding, start, end
 		}
 	}
 	return time.Time{}
-}
-
-func TestBoundExceededActivitySkipsDerivedLookupMaintenance(t *testing.T) {
-	binding := installedBindingForQualification(t, testBinding(t))
-	at := binding.sessionStart.Add(time.Hour)
-	state := &symbolAggregateState{
-		tail: make(map[int64]*canonicalAggregate), presence: &slotBitmap{}, provenAbsent: &slotBitmap{},
-		activity: &activityFeatureState{
-			boundExceeded: true,
-			result:        unavailableActivityResult(time.Time{}),
-			referenceLookup: activityReferenceLookup{
-				at: binding.sessionStart, transactions: []float64{1}, expansions: []float64{2}, valid: false,
-			},
-		},
-	}
-	before := state.activity.referenceLookup
-	result := activityFeatureResult{at: at, activity: aggregateFeatureField{status: featureInvalid, reason: featureReasonStateBoundExceeded}}
-	applyActivityResult(state, binding, result)
-	if state.activity.result != result {
-		t.Fatalf("result=%+v want=%+v", state.activity.result, result)
-	}
-	if state.activity.referenceLookup.at != before.at || state.activity.referenceLookup.valid != before.valid ||
-		len(state.activity.referenceLookup.transactions) != 1 || state.activity.referenceLookup.transactions[0] != 1 ||
-		len(state.activity.referenceLookup.expansions) != 1 || state.activity.referenceLookup.expansions[0] != 2 {
-		t.Fatalf("terminal-invalid derived lookup mutated: before=%+v after=%+v", before, state.activity.referenceLookup)
-	}
-	if rebuildActivityReferenceLookup(state.activity, state, binding, at) {
-		t.Fatal("terminal-invalid Activity lookup rebuilt")
-	}
-	advanceActivityReferenceLookup(state.activity, state, binding, at)
-	if state.activity.referenceLookup.at != before.at {
-		t.Fatal("terminal-invalid Activity lookup advanced")
-	}
-}
-
-func TestHistoryIncompleteActivityDefersDerivedLookupMaintenanceUntilRecovery(t *testing.T) {
-	binding := installedBindingForQualification(t, testBinding(t))
-	at := binding.sessionStart.Add(11 * activityBlockDuration)
-	state := &symbolAggregateState{
-		tail: make(map[int64]*canonicalAggregate), presence: &slotBitmap{}, provenAbsent: &slotBitmap{},
-		activity: &activityFeatureState{
-			references: map[int64]*activityBlockSummary{}, mutable: map[int64]activityMutableBlock{},
-			referenceLookup: activityReferenceLookup{at: binding.sessionStart, valid: true},
-			result:          unavailableActivityResult(time.Time{}),
-		},
-	}
-	incomplete := activityFeatureResult{at: at, activity: aggregateFeatureField{status: featureUnavailable, reason: featureReasonHistoryIncomplete}}
-	applyActivityResult(state, binding, incomplete)
-	if !state.activity.referenceLookup.valid || !state.activity.referenceLookup.at.Equal(binding.sessionStart) || state.activity.result != incomplete {
-		t.Fatalf("incomplete result changed lookup prefix: lookup=%+v result=%+v", state.activity.referenceLookup, state.activity.result)
-	}
-	if !installExactCoverage(state, binding, binding.sessionStart, at, nil) {
-		t.Fatal("recovery coverage")
-	}
-	recovered := evaluateActivityFeatures(binding, state, at)
-	if recovered.activity.status != featureUnavailable || recovered.activity.reason != featureReasonNoAggregateInTarget {
-		t.Fatalf("recovered result=%+v", recovered)
-	}
-	applyActivityResult(state, binding, recovered)
-	if !state.activity.referenceLookup.valid || !state.activity.referenceLookup.at.Equal(at) || state.activity.result != recovered {
-		t.Fatalf("recovered lookup did not advance: lookup=%+v result=%+v", state.activity.referenceLookup, state.activity.result)
-	}
 }

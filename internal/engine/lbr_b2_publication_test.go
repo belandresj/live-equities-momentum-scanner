@@ -53,14 +53,6 @@ func TestPLBRB2SelectedEnrichmentAndPublication(t *testing.T) {
 		t.Fatalf("unselected symbol was enriched: update=%+v", staged.updates[1])
 	}
 
-	view := e.selectedAggregateViewAtLocked(0, candidate, row.canonicalRevision)
-	if !view.RevisionMatched || !view.CandidateT.Equal(candidate) || !view.PrefixFoldedThrough.After(candidate) || view.PrefixUsableAtCandidate ||
-		view.PrefixVolume != 0 || view.PrefixPrints != 0 || view.PrefixFirstOpen != 0 || view.PrefixHigh != 0 || view.PrefixLow != 0 ||
-		view.PrefixFirstOpenTrusted || view.PrefixExtremaTrusted || view.PrefixLatestTrusted || len(view.Tail) != 0 ||
-		!view.MarkAvailable || !view.TrustedMarkAt.Equal(candidate.Add(-time.Second)) {
-		t.Fatalf("bound selected projection = %+v", view)
-	}
-
 	// Drive the real owner transition, evaluator acceptance, T/Q reconciliation,
 	// publication validation, and sole atomic-store decision.
 	admission, completion := e.AdmitTimer(context.Background())

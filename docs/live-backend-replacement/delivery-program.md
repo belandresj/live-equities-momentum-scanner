@@ -652,6 +652,46 @@ cross-boundary counterexample audit and final-byte-only expensive verification.
   replay/checkpoint/test-tool seams remain for B3/E1 removal. `LBR-B3` remains
   valid and is next but inactive pending its pre-assignment audit.
 
+#### `LBR-B3` — accepted 2026-08-23
+
+- **Coherent behavior/removal:** the supported live engine retains only B1
+  qualification/ranking and B2 selected enrichment for Volume, From Open, Day
+  Range, Activity 30s, and Move 30s. HOD drawdown, rolling 30/60-minute ranges,
+  the old Activity owner/formulas, qualification cloning, replay tail-scanned
+  selection, full-population formula fallback, and temporary selected-prefix
+  adapters are deleted. T/Q, Tape 5s, Spread, and separate one-second Tape-burst
+  state remain unchanged for C1.
+- **Tool separation:** replay/checkpoint commands still compile without a
+  correctness claim or E1 disposition. Legacy checkpoint Activity, Highs,
+  Lows, and RollingFloor payloads are independently rejected by bounded
+  validation, direct install, and admission without changing binding,
+  evaluation, installed-checkpoint state, or publication. Unsupported tooling
+  cannot reconstruct a removed live owner/evaluator/fallback.
+- **Proof:** `P-LBR-B3-REMOVAL` parses production and test sources, traverses
+  named live/tool import graphs bidirectionally, closes engine/config/symbol
+  ownership shapes and evaluation/publication entrypoints, verifies live call
+  ordering, and rejects neutral renamed/transitive/test-only selector, owner,
+  fallback, temporary-adapter, and direct-publication counterexamples. The
+  complete B1/B2/current-field/API-v2 corpus remains exact.
+- **Resource evidence:** the frozen manifest SHA
+  `3a70dda5bc040d1a77fbe3e114d788d3fc04c93fbb51ff2e5eec646f4c10e6e3`
+  validates 5,694 symbols and 5,470,012 represented rows. Initial measurement
+  was 8.655 ms and 15,484,824 allocated bytes. The single permitted profile/
+  correction/rerun removed candidate boxing and corrected diagnostic coverage;
+  the accepted rerun is 7.578 ms and 5,119,312 bytes (4.882 MiB/cycle), versus
+  the frozen 399.871 ms mean/601.020 ms maximum baseline with baseline
+  allocations unknown.
+- **Verification/review:** exclusion/current-product/API proofs, affected short
+  and race packages, focused vet, diff hygiene, and ordinary repository
+  verification pass. Focused review reopened tooling-root/dependency proof,
+  production test wrappers, structural renamed-fallback detection, and
+  independent checkpoint-field rejection; all corrections passed final
+  re-review `CLEAN/PASS`.
+- **Limitation/next gate:** replay/checkpoint correctness remains intentionally
+  unvalidated and its source disposition remains E1 owner-gated. This is not E2
+  whole-process stability or provider evidence. Capability B now requires its
+  final read-only review; C1 remains inactive.
+
 ## 14. Sole delivery ledger
 
 This table is the only mutable program status. Focused specs name allocations
@@ -663,7 +703,7 @@ but copy no status.
 | Delivery program | `approved` | Current replacement delivery authority |
 | `LBR-P1` focused contracts and characterization | `accepted` | Five-spec independent cross-review and owner acceptance are recorded; [`baseline-characterization.md`](baseline-characterization.md), SHA-256 `3a70dda5bc040d1a77fbe3e114d788d3fc04c93fbb51ff2e5eec646f4c10e6e3`, freezes baseline `0d043c1`, the semantic/API/UI corpus, durable queue/heartbeat/hydration/cycle/memory evidence, and the exact 5,694-symbol deterministic manifest. Comparable baseline CPU/RSS remain explicitly unknown. |
 | Capability A — canonical state and hydration | `finally_accepted` | A1/A2 proofs, verification, two A1 re-reviews, the A2 long-stall/launcher correction, and Capability A final focused re-review are clean. Next: activate only [`LBR-B1`](tickets/lbr-b1-incremental-qualification-and-selection.md). |
-| Capability B — evaluation and publication | `lbr_b3_active` | `LBR-B1` and `LBR-B2` are accepted. The B3 pre-assignment audit made Tape-burst removal solely C1-owned, authorized only mechanical unsupported-tool dependency separation without deciding E1 disposition, and bound exclusion/resource proof to exact live/tool roots and the frozen manifest; focused re-review is `CLEAN/PASS`. Implement only [`LBR-B3`](tickets/lbr-b3-remove-superseded-evaluation.md). |
+| Capability B — evaluation and publication | `slices_accepted_final_review_next` | `LBR-B1`, `LBR-B2`, and `LBR-B3` proofs, verification, corrections, and focused re-reviews are clean. Run the required Capability B final read-only review; C1 remains inactive. |
 | Capability C — selected-row T/Q | `not_started` | Requires Capability B publication/selection interface |
 | Capability D — live ingress | `not_started` | Requires accepted state/TQ input interface |
 | Capability E — integration/removal/acceptance | `not_started` | Requires Capabilities A-D accepted |

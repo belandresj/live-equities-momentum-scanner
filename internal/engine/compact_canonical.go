@@ -1,9 +1,7 @@
 package engine
 
 import (
-	"sort"
 	"time"
-	"unsafe"
 )
 
 // aggregatePrefix is the sealed, sufficient aggregate state. It contains no
@@ -82,53 +80,16 @@ type aggregateAffectedState struct {
 // SelectionStateView is the compact immutable input for Capability B's
 // population selection pass.
 type SelectionStateView struct {
-	Symbol                 string
-	PriorClose             float64
-	PriorCloseValid        bool
-	TrustedMark            AggregateValues
-	TrustedMarkAt          time.Time
-	MarkAvailable          bool
-	Coverage               AggregateCoverageClass
-	CanonicalRevision      uint64
-	Affected               AggregateAffectedView
-	PrefixVolume           float64
-	PrefixPrints           uint32
-	PrefixFirstOpen        float64
-	PrefixHigh, PrefixLow  float64
-	PrefixFirstOpenTrusted bool
-	PrefixExtremaTrusted   bool
-	PrefixLatestTrusted    bool
+	Symbol            string
+	PriorClose        float64
+	PriorCloseValid   bool
+	TrustedMark       AggregateValues
+	TrustedMarkAt     time.Time
+	MarkAvailable     bool
+	Coverage          AggregateCoverageClass
+	CanonicalRevision uint64
+	Affected          AggregateAffectedView
 }
-
-// CanonicalAggregateView is an immutable value copy, never a writable alias.
-type CanonicalAggregateView struct {
-	WindowStart, WindowEnd time.Time
-	Values                 AggregateValues
-	Source                 AggregateSource
-}
-
-// SelectedAggregateView is the read-only as-of seam for Capability B. Tail is
-// sorted and copied so callers cannot mutate or depend on map iteration order.
-type SelectedAggregateView struct {
-	SelectionStateView
-	CandidateT                time.Time
-	AcceptedCanonicalRevision uint64
-	RevisionMatched           bool
-	PrefixUsableAtCandidate   bool
-	PrefixFoldedThrough       time.Time
-	Tail                      []CanonicalAggregateView
-	Bounds                    CanonicalBoundsView
-}
-
-type CanonicalBoundsView struct {
-	TailRecords, TailRecordLimit int
-	TailChargedBytes             int
-	TailChargedByteLimit         int
-	CoverageBytes                int
-	BoundHits                    uint64
-}
-
-var canonicalTailEntryCharge = int(unsafe.Sizeof(canonicalAggregate{})) + 32 // map bucket/pointer charge, conservatively rounded
 
 func (p *aggregatePrefix) fold(record canonicalAggregate) {
 	if p.printCount == 0 {
@@ -217,9 +178,6 @@ func (e *Engine) selectionStateViewAtLocked(index int, at time.Time) SelectionSt
 	}
 	view.CanonicalRevision = state.canonicalRevision
 	view.Affected = AggregateAffectedView{CanonicalRevision: state.affected.revision, From: state.affected.from, Through: state.affected.through, Proofs: state.affected.proofs}
-	view.PrefixVolume, view.PrefixPrints = state.prefix.volume, state.prefix.printCount
-	view.PrefixFirstOpen, view.PrefixHigh, view.PrefixLow = state.prefix.firstOpen, state.prefix.high, state.prefix.low
-	view.PrefixFirstOpenTrusted, view.PrefixExtremaTrusted, view.PrefixLatestTrusted = state.prefix.firstOpenTrusted, state.prefix.extremaTrusted, state.prefix.latestTrusted
 	var mark canonicalAggregate
 	var hasMark bool
 	if at.IsZero() {
@@ -240,50 +198,6 @@ func (e *Engine) selectionStateViewAtLocked(index int, at time.Time) SelectionSt
 	if invalid, ok := e.invalidMarkBeforeLocked(index, invalidAt); ok && (!view.MarkAvailable || !invalid.windowStart.Before(view.TrustedMarkAt)) {
 		view.Coverage = AggregateCoverageInvalid
 	}
-	return view
-}
-
-func (e *Engine) selectedAggregateViewLocked(index int) SelectedAggregateView {
-	return e.selectedAggregateViewAtLocked(index, time.Time{}, 0)
-}
-
-func (e *Engine) selectedAggregateViewAtLocked(index int, at time.Time, acceptedRevision uint64) SelectedAggregateView {
-	selection := e.selectionStateViewLocked(index)
-	if !at.IsZero() {
-		selection = e.selectionStateViewAtLocked(index, at)
-	}
-	view := SelectedAggregateView{SelectionStateView: selection, CandidateT: at, AcceptedCanonicalRevision: acceptedRevision}
-	state := e.state.binding.symbols[index].aggregates
-	if state == nil {
-		return view
-	}
-	view.RevisionMatched = acceptedRevision == 0 || state.canonicalRevision == acceptedRevision
-	view.PrefixFoldedThrough = state.prefix.foldedThrough
-	view.PrefixUsableAtCandidate = at.IsZero() || !state.prefix.foldedThrough.After(at)
-	if !view.PrefixUsableAtCandidate {
-		view.PrefixVolume, view.PrefixPrints = 0, 0
-		view.PrefixFirstOpen, view.PrefixHigh, view.PrefixLow = 0, 0, 0
-		view.PrefixFirstOpenTrusted, view.PrefixExtremaTrusted, view.PrefixLatestTrusted = false, false, false
-	}
-	coverageBytes := 0
-	for _, bitmap := range []*slotBitmap{state.presence, state.sealedLive, state.provenAbsent, state.historicalConflict} {
-		if bitmap != nil {
-			coverageBytes += int(unsafe.Sizeof(*bitmap))
-		}
-	}
-	view.Bounds = CanonicalBoundsView{TailRecords: len(state.tail), TailRecordLimit: maximumTailRecords,
-		TailChargedBytes: len(state.tail) * canonicalTailEntryCharge, TailChargedByteLimit: maximumTailRecords * canonicalTailEntryCharge,
-		CoverageBytes: coverageBytes, BoundHits: state.tailBoundHits}
-	view.Tail = make([]CanonicalAggregateView, 0, len(state.tail))
-	for _, record := range state.tail {
-		if record == nil {
-			continue
-		}
-		if at.IsZero() || record.windowStart.Before(at) {
-			view.Tail = append(view.Tail, CanonicalAggregateView{WindowStart: record.windowStart, WindowEnd: record.windowEnd, Values: record.values, Source: record.authority.source})
-		}
-	}
-	sort.Slice(view.Tail, func(i, j int) bool { return view.Tail[i].WindowStart.Before(view.Tail[j].WindowStart) })
 	return view
 }
 
@@ -319,22 +233,4 @@ func (e *Engine) observeSelectionState() []SelectionStateView {
 		views[index] = e.selectionStateViewLocked(index)
 	}
 	return views
-}
-
-// observeSelectedAggregate returns a detached canonical view for one bound
-// symbol. The returned tail contains value copies and is safe for any reader.
-func (e *Engine) observeSelectedAggregate(symbol string) (SelectedAggregateView, bool) {
-	if e == nil {
-		return SelectedAggregateView{}, false
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.state.binding == nil {
-		return SelectedAggregateView{}, false
-	}
-	index, ok := e.state.binding.index[symbol]
-	if !ok {
-		return SelectedAggregateView{}, false
-	}
-	return e.selectedAggregateViewLocked(index), true
 }

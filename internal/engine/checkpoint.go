@@ -246,7 +246,6 @@ func projectCheckpointSymbol(binding *installedBinding, symbol *coreSymbol, eval
 	r.ProvenAbsent = projectBitmap(state.provenAbsent, cutoff)
 	r.HistoricalConflict = projectBitmap(state.historicalConflict, cutoff)
 	r.PriceRange = projectPriceRange(state.priceRange, t0)
-	r.Activity = projectActivity(state, binding, t0)
 	r.Qualification = projectQualification(state.qualification, t0)
 	return r, nil
 }
@@ -273,14 +272,12 @@ func projectPriceRange(source *priceRangeFeatureState, t0 time.Time) *checkpoint
 	if source == nil {
 		return nil
 	}
-	r := &checkpoint.PriceRange{FirstStart: source.firstStart, RollingFloor: min(source.rollingFloor, t0.Unix()),
+	r := &checkpoint.PriceRange{FirstStart: source.firstStart,
 		FinalizedThrough: min(source.finalizedThrough, t0.Unix()), FirstOpen: source.firstOpen,
 		HasFirst: source.hasFirst && source.firstStart < t0.Unix(), BoundExceeded: source.boundExceeded}
 	if !r.HasFirst {
 		r.FirstStart, r.FirstOpen = 0, 0
 	}
-	r.Highs = projectExtrema(source.highs, t0)
-	r.Lows = projectExtrema(source.lows, t0)
 	r.SessionHighs = projectExtrema(source.sessionHighs, t0)
 	r.SessionLows = projectExtrema(source.sessionLows, t0)
 	for _, p := range r.SessionHighs {
@@ -308,121 +305,6 @@ func projectExtrema(source []extremaPoint, t0 time.Time) []checkpoint.ExtremaPoi
 		return nil
 	}
 	return r
-}
-
-func projectActivity(state *symbolAggregateState, binding *installedBinding, t0 time.Time) *checkpoint.Activity {
-	source := state.activity
-	if source == nil {
-		return nil
-	}
-	r := &checkpoint.Activity{BoundExceeded: source.boundExceeded,
-		References:    make([]checkpoint.ActivitySummary, 0, len(source.references)),
-		Mutable:       make([]checkpoint.ActivityMutable, 0, len(source.mutable)),
-		FoldedTargets: make([]checkpoint.ActivityTargetBlock, 0, len(source.foldedTargets))}
-	keys := sortedInt64Keys(source.references)
-	for _, end := range keys {
-		if end <= t0.Unix() {
-			r.References = append(r.References, projectActivitySummary(*source.references[end]))
-		}
-	}
-	keys = sortedInt64Keys(source.mutable)
-	for _, end := range keys {
-		if end <= t0.Unix() {
-			b := source.mutable[end]
-			r.Mutable = append(r.Mutable, checkpoint.ActivityMutable{End: end, Folded: projectActivitySummary(b.folded), Current: projectActivitySummary(b.current)})
-		}
-	}
-	keys = sortedInt64Keys(source.foldedTargets)
-	for _, end := range keys {
-		block := source.foldedTargets[end]
-		out := checkpoint.ActivityTargetBlock{End: end, Transactions: block.transactions, Highs: block.highs, Lows: block.lows, Present: block.present, Invalid: block.invalid}
-		start := time.Unix(end, 0).UTC().Add(-activityBlockDuration)
-		floor := t0.Add(-activityBlockDuration)
-		for slot := 0; slot < 30; slot++ {
-			mask := uint32(1) << uint(slot)
-			second := start.Add(time.Duration(slot) * time.Second)
-			if second.Before(floor) || !second.Before(t0) {
-				out.Present &^= mask
-				out.Invalid &^= mask
-			}
-			if out.Present&mask == 0 || out.Invalid&mask != 0 {
-				out.Transactions[slot], out.Highs[slot], out.Lows[slot] = 0, 0, 0
-			}
-		}
-		if out.Present != 0 {
-			r.FoldedTargets = append(r.FoldedTargets, out)
-			r.FoldedTargetContributions += bitsSet32(out.Present)
-		}
-	}
-	// A stalled T0 may split one aligned block after compacted forward state has
-	// already entered the live Activity graph. Rebuild that partial block from
-	// identity-positioned pre-T0 folded contributions plus the retained tail;
-	// copying a combined post-T0 mutable/reference summary would contaminate it.
-	partialEnds := make(map[int64]struct{})
-	for end, block := range source.foldedTargets {
-		if end > t0.Unix() && block.present != 0 {
-			partialEnds[end] = struct{}{}
-		}
-	}
-	for _, record := range state.tail {
-		end := activityBlockEnd(binding, record.windowStart).Unix()
-		if end > t0.Unix() && record.windowStart.Before(t0) {
-			partialEnds[end] = struct{}{}
-		}
-	}
-	for _, end := range sortedSetKeys(partialEnds) {
-		folded := activityBlockSummary{end: end, low: math.Inf(1)}
-		if block, ok := source.foldedTargets[end]; ok {
-			blockStart := time.Unix(end, 0).UTC().Add(-activityBlockDuration)
-			for slot := 0; slot < 30; slot++ {
-				mask := uint32(1) << uint(slot)
-				if block.present&mask == 0 || !blockStart.Add(time.Duration(slot)*time.Second).Before(t0) {
-					continue
-				}
-				folded = addCheckpointActivityContribution(folded, block.transactions[slot], block.highs[slot], block.lows[slot], block.invalid&mask != 0)
-			}
-		}
-		current := folded
-		for _, record := range state.tail {
-			if record.windowStart.Before(t0) && activityBlockEnd(binding, record.windowStart).Unix() == end {
-				current = addActivityAggregate(current, record.values)
-			}
-		}
-		if folded.aggregateCount != 0 || current.aggregateCount != 0 || folded.invalid || current.invalid {
-			r.Mutable = append(r.Mutable, checkpoint.ActivityMutable{End: end, Folded: projectActivitySummary(folded), Current: projectActivitySummary(finishActivitySummary(current))})
-		}
-	}
-	sort.Slice(r.Mutable, func(i, j int) bool { return r.Mutable[i].End < r.Mutable[j].End })
-	return r
-}
-
-func addCheckpointActivityContribution(summary activityBlockSummary, transactions, high, low float64, invalid bool) activityBlockSummary {
-	if summary.invalid || invalid || !summary.transactionSum.add(transactions) || !finitePositiveFeature(high) || !finitePositiveFeature(low) || high < low || summary.aggregateCount == math.MaxUint8 {
-		summary.invalid = true
-		return summary
-	}
-	if summary.aggregateCount == 0 {
-		summary.high, summary.low = high, low
-	} else {
-		summary.high, summary.low = max(summary.high, high), min(summary.low, low)
-	}
-	summary.aggregateCount++
-	return summary
-}
-
-func projectActivitySummary(s activityBlockSummary) checkpoint.ActivitySummary {
-	if s.invalid {
-		return checkpoint.ActivitySummary{End: s.end, Invalid: true}
-	}
-	if s.aggregateCount == 0 {
-		return checkpoint.ActivitySummary{End: s.end}
-	}
-	s = finishActivitySummary(s)
-	if s.invalid {
-		return checkpoint.ActivitySummary{End: s.end, Invalid: true}
-	}
-	return checkpoint.ActivitySummary{End: s.end, TransactionSum: checkpoint.ExactSum(s.transactionSum), Transactions: s.transactions,
-		High: s.high, Low: s.low, ExpansionBPS: s.expansionBPS, AggregateCount: s.aggregateCount, Invalid: s.invalid}
 }
 
 func projectQualification(source *qualificationState, t0 time.Time) *checkpoint.Qualification {
@@ -464,14 +346,6 @@ func sortedInt64Keys[V any](m map[int64]V) []int64 {
 	return r
 }
 func sortedSetKeys(m map[int64]struct{}) []int64 { return sortedInt64Keys(m) }
-func bitsSet32(v uint32) int {
-	n := 0
-	for v != 0 {
-		v &= v - 1
-		n++
-	}
-	return n
-}
 
 // AdmitCheckpointInstall orders validation and installation through the sole
 // FIFO owner. The owner rebuilds a complete scratch graph before the single
@@ -500,12 +374,13 @@ func boundedCheckpointCandidate(image checkpoint.Image) bool {
 			(len(s.HistoricalConflict) != 0 && len(s.HistoricalConflict) != len(slotBitmap{})) {
 			return false
 		}
-		if p := s.PriceRange; p != nil && (len(p.Highs) > maximumExtremaPointsPerDeque || len(p.Lows) > maximumExtremaPointsPerDeque ||
-			len(p.SessionHighs) > sessionSeconds || len(p.SessionLows) > sessionSeconds) {
+		if p := s.PriceRange; p != nil && (len(p.Highs) != 0 || len(p.Lows) != 0 || p.RollingFloor != 0 ||
+			len(p.SessionHighs) > maximumSessionExtremaPoints || len(p.SessionLows) > maximumSessionExtremaPoints) {
 			return false
 		}
-		if a := s.Activity; a != nil && (len(a.References) > maximumActivityReferences || len(a.Mutable) > maximumMutableActivityBlockIDs ||
-			len(a.FoldedTargets) > maximumActivityTargetBlocks || a.FoldedTargetContributions < 0 || a.FoldedTargetContributions > maximumActivityTargetContributions) {
+		// Removed-product checkpoint payloads cannot restore a shared-engine
+		// owner. Retained unsupported tooling must emit no legacy Activity state.
+		if s.Activity != nil {
 			return false
 		}
 		if q := s.Qualification; q != nil && (len(q.FinalizedGateBars) > maximumFinalizedGateBars || len(q.Proofs) > maximumQualificationProofs || len(q.Dirty) > maximumQualificationProofs) {
@@ -529,12 +404,6 @@ func checkpointStructureCounts(image checkpoint.Image) checkpoint.StructureCount
 		c.ConflictWords += len(s.HistoricalConflict)
 		if s.PriceRange != nil {
 			c.PriceExtremaPoints += len(s.PriceRange.Highs) + len(s.PriceRange.Lows) + len(s.PriceRange.SessionHighs) + len(s.PriceRange.SessionLows)
-		}
-		if s.Activity != nil {
-			c.ActivityReferences += len(s.Activity.References)
-			c.ActivityMutable += len(s.Activity.Mutable)
-			c.ActivityTargetBlocks += len(s.Activity.FoldedTargets)
-			c.ActivityTargetContributions += s.Activity.FoldedTargetContributions
 		}
 		if s.Qualification != nil {
 			c.QualificationGateBars += len(s.Qualification.FinalizedGateBars)
@@ -581,12 +450,16 @@ func (e *Engine) installCheckpointLocked(candidate checkpoint.Candidate) Checkpo
 	}
 	scratchState := &engineState{lifecycle: e.state.lifecycle, binding: binding, aggregateEvaluator: evaluator, committedT: immutableTime(image.T0), clockMonotonic: true}
 	scratch := &Engine{mode: e.mode, state: scratchState}
-	staged := scratch.stageAggregateEvaluationAtLocked(image.T0, image.T0)
-	if err := validateAggregateEvaluation(staged); err != nil {
-		return CheckpointInstallResult{Disposition: CheckpointInvalid, Reason: CheckpointReasonEvaluation}
+	for index := range binding.symbols {
+		symbol := &binding.symbols[index]
+		if symbol.aggregates == nil {
+			continue
+		}
+		advanceSelectionMark(symbol.aggregates, binding, image.T0)
+		evaluateQualificationThrough(symbol.aggregates, binding, image.T0, image.T0)
+		maintainCurrentFieldStatuses(binding, symbol, image.T0, nil)
 	}
-	scratch.applyAggregateCandidateLocked(image.T0, image.T0)
-	staged = scratch.stageAggregateEvaluationAtLocked(image.T0, image.T0)
+	staged := scratch.stageAggregateEvaluationAtLocked(image.T0, image.T0)
 	if err := validateAggregateEvaluation(staged); err != nil {
 		return CheckpointInstallResult{Disposition: CheckpointInvalid, Reason: CheckpointReasonEvaluation}
 	}
@@ -713,17 +586,11 @@ func buildCheckpointSymbol(binding *installedBinding, source checkpoint.Symbol, 
 	if err != nil {
 		return nil, err
 	}
-	if state.priceRange != nil {
-		for _, record := range state.tail {
-			retainMutablePriceRangeEvidence(state.priceRange, *record)
-		}
-	}
 	for _, record := range state.tail {
 		retainMutableMVPMeasurement(state, *record)
 	}
-	state.activity, err = restoreActivity(source.Activity, binding, t0)
-	if err != nil {
-		return nil, err
+	if source.Activity != nil {
+		return nil, errors.New("legacy activity checkpoint unsupported")
 	}
 	state.qualification, err = restoreQualification(source.Qualification, binding, t0)
 	if err != nil {
@@ -733,7 +600,7 @@ func buildCheckpointSymbol(binding *installedBinding, source checkpoint.Symbol, 
 	rebuildTailCoverage(state, binding)
 	if source.CommittedMark != nil {
 		wanted := source.CommittedMark.WindowStart
-		mark, ok := latestMarkBefore(state, t0)
+		mark, ok := latestMarkBeforeCompact(state, t0)
 		if !ok || mark.windowStart != wanted {
 			return nil, errors.New("committed mark mismatch")
 		}
@@ -772,16 +639,11 @@ func restorePriceRange(v *checkpoint.PriceRange, b *installedBinding, t0 time.Ti
 	if v == nil {
 		return nil, nil
 	}
-	r := &priceRangeFeatureState{firstStart: v.FirstStart, rollingFloor: v.RollingFloor, finalizedThrough: v.FinalizedThrough, firstOpen: v.FirstOpen, sessionHigh: v.SessionHigh, sessionLow: v.SessionLow, hasFirst: v.HasFirst, hasSessionExtrema: v.HasSessionExtrema, boundExceeded: v.BoundExceeded, result: unavailablePriceRangeResult(time.Time{})}
+	if v.RollingFloor != 0 || len(v.Highs) != 0 || len(v.Lows) != 0 {
+		return nil, errors.New("legacy price range checkpoint unsupported")
+	}
+	r := &priceRangeFeatureState{firstStart: v.FirstStart, finalizedThrough: v.FinalizedThrough, firstOpen: v.FirstOpen, sessionHigh: v.SessionHigh, sessionLow: v.SessionLow, hasFirst: v.HasFirst, hasSessionExtrema: v.HasSessionExtrema, boundExceeded: v.BoundExceeded, result: unavailablePriceRangeResult(time.Time{})}
 	var err error
-	r.highs, err = restoreExtrema(v.Highs, b, t0)
-	if err != nil {
-		return nil, err
-	}
-	r.lows, err = restoreExtrema(v.Lows, b, t0)
-	if err != nil {
-		return nil, err
-	}
 	r.sessionHighs, err = restoreExtrema(v.SessionHighs, b, t0)
 	if err != nil {
 		return nil, err
@@ -790,7 +652,7 @@ func restorePriceRange(v *checkpoint.PriceRange, b *installedBinding, t0 time.Ti
 	if err != nil {
 		return nil, err
 	}
-	if len(r.highs) > maximumExtremaPointsPerDeque || len(r.lows) > maximumExtremaPointsPerDeque || len(r.sessionHighs) > sessionSeconds || len(r.sessionLows) > sessionSeconds || r.finalizedThrough > t0.Unix() || r.rollingFloor > t0.Unix() {
+	if len(r.sessionHighs) > maximumSessionExtremaPoints || len(r.sessionLows) > maximumSessionExtremaPoints || r.finalizedThrough > t0.Unix() {
 		return nil, errors.New("price range")
 	}
 	if (r.hasFirst && (r.firstStart < b.sessionStart.Unix() || r.firstStart >= t0.Unix() || !finitePositiveFeature(r.firstOpen))) ||
@@ -817,89 +679,6 @@ func restoreExtrema(v []checkpoint.ExtremaPoint, b *installedBinding, t0 time.Ti
 		last = p.WindowStart
 	}
 	return r, nil
-}
-
-func restoreActivity(v *checkpoint.Activity, b *installedBinding, t0 time.Time) (*activityFeatureState, error) {
-	if v == nil {
-		return nil, nil
-	}
-	r := &activityFeatureState{references: make(map[int64]*activityBlockSummary), mutable: make(map[int64]activityMutableBlock), foldedTargets: make(map[int64]activityFoldedTargetBlock), boundExceeded: v.BoundExceeded, result: unavailableActivityResult(time.Time{})}
-	for _, s := range v.References {
-		x := restoreActivitySummary(s)
-		if s.End > b.sessionEnd.Unix() || s.End > t0.Unix() || r.references[s.End] != nil || !validCheckpointActivitySummary(x, s.End) {
-			return nil, errors.New("activity reference")
-		}
-		normalizeCheckpointActivitySummary(&x)
-		r.references[s.End] = &x
-	}
-	for _, m := range v.Mutable {
-		folded, current := restoreActivitySummary(m.Folded), restoreActivitySummary(m.Current)
-		blockStart := time.Unix(m.End, 0).UTC().Add(-activityBlockDuration)
-		if m.End > b.sessionEnd.Unix() || !blockStart.Before(t0) || r.mutable[m.End].current.end != 0 || !validCheckpointActivitySummary(folded, m.End) || !validCheckpointActivitySummary(current, m.End) {
-			return nil, errors.New("activity mutable")
-		}
-		normalizeCheckpointActivitySummary(&folded)
-		normalizeCheckpointActivitySummary(&current)
-		r.mutable[m.End] = activityMutableBlock{folded: folded, current: current}
-	}
-	count := 0
-	for _, x := range v.FoldedTargets {
-		if x.End > b.sessionEnd.Unix() || r.foldedTargets[x.End].present != 0 || x.Invalid&^x.Present != 0 {
-			return nil, errors.New("activity target")
-		}
-		block := activityFoldedTargetBlock{transactions: x.Transactions, highs: x.Highs, lows: x.Lows, present: x.Present, invalid: x.Invalid}
-		start := time.Unix(x.End, 0).UTC().Add(-activityBlockDuration)
-		for slot := 0; slot < 30; slot++ {
-			mask := uint32(1) << uint(slot)
-			if block.present&mask == 0 {
-				if block.transactions[slot] != 0 || block.highs[slot] != 0 || block.lows[slot] != 0 {
-					return nil, errors.New("activity unused slot")
-				}
-				continue
-			}
-			if block.invalid&mask != 0 {
-				if block.transactions[slot] != 0 || block.highs[slot] != 0 || block.lows[slot] != 0 {
-					return nil, errors.New("activity invalid slot")
-				}
-			} else {
-				if !start.Add(time.Duration(slot)*time.Second).Before(t0) || !finiteFeature(block.transactions[slot]) || block.transactions[slot] < 0 || !finitePositiveFeature(block.highs[slot]) || !finitePositiveFeature(block.lows[slot]) || block.highs[slot] < block.lows[slot] {
-					return nil, errors.New("activity slot")
-				}
-			}
-			count++
-		}
-		r.foldedTargets[x.End] = block
-	}
-	r.foldedTargetContributions = count
-	if count != v.FoldedTargetContributions || len(r.references) > maximumActivityReferences || len(r.mutable) > maximumMutableActivityBlockIDs || len(r.foldedTargets) > maximumActivityTargetBlocks || count > maximumActivityTargetContributions {
-		return nil, errors.New("activity bounds")
-	}
-	return r, nil
-}
-
-func validCheckpointActivitySummary(s activityBlockSummary, end int64) bool {
-	if s.end != end || s.aggregateCount > 30 {
-		return false
-	}
-	if s.invalid {
-		return s.aggregateCount == 0 && s.transactionSum == (activityExactSum{}) && s.transactions == 0 && s.high == 0 && s.low == 0 && s.expansionBPS == 0
-	}
-	if s.aggregateCount == 0 {
-		return s.transactionSum == (activityExactSum{}) && s.transactions == 0 && s.high == 0 && (s.low == 0 || math.IsInf(s.low, 1)) && s.expansionBPS == 0
-	}
-	wantTransactions, finite := s.transactionSum.float64()
-	wantExpansion := 10_000 * math.Log(s.high/s.low)
-	return finite && s.transactions == wantTransactions && finiteFeature(s.transactions) && s.transactions >= 0 && finitePositiveFeature(s.high) && finitePositiveFeature(s.low) &&
-		s.high >= s.low && finiteFeature(s.expansionBPS) && s.expansionBPS == wantExpansion
-}
-func restoreActivitySummary(s checkpoint.ActivitySummary) activityBlockSummary {
-	return activityBlockSummary{end: s.End, transactionSum: activityExactSum(s.TransactionSum), transactions: s.Transactions, high: s.High, low: s.Low, expansionBPS: s.ExpansionBPS, aggregateCount: s.AggregateCount, invalid: s.Invalid}
-}
-
-func normalizeCheckpointActivitySummary(s *activityBlockSummary) {
-	if !s.invalid && s.aggregateCount == 0 {
-		s.low = math.Inf(1)
-	}
 }
 
 func restoreQualification(v *checkpoint.Qualification, b *installedBinding, t0 time.Time) (*qualificationState, error) {

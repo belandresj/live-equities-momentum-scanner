@@ -72,10 +72,9 @@ func validProjectedEvaluation() engine.ReplayEvaluationView {
 	feature.Statuses[0], feature.Reasons[0], feature.Pairs[0][0] = 1, 1, 1
 	return engine.ReplayEvaluationView{
 		At: time.Date(2026, 8, 12, 18, 44, 48, 0, time.UTC), Mode: "qualified_current",
-		Population:    engine.ReplayPopulationView{UniverseTotal: 1, ValidPriorClose: 1, TrustedRankableMark: 1, CoveredPopulation: 1},
-		Qualification: engine.ReplayQualificationAccountingView{NotYetPassed: 1},
-		Features: engine.ReplayAllFeatureAccountingView{DayPercent: feature, SessionVolume: feature, FromOpenPercent: feature, DayRange: feature, Activity30s: feature, Move30s: feature,
-			From4AMPercent: feature, HODDrawdown: feature, SessionRange: feature, Rolling30: feature, Rolling60: feature, Activity: feature},
+		Population:           engine.ReplayPopulationView{UniverseTotal: 1, ValidPriorClose: 1, TrustedRankableMark: 1, CoveredPopulation: 1},
+		Qualification:        engine.ReplayQualificationAccountingView{NotYetPassed: 1},
+		Features:             engine.ReplayAllFeatureAccountingView{DayPercent: feature, SessionVolume: feature, FromOpenPercent: feature, DayRange: feature, Activity30s: feature, Move30s: feature},
 		Floats:               engine.ReplayFloatAccountingView{Unavailable: 1},
 		PopulationTransition: engine.ReplayPopulationTransitionDiagnosticView{BootstrapUnknown: 1, TrustedByLaterLiveMark: 1},
 		KnownRankableCount:   1, Rows: []engine.ReplayRankingRowView{{Rank: 1, Symbol: "AAA"}},

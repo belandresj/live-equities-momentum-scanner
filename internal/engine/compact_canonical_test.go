@@ -42,7 +42,7 @@ func TestPLBRA1Canonical(t *testing.T) {
 		foreign := liveAggregate(binding, "MISSING", wholeNow.Add(-time.Second), 1, 7)
 		foreign.BindingIdentity = mutateIdentity(binding.Identity())
 		applyAggregate(t, e, foreign, DispositionAggregateFenced, ReasonBinding)
-		if _, ok := e.observeSelectedAggregate("NOT-BOUND"); ok {
+		if _, ok := e.state.binding.index["NOT-BOUND"]; ok {
 			t.Fatal("foreign symbol acquired a canonical slot")
 		}
 		closeAndWait(t, e)
@@ -96,19 +96,6 @@ func TestPLBRA1Canonical(t *testing.T) {
 			selection[0].Affected.Proofs != aggregateProofAll || selection[1].CanonicalRevision != 0 {
 			t.Fatalf("symbol-local revision/notification = %+v other=%+v", selection[0], selection[1])
 		}
-		view, ok := e.observeSelectedAggregate("AAA")
-		if !ok || len(view.Tail) != maximumTailRecords || view.Tail[len(view.Tail)-1].Values.Close != 10.75 {
-			t.Fatalf("selected canonical view = ok:%v tail:%d latest:%+v", ok, len(view.Tail), view.Tail[len(view.Tail)-1])
-		}
-		if view.Bounds.TailRecords > view.Bounds.TailRecordLimit || view.Bounds.TailChargedBytes > view.Bounds.TailChargedByteLimit || view.Bounds.BoundHits != 0 {
-			t.Fatalf("retained canonical bounds = %+v", view.Bounds)
-		}
-		view.Tail[len(view.Tail)-1].Values.Close = 999
-		again, _ := e.observeSelectedAggregate("AAA")
-		if again.Tail[len(again.Tail)-1].Values.Close != 10.75 {
-			t.Fatal("consumer mutated canonical state through selected view")
-		}
-
 		sealed := historicalAggregate(binding, "AAA", start, 1)
 		sealed.Values = changedClose(sealed, 11).Values
 		sealedProof := proofFor(binding, sealed, start, start.Add(time.Second))

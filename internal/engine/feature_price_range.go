@@ -7,8 +7,7 @@ import (
 )
 
 const (
-	maximumExtremaPointsPerDeque = 60 * 60
-	maximumPriceRangeDequePoints = 2 * maximumExtremaPointsPerDeque
+	maximumSessionExtremaPoints = sessionSeconds
 )
 
 type aggregateFeatureStatus string
@@ -27,7 +26,6 @@ const (
 	featureReasonBeforeFirstPrint      aggregateFeatureReason = "before_first_print"
 	featureReasonHistoryIncomplete     aggregateFeatureReason = "history_incomplete"
 	featureReasonPriorCloseUnavailable aggregateFeatureReason = "prior_close_unavailable"
-	featureReasonNoAggregateInTarget   aggregateFeatureReason = "no_aggregate_in_target"
 	featureReasonRollingWarmup         aggregateFeatureReason = "rolling_warmup"
 	featureReasonReferenceWarmup       aggregateFeatureReason = "reference_warmup"
 	featureReasonZeroWidth             aggregateFeatureReason = "zero_width"
@@ -43,9 +41,8 @@ type aggregateFeatureField struct {
 }
 
 type priceRangeFeatureResult struct {
-	at                                      time.Time
-	dayPercent, from4AMPercent, hodDrawdown aggregateFeatureField
-	sessionRange, rolling30, rolling60      aggregateFeatureField
+	at                                    time.Time
+	dayPercent, fromOpenPercent, dayRange aggregateFeatureField
 }
 
 type extremaPoint struct {
@@ -53,15 +50,13 @@ type extremaPoint struct {
 	value       float64
 }
 
-// priceRangeFeatureState is the one bounded Component 3 price/range substate
-// inside the canonical symbol owner. The two monotone deques are shared by the
-// 30- and 60-minute queries; mutable aggregate values remain solely in the
-// Component 2 tail.
+// priceRangeFeatureState contains only the bounded sufficient evidence for the
+// current From Open and Day Range fields. Mutable aggregate values remain
+// solely in the canonical correction tail.
 type priceRangeFeatureState struct {
-	firstStart, rollingFloor, finalizedThrough int64
-	firstOpen, sessionHigh, sessionLow         float64
-	hasFirst, hasSessionExtrema                bool
-	highs, lows                                []extremaPoint
+	firstStart, finalizedThrough       int64
+	firstOpen, sessionHigh, sessionLow float64
+	hasFirst, hasSessionExtrema        bool
 	// sessionHighs/sessionLows are cutoff-bearing sufficient extrema evidence,
 	// not raw aggregates. They retain one value per accepted second so a record
 	// beyond stalled committed T cannot change an older as-of query.
@@ -71,13 +66,11 @@ type priceRangeFeatureState struct {
 }
 
 type priceRangeTailView struct {
-	firstStart                                               int64
-	firstOpen                                                float64
-	hasFirst                                                 bool
-	sessionLow, sessionHigh                                  float64
-	hasSession                                               bool
-	rolling30Low, rolling30High, rolling60Low, rolling60High float64
-	hasRolling30, hasRolling60                               bool
+	firstStart              int64
+	firstOpen               float64
+	hasFirst                bool
+	sessionLow, sessionHigh float64
+	hasSession              bool
 }
 
 func ensurePriceRangeState(state *symbolAggregateState) *priceRangeFeatureState {
@@ -103,55 +96,10 @@ func foldPriceRangeAggregate(state *symbolAggregateState, binding *installedBind
 	features.sessionLows = insertExtremaEvidence(features.sessionLows, extremaPoint{start, record.values.Low})
 	if end := record.windowEnd.Unix(); end > features.finalizedThrough {
 		features.finalizedThrough = end
-		floor := max(binding.sessionStart.Unix(), end-int64((60*time.Minute)/time.Second))
-		if floor > features.rollingFloor {
-			features.rollingFloor = floor
-			features.highs = trimExtrema(features.highs, floor)
-			features.lows = trimExtrema(features.lows, floor)
-		}
 	}
-	if len(features.highs) > maximumExtremaPointsPerDeque {
-		features.highs = features.highs[len(features.highs)-maximumExtremaPointsPerDeque:]
+	if len(features.sessionHighs) > maximumSessionExtremaPoints || len(features.sessionLows) > maximumSessionExtremaPoints {
 		features.boundExceeded = true
 	}
-	if len(features.lows) > maximumExtremaPointsPerDeque {
-		features.lows = features.lows[len(features.lows)-maximumExtremaPointsPerDeque:]
-		features.boundExceeded = true
-	}
-	if len(features.highs)+len(features.lows) > maximumPriceRangeDequePoints {
-		features.boundExceeded = true
-	}
-	if len(features.sessionHighs) > sessionSeconds || len(features.sessionLows) > sessionSeconds {
-		features.boundExceeded = true
-	}
-}
-
-// retainMutablePriceRangeEvidence maintains the existing checkpointed high/low
-// evidence for canonical tail records. Insert-at-identity replaces a revision
-// exactly. When a record folds, compactAggregateLocked removes this mutable
-// entry after foldPriceRangeAggregate installs the session evidence. Canonical
-// aggregate values remain owned only by tail.
-func retainMutablePriceRangeEvidence(features *priceRangeFeatureState, record canonicalAggregate) {
-	start := record.windowStart.Unix()
-	features.highs = insertExtremaEvidence(features.highs, extremaPoint{start, record.values.High})
-	features.lows = insertExtremaEvidence(features.lows, extremaPoint{start, record.values.Low})
-}
-
-func removeMutablePriceRangeEvidence(features *priceRangeFeatureState, start int64) {
-	if features == nil {
-		return
-	}
-	features.highs = removeExtremaEvidence(features.highs, start)
-	features.lows = removeExtremaEvidence(features.lows, start)
-}
-
-func removeExtremaEvidence(points []extremaPoint, start int64) []extremaPoint {
-	index := sort.Search(len(points), func(i int) bool { return points[i].windowStart >= start })
-	if index == len(points) || points[index].windowStart != start {
-		return points
-	}
-	copy(points[index:], points[index+1:])
-	return points[:len(points)-1]
 }
 
 func insertExtremaEvidence(points []extremaPoint, point extremaPoint) []extremaPoint {
@@ -164,42 +112,6 @@ func insertExtremaEvidence(points []extremaPoint, point extremaPoint) []extremaP
 	copy(points[index+1:], points[index:])
 	points[index] = point
 	return points
-}
-
-// insertMonotonePoint produces the same canonical suffix-extrema sequence as
-// chronological append, including for out-of-order finalized historical fill.
-func insertMonotonePoint(points []extremaPoint, point extremaPoint, maximum bool) []extremaPoint {
-	index := sort.Search(len(points), func(i int) bool { return points[i].windowStart >= point.windowStart })
-	if index < len(points) && points[index].windowStart == point.windowStart {
-		points = append(points[:index], points[index+1:]...)
-	}
-	index = sort.Search(len(points), func(i int) bool { return points[i].windowStart > point.windowStart })
-	dominatedByNext := index < len(points) && ((maximum && points[index].value >= point.value) || (!maximum && points[index].value <= point.value))
-	if dominatedByNext {
-		return points
-	}
-	removeFrom := index
-	for removeFrom > 0 {
-		value := points[removeFrom-1].value
-		if (maximum && value > point.value) || (!maximum && value < point.value) {
-			break
-		}
-		removeFrom--
-	}
-	result := make([]extremaPoint, 0, len(points)-(index-removeFrom)+1)
-	result = append(result, points[:removeFrom]...)
-	result = append(result, point)
-	result = append(result, points[index:]...)
-	return result
-}
-
-func trimExtrema(points []extremaPoint, floor int64) []extremaPoint {
-	index := sort.Search(len(points), func(i int) bool { return points[i].windowStart >= floor })
-	if index == 0 {
-		return points
-	}
-	copy(points, points[index:])
-	return points[:len(points)-index]
 }
 
 // runAggregateFeatureContributorLocked is the single fixed-order Component 3
@@ -222,12 +134,6 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 			}
 			target = *e.state.committedT
 		}
-		maintenanceAt := target
-		if e.state.committedT != nil {
-			// Until the sole central gate accepts a later target, future support
-			// must not evict the retained state for the current committed T.
-			maintenanceAt = *e.state.committedT
-		}
 		maintenanceStarted := e.evaluationTimingStart()
 		maintainSymbol := func(index int) {
 			symbol := &e.state.binding.symbols[index]
@@ -249,9 +155,6 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 						}
 						maintainCurrentFieldStatuses(e.state.binding, symbol, target, invalid)
 					}
-				}
-				if e.mode == RunModeReplay && !e.hiddenReplayWarmupLocked(node) {
-					maintainActivityState(state, e.state.binding, node.admissionTime, maintenanceAt)
 				}
 			}
 		}
@@ -306,21 +209,6 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 	state := e.state.binding.symbols[index].aggregates
 	if state == nil {
 		return nil
-	}
-	if e.mode == RunModeReplay {
-		activity := ensureActivityState(state)
-		if code == DispositionAggregateWithdrawn {
-			removeFoldedActivityTarget(activity, e.state.binding, node.aggregate.WindowStart)
-		}
-		blockEnd := activityBlockEnd(e.state.binding, node.aggregate.WindowStart)
-		recomputeMutableActivityBlock(state, e.state.binding, blockEnd, node.admissionTime)
-		boundary := node.admissionTime
-		if e.state.committedT != nil {
-			boundary = *e.state.committedT
-		} else if e.state.latestTarget != nil {
-			boundary = *e.state.latestTarget
-		}
-		maintainActivityState(state, e.state.binding, node.admissionTime, boundary)
 	}
 	if e.state.committedT != nil {
 		qualification := ensureQualificationState(state)
@@ -418,8 +306,8 @@ func maintainCurrentFieldStatuses(binding *installedBinding, symbol *coreSymbol,
 	priceStatuses := priceRangeFieldStatuses(binding, symbol, at, mark, hasMark)
 	price := ensurePriceRangeState(state)
 	price.result.at = at
-	price.result.from4AMPercent = priceStatuses.from4AMPercent
-	price.result.sessionRange = priceStatuses.sessionRange
+	price.result.fromOpenPercent = priceStatuses.fromOpenPercent
+	price.result.dayRange = priceStatuses.dayRange
 	measurements := ensureMVPMeasurementState(state)
 	measurements.result = mvpMeasurementFieldStatuses(binding, state, at, invalid)
 }
@@ -458,9 +346,6 @@ func (e *Engine) selectedTrustClosureCandidateLocked(symbolIndex int, at time.Ti
 	candidate.rows[rowIndex].canonicalRevision = state.canonicalRevision
 	update := &candidate.updates[symbolIndex]
 	update.present, update.qualification = true, state.qualification
-	if state.activity != nil {
-		update.activity = state.activity.result
-	}
 	update.committedLatest = committedMark(mark)
 	candidate.enrichedRows--
 	e.enrichSelectedRowLocked(&candidate, rowIndex, at)
@@ -509,7 +394,7 @@ func priceRangeFieldStatuses(binding *installedBinding, symbol *coreSymbol, at t
 	}
 	if features.boundExceeded {
 		invalid := aggregateFeatureField{status: featureInvalid, reason: featureReasonStateBoundExceeded}
-		result.from4AMPercent, result.sessionRange = invalid, invalid
+		result.fromOpenPercent, result.dayRange = invalid, invalid
 		return result
 	}
 	tail := priceRangeTailViewAt(state, features, binding, at)
@@ -518,9 +403,9 @@ func priceRangeFieldStatuses(binding *installedBinding, symbol *coreSymbol, at t
 		firstStart, firstOpen, hasFirst = tail.firstStart, tail.firstOpen, true
 	}
 	if hasFirst {
-		result.from4AMPercent = historyTrust(state, binding, binding.sessionStart, time.Unix(firstStart, 0).UTC(), false)
-		if result.from4AMPercent.status == featureCurrent && (!finitePositiveFeature(mark.values.Close) || !finitePositiveFeature(firstOpen)) {
-			result.from4AMPercent = aggregateFeatureField{status: featureInvalid, reason: featureReasonInvalidInput}
+		result.fromOpenPercent = historyTrust(state, binding, binding.sessionStart, time.Unix(firstStart, 0).UTC(), false)
+		if result.fromOpenPercent.status == featureCurrent && (!finitePositiveFeature(mark.values.Close) || !finitePositiveFeature(firstOpen)) {
+			result.fromOpenPercent = aggregateFeatureField{status: featureInvalid, reason: featureReasonInvalidInput}
 		}
 	}
 	sessionLow, sessionHigh, hasSession := 0.0, 0.0, false
@@ -533,13 +418,13 @@ func priceRangeFieldStatuses(binding *installedBinding, symbol *coreSymbol, at t
 		sessionLow, sessionHigh, hasSession = mergeRangeEvidence(sessionLow, sessionHigh, hasSession, tail.sessionLow, tail.sessionHigh)
 	}
 	if hasSession {
-		result.sessionRange = historyTrust(state, binding, binding.sessionStart, at, false)
-		if result.sessionRange.status == featureCurrent {
+		result.dayRange = historyTrust(state, binding, binding.sessionStart, at, false)
+		if result.dayRange.status == featureCurrent {
 			switch {
 			case !finitePositiveFeature(mark.values.Close) || !finitePositiveFeature(sessionLow) || !finitePositiveFeature(sessionHigh) || sessionLow > sessionHigh:
-				result.sessionRange = aggregateFeatureField{status: featureInvalid, reason: featureReasonInvalidInput}
+				result.dayRange = aggregateFeatureField{status: featureInvalid, reason: featureReasonInvalidInput}
 			case sessionLow == sessionHigh:
-				result.sessionRange = aggregateFeatureField{status: featureUnavailable, reason: featureReasonZeroWidth}
+				result.dayRange = aggregateFeatureField{status: featureUnavailable, reason: featureReasonZeroWidth}
 			}
 		}
 	}
@@ -611,15 +496,6 @@ func (e *Engine) recordAggregateEvaluationStartLocked(node *queueNode, target ti
 	}
 }
 
-func evaluatePriceRangeFeatures(binding *installedBinding, symbol *coreSymbol, at time.Time) priceRangeFeatureResult {
-	state := symbol.aggregates
-	if state == nil {
-		return unavailablePriceRangeResult(at)
-	}
-	mark, hasMark := latestMarkBefore(state, at)
-	return evaluatePriceRangeFeaturesWithMark(binding, symbol, at, mark, hasMark)
-}
-
 func (e *Engine) evaluatePriceRangeFeaturesLocked(binding *installedBinding, symbol *coreSymbol, at time.Time) priceRangeFeatureResult {
 	if symbol == nil || symbol.aggregates == nil {
 		return unavailablePriceRangeResult(at)
@@ -643,8 +519,7 @@ func evaluatePriceRangeFeaturesWithMark(binding *installedBinding, symbol *coreS
 
 	if features.boundExceeded {
 		invalid := aggregateFeatureField{status: featureInvalid, reason: featureReasonStateBoundExceeded}
-		result.from4AMPercent, result.hodDrawdown = invalid, invalid
-		result.sessionRange, result.rolling30, result.rolling60 = invalid, invalid, invalid
+		result.fromOpenPercent, result.dayRange = invalid, invalid
 		return result
 	}
 	tail := priceRangeTailViewAt(state, features, binding, at)
@@ -665,55 +540,30 @@ func evaluatePriceRangeFeaturesWithMark(binding *installedBinding, symbol *coreS
 	if hasFirst {
 		trust := historyTrust(state, binding, binding.sessionStart, time.Unix(firstStart, 0).UTC(), false)
 		if trust.status == featureCurrent {
-			result.from4AMPercent = percentChange(mark.values.Close, firstOpen)
+			result.fromOpenPercent = percentChange(mark.values.Close, firstOpen)
 		} else {
-			result.from4AMPercent = trust
+			result.fromOpenPercent = trust
 		}
 	}
 	if hasSession {
 		trust := historyTrust(state, binding, binding.sessionStart, at, false)
 		if trust.status == featureCurrent {
-			result.hodDrawdown = boundedPercentChange(mark.values.Close, sessionHigh, -100, 0)
-			result.sessionRange = rangePosition(mark.values.Close, sessionLow, sessionHigh)
+			result.dayRange = rangePosition(mark.values.Close, sessionLow, sessionHigh)
 		} else {
-			result.hodDrawdown, result.sessionRange = trust, trust
+			result.dayRange = trust
 		}
 	}
-	result.rolling30 = evaluateRollingRange(state, binding, mark.values.Close, at, 30*time.Minute, tail.rolling30Low, tail.rolling30High, tail.hasRolling30)
-	result.rolling60 = evaluateRollingRange(state, binding, mark.values.Close, at, 60*time.Minute, tail.rolling60Low, tail.rolling60High, tail.hasRolling60)
 	return result
 }
 
 func unavailablePriceRangeResult(at time.Time) priceRangeFeatureResult {
 	result := priceRangeFeatureResult{at: at}
 	missing := aggregateFeatureField{status: featureUnavailable, reason: featureReasonBeforeFirstPrint}
-	result.dayPercent, result.from4AMPercent, result.hodDrawdown = missing, missing, missing
-	result.sessionRange, result.rolling30, result.rolling60 = missing, missing, missing
+	result.dayPercent, result.fromOpenPercent, result.dayRange = missing, missing, missing
 	return result
 }
 
-func latestMarkBefore(state *symbolAggregateState, at time.Time) (canonicalAggregate, bool) {
-	return latestMarkBeforeCompact(state, at)
-}
-
-func latestMarkBeforeReplay(state *symbolAggregateState, at time.Time) (canonicalAggregate, bool) {
-	result, found := latestMarkBeforeCompact(state, at)
-	// Retained replay tooling may be many seconds ahead of its logical target
-	// during hidden warm-up and has no previously committed live boundary.
-	// Preserve that unsupported-mode compatibility here. Supported live B1
-	// selection calls latestMarkBeforeCompact directly and never scans the tail.
-	for _, record := range state.tail {
-		if record.windowStart.Before(at) && (!found || record.windowStart.After(result.windowStart)) {
-			result, found = *record, true
-		}
-	}
-	return result, found
-}
-
 func (e *Engine) latestSelectionMarkLocked(state *symbolAggregateState, at time.Time) (canonicalAggregate, bool) {
-	if e.mode == RunModeReplay {
-		return latestMarkBeforeReplay(state, at)
-	}
 	return latestMarkBeforeCompact(state, at)
 }
 
@@ -842,49 +692,8 @@ func canonicalFromCommitted(mark *committedAggregateMark) (canonicalAggregate, b
 	}, true
 }
 
-func evaluateRollingRange(state *symbolAggregateState, binding *installedBinding, last float64, at time.Time, width time.Duration, tailLow, tailHigh float64, tailFound bool) aggregateFeatureField {
-	start := at.Add(-width)
-	if start.Before(binding.sessionStart) {
-		start = binding.sessionStart
-	}
-	trust := historyTrust(state, binding, start, at, true)
-	if trust.status != featureCurrent {
-		return trust
-	}
-	features := ensurePriceRangeState(state)
-	low, high, found := extremaEvidenceWithin(features.sessionLows, features.sessionHighs, start.Unix(), at.Unix())
-	if tailFound {
-		low, high, found = mergeRangeEvidence(low, high, found, tailLow, tailHigh)
-	}
-	if !found {
-		return aggregateFeatureField{status: featureUnavailable, reason: featureReasonBeforeFirstPrint}
-	}
-	return rangePosition(last, low, high)
-}
-
 func priceRangeTailViewAt(state *symbolAggregateState, features *priceRangeFeatureState, binding *installedBinding, at time.Time) priceRangeTailView {
 	result := priceRangeTailView{}
-	rolling30Start := at.Add(-30 * time.Minute)
-	if rolling30Start.Before(binding.sessionStart) {
-		rolling30Start = binding.sessionStart
-	}
-	rolling60Start := at.Add(-60 * time.Minute)
-	if rolling60Start.Before(binding.sessionStart) {
-		rolling60Start = binding.sessionStart
-	}
-	indexed := len(features.highs) == len(state.tail) && len(features.lows) == len(state.tail)
-	if indexed {
-		if len(features.highs) != 0 && features.highs[0].windowStart < at.Unix() {
-			if record := state.tail[features.highs[0].windowStart]; record != nil {
-				result.firstStart, result.firstOpen, result.hasFirst = record.windowStart.Unix(), record.values.Open, true
-			}
-		}
-		populatePriceRangeTailExtrema(&result, features.lows, features.highs, binding.sessionStart.Unix(), rolling60Start.Unix(), rolling30Start.Unix(), at.Unix())
-		return result
-	}
-	// Compatibility/containment fallback for a pre-correction or malformed
-	// in-memory fixture. Production mutation and checkpoint restoration maintain
-	// one high/low point per canonical tail identity.
 	for _, record := range state.tail {
 		if record == nil || !record.windowStart.Before(at) {
 			continue
@@ -894,65 +703,8 @@ func priceRangeTailViewAt(state *symbolAggregateState, features *priceRangeFeatu
 			result.firstStart, result.firstOpen, result.hasFirst = start, record.values.Open, true
 		}
 		result.sessionLow, result.sessionHigh, result.hasSession = mergeRangeEvidence(result.sessionLow, result.sessionHigh, result.hasSession, record.values.Low, record.values.High)
-		if !record.windowStart.Before(rolling60Start) {
-			result.rolling60Low, result.rolling60High, result.hasRolling60 = mergeRangeEvidence(result.rolling60Low, result.rolling60High, result.hasRolling60, record.values.Low, record.values.High)
-			if !record.windowStart.Before(rolling30Start) {
-				result.rolling30Low, result.rolling30High, result.hasRolling30 = mergeRangeEvidence(result.rolling30Low, result.rolling30High, result.hasRolling30, record.values.Low, record.values.High)
-			}
-		}
 	}
 	return result
-}
-
-// populatePriceRangeTailExtrema answers the three nested as-of ranges in one
-// pass over each ordered extrema stream. The former implementation rescanned
-// the retained per-second tail independently for session, 60-minute, and
-// 30-minute results during every full-universe evaluation.
-func populatePriceRangeTailExtrema(result *priceRangeTailView, lows, highs []extremaPoint, sessionStart, rolling60Start, rolling30Start, upper int64) {
-	lowStart := sort.Search(len(lows), func(i int) bool { return lows[i].windowStart >= sessionStart })
-	lowEnd := sort.Search(len(lows), func(i int) bool { return lows[i].windowStart >= upper })
-	for _, point := range lows[lowStart:lowEnd] {
-		if !result.hasSession || point.value < result.sessionLow {
-			result.sessionLow = point.value
-		}
-		result.hasSession = true
-		if point.windowStart >= rolling60Start {
-			if !result.hasRolling60 || point.value < result.rolling60Low {
-				result.rolling60Low = point.value
-			}
-			result.hasRolling60 = true
-			if point.windowStart >= rolling30Start {
-				if !result.hasRolling30 || point.value < result.rolling30Low {
-					result.rolling30Low = point.value
-				}
-				result.hasRolling30 = true
-			}
-		}
-	}
-	hasSessionHigh, hasRolling60High, hasRolling30High := false, false, false
-	highStart := sort.Search(len(highs), func(i int) bool { return highs[i].windowStart >= sessionStart })
-	highEnd := sort.Search(len(highs), func(i int) bool { return highs[i].windowStart >= upper })
-	for _, point := range highs[highStart:highEnd] {
-		if !hasSessionHigh || point.value > result.sessionHigh {
-			result.sessionHigh = point.value
-		}
-		hasSessionHigh = true
-		if point.windowStart >= rolling60Start {
-			if !hasRolling60High || point.value > result.rolling60High {
-				result.rolling60High = point.value
-			}
-			hasRolling60High = true
-			if point.windowStart >= rolling30Start {
-				if !hasRolling30High || point.value > result.rolling30High {
-					result.rolling30High = point.value
-				}
-				hasRolling30High = true
-			}
-		}
-	}
-	result.hasSession = result.hasSession && hasSessionHigh
-	result.hasRolling60 = result.hasRolling60 && hasRolling60High
-	result.hasRolling30 = result.hasRolling30 && hasRolling30High
 }
 
 func mergeRangeEvidence(low, high float64, found bool, candidateLow, candidateHigh float64) (float64, float64, bool) {
@@ -960,15 +712,6 @@ func mergeRangeEvidence(low, high float64, found bool, candidateLow, candidateHi
 		return candidateLow, candidateHigh, true
 	}
 	return min(low, candidateLow), max(high, candidateHigh), true
-}
-
-func extremaWithin(lows, highs []extremaPoint, floor int64) (float64, float64, bool) {
-	lowIndex := sort.Search(len(lows), func(i int) bool { return lows[i].windowStart >= floor })
-	highIndex := sort.Search(len(highs), func(i int) bool { return highs[i].windowStart >= floor })
-	if lowIndex == len(lows) || highIndex == len(highs) {
-		return 0, 0, false
-	}
-	return lows[lowIndex].value, highs[highIndex].value, true
 }
 
 func extremaEvidenceWithin(lows, highs []extremaPoint, floor, upper int64) (float64, float64, bool) {
@@ -1030,14 +773,6 @@ func percentChange(value, base float64) aggregateFeatureField {
 		return aggregateFeatureField{status: featureInvalid, reason: featureReasonInvalidInput}
 	}
 	return aggregateFeatureField{status: featureCurrent, value: result}
-}
-
-func boundedPercentChange(value, base, lower, upper float64) aggregateFeatureField {
-	result := percentChange(value, base)
-	if result.status == featureCurrent && (result.value < lower || result.value > upper) {
-		return aggregateFeatureField{status: featureInvalid, reason: featureReasonInvalidInput}
-	}
-	return result
 }
 
 func rangePosition(last, low, high float64) aggregateFeatureField {

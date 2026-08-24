@@ -924,7 +924,6 @@ func (e *Engine) applyHydrationChunkLocked(node *queueNode) (DispositionCode, Di
 	if e.state.hydration.generation.purpose == HydrationFreshBootstrap && !last.IsZero() {
 		state := e.state.binding.symbols[e.state.binding.index[input.token.symbol]].aggregates
 		advanceFreshHydrationQualification(state, e.state.binding, last.Add(time.Second), input.token.end)
-		pruneFreshHydrationActivityTargets(state.activity, last.Add(time.Second), input.token.end)
 	}
 	addHydrationRows(&entry.rowAccounting, delta)
 	addHydrationRows(&e.state.hydration.generation.rowAccounting, delta)

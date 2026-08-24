@@ -357,11 +357,10 @@ func TestPMVPRankSelectionAndPreselectionHistory(t *testing.T) {
 		state.canonicalRevision++
 		ensurePresence(state).set(sessionSlot(base.state.binding, record.windowStart))
 		retainMutableMVPMeasurement(state, record)
-		retainMutablePriceRangeEvidence(ensurePriceRangeState(state), record)
 		installExactCoverage(state, base.state.binding, base.state.binding.sessionStart, at, nil)
 		state.qualification.accountedThrough = at
 		state.qualification.result.at = at
-		ensurePriceRangeState(state).result = evaluatePriceRangeFeatures(base.state.binding, symbol, at)
+		ensurePriceRangeState(state).result = evaluateTestPriceRangeFeatures(base.state.binding, symbol, at)
 		ensureMVPMeasurementState(state).result = evaluateMVPMeasurements(base.state.binding, state, at, nil)
 	}
 	base.state.committedT = immutableTime(at)
@@ -370,7 +369,6 @@ func TestPMVPRankSelectionAndPreselectionHistory(t *testing.T) {
 	baseRecord.identity.symbol = outsider.symbol
 	outsider.aggregates.tail[baseRecord.identity.start] = &baseRecord
 	retainMutableMVPMeasurement(outsider.aggregates, baseRecord)
-	retainMutablePriceRangeEvidence(ensurePriceRangeState(outsider.aggregates), baseRecord)
 	ensurePresence(outsider.aggregates).set(sessionSlot(base.state.binding, baseRecord.windowStart))
 	outsider.aggregates.provenAbsent.clear(sessionSlot(base.state.binding, baseRecord.windowStart))
 	ensurePresence(outsider.aggregates).set(sessionSlot(base.state.binding, at.Add(-time.Second)))

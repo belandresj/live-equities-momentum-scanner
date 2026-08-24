@@ -197,10 +197,10 @@ type symbolAggregateState struct {
 	tailBoundHits      uint64
 	lastConflict       *aggregateConflictEvidence
 	invalidStarts      []int64
-	// These feature structs are temporary one-way projections for the existing
-	// evaluator. Canonical merge never reads them; LBR-B3 removes them.
+	// Current-product aggregate sufficient state remains selection-independent.
+	// Canonical merge owns the facts; selected-row enrichment is its only value
+	// consumer.
 	priceRange      *priceRangeFeatureState
-	activity        *activityFeatureState
 	mvpMeasurements *mvpMeasurementState
 	qualification   *qualificationState
 	// tailCoverage is bounded derived acceleration for the at-most-961-second
@@ -757,7 +757,6 @@ func (e *Engine) installAggregateLocked(symbol *coreSymbol, input frozenAggregat
 		ensurePresence(state).set(slot)
 		foldQualificationAggregate(state, e.state.binding, record, now)
 		foldPriceRangeAggregate(state, e.state.binding, record)
-		foldActivityAggregate(state, e.state.binding, record, now)
 		foldMVPMeasurementAggregate(state, record)
 		state.prefix.fold(record)
 		if !state.prefix.latestUncertain && (state.olderLatest == nil || record.windowStart.After(state.olderLatest.windowStart)) {
@@ -773,7 +772,6 @@ func (e *Engine) installAggregateLocked(symbol *coreSymbol, input frozenAggregat
 	} else {
 		copyRecord := record
 		state.tail[record.identity.start] = &copyRecord
-		retainMutablePriceRangeEvidence(ensurePriceRangeState(state), record)
 		retainMutableMVPMeasurement(state, record)
 	}
 	if !foldedDirect || !state.prefix.latestUncertain {
@@ -792,7 +790,6 @@ func (e *Engine) installAggregateLocked(symbol *coreSymbol, input frozenAggregat
 func (e *Engine) integrityWithdrawLocked(symbol *coreSymbol, existing *canonicalAggregate) DispositionCode {
 	state := ensureAggregateState(symbol)
 	delete(state.tail, existing.identity.start)
-	removeMutablePriceRangeEvidence(state.priceRange, existing.identity.start)
 	removeMutableMVPMeasurement(state, existing.identity.start)
 	removeFoldedMVPMeasurement(state, existing.identity.start)
 	if state.presence != nil {
@@ -823,7 +820,6 @@ func (e *Engine) historicalWithdrawLocked(symbol *coreSymbol, existing *canonica
 	state := ensureAggregateState(symbol)
 	wasFolded := state.presence != nil && state.presence.has(sessionSlot(e.state.binding, existing.windowStart))
 	delete(state.tail, existing.identity.start)
-	removeMutablePriceRangeEvidence(state.priceRange, existing.identity.start)
 	removeMutableMVPMeasurement(state, existing.identity.start)
 	removeFoldedMVPMeasurement(state, existing.identity.start)
 	slot := sessionSlot(e.state.binding, existing.windowStart)
@@ -942,8 +938,6 @@ func (e *Engine) compactAggregateLocked(state *symbolAggregateState, binding *in
 	}
 	foldQualificationAggregate(state, binding, *record, now)
 	foldPriceRangeAggregate(state, binding, *record)
-	removeMutablePriceRangeEvidence(state.priceRange, record.identity.start)
-	foldActivityAggregate(state, binding, *record, now)
 	foldMVPMeasurementAggregate(state, *record)
 	state.prefix.fold(*record)
 	removeMutableMVPMeasurement(state, record.identity.start)

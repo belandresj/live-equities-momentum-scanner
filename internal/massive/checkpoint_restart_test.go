@@ -116,12 +116,6 @@ func TestC7LIVE01CheckpointCatchupEquivalence(t *testing.T) {
 }
 
 func b2SupportedEvaluation(value engine.ReplayEvaluationView) engine.ReplayEvaluationView {
-	value.Features.From4AMPercent = engine.ReplayFeatureAccountingView{}
-	value.Features.HODDrawdown = engine.ReplayFeatureAccountingView{}
-	value.Features.SessionRange = engine.ReplayFeatureAccountingView{}
-	value.Features.Rolling30 = engine.ReplayFeatureAccountingView{}
-	value.Features.Rolling60 = engine.ReplayFeatureAccountingView{}
-	value.Features.Activity = engine.ReplayFeatureAccountingView{}
 	return value
 }
 

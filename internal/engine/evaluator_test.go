@@ -59,7 +59,7 @@ func TestC3POP02AccountingIntegrityAndOverlap(t *testing.T) {
 	clear(qualification.proofs)
 	qualification.result = qualificationResult{at: at, status: qualificationFinalized, finalProofEnd: qualification.finalProofEnd}
 	second := e.stageAggregateEvaluationLocked(at)
-	if first.population != second.population || first.qualification.provisional != 1 || second.qualification.finalized != 1 || second.features.activity.statuses[0] != 1 {
+	if first.population != second.population || first.qualification.provisional != 1 || second.qualification.finalized != 1 || !second.features.activity30s.reconciles(1) {
 		t.Fatalf("overlap changed primary accounting: first=%+v second=%+v", first, second)
 	}
 	bad := second
@@ -175,12 +175,6 @@ func TestC3PROJ01ModesAndIndependentFields(t *testing.T) {
 	populationOnly := populationOnlyEngine.stageAggregateEvaluationLocked(at)
 	if populationOnly.mode != rankingDegradedBootstrap || populationOnly.reason != rankingReasonIncompletePopulation {
 		t.Fatalf("population-only degradation = %+v", populationOnly)
-	}
-	invalidFieldEngine := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationProvisional}})
-	invalidFieldEngine.state.binding.symbols[0].aggregates.activity = &activityFeatureState{boundExceeded: true}
-	invalidField := invalidFieldEngine.stageAggregateEvaluationLocked(at)
-	if invalidField.mode != rankingQualifiedCurrent || len(invalidField.rows) != 1 || invalidField.rows[0].activity30s.status != featureCurrent {
-		t.Fatalf("invalid field changed ranking = %+v", invalidField)
 	}
 	suppressedEngine := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationProvisional}})
 	suppressedEngine.state.lifecycle, suppressedEngine.state.globalFailure = lifecycleSuppressed, true
@@ -360,9 +354,8 @@ func evaluatorProofEngine(at time.Time, specs []evaluatorSymbol) *Engine {
 			}
 			installExactCoverage(binding.symbols[i].aggregates, binding, coverageStart, at, nil)
 			state := binding.symbols[i].aggregates
-			ensurePriceRangeState(state).result = evaluatePriceRangeFeatures(binding, &binding.symbols[i], at)
+			ensurePriceRangeState(state).result = evaluateTestPriceRangeFeatures(binding, &binding.symbols[i], at)
 			ensureMVPMeasurementState(state).result = evaluateMVPMeasurements(binding, state, at, nil)
-			applyActivityResult(state, binding, evaluateActivityFeatures(binding, state, at))
 		}
 	}
 	engine := &Engine{mode: RunModeLive, state: &engineState{binding: binding, lifecycle: lifecycleLive, committedT: immutableTime(at), clockMonotonic: true}}

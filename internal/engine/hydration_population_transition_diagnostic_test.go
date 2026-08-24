@@ -321,7 +321,7 @@ func runD3OneSymbolPopulationTransition(t *testing.T, unequalOverlap bool) d3Pop
 	ordinaryCoverage, ordinaryCoverageSet := e.state.aggregateEvaluator.coverage[index]
 	state := e.state.binding.symbols[index].aggregates
 	conflictAtOldIdentity := state.historicalConflict != nil && state.historicalConflict.has(sessionSlot(e.state.binding, start))
-	latest, latestSet := latestMarkBefore(state, now)
+	latest, latestSet := latestMarkBeforeCompact(state, now)
 	e.mu.Unlock()
 	latestWindow := time.Time{}
 	if latestSet {

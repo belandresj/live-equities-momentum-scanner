@@ -618,8 +618,7 @@ func pressureQualifiedEvaluation(at time.Time) aggregateEvaluationResult {
 	counts.statuses[1], counts.statuses[2] = 2, 1
 	counts.reasons[0], counts.reasons[9] = 2, 1
 	counts.pairs[1][0], counts.pairs[2][9] = 2, 1
-	features := featureAccounting{dayPercent: counts, sessionVolume: counts, fromOpenPercent: counts, dayRange: counts, activity30s: counts, move30s: counts,
-		from4AMPercent: counts, hodDrawdown: counts, sessionRange: counts, rolling30: counts, rolling60: counts, activity: counts}
+	features := featureAccounting{dayPercent: counts, sessionVolume: counts, fromOpenPercent: counts, dayRange: counts, activity30s: counts, move30s: counts}
 	current := aggregateFeatureField{status: featureCurrent}
 	return aggregateEvaluationResult{
 		at: at, mode: rankingQualifiedCurrent,

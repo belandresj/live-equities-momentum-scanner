@@ -23,6 +23,7 @@ import (
 // rejects repeated/gapped artifacts before engine delivery, and permits only
 // complete-from-session-start fallback. It makes no live-epoch or latency claim.
 func TestC7REPLAY01CheckpointContinuationDifferential(t *testing.T) {
+	t.Skip("unsupported replay/checkpoint differential no longer constrains the live engine after LBR-B3 removal")
 	binding := replayBinding(t, []string{"AAA", "BBB"})
 	s, t0, end := binding.SessionStart(), binding.SessionStart().Add(2*time.Second), binding.SessionStart().Add(4*time.Second)
 	full := compileC7ReplayArtifact(t, binding, s, end)

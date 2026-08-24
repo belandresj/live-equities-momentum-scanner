@@ -37,7 +37,6 @@ type ReplayCanonicalSymbol struct {
 	Features              ReplayFeatureView
 	Qualification         ReplayQualificationView
 	PriceRangeState       ReplayPriceRangeStateView
-	ActivityState         ReplayActivityStateView
 	QualificationState    ReplayQualificationStateView
 	MVPState              ReplayMVPStateView
 }
@@ -55,43 +54,10 @@ type ReplayExtremaPointView struct {
 
 type ReplayPriceRangeStateView struct {
 	Present                                    bool
-	FirstStart, RollingFloor, FinalizedThrough int64
+	FirstStart, FinalizedThrough               int64
 	FirstOpen, SessionHigh, SessionLow         float64
 	HasFirst, HasSessionExtrema, BoundExceeded bool
-	Highs, Lows, SessionHighs, SessionLows     []ReplayExtremaPointView
-}
-
-type ReplayActivitySummaryView struct {
-	End                                   int64
-	TransactionSum                        [34]uint64
-	Transactions, High, Low, ExpansionBPS float64
-	AggregateCount                        uint8
-	Invalid                               bool
-}
-
-type ReplayActivityMutableView struct {
-	End             int64
-	Folded, Current ReplayActivitySummaryView
-}
-type ReplayActivityTargetView struct {
-	End                       int64
-	Transactions, Highs, Lows [30]float64
-	Present, Invalid          uint32
-}
-type ReplayActivityStateView struct {
-	Present                                                                            bool
-	References                                                                         []ReplayActivitySummaryView
-	Mutable                                                                            []ReplayActivityMutableView
-	FoldedTargets                                                                      []ReplayActivityTargetView
-	FoldedTargetContributions                                                          int
-	BoundExceeded                                                                      bool
-	ResultAt                                                                           time.Time
-	ResultActivity                                                                     ReplayFieldView
-	TargetTransactions, TargetExpansionBPS, TransactionPercentile, ExpansionPercentile float64
-	ReferenceCount                                                                     int
-	LookupAt                                                                           time.Time
-	LookupTransactions, LookupExpansions                                               []float64
-	LookupValid                                                                        bool
+	SessionHighs, SessionLows                  []ReplayExtremaPointView
 }
 
 type ReplayQualificationGateBarView struct {
@@ -142,10 +108,8 @@ type ReplayFieldView struct {
 }
 
 type ReplayFeatureView struct {
-	At                                      time.Time
-	DayPercent, From4AMPercent, HODDrawdown ReplayFieldView
-	SessionRange, Rolling30, Rolling60      ReplayFieldView
-	Activity                                ReplayFieldView
+	At                                    time.Time
+	DayPercent, FromOpenPercent, DayRange ReplayFieldView
 }
 
 type ReplayQualificationView struct {
@@ -174,10 +138,9 @@ type ReplayFeatureAccountingView struct {
 }
 
 type ReplayAllFeatureAccountingView struct {
-	SessionVolume, FromOpenPercent, DayRange              ReplayFeatureAccountingView
-	Activity30s, Move30s                                  ReplayFeatureAccountingView
-	DayPercent, From4AMPercent, HODDrawdown, SessionRange ReplayFeatureAccountingView
-	Rolling30, Rolling60, Activity                        ReplayFeatureAccountingView
+	SessionVolume, FromOpenPercent, DayRange ReplayFeatureAccountingView
+	Activity30s, Move30s                     ReplayFeatureAccountingView
+	DayPercent                               ReplayFeatureAccountingView
 }
 
 type ReplayFloatAccountingView struct {
@@ -378,17 +341,12 @@ func replayCanonicalSymbolView(symbol coreSymbol) ReplayCanonicalSymbol {
 		result.OlderLatest = &value
 	}
 	features := unavailablePriceRangeResult(time.Time{})
-	activity := unavailableActivityResult(time.Time{})
 	if state.priceRange != nil {
 		features = state.priceRange.result
 	}
-	if state.activity != nil {
-		activity = state.activity.result
-	}
 	result.Features = ReplayFeatureView{
-		At: features.at, DayPercent: replayFieldView(features.dayPercent), From4AMPercent: replayFieldView(features.from4AMPercent),
-		HODDrawdown: replayFieldView(features.hodDrawdown), SessionRange: replayFieldView(features.sessionRange),
-		Rolling30: replayFieldView(features.rolling30), Rolling60: replayFieldView(features.rolling60), Activity: replayFieldView(activity.activity),
+		At: features.at, DayPercent: replayFieldView(features.dayPercent), FromOpenPercent: replayFieldView(features.fromOpenPercent),
+		DayRange: replayFieldView(features.dayRange),
 	}
 	if state.qualification != nil {
 		qualification := state.qualification.result
@@ -397,7 +355,6 @@ func replayCanonicalSymbolView(symbol coreSymbol) ReplayCanonicalSymbol {
 			FinalProofEnd: qualification.finalProofEnd}
 	}
 	result.PriceRangeState = replayPriceRangeStateView(state.priceRange)
-	result.ActivityState = replayActivityStateView(state.activity)
 	result.QualificationState = replayQualificationStateView(state.qualification)
 	result.MVPState = replayMVPStateView(state.mvpMeasurements)
 	return result
@@ -428,41 +385,10 @@ func replayPriceRangeStateView(state *priceRangeFeatureState) ReplayPriceRangeSt
 	if state == nil {
 		return ReplayPriceRangeStateView{}
 	}
-	return ReplayPriceRangeStateView{Present: true, FirstStart: state.firstStart, RollingFloor: state.rollingFloor,
+	return ReplayPriceRangeStateView{Present: true, FirstStart: state.firstStart,
 		FinalizedThrough: state.finalizedThrough, FirstOpen: state.firstOpen, SessionHigh: state.sessionHigh, SessionLow: state.sessionLow,
 		HasFirst: state.hasFirst, HasSessionExtrema: state.hasSessionExtrema, BoundExceeded: state.boundExceeded,
-		Highs: replayExtremaPointsView(state.highs), Lows: replayExtremaPointsView(state.lows),
 		SessionHighs: replayExtremaPointsView(state.sessionHighs), SessionLows: replayExtremaPointsView(state.sessionLows)}
-}
-
-func replayActivitySummaryView(value activityBlockSummary) ReplayActivitySummaryView {
-	return ReplayActivitySummaryView{End: value.end, TransactionSum: value.transactionSum, Transactions: value.transactions,
-		High: value.high, Low: value.low, ExpansionBPS: value.expansionBPS, AggregateCount: value.aggregateCount, Invalid: value.invalid}
-}
-
-func replayActivityStateView(state *activityFeatureState) ReplayActivityStateView {
-	if state == nil {
-		return ReplayActivityStateView{}
-	}
-	result := ReplayActivityStateView{Present: true, FoldedTargetContributions: state.foldedTargetContributions,
-		BoundExceeded: state.boundExceeded, ResultAt: state.result.at, ResultActivity: replayFieldView(state.result.activity),
-		TargetTransactions: state.result.targetTransactions, TargetExpansionBPS: state.result.targetExpansionBPS,
-		TransactionPercentile: state.result.transactionPercentile, ExpansionPercentile: state.result.expansionPercentile,
-		ReferenceCount: state.result.referenceCount, LookupAt: state.referenceLookup.at,
-		LookupTransactions: append([]float64(nil), state.referenceLookup.transactions...),
-		LookupExpansions:   append([]float64(nil), state.referenceLookup.expansions...), LookupValid: state.referenceLookup.valid}
-	for _, end := range sortedInt64Keys(state.references) {
-		result.References = append(result.References, replayActivitySummaryView(*state.references[end]))
-	}
-	for _, end := range sortedInt64Keys(state.mutable) {
-		value := state.mutable[end]
-		result.Mutable = append(result.Mutable, ReplayActivityMutableView{End: end, Folded: replayActivitySummaryView(value.folded), Current: replayActivitySummaryView(value.current)})
-	}
-	for _, end := range sortedInt64Keys(state.foldedTargets) {
-		value := state.foldedTargets[end]
-		result.FoldedTargets = append(result.FoldedTargets, ReplayActivityTargetView{End: end, Transactions: value.transactions, Highs: value.highs, Lows: value.lows, Present: value.present, Invalid: value.invalid})
-	}
-	return result
 }
 
 func replayQualificationStateView(state *qualificationState) ReplayQualificationStateView {
@@ -525,10 +451,7 @@ func replayEvaluationView(value aggregateEvaluationResult) ReplayEvaluationView 
 			SessionVolume: replayFeatureAccountingView(value.features.sessionVolume), FromOpenPercent: replayFeatureAccountingView(value.features.fromOpenPercent),
 			DayRange: replayFeatureAccountingView(value.features.dayRange), Activity30s: replayFeatureAccountingView(value.features.activity30s),
 			Move30s:    replayFeatureAccountingView(value.features.move30s),
-			DayPercent: replayFeatureAccountingView(value.features.dayPercent), From4AMPercent: replayFeatureAccountingView(value.features.from4AMPercent),
-			HODDrawdown: replayFeatureAccountingView(value.features.hodDrawdown), SessionRange: replayFeatureAccountingView(value.features.sessionRange),
-			Rolling30: replayFeatureAccountingView(value.features.rolling30), Rolling60: replayFeatureAccountingView(value.features.rolling60),
-			Activity: replayFeatureAccountingView(value.features.activity),
+			DayPercent: replayFeatureAccountingView(value.features.dayPercent),
 		},
 		Floats:      ReplayFloatAccountingView{Current: value.floats.current, Stale: value.floats.stale, Unavailable: value.floats.unavailable, Invalid: value.floats.invalid},
 		Uncertainty: ReplayUncertaintyView{BootstrapOrigin: value.uncertainty.bootstrapOrigin, PostBootstrapGap: value.uncertainty.postBootstrapGap, LocalInvalid: value.uncertainty.localInvalid},
