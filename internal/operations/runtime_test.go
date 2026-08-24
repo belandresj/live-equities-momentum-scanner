@@ -404,7 +404,7 @@ func TestPC9PressureRuntimeCommandAndSampling(t *testing.T) {
 		t.Fatalf("pressure proof requires ready aggregate control: %+v", readyBefore)
 	}
 
-	sample := engine.TQPressureSample{WaitingFrames: 10, FrameCapacity: 100, ByteCapacity: 1000, TQLocalAccountingHealthy: true, Goroutines: 1}
+	sample := engine.TQPressureSample{WaitingFrames: 10, FrameCapacity: 100, ByteCapacity: 1000, TQLocalAccountingHealthy: true}
 	run.pressureSampler = func(Metrics) engine.TQPressureSample { return sample }
 	cycle := func(at time.Time) {
 		clockNanos.Store(at.UnixNano())
@@ -458,7 +458,7 @@ func TestPTQRPressureShedsBeforeQuarterQueueAndHardCapacity(t *testing.T) {
 	}()
 	applyControl(t, run.Engine(), binding, engine.ConnectionAttempt, 1, 1, engine.LivePosition{}, base)
 	run.pressureSampler = func(Metrics) engine.TQPressureSample {
-		return engine.TQPressureSample{WaitingFrames: 4096, FrameCapacity: massive.MaximumLiveFrameSlots, ByteCapacity: 1, TQLocalAccountingHealthy: true, Goroutines: 1}
+		return engine.TQPressureSample{WaitingFrames: 4096, FrameCapacity: massive.MaximumLiveFrameSlots, ByteCapacity: 1, TQLocalAccountingHealthy: true}
 	}
 	for index := 0; index < 2; index++ {
 		clockNanos.Store(base.Add(time.Duration(index) * time.Second).UnixNano())
@@ -505,7 +505,7 @@ func TestPC9BroadQueueAccountingLossSuppressesInvalidAggregatePath(t *testing.T)
 	}
 }
 
-func TestPTQRAccountingPartitionQuarantinesOnlyTQ(t *testing.T) {
+func TestPTQRAccountingPartitionClosesOnlyTQ(t *testing.T) {
 	binding := operationsBinding(t)
 	now := binding.SessionStart().Add(15 * time.Minute)
 	config := DefaultConfig()
@@ -524,7 +524,9 @@ func TestPTQRAccountingPartitionQuarantinesOnlyTQ(t *testing.T) {
 	if !partitioned.TransportReconciles() || partitioned.TQReconciles() || partitioned.Reconciles() {
 		t.Fatalf("test accounting did not isolate the T/Q partition: %+v", partitioned)
 	}
-	run.metricsSnapshot = func() Metrics { return Metrics{LiveQueue: massive.LiveQueueAccounting{}, Adapter: partitioned} }
+	run.metricsSnapshot = func() Metrics {
+		return Metrics{LiveQueue: massive.LiveQueueAccounting{CapacityFrames: 100, CapacityBytes: 100}, Adapter: partitioned}
+	}
 	admission, completion := run.Engine().AdmitTQPressureTick(context.Background())
 	if admission != engine.AdmissionAdmitted || completion == nil || (<-completion).Code != engine.DispositionTQApplied {
 		t.Fatal("pressure tick")
@@ -532,7 +534,7 @@ func TestPTQRAccountingPartitionQuarantinesOnlyTQ(t *testing.T) {
 	run.syncTQPressure(context.Background())
 	operational := run.Engine().ObserveOperational()
 	view := run.Engine().ObserveTQ()
-	if operational.Lifecycle == "suppressed" || !operational.Connection.Active || !view.Quarantined || view.QuarantineReason != engine.TQControlAccounting || !view.AggregateOnly {
+	if operational.Lifecycle == "suppressed" || !operational.Connection.Active || !view.AggregateOnly || view.PressureCause != engine.TQPressureCauseTransportAccounting {
 		t.Fatalf("T/Q accounting escaped its failure domain: operational=%+v tq=%+v", operational, view)
 	}
 }
@@ -1226,7 +1228,7 @@ func TestPC9TAQOpaqueEngineCommandThroughC5Ack(t *testing.T) {
 	if !view.Rows[0].TradeCoverage || !view.Rows[0].QuoteCoverage || view.AggregateOnly {
 		t.Fatalf("foreign-binding drop mutated coverage = %+v", view)
 	}
-	pressureSample := engine.TQPressureSample{WaitingFrames: 10, FrameCapacity: 100, ByteCapacity: 1000, TQLocalAccountingHealthy: true, Goroutines: 1}
+	pressureSample := engine.TQPressureSample{WaitingFrames: 10, FrameCapacity: 100, ByteCapacity: 1000, TQLocalAccountingHealthy: true}
 	run.pressureSampler = func(Metrics) engine.TQPressureSample { return pressureSample }
 	pressureTick := func(at time.Time) {
 		now = at
@@ -1264,7 +1266,7 @@ func TestPC9TAQOpaqueEngineCommandThroughC5Ack(t *testing.T) {
 	}
 	view = run.Engine().ObserveTQ()
 	if view.Pressure != engine.TQPressureAggregateOnly || !view.AggregateOnly || view.Accounting.KnownPresent != 0 || view.Accounting.Unknown != 0 || view.CommandPending ||
-		view.Commands.Issued != view.Commands.Pending+view.Commands.Acknowledged+view.Commands.Failed+view.Commands.Fenced {
+		view.Commands.Issued != view.Commands.Pending+view.Commands.Written+view.Commands.Failed+view.Commands.Fenced {
 		t.Fatalf("aggregate-only zero/accounting = %+v", view)
 	}
 	if metrics := run.Metrics(); !metrics.TQNormalization.Reconciles() || metrics.TQNormalization.Rejected == 0 || metrics.TQNormalization.NormalizedTrades == 0 || metrics.TQNormalization.NormalizedQuotes == 0 || !metrics.Adapter.Reconciles() || !metrics.LiveQueue.Reconciles() {
@@ -1378,7 +1380,7 @@ func TestPC9TQFreshEpochSubscribesAllRankedRowsInOneCommand(t *testing.T) {
 		t.Fatalf("batch acknowledgement = %+v", result)
 	}
 	view := run.Engine().ObserveTQ()
-	if view.CommandPending || view.Commands.Issued != 1 || view.Commands.Acknowledged != 1 || view.Accounting.KnownPresent != 2 || len(view.Rows) != 2 ||
+	if view.CommandPending || view.Commands.Issued != 1 || view.Commands.Written != 1 || view.Accounting.KnownPresent != 2 || len(view.Rows) != 2 ||
 		!view.Rows[0].TradeCoverage || !view.Rows[1].TradeCoverage || view.Rows[0].Tape.Status != engine.TQWarming || view.Rows[1].Tape.Status != engine.TQWarming {
 		t.Fatalf("completed initial batch = %+v", view)
 	}

@@ -10,34 +10,16 @@ import (
 
 const TQSchemaV1 = "engine-tq-v1"
 
-type TQControlFailureClass string
-
-const (
-	TQControlStatusUnsolicited TQControlFailureClass = "status_unsolicited"
-	TQControlStatusFailed      TQControlFailureClass = "status_failed"
-	TQControlStatusAmbiguous   TQControlFailureClass = "status_ambiguous"
-	TQControlStatusExtra       TQControlFailureClass = "status_extra"
-	TQControlStatusDeadline    TQControlFailureClass = "status_deadline"
-	TQControlWriteFailed       TQControlFailureClass = "write_failed"
-	TQControlProviderError     TQControlFailureClass = "provider_error"
-	TQControlAccounting        TQControlFailureClass = "command_accounting"
-)
-
-// TQControlQuarantineInput is a bounded, provider-independent T/Q control
-// failure fact. It cannot carry provider prose or request a lifecycle change.
-type TQControlQuarantineInput struct {
+// TQControlErrorInput is the one bounded post-handshake provider error fact.
+// Generic success and late status messages are intentionally not inputs.
+type TQControlErrorInput struct {
 	SchemaVersion, BindingIdentity string
 	ConnectionEpoch                uint64
 	Position                       LivePosition
 	ReceiptTime                    time.Time
-	Failure                        TQControlFailureClass
-	CommandToken                   uint64
-	ExpectedStatuses               int
-	ObservedStatuses               int
-	Deadline                       bool
 }
 
-type frozenTQControlQuarantineInput struct{ TQControlQuarantineInput }
+type frozenTQControlErrorInput struct{ TQControlErrorInput }
 
 const (
 	maximumTQSymbols          = 20
@@ -216,40 +198,39 @@ type tqState struct {
 	canonicalMutations uint64
 	// publicProjectionRevision advances only for a trust transition that must
 	// replace the combined immutable publication immediately.
-	publicProjectionRevision                                                                                    uint64
-	projectionDirty                                                                                             bool
-	projectionDirtyMutations                                                                                    uint64
-	projectionDirtied                                                                                           uint64
-	projectionFlushedByCadence                                                                                  uint64
-	immediateTrustTransitionPublications                                                                        uint64
-	immediateTrustTransitionMutations                                                                           uint64
-	coalescedOrdinaryMutations                                                                                  uint64
-	immediateProjectionPending                                                                                  bool
-	nextToken                                                                                                   uint64
-	desired                                                                                                     []string
-	members                                                                                                     map[string]*tqSymbolState
-	pending                                                                                                     *TQCommand
-	dispatched                                                                                                  bool
-	consumed, applied                                                                                           uint64
-	duplicate, rejected                                                                                         uint64
-	fenced, pressureShed                                                                                        uint64
-	tradeApplied, quoteApplied, tradePressureShed, quotePressureShed                                            uint64
-	integrity                                                                                                   uint64
-	tradeCount, quoteCount                                                                                      int
-	fingerprintCount                                                                                            int
-	retainedBytes                                                                                               int64
-	globalBound                                                                                                 bool
-	aggregateOnly                                                                                               bool
-	pressure                                                                                                    tqPressureState
-	commandsIssued, commandsWritten, commandsAcknowledged, commandsFailed, commandsFenced, commandResultsFenced uint64
-	epochCommandsWritten                                                                                        uint64
-	quarantined, quarantineRaisedAggregateOnly                                                                  bool
-	quarantineReason                                                                                            TQControlFailureClass
-	quarantineEpoch                                                                                             uint64
-	quarantinePosition                                                                                          LivePosition
-	quarantineExpected, quarantineObserved                                                                      int
-	quarantineDeadline                                                                                          bool
-	quarantines, quarantineFenced                                                                               uint64
+	publicProjectionRevision                                                              uint64
+	projectionDirty                                                                       bool
+	projectionDirtyMutations                                                              uint64
+	projectionDirtied                                                                     uint64
+	projectionFlushedByCadence                                                            uint64
+	immediateTrustTransitionPublications                                                  uint64
+	immediateTrustTransitionMutations                                                     uint64
+	coalescedOrdinaryMutations                                                            uint64
+	immediateProjectionPending                                                            bool
+	nextToken                                                                             uint64
+	nextGeneration                                                                        uint64
+	desired                                                                               []string
+	cadenceDesired                                                                        []string
+	members                                                                               map[string]*tqSymbolState
+	pending                                                                               *TQCommand
+	dispatched                                                                            bool
+	additionPermit, freshEpoch, restoring                                                 bool
+	consumed, applied                                                                     uint64
+	duplicate, rejected                                                                   uint64
+	fenced, pressureShed                                                                  uint64
+	tradeApplied, quoteApplied, tradePressureShed, quotePressureShed                      uint64
+	integrity                                                                             uint64
+	tradeCount, quoteCount                                                                int
+	fingerprintCount                                                                      int
+	retainedBytes                                                                         int64
+	globalBound                                                                           bool
+	aggregateOnly                                                                         bool
+	pressure                                                                              tqPressureState
+	commandsIssued, commandsWritten, commandsFailed, commandsFenced, commandResultsFenced uint64
+	controlClosed                                                                         bool
+	controlClosedEpoch                                                                    uint64
+	controlClosedPosition                                                                 LivePosition
+	controlErrors, controlErrorsFenced                                                    uint64
 }
 
 type TQFieldStatus string
@@ -299,9 +280,6 @@ type TQAccountingView struct {
 
 type TQCommandAccountingView struct {
 	Issued, Pending, Written, Failed, Fenced, ResultFenced uint64
-	// Acknowledged is an in-process compatibility mirror only. It is never
-	// exposed in the strict v2 snapshot schema.
-	Acknowledged uint64
 }
 
 type TQPressureSampleView struct {
@@ -332,13 +310,9 @@ type TQView struct {
 	RecoveryRequiredSamples             uint8
 	Accounting                          TQAccountingView
 	Commands                            TQCommandAccountingView
-	Quarantined                         bool
-	QuarantineReason                    TQControlFailureClass
-	QuarantinePosition                  LivePosition
-	QuarantineExpected                  int
-	QuarantineObserved                  int
-	QuarantineDeadline                  bool
-	Quarantines, QuarantineFenced       uint64
+	ControlClosed                       bool
+	ControlClosedPosition               LivePosition
+	ControlErrors, ControlErrorsFenced  uint64
 }
 
 // TQPublicationAccountingView is fixed-cardinality engine observation for the
@@ -378,32 +352,19 @@ func (e *Engine) ObserveTQPublicationAccounting() TQPublicationAccountingView {
 	}
 }
 
-func (e *Engine) AdmitTQControlQuarantine(ctx context.Context, input TQControlQuarantineInput) (AdmissionResult, <-chan Disposition) {
+func (e *Engine) AdmitTQControlError(ctx context.Context, input TQControlErrorInput) (AdmissionResult, <-chan Disposition) {
 	e.beginAdmission()
-	if ctx == nil || !validTQControlQuarantineInput(input) {
+	if ctx == nil || !validTQControlErrorInput(input) {
 		return e.finishNonAdmission(AdmissionNotAdmittedInvalid), nil
 	}
-	return e.admit(ctx, &queueNode{kind: inputTQControlQuarantine, tqControlQuarantine: frozenTQControlQuarantineInput{input}}, false)
+	return e.admit(ctx, &queueNode{kind: inputTQControlError, tqControlError: frozenTQControlErrorInput{input}}, false)
 }
 
-func validTQControlQuarantineInput(v TQControlQuarantineInput) bool {
+func validTQControlErrorInput(v TQControlErrorInput) bool {
 	hasPosition := v.Position != (LivePosition{})
 	validPosition := v.Position.ConnectionEpoch == v.ConnectionEpoch && v.Position.FrameSequence > 0
 	return v.SchemaVersion == TQSchemaV1 && validIdentityShape(v.BindingIdentity) && v.ConnectionEpoch > 0 &&
-		!v.ReceiptTime.IsZero() && v.ReceiptTime == v.ReceiptTime.UTC() && validTQControlFailure(v.Failure) &&
-		(!hasPosition || validPosition) && v.ExpectedStatuses >= 0 && v.ExpectedStatuses <= 2*maximumTQSymbols &&
-		v.ObservedStatuses >= 0 && v.ObservedStatuses <= 2*maximumTQSymbols+1 &&
-		(v.CommandToken != 0 || v.ExpectedStatuses == 0)
-}
-
-func validTQControlFailure(v TQControlFailureClass) bool {
-	switch v {
-	case TQControlStatusUnsolicited, TQControlStatusFailed, TQControlStatusAmbiguous,
-		TQControlStatusExtra, TQControlStatusDeadline, TQControlWriteFailed, TQControlProviderError, TQControlAccounting:
-		return true
-	default:
-		return false
-	}
+		!v.ReceiptTime.IsZero() && v.ReceiptTime == v.ReceiptTime.UTC() && (!hasPosition || validPosition)
 }
 
 func (e *Engine) AdmitTQCommandResult(ctx context.Context, input TQCommandResultInput) (AdmissionResult, <-chan Disposition) {
@@ -483,11 +444,13 @@ func validQuoteInput(v QuoteInput) bool {
 		v.Live.ConnectionEpoch > 0 && v.Live.FrameSequence > 0
 }
 
-func (e *Engine) reconcileTQLocked(now time.Time) {
+func (e *Engine) reconcileTQLocked(now time.Time, cadence ...bool) {
 	s := &e.state.tq
+	cadenceBoundary := len(cadence) == 0 || cadence[0]
 	if s.members == nil {
 		s.members = make(map[string]*tqSymbolState)
 		s.nextToken = 1
+		s.nextGeneration = 1
 	}
 	if s.epoch != e.state.liveEpoch {
 		previous := *s
@@ -507,18 +470,16 @@ func (e *Engine) reconcileTQLocked(now time.Time) {
 			immediateTrustTransitionMutations:    previous.immediateTrustTransitionMutations,
 			coalescedOrdinaryMutations:           previous.coalescedOrdinaryMutations,
 			immediateProjectionPending:           previous.immediateProjectionPending,
-			nextToken:                            maxUint64(e.state.aggregateWriteToken+1, maxUint64(1, previous.nextToken)), members: make(map[string]*tqSymbolState),
+			nextToken:                            maxUint64(e.state.aggregateWriteToken+1, maxUint64(1, previous.nextToken)), nextGeneration: 1, members: make(map[string]*tqSymbolState),
 			consumed: previous.consumed, applied: previous.applied, duplicate: previous.duplicate, rejected: previous.rejected, fenced: previous.fenced,
 			pressureShed: previous.pressureShed, integrity: previous.integrity, tradeApplied: previous.tradeApplied, quoteApplied: previous.quoteApplied,
 			tradePressureShed: previous.tradePressureShed, quotePressureShed: previous.quotePressureShed,
 			globalBound: previous.globalBound, aggregateOnly: previous.aggregateOnly,
-			commandsIssued: previous.commandsIssued, commandsWritten: previous.commandsWritten, commandsAcknowledged: previous.commandsAcknowledged, commandsFailed: previous.commandsFailed,
+			commandsIssued: previous.commandsIssued, commandsWritten: previous.commandsWritten, commandsFailed: previous.commandsFailed,
 			commandsFenced: commandFenced, commandResultsFenced: previous.commandResultsFenced,
-			pressure:    pressure,
-			quarantined: previous.quarantined, quarantineRaisedAggregateOnly: previous.quarantineRaisedAggregateOnly,
-			quarantineReason: previous.quarantineReason, quarantineEpoch: previous.quarantineEpoch, quarantinePosition: previous.quarantinePosition,
-			quarantineExpected: previous.quarantineExpected, quarantineObserved: previous.quarantineObserved,
-			quarantineDeadline: previous.quarantineDeadline, quarantines: previous.quarantines, quarantineFenced: previous.quarantineFenced,
+			pressure:      pressure,
+			freshEpoch:    true,
+			controlErrors: previous.controlErrors, controlErrorsFenced: previous.controlErrorsFenced,
 		}
 		if previousTQPublicationState(previous) {
 			e.markTQTrustTransitionLocked()
@@ -540,6 +501,11 @@ func (e *Engine) reconcileTQLocked(now time.Time) {
 	s.desired = desired
 	if !equalTQSymbols(previousDesired, desired) {
 		e.markTQTrustTransitionLocked()
+	}
+	if cadenceBoundary || s.freshEpoch {
+		s.cadenceDesired = append(s.cadenceDesired[:0], desired...)
+		s.additionPermit = true
+		s.freshEpoch = false
 	}
 	target := now
 	if e.state.committedT != nil {
@@ -576,28 +542,23 @@ func (e *Engine) reconcileTQLocked(now time.Time) {
 			}
 		}
 	}
-	if s.pending != nil || s.quarantined || !e.state.liveEpochActive || e.state.lifecycle != lifecycleLive {
+	if s.pending != nil || s.controlClosed || !e.state.liveEpochActive || e.state.lifecycle != lifecycleLive {
 		return
 	}
-	if s.pressure.mode == TQPressureDegraded {
-		return
-	}
-	if s.aggregateOnly {
-		for index := len(desired) - 1; index >= 0; index-- {
-			member := s.members[desired[index]]
-			if member != nil && (member.requested || member.present || member.unknown) {
-				e.issueTQCommandLocked(TQUnsubscribe, []string{desired[index]})
-				return
-			}
-		}
-	}
+	removals := make([]string, 0, maximumTQSymbols)
 	for symbol, member := range s.members {
 		if (member.requested || member.present || member.unknown) && (s.aggregateOnly || member.bound || member.resetRequired || !desiredSet[symbol]) {
-			e.issueTQCommandLocked(TQUnsubscribe, []string{symbol})
-			return
+			removals = append(removals, symbol)
 		}
 	}
+	if len(removals) > 0 {
+		e.issueTQCommandLocked(TQUnsubscribe, removals)
+		return
+	}
 	if s.aggregateOnly {
+		return
+	}
+	if s.pressure.mode == TQPressureDegraded || !s.additionPermit {
 		return
 	}
 	wireMembers := 0
@@ -607,7 +568,14 @@ func (e *Engine) reconcileTQLocked(now time.Time) {
 		}
 	}
 	missing := make([]string, 0, len(desired))
+	cadenceSet := make(map[string]bool, len(s.cadenceDesired))
+	for _, symbol := range s.cadenceDesired {
+		cadenceSet[symbol] = true
+	}
 	for _, symbol := range desired {
+		if !cadenceSet[symbol] {
+			continue
+		}
 		member := s.member(symbol)
 		if member.bound {
 			continue
@@ -619,17 +587,16 @@ func (e *Engine) reconcileTQLocked(now time.Time) {
 		}
 	}
 	if len(missing) > 0 {
-		// A fresh epoch has no earlier T/Q command whose delayed, untagged
-		// provider status could contaminate this acknowledgement. Subscribe the
-		// complete displayed set in one command so every selected row begins
-		// causal coverage at the same terminal boundary. Later churn and pressure
-		// restoration retain the accepted single-symbol command path.
-		if wireMembers == 0 && s.epochCommandsWritten == 0 {
-			e.issueTQCommandLocked(TQSubscribe, missing)
-		} else {
+		s.additionPermit = false
+		if s.restoring {
 			e.issueTQCommandLocked(TQSubscribe, missing[:1])
+		} else {
+			e.issueTQCommandLocked(TQSubscribe, missing)
 		}
+		return
 	}
+	s.additionPermit = false
+	s.restoring = false
 	_ = now
 }
 
@@ -655,7 +622,7 @@ func (s *tqState) deleteMember(symbol string) {
 }
 
 func previousTQPublicationState(s tqState) bool {
-	if len(s.desired) > 0 || s.pending != nil || s.quarantined || s.aggregateOnly || s.globalBound {
+	if len(s.desired) > 0 || s.pending != nil || s.controlClosed || s.aggregateOnly || s.globalBound {
 		return true
 	}
 	for _, member := range s.members {
@@ -839,6 +806,8 @@ func (e *Engine) enterTQAggregateOnlyLocked() {
 
 func (e *Engine) stopTQAdditionsLocked() {
 	s := &e.state.tq
+	s.additionPermit = false
+	s.cadenceDesired = s.cadenceDesired[:0]
 	if s.pending != nil && s.pending.action == TQSubscribe && !s.dispatched {
 		s.pending = nil
 		s.dispatched = false
@@ -874,7 +843,12 @@ func (e *Engine) applyTQCommandResultLocked(node *queueNode) (DispositionCode, D
 		s.commandsFailed++
 		for _, symbol := range commandSymbols {
 			m := s.member(symbol)
-			m.requested, m.present, m.unknown = false, false, false
+			if v.command.action == TQUnsubscribe {
+				m.requested, m.present, m.unknown = true, false, true
+				m.resetRequired = true
+			} else {
+				m.requested, m.present, m.unknown = false, false, false
+			}
 			m.tradeCoverage.active, m.quoteCoverage.active = false, false
 			if v.command.action == TQUnsubscribe {
 				m.cleanupAttempted = true
@@ -883,17 +857,14 @@ func (e *Engine) applyTQCommandResultLocked(node *queueNode) (DispositionCode, D
 		// A failed local write gives no request boundary and no evidence about
 		// which provider-side topics changed. Contain only T/Q for this epoch;
 		// aggregate processing remains live and no silence-based retry is issued.
-		if !s.quarantined {
-			s.quarantined, s.quarantineReason, s.quarantineEpoch = true, TQControlWriteFailed, e.state.liveEpoch
-			s.quarantines++
-		}
-		e.enterTQAggregateOnlyLocked()
+		s.controlClosed, s.controlClosedEpoch = true, e.state.liveEpoch
+		s.controlErrors++
+		e.stopTQAdditionsLocked()
+		e.closeAllTQCoverageLocked()
 		s.rejected++
 		return DispositionTQRejected, ReasonControlOutcome
 	}
 	s.commandsWritten++
-	s.commandsAcknowledged = s.commandsWritten
-	s.epochCommandsWritten++
 	if v.command.action == TQUnsubscribe {
 		for _, symbol := range commandSymbols {
 			m := s.member(symbol)
@@ -921,7 +892,12 @@ func (e *Engine) applyTQCommandResultLocked(node *queueNode) (DispositionCode, D
 				continue
 			}
 			m.requested, m.present, m.unknown, m.cleanupAttempted = true, false, true, false
-			m.generation++
+			if s.nextGeneration == 0 {
+				e.enterTQGlobalBoundLocked()
+				continue
+			}
+			m.generation = s.nextGeneration
+			s.nextGeneration++
 			m.tradeCoverage = tqCoverage{epoch: v.command.connectionEpoch, boundary: v.position}
 			m.quoteCoverage = tqCoverage{epoch: v.command.connectionEpoch, boundary: v.position}
 			s.releaseMember(m)
@@ -932,34 +908,35 @@ func (e *Engine) applyTQCommandResultLocked(node *queueNode) (DispositionCode, D
 	return DispositionTQApplied, ReasonNone
 }
 
-func (e *Engine) applyTQControlQuarantineLocked(node *queueNode) (DispositionCode, DispositionReason) {
-	v, s := node.tqControlQuarantine.TQControlQuarantineInput, &e.state.tq
+func (e *Engine) applyTQControlErrorLocked(node *queueNode) (DispositionCode, DispositionReason) {
+	v, s := node.tqControlError.TQControlErrorInput, &e.state.tq
 	if e.state.binding == nil || v.BindingIdentity != e.state.binding.identity || v.ConnectionEpoch != e.state.liveEpoch || !e.state.liveEpochActive {
-		s.quarantineFenced++
+		s.controlErrorsFenced++
 		return DispositionTQFenced, ReasonHistoricalContext
 	}
-	if v.Position != (LivePosition{}) && s.quarantinePosition != (LivePosition{}) && compareLive(v.Position, s.quarantinePosition) <= 0 {
-		s.quarantineFenced++
+	if v.Position != (LivePosition{}) && s.controlClosedPosition != (LivePosition{}) && compareLive(v.Position, s.controlClosedPosition) <= 0 {
+		s.controlErrorsFenced++
 		return DispositionTQFenced, ReasonNonprecedent
 	}
-	if !s.quarantined {
+	if !s.controlClosed {
 		e.markTQTrustTransitionLocked()
-		s.quarantined = true
-		s.quarantineReason = v.Failure
-		s.quarantineEpoch = v.ConnectionEpoch
-		s.quarantinePosition = v.Position
-		s.quarantineExpected = v.ExpectedStatuses
-		s.quarantineObserved = v.ObservedStatuses
-		s.quarantineDeadline = v.Deadline
-		s.quarantineRaisedAggregateOnly = !s.aggregateOnly
+		s.controlClosed = true
+		s.controlClosedEpoch = v.ConnectionEpoch
+		s.controlClosedPosition = v.Position
 	} else if v.Position != (LivePosition{}) {
-		s.quarantinePosition = v.Position
+		s.controlClosedPosition = v.Position
 	}
-	s.quarantines++
+	s.controlErrors++
 	if s.pending != nil {
+		action := s.pending.action
 		for _, symbol := range s.pending.symbols[:s.pending.symbolCount] {
 			member := s.member(symbol)
-			member.requested, member.present, member.unknown = false, false, false
+			if action == TQUnsubscribe {
+				member.requested, member.present, member.unknown = true, false, true
+				member.resetRequired = true
+			} else {
+				member.requested, member.present, member.unknown = false, false, false
+			}
 			member.tradeCoverage.active, member.quoteCoverage.active = false, false
 		}
 		s.pending, s.dispatched = nil, false
@@ -972,32 +949,23 @@ func (e *Engine) applyTQControlQuarantineLocked(node *queueNode) (DispositionCod
 		member.tradeCoverage.active, member.quoteCoverage.active = false, false
 		s.releaseMember(member)
 	}
-	e.enterTQAggregateOnlyLocked()
+	e.stopTQAdditionsLocked()
+	e.closeAllTQCoverageLocked()
 	return DispositionTQRejected, ReasonControlOutcome
 }
 
-// clearTQControlQuarantineLocked is called only when the aggregate handshake
-// acknowledges a strictly greater connection epoch. A fresh epoch has no
-// provider-membership continuity and therefore must warm from new coverage.
-func (e *Engine) clearTQControlQuarantineLocked(epoch uint64) {
+func (e *Engine) clearTQControlErrorLocked(epoch uint64) {
 	s := &e.state.tq
-	if !s.quarantined || epoch <= s.quarantineEpoch {
+	if !s.controlClosed || epoch <= s.controlClosedEpoch {
 		return
-	}
-	if s.quarantineRaisedAggregateOnly {
-		s.aggregateOnly = false
-		if s.pressure.mode == TQPressureAggregateOnly {
-			s.pressure.mode = TQPressureNormal
-		}
 	}
 	// A strictly newer aggregate acknowledgement restores the public T/Q trust
 	// domain. The connection-control fingerprint would publish the combined
 	// cell anyway, but this transition must also be represented by the T/Q
 	// projection accounting and immediate-transition counters.
 	e.markTQTrustTransitionLocked()
-	s.quarantined, s.quarantineRaisedAggregateOnly = false, false
-	s.quarantineReason, s.quarantineEpoch, s.quarantinePosition = "", 0, LivePosition{}
-	s.quarantineExpected, s.quarantineObserved, s.quarantineDeadline = 0, 0, false
+	s.controlClosed = false
+	s.controlClosedEpoch, s.controlClosedPosition = 0, LivePosition{}
 }
 
 func (e *Engine) applyTQDropLocked(node *queueNode) (DispositionCode, DispositionReason) {
@@ -1306,9 +1274,8 @@ func (e *Engine) tqViewLocked() TQView {
 			OldestWaitingFrameAge: s.pressure.lastSample.OldestWaitingFrameAge, AggregateWatermarkLag: s.pressure.lastSample.AggregateWatermarkLag,
 			RecoveryHealthy: s.pressure.lastSampleRecoveryHealthy},
 		RecoveryHealthySamples: s.pressure.streaks.healthy, RecoveryRequiredSamples: e.tqPressurePolicy.recoverySamples,
-		Quarantined: s.quarantined, QuarantineReason: s.quarantineReason, QuarantinePosition: s.quarantinePosition,
-		QuarantineExpected: s.quarantineExpected, QuarantineObserved: s.quarantineObserved,
-		QuarantineDeadline: s.quarantineDeadline, Quarantines: s.quarantines, QuarantineFenced: s.quarantineFenced}
+		ControlClosed: s.controlClosed, ControlClosedPosition: s.controlClosedPosition,
+		ControlErrors: s.controlErrors, ControlErrorsFenced: s.controlErrorsFenced}
 	if s.pending != nil {
 		result.CommandPending, result.PendingAction, result.PendingSymbol = true, s.pending.action, s.pending.Symbol()
 	}
@@ -1325,7 +1292,7 @@ func (e *Engine) tqViewLocked() TQView {
 			row.Tape = tapeView(m, e.state.committedT)
 			row.Spread = spreadView(m, e.state.committedT)
 		}
-		if s.quarantined {
+		if s.controlClosed {
 			row.Tape = TapeRateView{Status: TQUnavailable, Reason: "control_error"}
 			row.Spread = SpreadView{Status: TQUnavailable, Reason: "control_error"}
 		}
@@ -1352,11 +1319,7 @@ func (e *Engine) tqViewLocked() TQView {
 	if s.pending != nil {
 		pending = 1
 	}
-	written := s.commandsWritten
-	if written < s.commandsAcknowledged {
-		written = s.commandsAcknowledged
-	}
-	result.Commands = TQCommandAccountingView{Issued: s.commandsIssued, Pending: pending, Written: written, Acknowledged: written, Failed: s.commandsFailed,
+	result.Commands = TQCommandAccountingView{Issued: s.commandsIssued, Pending: pending, Written: s.commandsWritten, Failed: s.commandsFailed,
 		Fenced: s.commandsFenced, ResultFenced: s.commandResultsFenced}
 	return result
 }
@@ -1374,9 +1337,8 @@ func validTQPublication(value TQView, publicationID uint64, evaluation aggregate
 		value.Accounting.RetainedTrades < 0 || value.Accounting.RetainedQuotes < 0 || value.Accounting.RetainedFingerprints < 0 || value.Accounting.RetainedBytes < 0 ||
 		value.Accounting.Consumed != value.Accounting.Applied+value.Accounting.Duplicate+value.Accounting.Rejected+value.Accounting.Fenced+value.Accounting.PressureShed+value.Accounting.Integrity ||
 		value.Commands.Pending > 1 || value.Commands.Issued != value.Commands.Pending+value.Commands.Written+value.Commands.Failed+value.Commands.Fenced ||
-		value.CommandPending != (value.Commands.Pending == 1) || value.Bounds && !value.AggregateOnly || value.Quarantined && !value.AggregateOnly ||
-		value.QuarantineExpected < 0 || value.QuarantineExpected > 2*maximumTQSymbols || value.QuarantineObserved < 0 || value.QuarantineObserved > 2*maximumTQSymbols+1 ||
-		value.Quarantined != validTQControlFailure(value.QuarantineReason) || value.RecoveryRequiredSamples == 0 || value.RecoveryHealthySamples > value.RecoveryRequiredSamples ||
+		value.CommandPending != (value.Commands.Pending == 1) || value.Bounds && !value.AggregateOnly ||
+		value.RecoveryRequiredSamples == 0 || value.RecoveryHealthySamples > value.RecoveryRequiredSamples ||
 		value.Pressure != TQPressureNormal && value.RecoveryHealthySamples >= value.RecoveryRequiredSamples ||
 		pressureSample.OldestWaitingFrameAge < 0 || pressureSample.AggregateWatermarkLag < 0 ||
 		pressureSample.Observed && (pressureSample.FrameCapacity == 0 || pressureSample.WaitingFrames > pressureSample.FrameCapacity || pressureSample.ByteCapacity == 0 || pressureSample.WaitingBytes > pressureSample.ByteCapacity) ||

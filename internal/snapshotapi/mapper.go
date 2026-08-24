@@ -192,10 +192,6 @@ func mapRecovery(value engine.OperationalHydration) Recovery {
 
 func mapTQ(value engine.TQView, normalization massive.TQNormalizationAccounting) TQ {
 	a, c := value.Accounting, value.Commands
-	written := c.Written
-	if written < c.Acknowledged { // legacy in-process fixture compatibility
-		written = c.Acknowledged
-	}
 	return TQ{DesiredSymbols: append([]string{}, value.Desired...), PressureMode: string(value.Pressure), PressureCause: string(value.PressureCause), AggregateOnly: value.AggregateOnly,
 		Shed: value.ShedTradesQuotes, RetainedBoundHit: value.Bounds, PressureMisses: uint64(value.PressureMisses),
 		PressureTransitions: decimal(value.PressureTransitions), PressureFenced: decimal(value.PressureFenced),
@@ -208,7 +204,7 @@ func mapTQ(value engine.TQView, normalization massive.TQNormalizationAccounting)
 		Facts: TQFacts{Consumed: decimal(a.Consumed), Applied: decimal(a.Applied), Duplicate: decimal(a.Duplicate), Rejected: decimal(a.Rejected),
 			Fenced: decimal(a.Fenced), PressureShed: decimal(a.PressureShed), Integrity: decimal(a.Integrity), NormalizedTrades: decimal(normalization.NormalizedTrades), NormalizedQuotes: decimal(normalization.NormalizedQuotes), AppliedTrades: decimal(a.AppliedTrades),
 			AppliedQuotes: decimal(a.AppliedQuotes), PressureShedTrades: decimal(a.PressureShedTrades), PressureShedQuotes: decimal(a.PressureShedQuotes)},
-		Commands: TQCommands{Issued: decimal(c.Issued), Pending: decimal(c.Pending), Written: decimal(written), Failed: decimal(c.Failed),
+		Commands: TQCommands{Issued: decimal(c.Issued), Pending: decimal(c.Pending), Written: decimal(c.Written), Failed: decimal(c.Failed),
 			Fenced: decimal(c.Fenced), ResultFenced: decimal(c.ResultFenced)}}
 }
 

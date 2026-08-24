@@ -1196,7 +1196,7 @@ func makeTapeUnequalRepeat(t *testing.T, runtime *operations.Runtime, binding re
 
 func shedTapeForPressure(t *testing.T, runtime *operations.Runtime, _ reference.Binding, now *time.Time) {
 	t.Helper()
-	sample := engine.TQPressureSample{WaitingFrames: 10, FrameCapacity: 100, ByteCapacity: 1_000, DeliveryLatencyAttributed: true, TQLocalAccountingHealthy: true, Goroutines: 1}
+	sample := engine.TQPressureSample{WaitingFrames: 10, FrameCapacity: 100, ByteCapacity: 1_000, TQLocalAccountingHealthy: true}
 	for i := 0; i < 2; i++ {
 		*now = now.Add(time.Second)
 		admission, completion := runtime.Engine().AdmitTQPressureTick(context.Background())

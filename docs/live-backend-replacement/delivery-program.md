@@ -740,6 +740,48 @@ permitted ticket and remains inactive for a fresh task.
   queue behavior, whole-process heap/RSS, or live-provider chronology. `LBR-C2`
   remains coherent and is next but inactive pending its pre-assignment audit.
 
+#### `LBR-C2` — accepted 2026-08-23
+
+- **Coherent behavior:** the engine snapshots additions only at the accepted
+  one-second combined cadence, issues one sorted full batch for a fresh epoch,
+  closes rank removals locally and immediately, batches all wire removals
+  before one additions batch, and keeps one write in flight. Pressure recovery
+  waits for cadence and restores at most one highest-ranked symbol with a fresh
+  generation per cadence. Generic/late success status is informational; local
+  write or bounded provider error closes additions and T/Q trust for the epoch
+  without changing aggregate readiness or entering pressure by invention.
+- **Command/pressure ownership:** successful subscribe `B` is the greatest
+  admitted complete raw-frame sequence at write return; rejected read attempts,
+  array positions, and status counts cannot advance it. Engine pressure input
+  now contains only waiting slots/bytes and capacities, oldest waiting age,
+  cumulative slot/byte loss, guarded aggregate lag/T/Q-work, and closed
+  accounting. Active-frame age, heap, goroutines, generic latency, and delivery
+  attribution remain diagnostics only. The old T/Q acknowledgement/status-
+  count/deadline/quarantine state, tests, counters, mapper fallback, and
+  per-symbol churn sequencing are deleted; handshake-only status correlation
+  remains isolated to connection/authentication/aggregate subscription.
+- **Proof:** `P-LBR-C2-TQ-MEMBERSHIP` passes fresh sorted batching, rapid churn,
+  immediate local closure, unsubscribe-before-subscribe continuation, write
+  failure, generic/late status, bounded provider error, quiet post-write data
+  confirmation, aggregate-only membership to zero, exact 10%/25% entry and
+  strict-below-1% plus 749/750-ms recovery ties, guarded watermark and capacity/
+  accounting loss, five-sample cadence-gated restoration, reconnect fencing,
+  one-in-flight accounting, and 500-ms mixed-frame T/Q shedding with aggregate/
+  control classification preserved. The admitted-frame proof forces raw read
+  attempts above `B`, excludes frame `B`, and confirms independently at `B+1`.
+- **Verification/review:** primary/direct engine, Massive, operations, and API
+  proofs; affected short suites; engine/Massive/operations race; focused vet;
+  source exclusion; diff hygiene; API golden/HTTP; and exact ordinary repository
+  verification pass on final executable bytes. A final comment-only removal of
+  superseded status tests reran affected Massive/vet/diff and ordinary gates;
+  unchanged race/direct evidence was preserved. No narrow review was triggered
+  because command, pressure, and mixed-frame linearization were resolved by
+  construction and the allocated proof.
+- **Limitation/next gate:** deterministic evidence does not prove provider
+  acceptance, credentialed behavior, final D2 queue replacement, whole-process
+  resources, or live-market chronology. Both C slices are ready for the
+  required Capability C final read-only review; `LBR-D1` remains inactive.
+
 ### Owner-approved E2 duration and manifest revision — 2026-08-23
 
 The owner revised E2 to exactly one 10-minute deterministic acceptance run. The
@@ -766,7 +808,7 @@ but copy no status.
 | Capability A — canonical state and hydration | `finally_accepted` | A1/A2 proofs, verification, corrections, and Capability A final review are clean; accepted dependency for Capability B. |
 | `LBR-B3` removal slice | `accepted` | Commit `f697288`; removal proof, resource evidence, focused corrections, and final focused re-review are clean. |
 | Capability B — evaluation and publication | `finally_accepted` | B1/B2/B3 accepted; required final read-only review returned `CLEAN/PASS`. Next permitted ticket is C1, which is inactive. |
-| Capability C — selected-row T/Q | `lbr_c2_active` | `LBR-C1` is accepted. The C2 pre-assignment audit traced the engine command/pressure owners through Runtime, Massive write/normalization/queue seams, immutable publication/API capture, and the ordinary `DefaultConfig`/CLI constructors. It corrected `B` to the greatest admitted complete raw-frame sequence rather than raw read attempts, excluded diagnostic-only metrics from pressure input/validation, and allocated exact cadence/occupancy/age ties plus rejected-frame, mixed-frame, status, failure, loss, and restoration counterexamples to the primary proof. Implement only [`LBR-C2`](tickets/lbr-c2-cadence-membership-and-trust.md). |
+| Capability C — selected-row T/Q | `lbr_c1_c2_accepted_final_review_pending` | C1/C2 primary proofs and allocated final-byte gates pass; bounded retention, exact horizons, cadence batching, data-confirmed coverage, direct pressure, immediate trust closure, status-model removal, and aggregate independence are accepted at slice level. Run the required final read-only Capability C review; `LBR-D1` remains inactive. |
 | Capability D — live ingress | `not_started` | Requires accepted state/TQ input interface |
 | Capability E — integration/removal/acceptance | `not_started` | Requires Capabilities A-D accepted |
 | E2 deterministic duration/manifest revision | `owner_approved` | Exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |

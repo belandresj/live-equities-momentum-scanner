@@ -246,7 +246,7 @@ func (e *Engine) decideConnectionControlLocked(node *queueNode, input Connection
 		e.state.aggregateAcknowledged = true
 		e.state.aggregateAckPosition = input.Position
 		e.state.aggregateAckReceivedAt = input.ReceiptTime
-		e.clearTQControlQuarantineLocked(input.ConnectionEpoch)
+		e.clearTQControlErrorLocked(input.ConnectionEpoch)
 		return DispositionConnectionControlApplied, ReasonNone
 	case TradeQuoteCommandWriteResult, TradeQuoteSubscriptionResult:
 		return DispositionConnectionControlDeferred, controlOutcomeReason(input.Outcome)

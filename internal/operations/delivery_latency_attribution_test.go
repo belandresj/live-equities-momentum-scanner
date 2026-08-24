@@ -94,9 +94,8 @@ func TestPC8DeliveryLatencyAttribution(t *testing.T) {
 	if !reflect.DeepEqual(beforeEngine, afterEngine) || !reflect.DeepEqual(beforeStatus, afterStatus) {
 		t.Fatalf("diagnostic attribution mutated engine/status: before=%+v/%+v after=%+v/%+v", beforeEngine, beforeStatus, afterEngine, afterStatus)
 	}
-	if !beforePressure.DeliveryLatencyAttributed || afterPressure.DeliveryLatencyAttributed ||
-		beforePressure.MaxDeliveryDelayOneSec != afterPressure.MaxDeliveryDelayOneSec || beforePressure.MaxDeliveryDelayOneSec != 999*time.Millisecond {
-		t.Fatalf("attribution recovery predicate = before=%+v after=%+v", beforePressure, afterPressure)
+	if !reflect.DeepEqual(beforePressure, afterPressure) {
+		t.Fatalf("diagnostic attribution leaked into pressure input: before=%+v after=%+v", beforePressure, afterPressure)
 	}
 	if err := live.Shutdown(ctx); err != nil {
 		t.Fatal(err)

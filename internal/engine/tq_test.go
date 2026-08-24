@@ -11,7 +11,7 @@ import (
 	"github.com/belandresj/live-equities-momentum-scanner/internal/reference"
 )
 
-func TestPTQRStatusQuarantinePreservesAggregateState(t *testing.T) {
+func TestPTQRProviderErrorClosesOnlyTQ(t *testing.T) {
 	binding := testBinding(t)
 	now := binding.SessionStart().Add(20 * time.Minute)
 	delay := time.Duration(0)
@@ -36,42 +36,26 @@ func TestPTQRStatusQuarantinePreservesAggregateState(t *testing.T) {
 	installExactCoverage(e.state.binding.symbols[index].aggregates, e.state.binding, e.state.binding.sessionStart, now, nil)
 	e.mu.Unlock()
 	applyTQTimer(t, e)
-	command := issueTQForTest(t, e)
+	_ = issueTQForTest(t, e)
 	before := e.ObserveReplayDeterministic()
-	input := TQControlQuarantineInput{SchemaVersion: TQSchemaV1, BindingIdentity: binding.Identity(), ConnectionEpoch: 1,
-		Position: LivePosition{ConnectionEpoch: 1, FrameSequence: 10}, ReceiptTime: now, Failure: TQControlStatusExtra,
-		CommandToken: command.CommandToken(), ExpectedStatuses: 2, ObservedStatuses: 3}
-	admission, completion := e.AdmitTQControlQuarantine(context.Background(), input)
+	input := TQControlErrorInput{SchemaVersion: TQSchemaV1, BindingIdentity: binding.Identity(), ConnectionEpoch: 1,
+		Position: LivePosition{ConnectionEpoch: 1, FrameSequence: 10}, ReceiptTime: now}
+	admission, completion := e.AdmitTQControlError(context.Background(), input)
 	if admission != AdmissionAdmitted || completion == nil || (<-completion).Code != DispositionTQRejected {
-		t.Fatalf("quarantine admission = %s", admission)
+		t.Fatalf("control-error admission = %s", admission)
 	}
 	after := e.ObserveReplayDeterministic()
 	if !reflect.DeepEqual(before.Canonical, after.Canonical) || !reflect.DeepEqual(before.Evaluation, after.Evaluation) ||
 		before.Publication.Watermark == nil || after.Publication.Watermark == nil || *before.Publication.Watermark != *after.Publication.Watermark ||
 		after.Publication.Lifecycle != "live" || !after.Publication.CurrentMarketClaim {
-		t.Fatalf("T/Q quarantine changed aggregate state: before=%+v after=%+v", before, after)
+		t.Fatalf("T/Q control error changed aggregate state: before=%+v after=%+v", before, after)
 	}
 	view := e.ObserveTQ()
-	if !view.Quarantined || view.QuarantineReason != TQControlStatusExtra || !view.AggregateOnly || view.CommandPending ||
-		view.Commands.Issued != view.Commands.Failed || view.QuarantineExpected != 2 || view.QuarantineObserved != 3 {
-		t.Fatalf("quarantine view = %+v", view)
+	if !view.ControlClosed || view.AggregateOnly || view.CommandPending || view.Commands.Issued != view.Commands.Failed {
+		t.Fatalf("control-error view = %+v", view)
 	}
 	if _, err := e.IssueTQCommand(); err == nil {
-		t.Fatal("quarantined epoch issued another T/Q command")
-	}
-	for index, failure := range []TQControlFailureClass{TQControlStatusUnsolicited, TQControlStatusFailed, TQControlStatusAmbiguous,
-		TQControlStatusDeadline, TQControlWriteFailed, TQControlAccounting} {
-		variant := TQControlQuarantineInput{SchemaVersion: TQSchemaV1, BindingIdentity: binding.Identity(), ConnectionEpoch: 1,
-			Position: LivePosition{ConnectionEpoch: 1, FrameSequence: uint64(20 + index)}, ReceiptTime: now, Failure: failure}
-		admission, completion := e.AdmitTQControlQuarantine(context.Background(), variant)
-		if admission != AdmissionAdmitted || completion == nil || (<-completion).Code != DispositionTQRejected {
-			t.Fatalf("variant %s admission = %s", failure, admission)
-		}
-		variantAfter := e.ObserveReplayDeterministic()
-		if !reflect.DeepEqual(before.Canonical, variantAfter.Canonical) || !reflect.DeepEqual(before.Evaluation, variantAfter.Evaluation) ||
-			variantAfter.Publication.Watermark == nil || *variantAfter.Publication.Watermark != *before.Publication.Watermark || !variantAfter.Publication.CurrentMarketClaim {
-			t.Fatalf("variant %s changed aggregates: %+v", failure, variantAfter)
-		}
+		t.Fatal("control-closed epoch issued another T/Q command")
 	}
 
 	if got := admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionLost, 1, LivePosition{ConnectionEpoch: 1, FrameSequence: 11}, now, 0, ControlFailed)); got.Code != DispositionConnectionControlApplied {
@@ -88,7 +72,7 @@ func TestPTQRStatusQuarantinePreservesAggregateState(t *testing.T) {
 			t.Fatalf("new epoch fact %+v = %+v", fact, got)
 		}
 	}
-	if reset := e.ObserveTQ(); reset.Quarantined || reset.Accounting.KnownPresent != 0 || reset.Accounting.Unknown != 0 {
+	if reset := e.ObserveTQ(); reset.ControlClosed || reset.Accounting.KnownPresent != 0 || reset.Accounting.Unknown != 0 {
 		t.Fatalf("greater acknowledged epoch did not reset T/Q control: %+v", reset)
 	}
 }

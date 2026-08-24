@@ -28,21 +28,16 @@ const (
 )
 
 type TQPressureSample struct {
-	WaitingFrames             uint64
-	FrameCapacity             uint64
-	WaitingBytes              uint64
-	ByteCapacity              uint64
-	OldestWaitingFrameAge     time.Duration
-	ActiveFrameAge            time.Duration
-	SlotCapacityDrops         uint64
-	ByteCapacityDrops         uint64
-	AggregateWatermarkLag     time.Duration
-	TQWorkPresent             bool
-	MaxDeliveryDelayOneSec    time.Duration
-	DeliveryLatencyAttributed bool
-	HeapAllocBytes            uint64
-	Goroutines                int
-	TQLocalAccountingHealthy  bool
+	WaitingFrames            uint64
+	FrameCapacity            uint64
+	WaitingBytes             uint64
+	ByteCapacity             uint64
+	OldestWaitingFrameAge    time.Duration
+	SlotCapacityDrops        uint64
+	ByteCapacityDrops        uint64
+	AggregateWatermarkLag    time.Duration
+	TQWorkPresent            bool
+	TQLocalAccountingHealthy bool
 }
 
 // TQPressureCommand is an opaque, one-shot request for a fixed-cardinality
@@ -158,8 +153,7 @@ func validTQPressureCommand(v TQPressureCommand) bool {
 
 func validTQPressureSample(v TQPressureSample) bool {
 	return v.FrameCapacity > 0 && v.WaitingFrames <= v.FrameCapacity && v.ByteCapacity > 0 && v.WaitingBytes <= v.ByteCapacity &&
-		v.OldestWaitingFrameAge >= 0 && v.ActiveFrameAge >= 0 && v.AggregateWatermarkLag >= 0 &&
-		v.MaxDeliveryDelayOneSec >= 0 && v.Goroutines >= 0
+		v.OldestWaitingFrameAge >= 0 && v.AggregateWatermarkLag >= 0
 }
 
 func (e *Engine) advanceTQPressureTimerLocked(now time.Time) {
@@ -350,6 +344,7 @@ func (e *Engine) setTQPressureModeLocked(mode TQPressureMode, now time.Time, cau
 		p.streaks, p.degradedAt = tqPressureStreaks{}, time.Time{}
 		if !s.globalBound {
 			s.aggregateOnly = false
+			s.restoring = true
 		}
 	}
 }

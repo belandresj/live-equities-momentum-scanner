@@ -427,7 +427,7 @@ func admitTQDropForCoalescing(t *testing.T, e *Engine, input TQDropInput) Dispos
 	return awaitDisposition(t, completion)
 }
 
-func TestTQPublicationCoalescingFamilyDropAndQuarantineRecovery(t *testing.T) {
+func TestTQPublicationCoalescingFamilyDropAndControlErrorRecovery(t *testing.T) {
 	t.Run("family drop is edge triggered", func(t *testing.T) {
 		fixture := newTQPublicationFixture(t, []string{"AAA", "BBB"})
 		fixture.confirmChannels(t)
@@ -454,22 +454,22 @@ func TestTQPublicationCoalescingFamilyDropAndQuarantineRecovery(t *testing.T) {
 		}
 	})
 
-	t.Run("quarantine recovery is accounted as an immediate transition", func(t *testing.T) {
+	t.Run("control error recovery is accounted as an immediate transition", func(t *testing.T) {
 		fixture := newTQPublicationFixture(t, []string{"AAA"})
 		fixture.confirmChannels(t)
 		before := fixture.e.ObserveTQPublicationAccounting()
-		quarantine := TQControlQuarantineInput{SchemaVersion: TQSchemaV1, BindingIdentity: fixture.binding.Identity(), ConnectionEpoch: 1,
-			Position: LivePosition{ConnectionEpoch: 1, FrameSequence: 400}, ReceiptTime: fixture.now, Failure: TQControlStatusExtra}
-		admission, completion := fixture.e.AdmitTQControlQuarantine(context.Background(), quarantine)
+		controlError := TQControlErrorInput{SchemaVersion: TQSchemaV1, BindingIdentity: fixture.binding.Identity(), ConnectionEpoch: 1,
+			Position: LivePosition{ConnectionEpoch: 1, FrameSequence: 400}, ReceiptTime: fixture.now}
+		admission, completion := fixture.e.AdmitTQControlError(context.Background(), controlError)
 		if admission != AdmissionAdmitted || completion == nil {
-			t.Fatalf("quarantine admission = %s", admission)
+			t.Fatalf("control-error admission = %s", admission)
 		}
 		if got := awaitDisposition(t, completion); got.Code != DispositionTQRejected {
-			t.Fatalf("quarantine = %+v", got)
+			t.Fatalf("control error = %+v", got)
 		}
-		afterQuarantine := fixture.e.ObserveTQPublicationAccounting()
-		if afterQuarantine.ImmediateTrustTransitionMutations != before.ImmediateTrustTransitionMutations+1 {
-			t.Fatalf("quarantine transition accounting=%+v before=%+v", afterQuarantine, before)
+		afterControlError := fixture.e.ObserveTQPublicationAccounting()
+		if afterControlError.ImmediateTrustTransitionMutations != before.ImmediateTrustTransitionMutations+1 {
+			t.Fatalf("control-error transition accounting=%+v before=%+v", afterControlError, before)
 		}
 
 		if got := admitConnectionControl(t, fixture.e, controlFact(fixture.binding.Identity(), ConnectionLost, 1,
@@ -488,12 +488,12 @@ func TestTQPublicationCoalescingFamilyDropAndQuarantineRecovery(t *testing.T) {
 			}
 		}
 		afterRecovery := fixture.e.ObserveTQPublicationAccounting()
-		if afterRecovery.ImmediateTrustTransitionMutations < afterQuarantine.ImmediateTrustTransitionMutations+2 ||
+		if afterRecovery.ImmediateTrustTransitionMutations < afterControlError.ImmediateTrustTransitionMutations+2 ||
 			afterRecovery.CanonicalMutations != afterRecovery.ImmediateTrustTransitionMutations+afterRecovery.CoalescedOrdinaryMutations {
-			t.Fatalf("quarantine recovery transition was not accounted: before=%+v after=%+v", afterQuarantine, afterRecovery)
+			t.Fatalf("control-error recovery transition was not accounted: before=%+v after=%+v", afterControlError, afterRecovery)
 		}
-		if view := fixture.e.ObserveTQ(); view.Quarantined {
-			t.Fatalf("quarantine did not clear on greater acknowledged epoch: %+v", view)
+		if view := fixture.e.ObserveTQ(); view.ControlClosed {
+			t.Fatalf("control error did not clear on greater acknowledged epoch: %+v", view)
 		}
 	})
 }

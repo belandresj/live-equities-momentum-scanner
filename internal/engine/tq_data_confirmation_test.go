@@ -42,6 +42,10 @@ func TestTQDataConfirmationSeparatesWriteFromCoverage(t *testing.T) {
 		view.Rows[0].Tape.Reason != "channel_unconfirmed" || view.Rows[0].Spread.Reason != "channel_unconfirmed" || view.Commands.Written != 1 || view.Commands.Pending != 0 {
 		t.Fatalf("write falsely created coverage: %+v", view)
 	}
+	atBoundary := baseTrade(binding, now.Add(50*time.Millisecond), LivePosition{ConnectionEpoch: 1, FrameSequence: 10, ArrayIndex: 99})
+	if got := admitTradeForTest(t, e, atBoundary); got.Code != DispositionTQFenced {
+		t.Fatalf("frame at B confirmed coverage: %+v", got)
+	}
 
 	// A non-volume-updating trade is still real delivery evidence. It confirms
 	// only T and leaves Tape warming rather than inventing a zero-rate channel.

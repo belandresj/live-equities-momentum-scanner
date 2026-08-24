@@ -78,7 +78,7 @@ func TestPC9PressureTransitionsExpiryAndRankedRestoration(t *testing.T) {
 	if view.Accounting.Consumed != view.Accounting.Applied+view.Accounting.Duplicate+view.Accounting.Rejected+view.Accounting.Fenced+view.Accounting.PressureShed+view.Accounting.Integrity {
 		t.Fatalf("T/Q accounting = %+v", view.Accounting)
 	}
-	if view.Commands.Issued != view.Commands.Pending+view.Commands.Acknowledged+view.Commands.Failed+view.Commands.Fenced {
+	if view.Commands.Issued != view.Commands.Pending+view.Commands.Written+view.Commands.Failed+view.Commands.Fenced {
 		t.Fatalf("command accounting = %+v", view.Commands)
 	}
 	e.mu.Lock()
@@ -98,15 +98,12 @@ func TestPC9DiagnosticsAndQuietWindowsDoNotGatePressure(t *testing.T) {
 	e, _, clockNanos, start := pressureProofEngine(t)
 	defer closeAndWait(t, e)
 	diagnosticSpike := healthyTQPressureSample()
-	diagnosticSpike.HeapAllocBytes, diagnosticSpike.Goroutines, diagnosticSpike.MaxDeliveryDelayOneSec = ^uint64(0), 1<<20, time.Hour
-	for second, age := range []time.Duration{251 * time.Millisecond, 500 * time.Millisecond, time.Second} {
-		diagnosticSpike.ActiveFrameAge = age
+	for second := range []time.Duration{251 * time.Millisecond, 500 * time.Millisecond, time.Second} {
 		applyPressureSample(t, e, clockNanos, start.Add(time.Duration(second)*time.Second), diagnosticSpike)
 	}
 	if view := e.ObserveTQ(); view.Pressure != TQPressureNormal || view.ShedTradesQuotes {
 		t.Fatalf("active frame age changed global pressure = %+v", view)
 	}
-	diagnosticSpike.ActiveFrameAge = time.Hour
 	for second := 3; second <= 10; second++ {
 		applyPressureSample(t, e, clockNanos, start.Add(time.Duration(second)*time.Second), diagnosticSpike)
 	}
@@ -363,7 +360,7 @@ func TestPC9PressureEpochReplacementPreservesMonotonicAuthority(t *testing.T) {
 	e.state.tq.consumed, e.state.tq.applied, e.state.tq.duplicate = 6, 1, 1
 	e.state.tq.rejected, e.state.tq.fenced, e.state.tq.pressureShed, e.state.tq.integrity = 1, 1, 1, 1
 	e.state.tq.tradePressureShed = 1
-	e.state.tq.commandsIssued, e.state.tq.commandsAcknowledged, e.state.tq.commandsFailed, e.state.tq.commandsFenced = 3, 1, 1, 1
+	e.state.tq.commandsIssued, e.state.tq.commandsWritten, e.state.tq.commandsFailed, e.state.tq.commandsFenced = 3, 1, 1, 1
 	e.state.tq.commandResultsFenced = 1
 	e.state.tq.pressure.mode, e.state.tq.pressure.cause, e.state.tq.pressure.transitions, e.state.tq.pressure.fenced = TQPressureDegraded, TQPressureCauseWaitingFrames, 2, 1
 	e.advanceTQPressureTimerLocked(start)
@@ -402,9 +399,9 @@ func TestPC9PressureEpochReplacementPreservesMonotonicAuthority(t *testing.T) {
 		afterReplacement.Accounting.Duplicate != before.Accounting.Duplicate || afterReplacement.Accounting.Rejected != before.Accounting.Rejected ||
 		afterReplacement.Accounting.Fenced != before.Accounting.Fenced || afterReplacement.Accounting.PressureShed != before.Accounting.PressureShed ||
 		afterReplacement.Accounting.Integrity != before.Accounting.Integrity || afterReplacement.Commands.Issued != before.Commands.Issued ||
-		afterReplacement.Commands.Acknowledged != before.Commands.Acknowledged || afterReplacement.Commands.Failed != before.Commands.Failed ||
+		afterReplacement.Commands.Written != before.Commands.Written || afterReplacement.Commands.Failed != before.Commands.Failed ||
 		afterReplacement.Commands.ResultFenced != before.Commands.ResultFenced || afterReplacement.Commands.Fenced != before.Commands.Fenced+1 || afterReplacement.Commands.Pending != 0 ||
-		afterReplacement.Commands.Issued != afterReplacement.Commands.Pending+afterReplacement.Commands.Acknowledged+afterReplacement.Commands.Failed+afterReplacement.Commands.Fenced {
+		afterReplacement.Commands.Issued != afterReplacement.Commands.Pending+afterReplacement.Commands.Written+afterReplacement.Commands.Failed+afterReplacement.Commands.Fenced {
 		t.Fatalf("replacement command accounting = before=%+v after=%+v", before.Commands, afterReplacement.Commands)
 	}
 
@@ -413,7 +410,7 @@ func TestPC9PressureEpochReplacementPreservesMonotonicAuthority(t *testing.T) {
 	}
 	afterTQFence := e.ObserveTQ()
 	if afterTQFence.Accounting.Consumed != afterReplacement.Accounting.Consumed+1 || afterTQFence.Accounting.Fenced != afterReplacement.Accounting.Fenced+1 ||
-		afterTQFence.Commands.ResultFenced != afterReplacement.Commands.ResultFenced+1 || afterTQFence.Commands.Issued != afterTQFence.Commands.Pending+afterTQFence.Commands.Acknowledged+afterTQFence.Commands.Failed+afterTQFence.Commands.Fenced ||
+		afterTQFence.Commands.ResultFenced != afterReplacement.Commands.ResultFenced+1 || afterTQFence.Commands.Issued != afterTQFence.Commands.Pending+afterTQFence.Commands.Written+afterTQFence.Commands.Failed+afterTQFence.Commands.Fenced ||
 		afterTQFence.Accounting.Consumed != afterTQFence.Accounting.Applied+afterTQFence.Accounting.Duplicate+afterTQFence.Accounting.Rejected+afterTQFence.Accounting.Fenced+afterTQFence.Accounting.PressureShed+afterTQFence.Accounting.Integrity ||
 		afterTQFence.Accounting.KnownPresent != 0 || afterTQFence.Accounting.Unknown != 0 {
 		t.Fatalf("old T/Q result accounting/membership = before=%+v after=%+v", afterReplacement, afterTQFence)
@@ -457,7 +454,7 @@ func pressureProofEngine(t *testing.T) (*Engine, reference.Binding, *atomic.Int6
 }
 
 func healthyTQPressureSample() TQPressureSample {
-	return TQPressureSample{FrameCapacity: 100, ByteCapacity: 1000, DeliveryLatencyAttributed: true, TQLocalAccountingHealthy: true, Goroutines: 1}
+	return TQPressureSample{FrameCapacity: 100, ByteCapacity: 1000, TQLocalAccountingHealthy: true}
 }
 
 func applyPressureSample(t *testing.T, e *Engine, clock *atomic.Int64, at time.Time, sample TQPressureSample) {

@@ -559,355 +559,6 @@ func TestCapacityTerminalReasonsAndOperandsFollowReaderAdmissionPath(t *testing.
 	}
 }
 
-func TestPC5CommandWriteAcknowledgementLinearization(t *testing.T) {
-	t.Skip("superseded generic-success acknowledgement linearization; successful writes now return a frame boundary")
-	socket := newFakeLiveSocket()
-	enqueueHandshake(socket)
-	adapter, open := testLiveAdapter(t, socket, []string{"AAA", "BBB"})
-	attempt, _, _ := startHandshake(t, adapter, open)
-
-	socket.mu.Lock()
-	socket.blockWrite = true
-	socket.writeStarted = make(chan struct{}, 1)
-	socket.writeRelease = make(chan struct{})
-	socket.mu.Unlock()
-	type commandResult struct {
-		delivery AdapterDelivery
-		err      error
-	}
-	result := make(chan commandResult, 1)
-	go func() {
-		delivery, err := attempt.ChangeTQ(context.Background(), ChangeTQCommand{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: 2, Action: TQSubscribe, Symbols: []string{"AAA", "BBB"}})
-		result <- commandResult{delivery: delivery, err: err}
-	}()
-	<-socket.writeStarted
-	socket.send(socketMessageText, `[{"ev":"status","status":"success"},{"ev":"status","status":"success"},{"ev":"status","status":"success"},{"ev":"status","status":"success"}]`)
-	ackResult := make(chan AdapterDelivery, 1)
-	go func() {
-		ack, _ := attempt.nextForProof(context.Background())
-		ackResult <- ack
-	}()
-	select {
-	case premature := <-result:
-		t.Fatalf("write returned before release: %+v", premature)
-	default:
-	}
-	select {
-	case premature := <-ackResult:
-		t.Fatalf("ack completed before write: %+v", premature)
-	case <-time.After(5 * time.Millisecond):
-	}
-	close(socket.writeRelease)
-	written := <-result
-	if written.err != nil || written.delivery.Control.Outcome != engine.ControlSucceeded {
-		t.Fatalf("write result = %+v", written)
-	}
-	ack := <-ackResult
-	if ack.Control.Kind != engine.TradeQuoteSubscriptionResult || ack.Control.Outcome != engine.ControlSucceeded || ack.ExpectedStatusCount != 4 || ack.ObservedStatusCount != 4 {
-		t.Fatalf("ack result = %+v", ack)
-	}
-	writes := socket.written()
-	if writes[len(writes)-1] != `{"action":"subscribe","params":"T.AAA,Q.AAA,T.BBB,Q.BBB"}` {
-		t.Fatalf("dynamic command = %q", writes[len(writes)-1])
-	}
-
-	t.Run("shape token and stale close reject before I/O", func(t *testing.T) {
-		before := len(socket.written())
-		bad := []ChangeTQCommand{
-			{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch() + 1, CommandToken: 3, Action: TQSubscribe, Symbols: []string{"AAA"}},
-			{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: 3, Action: TQSubscribe, Symbols: []string{"BBB", "AAA"}},
-			{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: 2, Action: TQSubscribe, Symbols: []string{"AAA"}},
-			{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: 3, Action: TQSubscribe},
-			{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: 3, Action: TQSubscribe, Symbols: []string{"AAA", "AAA"}},
-			{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: 3, Action: TQSubscribe, Symbols: []string{"NOT-BOUND"}},
-			{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: 3, Action: TQSubscribe, Symbols: makeTwentyOneSymbols()},
-		}
-		for _, command := range bad {
-			if _, err := attempt.ChangeTQ(context.Background(), command); !errors.Is(err, errCommand) {
-				t.Fatalf("bad command accepted: %+v err=%v", command, err)
-			}
-		}
-		if err := attempt.Close(CloseEpochCommand{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch() + 1, CommandToken: 3, Cause: CloseControlledStop}); !errors.Is(err, errCommand) {
-			t.Fatalf("stale close = %v", err)
-		}
-		if len(socket.written()) != before {
-			t.Fatal("invalid command performed I/O")
-		}
-	})
-
-	t.Run("split success completes while extra status quarantines", func(t *testing.T) {
-		write, err := attempt.ChangeTQ(context.Background(), ChangeTQCommand{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: 3, Action: TQSubscribe, Symbols: []string{"AAA"}})
-		if err != nil || write.Control.Outcome != engine.ControlSucceeded {
-			t.Fatalf("split write = %+v %v", write, err)
-		}
-		socket.send(socketMessageText, `[{"ev":"status","status":"success"}]`)
-		socket.send(socketMessageText, `[{"ev":"status","status":"success"}]`)
-		ack, ok := attempt.nextForProof(context.Background())
-		if !ok || ack.Control.Outcome != engine.ControlSucceeded || ack.ExpectedStatusCount != 2 || ack.ObservedStatusCount != 2 {
-			t.Fatalf("split acknowledgement = %+v", ack)
-		}
-
-		write, err = attempt.ChangeTQ(context.Background(), ChangeTQCommand{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: 4, Action: TQSubscribe, Symbols: []string{"AAA"}})
-		if err != nil || write.Control.Outcome != engine.ControlSucceeded {
-			t.Fatalf("extra write = %+v %v", write, err)
-		}
-		socket.send(socketMessageText, `[{"ev":"status","status":"success"},{"ev":"status","status":"success"},{"ev":"status","status":"success"}]`)
-		quarantine, ok := attempt.nextForProof(context.Background())
-		if !ok || quarantine.Kind != DeliveryTQControlQuarantine || quarantine.TQQuarantine.Failure != engine.TQControlStatusExtra || quarantine.TQQuarantine.ExpectedStatuses != 2 {
-			t.Fatalf("extra status quarantine = %+v", quarantine)
-		}
-		for index := 0; index < 2; index++ {
-			orphan, ok := attempt.nextForProof(context.Background())
-			if !ok || orphan.Kind != DeliveryTQControlQuarantine || orphan.TQQuarantine.Failure != engine.TQControlStatusUnsolicited {
-				t.Fatalf("extra orphan %d = %+v", index, orphan)
-			}
-		}
-
-		socket.mu.Lock()
-		socket.blockWrite = true
-		socket.writeError = errors.New("provider prose CREDENTIAL-MUST-NOT-ESCAPE")
-		socket.writeStarted = make(chan struct{}, 1)
-		socket.writeRelease = make(chan struct{})
-		socket.mu.Unlock()
-		failed := make(chan commandResult, 1)
-		go func() {
-			delivery, err := attempt.ChangeTQ(context.Background(), ChangeTQCommand{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: 5, Action: TQUnsubscribe, Symbols: []string{"AAA"}})
-			failed <- commandResult{delivery: delivery, err: err}
-		}()
-		<-socket.writeStarted
-		socket.send(socketMessageText, `[{"ev":"status","status":"success"},{"ev":"status","status":"success"}]`)
-		close(socket.writeRelease)
-		failure := <-failed
-		if !errors.Is(failure.err, errCommandWrite) || failure.delivery.Kind != DeliveryTQControlQuarantine || failure.delivery.TQQuarantine.Failure != engine.TQControlWriteFailed || strings.Contains(fmt.Sprint(failure.err), "CREDENTIAL") {
-			t.Fatalf("write failure = %+v", failure)
-		}
-		if accounting := adapter.Accounting(); accounting.CommandsFailed != 1 || !accounting.Reconciles() {
-			t.Fatalf("write failure accounting = %+v", accounting)
-		}
-		late, ok := attempt.nextForProof(context.Background())
-		if !ok || late.Kind != DeliveryTQControlQuarantine || late.TQQuarantine.Failure != engine.TQControlStatusUnsolicited {
-			t.Fatalf("ack after failed write = %+v", late)
-		}
-		late, ok = attempt.nextForProof(context.Background())
-		if !ok || late.Kind != DeliveryTQControlQuarantine || late.TQQuarantine.Failure != engine.TQControlStatusUnsolicited {
-			t.Fatalf("second ack after failed write = %+v", late)
-		}
-		socket.mu.Lock()
-		socket.blockWrite = false
-		socket.writeError = nil
-		socket.mu.Unlock()
-	})
-
-	attempt.durations.HandshakeStep = 3 * time.Millisecond
-	if _, err := attempt.ChangeTQ(context.Background(), ChangeTQCommand{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: 6, Action: TQSubscribe, Symbols: []string{"AAA"}}); err != nil {
-		t.Fatal(err)
-	}
-	timedOut, ok := attempt.nextForProof(context.Background())
-	if !ok || timedOut.Kind != DeliveryTQControlQuarantine || timedOut.TQQuarantine.Failure != engine.TQControlStatusDeadline || timedOut.Position != (engine.LivePosition{}) {
-		t.Fatalf("ack deadline fabricated success/position = %+v", timedOut)
-	}
-	attempt.durations.HandshakeStep = time.Second
-	if _, err := attempt.ChangeTQ(context.Background(), ChangeTQCommand{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: 7, Action: TQSubscribe, Symbols: []string{"AAA"}}); err != nil {
-		t.Fatal(err)
-	}
-	socket.failRead()
-	if terminal, ok := attempt.nextForProof(context.Background()); !ok || terminal.Kind != DeliveryTerminal || terminal.Control.Outcome != engine.ControlFailed || terminal.Terminal.PendingCommandToken != 7 || terminal.Terminal.PendingExpectedStatusCount != 2 || terminal.Terminal.PendingCommandOutcome != engine.ControlAmbiguous {
-		t.Fatalf("loss while pending = %+v %v", terminal, ok)
-	}
-	if accounting := adapter.Accounting(); !accounting.Reconciles() || accounting.CommandsStarted != 7 || accounting.CommandsPendingWrite != 0 || accounting.CommandsPendingAck != 0 {
-		t.Fatalf("command accounting = %+v", accounting)
-	}
-
-	t.Run("completed acknowledgement cannot be reclassified by terminal cleanup", func(t *testing.T) {
-		raceSocket := newFakeLiveSocket()
-		enqueueHandshake(raceSocket)
-		raceAdapter, command := testLiveAdapter(t, raceSocket, []string{"AAA"})
-		raceAttempt, _, _ := startHandshake(t, raceAdapter, command)
-		if _, err := raceAttempt.ChangeTQ(context.Background(), ChangeTQCommand{BindingIdentity: command.BindingIdentity, ConnectionEpoch: raceAttempt.Epoch(), CommandToken: 2, Action: TQSubscribe, Symbols: []string{"AAA"}}); err != nil {
-			t.Fatal(err)
-		}
-		raceSocket.send(socketMessageText, `[{"ev":"status","status":"success"},{"ev":"status","status":"success"}]`)
-		waitForQueuedFrames(t, raceAttempt, 1)
-		// Hold the adapter accounting lock so Next can atomically detach the
-		// pending command but cannot yet record its acknowledgement. Terminal
-		// cleanup then overlaps the exact detach-to-account interval that must
-		// not classify the command a second time.
-		raceAdapter.mu.Lock()
-		type deliveryResult struct {
-			delivery AdapterDelivery
-			ok       bool
-		}
-		ackDone := make(chan deliveryResult, 1)
-		go func() {
-			delivery, ok := raceAttempt.nextForProof(context.Background())
-			ackDone <- deliveryResult{delivery: delivery, ok: ok}
-		}()
-		deadline := time.Now().Add(200 * time.Millisecond)
-		for {
-			raceAttempt.mu.Lock()
-			detached := raceAttempt.pending == nil
-			raceAttempt.mu.Unlock()
-			if detached {
-				break
-			}
-			if time.Now().After(deadline) {
-				raceAdapter.mu.Unlock()
-				t.Fatal("pending command was not detached")
-			}
-			time.Sleep(time.Millisecond)
-		}
-		terminalTriggered := make(chan struct{})
-		go func() {
-			raceAttempt.triggerTerminal(TerminalReader, TerminalReadFailed, 0, false)
-			close(terminalTriggered)
-		}()
-		raceAdapter.mu.Unlock()
-		<-terminalTriggered
-		ackResult := <-ackDone
-		ack, ok := ackResult.delivery, ackResult.ok
-		if !ok || ack.Control.Outcome != engine.ControlSucceeded {
-			t.Fatalf("race acknowledgement = %+v %v", ack, ok)
-		}
-		if terminal, ok := raceAttempt.nextForProof(context.Background()); !ok || terminal.Kind != DeliveryTerminal || !raceAdapter.Accounting().Reconciles() {
-			t.Fatalf("race terminal/accounting = %+v %v %+v", terminal, ok, raceAdapter.Accounting())
-		}
-		accounting := raceAdapter.Accounting()
-		if accounting.CommandsStarted != 2 || accounting.CommandsAcknowledged != 2 || accounting.CommandsCanceledOrFenced != 0 {
-			t.Fatalf("completed acknowledgement was reclassified: %+v", accounting)
-		}
-	})
-}
-
-// TestPTQRStatusAsyncCorrelationAndContainment is the adapter half of
-// P-TQR-STATUS. Every subtest uses the same bounded fake WebSocket and differs
-// only in provider status framing.
-func TestPTQRStatusAsyncCorrelationAndContainment(t *testing.T) {
-	t.Skip("superseded generic-success correlation and deadline containment model")
-	t.Run("handshake batches classified elements without singleton frames", func(t *testing.T) {
-		socket := newFakeLiveSocket()
-		binding := component4TestBinding(t, []string{"AAA"})
-		start := binding.SessionStart().Add(10 * time.Second)
-		socket.send(socketMessageText, `[{"ev":"future_family"},{"ev":"status","status":"connected"}]`)
-		socket.send(socketMessageText, `[{"ev":"T","sym":"AAA"},{"ev":"status","status":"auth_success"}]`)
-		socket.send(socketMessageText, "["+aggregateLiveJSON("AAA", start, `"v":1,"z":1`)+`,{"ev":"status","status":"success"},`+aggregateLiveJSON("AAA", start.Add(time.Second), `"v":2,"z":1`)+"]")
-		adapter, open := testLiveAdapterForBinding(t, socket, binding)
-		attempt, _, deliveries := startHandshake(t, adapter, open)
-		defer closeAttemptForTest(t, attempt, 90)
-		want := []DeliveryKind{DeliveryNormalizationDrop, DeliveryControl, DeliveryNormalizationDrop, DeliveryControl, DeliveryControl, DeliveryAggregate, DeliveryControl, DeliveryAggregate}
-		if len(deliveries) != len(want) {
-			t.Fatalf("batched handshake deliveries = %+v", deliveries)
-		}
-		for index := range want {
-			if deliveries[index].Kind != want[index] {
-				t.Fatalf("batched handshake %d = %+v", index, deliveries[index])
-			}
-		}
-		if deliveries[5].Position.ArrayIndex != 0 || deliveries[6].Position.ArrayIndex != 1 || deliveries[7].Position.ArrayIndex != 2 ||
-			adapter.Accounting().UnsupportedFamilies != 1 || attempt.TQNormalizationAccounting().Rejected != 1 {
-			t.Fatalf("batched causal/accounting evidence: deliveries=%+v adapter=%+v tq=%+v", deliveries, adapter.Accounting(), attempt.TQNormalizationAccounting())
-		}
-	})
-
-	for _, tc := range []struct {
-		name       string
-		frames     []string
-		want       engine.TQControlFailureClass
-		wantOK     bool
-		afterAck   bool
-		authFailed bool
-		deadline   bool
-	}{
-		{name: "paired_one_frame", frames: []string{`[{"ev":"status","status":"success"},{"ev":"status","status":"success"}]`}, wantOK: true},
-		{name: "split_frames", frames: []string{`[{"ev":"status","status":"success"}]`, `[{"ev":"status","status":"success"}]`}, wantOK: true},
-		{name: "extra", frames: []string{`[{"ev":"status","status":"success"},{"ev":"status","status":"success"},{"ev":"status","status":"success"}]`}, want: engine.TQControlStatusExtra},
-		{name: "duplicate_member", frames: []string{`[{"ev":"status","status":"success","status":"success"}]`}, want: engine.TQControlStatusAmbiguous},
-		{name: "provider_error", frames: []string{`[{"ev":"status","status":"error","message":"discarded"}]`}, want: engine.TQControlStatusFailed},
-		{name: "unknown_status", frames: []string{`[{"ev":"status","status":"new_provider_status","message":"discarded"}]`}, want: engine.TQControlStatusFailed},
-		{name: "wrong_phase", frames: []string{`[{"ev":"status","status":"connected"}]`}, want: engine.TQControlStatusAmbiguous},
-		{name: "partial_deadline", frames: []string{`[{"ev":"status","status":"success"}]`}, want: engine.TQControlStatusDeadline, deadline: true},
-		{name: "delayed_after_complete", frames: []string{`[{"ev":"status","status":"success"},{"ev":"status","status":"success"}]`, `[{"ev":"status","status":"success"}]`}, want: engine.TQControlStatusUnsolicited, afterAck: true},
-		{name: "auth_failed", frames: []string{`[{"ev":"status","status":"auth_failed"}]`}, want: engine.TQControlStatusFailed, authFailed: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			socket := newFakeLiveSocket()
-			enqueueHandshake(socket)
-			adapter, open := testLiveAdapter(t, socket, []string{"AAA"})
-			attempt, _, _ := startHandshake(t, adapter, open)
-			if !tc.authFailed {
-				defer closeAttemptForTest(t, attempt, 90)
-			}
-			if tc.deadline {
-				attempt.durations.HandshakeStep = 3 * time.Millisecond
-			}
-			if _, err := attempt.ChangeTQ(context.Background(), ChangeTQCommand{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: 2, Action: TQSubscribe, Symbols: []string{"AAA"}}); err != nil {
-				t.Fatal(err)
-			}
-			for _, frame := range tc.frames {
-				socket.send(socketMessageText, frame)
-			}
-			var got AdapterDelivery
-			for index := 0; index < len(tc.frames)+3; index++ {
-				delivery, ok := attempt.nextForProof(context.Background())
-				if !ok {
-					t.Fatal("status trace ended without terminal evidence")
-				}
-				if tc.wantOK && delivery.Control.Kind == engine.TradeQuoteSubscriptionResult || !tc.wantOK && delivery.Kind == DeliveryTQControlQuarantine {
-					got = delivery
-					if !tc.afterAck || delivery.Kind == DeliveryTQControlQuarantine {
-						break
-					}
-				}
-			}
-			if tc.wantOK {
-				if got.Control.Outcome != engine.ControlSucceeded || got.ExpectedStatusCount != 2 || got.ObservedStatusCount != 2 {
-					t.Fatalf("successful correlation = %+v", got)
-				}
-			} else if got.Kind != DeliveryTQControlQuarantine || got.TQQuarantine.Failure != tc.want {
-				t.Fatalf("quarantine = %+v want=%s", got, tc.want)
-			}
-			if tc.authFailed {
-				terminal, ok := attempt.nextForProof(context.Background())
-				if !ok || terminal.Kind != DeliveryTerminal || terminal.Control.Kind != engine.ConnectionLost {
-					t.Fatalf("authentication failure did not end epoch: %+v", terminal)
-				}
-			}
-			accounting := adapter.Accounting()
-			if !accounting.TransportReconciles() || !accounting.TQReconciles() || strings.Contains(fmt.Sprint(accounting), "discarded") {
-				t.Fatalf("partitioned/redacted accounting = %+v", accounting)
-			}
-			if !tc.wantOK && (accounting.FirstTQFailureClass != tc.want || accounting.FirstTQFailurePhase == "" || accounting.FirstTQFailureEpoch != attempt.Epoch()) {
-				t.Fatalf("bounded first-cause diagnostic = %+v", accounting)
-			}
-		})
-	}
-
-	t.Run("interleaved aggregate and malformed TQ retain causal dispositions", func(t *testing.T) {
-		socket := newFakeLiveSocket()
-		enqueueHandshake(socket)
-		adapter, open := testLiveAdapter(t, socket, []string{"AAA"})
-		attempt, _, _ := startHandshake(t, adapter, open)
-		defer closeAttemptForTest(t, attempt, 90)
-		if _, err := attempt.ChangeTQ(context.Background(), ChangeTQCommand{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: 2, Action: TQSubscribe, Symbols: []string{"AAA"}}); err != nil {
-			t.Fatal(err)
-		}
-		start := adapter.binding.SessionStart().Add(10 * time.Second)
-		socket.send(socketMessageText, `[{"ev":"status","status":"success"},`+aggregateLiveJSON("AAA", start, `"v":1,"z":1`)+`]`)
-		socket.send(socketMessageText, `[{"ev":"T","sym":"AAA"},{"ev":"status","status":"success"}]`)
-		aggregate, ok := attempt.nextForProof(context.Background())
-		if !ok || aggregate.Kind != DeliveryAggregate {
-			t.Fatalf("interleaved aggregate = %+v", aggregate)
-		}
-		drop, ok := attempt.nextForProof(context.Background())
-		if !ok || drop.Kind != DeliveryNormalizationDrop || drop.Rejection.Family != LiveFamilyTrade {
-			t.Fatalf("malformed TQ = %+v", drop)
-		}
-		ack, ok := attempt.nextForProof(context.Background())
-		if !ok || ack.Control.Outcome != engine.ControlSucceeded || ack.ObservedStatusCount != 2 {
-			t.Fatalf("interleaved split acknowledgement = %+v", ack)
-		}
-	})
-}
-
 func closeAttemptForTest(t *testing.T, attempt *LiveAttempt, token uint64) {
 	t.Helper()
 	if attempt == nil {
@@ -917,74 +568,6 @@ func closeAttemptForTest(t *testing.T, attempt *LiveAttempt, token uint64) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_ = attempt.Wait(ctx)
-}
-
-func TestPC5CommandDeadlineWakesBlockedDequeue(t *testing.T) {
-	t.Skip("superseded T/Q status deadline; a quiet requested channel remains unconfirmed without a dequeue wakeup")
-	socket := newFakeLiveSocket()
-	enqueueHandshake(socket)
-	adapter, open := testLiveAdapter(t, socket, []string{"AAA"})
-	attempt, _, _ := startHandshake(t, adapter, open)
-	// Receipt evidence may deliberately use a deterministic market clock that
-	// is unrelated to process time; command I/O bounds must not inherit it.
-	adapter.clock = func() time.Time { return time.Date(2099, 1, 2, 3, 4, 5, 0, time.UTC) }
-	attempt.durations.HandshakeStep = 20 * time.Millisecond
-
-	type deliveryResult struct {
-		delivery AdapterDelivery
-		ok       bool
-	}
-	proofCtx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-	defer cancel()
-	result := make(chan deliveryResult, 1)
-	go func() {
-		delivery, ok := attempt.nextForProof(proofCtx)
-		result <- deliveryResult{delivery: delivery, ok: ok}
-	}()
-	waitForNextDrainOwner(t, attempt)
-
-	started := time.Now()
-	write, err := attempt.ChangeTQ(proofCtx, ChangeTQCommand{
-		BindingIdentity: open.BindingIdentity,
-		ConnectionEpoch: attempt.Epoch(),
-		CommandToken:    2,
-		Action:          TQSubscribe,
-		Symbols:         []string{"AAA"},
-	})
-	if err != nil || write.Control.Outcome != engine.ControlSucceeded {
-		t.Fatalf("command write = %+v err=%v", write, err)
-	}
-
-	var completed deliveryResult
-	select {
-	case completed = <-result:
-	case <-proofCtx.Done():
-		t.Fatal("blocked dequeue did not observe the pending command deadline")
-	}
-	if !completed.ok || completed.delivery.Kind != DeliveryTQControlQuarantine ||
-		completed.delivery.TQQuarantine.Failure != engine.TQControlStatusDeadline || completed.delivery.TQQuarantine.ExpectedStatuses != 2 ||
-		completed.delivery.TQQuarantine.ObservedStatuses != 0 || completed.delivery.Position != (engine.LivePosition{}) {
-		t.Fatalf("no-response command result = %+v ok=%v", completed.delivery, completed.ok)
-	}
-	if elapsed := time.Since(started); elapsed >= 200*time.Millisecond {
-		t.Fatalf("command deadline completed too late: %s", elapsed)
-	}
-	if accounting := adapter.Accounting(); !accounting.Reconciles() || accounting.CommandsStarted != 2 ||
-		accounting.CommandsPendingWrite != 0 || accounting.CommandsPendingAck != 0 || accounting.CommandsAmbiguous != 1 {
-		t.Fatalf("command accounting = %+v", accounting)
-	}
-	if accounting := attempt.QueueAccounting(); !accounting.Reconciles() || accounting.FramesRead != accounting.FramesDispositioned {
-		t.Fatalf("queue accounting = %+v", accounting)
-	}
-
-	if err := attempt.Close(CloseEpochCommand{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(), CommandToken: 3, Cause: CloseControlledStop}); err != nil {
-		t.Fatal(err)
-	}
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer waitCancel()
-	if err := attempt.Wait(waitCtx); err != nil {
-		t.Fatalf("cleanup = %v", err)
-	}
 }
 
 func TestPC5BoundRawFIFOAccountingAndDrain(t *testing.T) {
@@ -1144,6 +727,58 @@ func TestPC5BoundRawFIFOAccountingAndDrain(t *testing.T) {
 			t.Fatalf("completed pressure view = %+v", view)
 		}
 	})
+}
+
+func TestPLBRC2WriteBoundaryUsesGreatestAdmittedRawFrame(t *testing.T) {
+	socket := newFakeLiveSocket()
+	enqueueHandshake(socket)
+	adapter, open := testLiveAdapter(t, socket, []string{"AAA"})
+	attempt, _, _ := startHandshake(t, adapter, open)
+	defer closeAttemptForTest(t, attempt, 90)
+
+	received := adapter.now().UTC()
+	prior, ok := attempt.queue.lastRawPosition(attempt.Epoch())
+	if !ok {
+		t.Fatal("handshake did not establish an admitted raw-frame prefix")
+	}
+	boundarySequence := prior.FrameSequence + 1
+	if frame, reason, _ := attempt.queue.tryEnqueue(attempt.Epoch(), socketMessageText, received, []byte(`[]`)); reason != FrameAdmitted || frame.sequence != boundarySequence {
+		t.Fatalf("admitted boundary frame = sequence=%d reason=%s", frame.sequence, reason)
+	}
+	oversize := make([]byte, attempt.queue.config.MaxFrameBytes+1)
+	if _, reason, _ := attempt.queue.tryEnqueue(attempt.Epoch(), socketMessageText, received, oversize); reason != FrameRejectedOversize {
+		t.Fatalf("diagnostic read attempt was not rejected: %s", reason)
+	}
+	delivery, err := attempt.ChangeTQ(context.Background(), ChangeTQCommand{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(),
+		CommandToken: 2, Action: TQSubscribe, Symbols: []string{"AAA"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accounting := attempt.QueueAccounting()
+	if accounting.FramesRead != accounting.FramesAdmitted+accounting.FramesRejectedOversize+accounting.FramesRejectedCapacity+accounting.FramesRejectedReceipt+accounting.FramesRejectedGateOrClose ||
+		delivery.TQWriteBoundary != (engine.LivePosition{ConnectionEpoch: attempt.Epoch(), FrameSequence: boundarySequence}) {
+		t.Fatalf("write boundary followed read attempts: boundary=%+v queue=%+v", delivery.TQWriteBoundary, accounting)
+	}
+}
+
+func TestPLBRC2GenericStatusIsInformationalAndProviderErrorIsBounded(t *testing.T) {
+	socket := newFakeLiveSocket()
+	enqueueHandshake(socket)
+	adapter, open := testLiveAdapter(t, socket, []string{"AAA"})
+	attempt, _, _ := startHandshake(t, adapter, open)
+	defer closeAttemptForTest(t, attempt, 90)
+	if _, err := attempt.ChangeTQ(context.Background(), ChangeTQCommand{BindingIdentity: open.BindingIdentity, ConnectionEpoch: attempt.Epoch(),
+		CommandToken: 2, Action: TQSubscribe, Symbols: []string{"AAA"}}); err != nil {
+		t.Fatal(err)
+	}
+	socket.send(socketMessageText, `[{"ev":"status","status":"success"},{"ev":"status","status":"error","message":"must-not-escape"}]`)
+	delivery, ok := attempt.nextForProof(context.Background())
+	if !ok || delivery.Kind != DeliveryTQControlError || delivery.Position.ArrayIndex != 1 || delivery.TQControlError.Position != delivery.Position {
+		t.Fatalf("bounded provider error = %+v ok=%t", delivery, ok)
+	}
+	if strings.Contains(fmt.Sprint(delivery), "must-not-escape") || !adapter.Accounting().Reconciles() {
+		t.Fatalf("provider prose/accounting escaped: delivery=%+v accounting=%+v", delivery, adapter.Accounting())
+	}
 }
 
 func TestMaximumLiveQueueSlotCeilingAdmitsThenFailsClosed(t *testing.T) {
@@ -1857,14 +1492,14 @@ func TestPC5LiveOfflineComponentsOneThroughFiveCanonicalPath(t *testing.T) {
 	aggregate := aggregateLiveJSON("AAA", binding.SessionStart().Add(10*time.Second), `"dv":"1000.5"`)
 	socket.send(socketMessageText, `[{"ev":"status","status":"failed","message":"ignored"},{"ev":"status","status":"failed"},`+aggregate+`]`)
 	status, ok := attempt.nextForProof(context.Background())
-	if !ok || status.Kind != DeliveryTQControlQuarantine || status.TQQuarantine.Failure != engine.TQControlStatusFailed {
+	if !ok || status.Kind != DeliveryTQControlError {
 		t.Fatalf("mixed TQ status = %+v", status)
 	}
 	if result, err := DeliverToEngine(context.Background(), state, status); err != nil || result.TQDisposition.Code != engine.DispositionTQRejected {
 		t.Fatalf("mixed TQ engine = %+v err=%v", result, err)
 	}
 	duplicateStatus, ok := attempt.nextForProof(context.Background())
-	if !ok || duplicateStatus.Kind != DeliveryTQControlQuarantine || duplicateStatus.TQQuarantine.Failure != engine.TQControlStatusUnsolicited {
+	if !ok || duplicateStatus.Kind != DeliveryTQControlError {
 		t.Fatalf("duplicate failed status = %+v", duplicateStatus)
 	}
 	if result, err := DeliverToEngine(context.Background(), state, duplicateStatus); err != nil || result.TQDisposition.Code != engine.DispositionTQRejected {

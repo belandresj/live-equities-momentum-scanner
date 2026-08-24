@@ -714,7 +714,7 @@ func schemaCapture() operations.SnapshotCaptureView {
 		Spread: engine.SpreadView{Status: engine.TQCurrent, QuoteAge: time.Second, Quality: "reviewed_ordinary"}}}, Pressure: engine.TQPressureNormal,
 		PressureSample: engine.TQPressureSampleView{Observed: true, WaitingFrames: 2, FrameCapacity: 512, WaitingBytes: 100, ByteCapacity: 64 << 20,
 			OldestWaitingFrameAge: 500 * time.Millisecond, RecoveryHealthy: true}, RecoveryRequiredSamples: 5,
-		Accounting: engine.TQAccountingView{Consumed: 2, Applied: 1, Duplicate: 1, KnownPresent: 1}, Commands: engine.TQCommandAccountingView{Issued: 1, Acknowledged: 1}}
+		Accounting: engine.TQAccountingView{Consumed: 2, Applied: 1, Duplicate: 1, KnownPresent: 1}, Commands: engine.TQCommandAccountingView{Issued: 1, Written: 1}}
 	publication := engine.ReplayPublicationView{SchemaVersion: "engine-private-publication-v1", PublicationID: operational.PublicationID, BindingIdentity: operational.BindingIdentity,
 		TradingDate: operational.TradingDate, RunMode: engine.RunModeLive, Lifecycle: "live", LastEngineSequence: operational.LastEngineSequence,
 		Watermark: &target, GeneratedAt: at, CurrentMarketClaim: true, AggregateEvaluation: evaluation}

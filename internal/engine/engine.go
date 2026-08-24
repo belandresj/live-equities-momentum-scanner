@@ -300,7 +300,7 @@ const (
 	inputRecoveryExhaustion
 	inputScheduledRecovery
 	inputTQCommandResult
-	inputTQControlQuarantine
+	inputTQControlError
 	inputTrade
 	inputQuote
 	inputTQDrop
@@ -368,7 +368,7 @@ type queueNode struct {
 	recoveryExhaustion     frozenRecoveryExhaustionInput
 	scheduledRecovery      frozenScheduledRecoveryInput
 	tqCommandResult        frozenTQCommandResultInput
-	tqControlQuarantine    frozenTQControlQuarantineInput
+	tqControlError         frozenTQControlErrorInput
 	trade                  frozenTradeInput
 	quote                  frozenQuoteInput
 	tqDrop                 frozenTQDropInput
@@ -1073,9 +1073,9 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		e.mu.Lock()
 		code, reason = e.applyTQCommandResultLocked(node)
 		e.mu.Unlock()
-	} else if node.kind == inputTQControlQuarantine {
+	} else if node.kind == inputTQControlError {
 		e.mu.Lock()
-		code, reason = e.applyTQControlQuarantineLocked(node)
+		code, reason = e.applyTQControlErrorLocked(node)
 		e.mu.Unlock()
 	} else if node.kind == inputTrade {
 		e.mu.Lock()
@@ -1288,7 +1288,7 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		e.state.scheduledRecovery.pending = nil
 		e.state.scheduledRecovery.dispatched = false
 	}
-	e.reconcileTQLocked(node.admissionTime)
+	e.reconcileTQLocked(node.admissionTime, node.kind == inputTimer)
 	if tqProjectionInput(node.kind) || e.state.tq.immediateProjectionPending {
 		e.recordTQProjectionInputLocked()
 	}
@@ -1316,7 +1316,7 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 // trust-transition marker and existing global cadence.
 func tqProjectionInput(kind inputKind) bool {
 	switch kind {
-	case inputTimer, inputTQCommandResult, inputTQControlQuarantine, inputTrade, inputQuote, inputTQDrop, inputTQPressureResult, inputTQPressureTick:
+	case inputTimer, inputTQCommandResult, inputTQControlError, inputTrade, inputQuote, inputTQDrop, inputTQPressureResult, inputTQPressureTick:
 		return true
 	default:
 		return false

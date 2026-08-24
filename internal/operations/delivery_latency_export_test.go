@@ -46,15 +46,9 @@ func SampleAndResetDeliveryLatencyWindowForTest(t *testing.T, ctx context.Contex
 		t.Fatal("delivery-latency pressure tick was not applied")
 	}
 	priorSampler := run.pressureSampler
-	run.pressureSampler = func(metrics Metrics) engine.TQPressureSample {
-		attribution := metrics.DeliveryLatencyAttribution
+	run.pressureSampler = func(Metrics) engine.TQPressureSample {
 		return engine.TQPressureSample{
-			FrameCapacity:             100,
-			ByteCapacity:              100,
-			MaxDeliveryDelayOneSec:    metrics.MaxProcessingDelayOneSecond,
-			DeliveryLatencyAttributed: attribution.MaximumFamily != DeliveryLatencyUnknown && attribution.Reconciles(metrics.Deliveries),
-			TQLocalAccountingHealthy:  true,
-			Goroutines:                1,
+			FrameCapacity: 100, ByteCapacity: 100, TQLocalAccountingHealthy: true,
 		}
 	}
 	run.syncTQPressure(ctx)

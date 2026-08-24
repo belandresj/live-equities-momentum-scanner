@@ -362,19 +362,6 @@ func (r *Runtime) syncTQPressure(ctx context.Context) {
 		r.recordRuntimeAccountingIncident(failedIdentity, metrics, prior)
 		return
 	}
-	if !metrics.Adapter.TQReconciles() {
-		view := r.engine.ObserveOperational()
-		input := engine.TQControlQuarantineInput{SchemaVersion: engine.TQSchemaV1, BindingIdentity: r.binding.Identity(), ConnectionEpoch: view.Connection.Epoch,
-			ReceiptTime: r.clock().UTC(), Failure: engine.TQControlAccounting}
-		admission, completion := r.engine.AdmitTQControlQuarantine(ctx, input)
-		if admission == engine.AdmissionAdmitted && completion != nil {
-			select {
-			case <-ctx.Done():
-			case <-completion:
-			}
-		}
-		return
-	}
 	command, err := r.engine.IssueTQPressureCommand()
 	if err != nil {
 		return
@@ -546,18 +533,13 @@ func defaultTQPressureSample(metrics Metrics) engine.TQPressureSample {
 	if metrics.LiveQueue.CapacityBytes > 0 {
 		byteCapacity = uint64(metrics.LiveQueue.CapacityBytes)
 	}
-	attribution := metrics.DeliveryLatencyAttribution
-	attributed := attribution.MaximumFamily != DeliveryLatencyUnknown &&
-		attribution.MaximumDuration == metrics.MaxProcessingDelayOneSecond &&
-		attribution.Reconciles(metrics.Deliveries)
 	return engine.TQPressureSample{
 		WaitingFrames: uint64(metrics.LiveQueue.FramesQueued), FrameCapacity: frameCapacity,
 		WaitingBytes: uint64(metrics.LiveQueue.QueuedBytes), ByteCapacity: byteCapacity,
-		OldestWaitingFrameAge: metrics.LiveQueue.OldestWaitingFrameAge, ActiveFrameAge: metrics.LiveQueue.ActiveFrameAge,
-		SlotCapacityDrops: metrics.LiveQueue.FramesRejectedSlotCapacity, ByteCapacityDrops: metrics.LiveQueue.FramesRejectedByteCapacity,
-		AggregateWatermarkLag:  metrics.WatermarkLag,
-		MaxDeliveryDelayOneSec: metrics.MaxProcessingDelayOneSecond, DeliveryLatencyAttributed: attributed, HeapAllocBytes: metrics.HeapAllocBytes,
-		Goroutines: metrics.Goroutines, TQLocalAccountingHealthy: metrics.LiveQueue.Reconciles() && metrics.Adapter.TransportReconciles() && metrics.Adapter.TQReconciles() && metrics.TQNormalization.Reconciles(),
+		OldestWaitingFrameAge: metrics.LiveQueue.OldestWaitingFrameAge,
+		SlotCapacityDrops:     metrics.LiveQueue.FramesRejectedSlotCapacity, ByteCapacityDrops: metrics.LiveQueue.FramesRejectedByteCapacity,
+		AggregateWatermarkLag:    metrics.WatermarkLag,
+		TQLocalAccountingHealthy: metrics.LiveQueue.Reconciles() && metrics.Adapter.TransportReconciles() && metrics.Adapter.TQReconciles() && metrics.TQNormalization.Reconciles(),
 	}
 }
 
