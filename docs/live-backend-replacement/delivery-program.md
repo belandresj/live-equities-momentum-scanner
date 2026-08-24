@@ -1,6 +1,7 @@
 # Live backend replacement delivery program
 
-**Status:** Owner-approved current delivery authority, 2026-08-23.
+**Status:** Owner-approved current delivery authority, 2026-08-23; owner-revised
+E2 to exactly one 10-minute deterministic acceptance run on 2026-08-23.
 
 **Parent:** [`../live-backend-replacement.md`](../live-backend-replacement.md).
 
@@ -300,32 +301,25 @@ interface.
 
 ### `LBR-E2` — deterministic resource and stability acceptance
 
-Run one mature approximately 5,700-symbol deterministic 30-minute mixed-feed
-soak with selected-row T/Q and one-second dashboard polling. Use a fixed
-manifest at approximately 300 frames/s unless characterization selects a
-better documented 1.5x observed rate. Measure the parent CPU, heap, RSS,
+Run exactly one mature 5,694-symbol deterministic 10-minute mixed-feed
+acceptance composition with selected-row T/Q and one-second dashboard polling. Use a fixed
+manifest at exactly 300 frames/s: 600 timed seconds, 180,000 frames, 3,416,400
+base aggregates, 600 resource samples, 600 dashboard polls, and 11 ranking/
+accounting checkpoints. Measure the parent CPU, heap, RSS,
 allocation, goroutine, queue, cycle, capture, watermark, loss, and accounting
 targets.
 
-An optional generic host-coexistence observation may repeat the accepted
-composition alongside any owner-chosen ordinary local workload and record
-scanner/system headroom. It is diagnostic and non-gating unless it exposes a
-hard scanner failure such as unbounded growth, sustained backlog/readiness
-flapping, or unusable one-second polling.
+There is no optional, fallback, diagnostic, host-coexistence, or non-gating
+repeat composition. The exact 10-minute run remains within the ordinary
+15-minute local-command ceiling. Validate the manifest first, use an explicit
+15-minute command timeout, keep stop conditions active, and do not shorten or
+extend the timed interval.
 
-The 30-minute duration is this program's explicit exception to the ordinary
-15-minute local-command ceiling: the claim requires a mature heap plateau and
-sustained queue slope rather than a short burst.
-Validate the manifest first, keep stop conditions active, and do not extend an
-individual trial beyond 30 minutes without a new recorded reason.
-
-Every numeric target is reported. A miss invokes exactly one bounded
-measurement/profile/correction/rerun cycle. If the final composition is
-correct, reaches a bounded resource plateau, handles the characterized feed
-without sustained backlog/loss/readiness flapping, and keeps API polling usable,
-record the deviation and accept the measured result. The orchestrator must not
-continue optimization only to hit a target. Block only on a hard failure or
-explicit owner rejection of the measured stable result.
+Every numeric target is reported from that one run. If hard acceptance passes,
+a numeric miss is recorded as a deviation and cannot authorize an additional
+timed trial. Measurement invalidity or a hard failure reopens the lowest owning
+ticket; a corrected future E2 activation again owns exactly one 10-minute run.
+The orchestrator must not append optimization, coexistence, or diagnostic runs.
 
 ### `LBR-E3` — separately authorized market-hours confirmation
 
@@ -371,10 +365,10 @@ and explicitly authorized.
 The orchestrator owns the program ledger, assignment generation, exact-path
 staging, local commits, correction routing, and final conformance review.
 
-For a resource-target miss, the orchestrator owns the single bounded response
-defined by `LBR-E2`. It must reject repeated profiling, speculative tuning, or
-scope expansion once hard acceptance passes. A target deviation is evidence
-for the ledger, not an unfinished implementation state.
+For an E2 resource-target miss, the orchestrator records the deviation from the
+single 10-minute run. It must reject repeated profiling, speculative tuning,
+scope expansion, or another timed trial once hard acceptance passes. A target
+deviation is evidence for the ledger, not an unfinished implementation state.
 
 For implementation:
 
@@ -444,10 +438,10 @@ reopens the lowest unsuitable spec/slice. Preserve unaffected evidence, revise
 the smallest artifact, run the narrow distinguishing proof, and continue in
 program order.
 
-A numeric resource-target miss alone does not reopen a capability indefinitely.
-After the one bounded `LBR-E2` response, accept a stable hard-conforming result
-with its deviation or block on the exact hard failure. Further optimization is
-a new owner-directed task.
+A numeric resource-target miss alone does not reopen a capability. Accept the
+single stable hard-conforming 10-minute result with its deviation. Measurement
+invalidity or a hard failure reopens the lowest owning ticket; any later E2
+activation again permits one exact 10-minute run, not an appended repeat.
 
 At each accepted slice, record only:
 
@@ -673,7 +667,7 @@ cross-boundary counterexample audit and final-byte-only expensive verification.
   ordering, and rejects neutral renamed/transitive/test-only selector, owner,
   fallback, temporary-adapter, and direct-publication counterexamples. The
   complete B1/B2/current-field/API-v2 corpus remains exact.
-- **Resource evidence:** the frozen manifest SHA
+- **Resource evidence:** the then-current pre-E2-duration-revision manifest SHA
   `3a70dda5bc040d1a77fbe3e114d788d3fc04c93fbb51ff2e5eec646f4c10e6e3`
   validates 5,694 symbols and 5,470,012 represented rows. Initial measurement
   was 8.655 ms and 15,484,824 allocated bytes. The single permitted profile/
@@ -692,6 +686,19 @@ cross-boundary counterexample audit and final-byte-only expensive verification.
   whole-process stability or provider evidence. Capability B now requires its
   final read-only review; C1 remains inactive.
 
+### Owner-approved E2 duration and manifest revision — 2026-08-23
+
+The owner revised E2 to exactly one 10-minute deterministic acceptance run. The
+fixed population/rate/polling and
+hard gates remain: 5,694 symbols, 300 frames/s, one-second dashboard polling,
+all event classes, exact semantic/accounting/API/UI results, zero aggregate/
+control loss, bounded CPU/memory/queue/goroutine plateaus, stable readiness,
+and usable isolated polling. The owner-revised manifest is exactly 600 timed
+seconds, 180,000 frames, 3,416,400 base aggregates, 600 resource samples, 600
+dashboard polls, and 11 ranking/accounting checkpoints with recomputed count,
+ranking, and accounting digests. No optional, fallback, diagnostic, host-
+coexistence, or non-gating repeat run exists.
+
 ## 14. Sole delivery ledger
 
 This table is the only mutable program status. Focused specs name allocations
@@ -701,7 +708,7 @@ but copy no status.
 | --- | --- | --- |
 | Parent architecture | `approved` | Current replacement architecture |
 | Delivery program | `approved` | Current replacement delivery authority |
-| `LBR-P1` focused contracts and characterization | `accepted` | Five-spec independent cross-review and owner acceptance are recorded; [`baseline-characterization.md`](baseline-characterization.md), SHA-256 `3a70dda5bc040d1a77fbe3e114d788d3fc04c93fbb51ff2e5eec646f4c10e6e3`, freezes baseline `0d043c1`, the semantic/API/UI corpus, durable queue/heartbeat/hydration/cycle/memory evidence, and the exact 5,694-symbol deterministic manifest. Comparable baseline CPU/RSS remain explicitly unknown. |
+| `LBR-P1` focused contracts and characterization | `accepted_owner_revised_e2_10m` | Five-spec review/owner acceptance remain valid. Owner-revised [`baseline-characterization.md`](baseline-characterization.md), SHA-256 `5745a6eed3e25891f61f58b40b06a4e9733c7b3f7d0914d411b142fe3ad8d62d`, freezes baseline `0d043c1`, the semantic/API/UI corpus, durable evidence, and exact 5,694-symbol/600-second/180,000-frame E2 manifest with recomputed event counts and digests. Comparable baseline CPU/RSS remain explicitly unknown. |
 | Capability A — canonical state and hydration | `finally_accepted` | A1/A2 proofs, verification, two A1 re-reviews, the A2 long-stall/launcher correction, and Capability A final focused re-review are clean. Next: activate only [`LBR-B1`](tickets/lbr-b1-incremental-qualification-and-selection.md). |
 | Capability B — evaluation and publication | `slices_accepted_final_review_next` | `LBR-B1`, `LBR-B2`, and `LBR-B3` proofs, verification, corrections, and focused re-reviews are clean. Run the required Capability B final read-only review; C1 remains inactive. |
 | Capability C — selected-row T/Q | `not_started` | Requires Capability B publication/selection interface |

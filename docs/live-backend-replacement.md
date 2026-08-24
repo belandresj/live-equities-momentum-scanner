@@ -1,6 +1,7 @@
 # Live backend replacement architecture
 
-**Status:** Owner-approved replacement architecture, 2026-08-23.
+**Status:** Owner-approved replacement architecture, 2026-08-23; owner-revised
+E2 to exactly one 10-minute deterministic acceptance run on 2026-08-23.
 
 **Baseline:** `0d043c1 stabilize live evaluation and local continuity` on
 `codex/live-backend-replacement`.
@@ -325,13 +326,13 @@ simplify lower-level machinery but may not weaken these failure domains.
 
 ### `LBR-ARCH-12` — bounded private/local operation
 
-Measure the replacement against a mature approximately 5,700-symbol state with
+Measure the replacement in E2 against the exact mature 5,694-symbol manifest with
 representative selected-row T/Q and dashboard polling. The values below are
 design targets and diagnostic thresholds, not independent completion gates.
 
 | Metric | Initial design target |
 | --- | ---: |
-| Average backend CPU over a 30-minute deterministic soak | `<= 0.75` core |
+| Average backend CPU over the exact 10-minute deterministic acceptance run | `<= 0.75` core |
 | One-second-sampled CPU p95 | `<= 1.5` cores |
 | Heap in use after hydration | `<= 512 MiB` |
 | Heap in use during hydration | `<= 768 MiB` |
@@ -366,11 +367,10 @@ measurement mechanics, or the reported target deviation when evidence
 requires it. It may not loosen product correctness, readiness, market-time, or
 bounded-plateau requirements to pass a benchmark.
 
-An optional generic host-coexistence observation may repeat the accepted soak
-alongside an owner-chosen ordinary local workload. It records practical CPU,
-memory-pressure, swap, UI, and API headroom but is not a named-application
-requirement or completion gate. It becomes correction evidence only when it
-exposes one of the hard scanner failures above.
+`LBR-E2` executes exactly one 10-minute deterministic acceptance run. No
+optional, fallback, diagnostic, host-coexistence, or non-gating repeat run is
+part of the replacement authority. The single run must still establish every
+hard semantic, loss, plateau, backlog, readiness, and polling gate above.
 
 ## 9. Retain, replace, and remove
 
@@ -444,5 +444,5 @@ loss, unsupported readiness, or replay/checkpoint gate.
    aggregate correction horizon, ranking input, or backend-readiness rule.
 3. The numeric resource values are design targets governed by the bounded
    response above. Hard acceptance is behavioral and plateau-based.
-4. The owner separately authorizes or executes any market-hours run. No
-   host-coexistence observation is required for deterministic completion.
+4. The owner separately authorizes or executes any market-hours run. E2 has
+   exactly one 10-minute deterministic run and no host-coexistence repeat.

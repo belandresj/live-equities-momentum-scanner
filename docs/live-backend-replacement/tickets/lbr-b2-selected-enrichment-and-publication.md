@@ -115,7 +115,7 @@ Run the primary proof, direct current-feature/publication/capture regressions,
 affected short packages, and affected engine/operations/snapshot race tests
 under five minutes. Run focused vet, API-v2 golden tests, `git diff --check`,
 and ordinary `go test -count=1 -short -timeout 2m ./...` at the gate. Do not run
-provider or integrated 30-minute tiers.
+provider or integrated 10-minute E2 tier.
 
 ## 8. Removal and handoff
 

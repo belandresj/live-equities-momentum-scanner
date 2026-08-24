@@ -92,7 +92,7 @@ Observe one queue/reader/attempt, exact currentness/accounting, zero silent
 aggregate/control loss, marker order, retry reset only after fence, and no
 goroutine/waiter. Dangerous counterexample is dropped aggregate followed by a
 current fence or reset. This is deterministic transport evidence, not provider
-or final 30-minute resource acceptance.
+or final 10-minute resource acceptance.
 
 ## 7. Verification and timeout policy
 

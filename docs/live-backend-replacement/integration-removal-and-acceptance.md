@@ -1,7 +1,9 @@
 # Integration, removal, and acceptance
 
-**Status:** Owner-approved focused replacement specification, 2026-08-23. The
-[delivery program](delivery-program.md) is the sole mutable status ledger.
+**Status:** Owner-approved focused replacement specification, 2026-08-23;
+owner-revised E2 to exactly one 10-minute deterministic acceptance run on
+2026-08-23. The [delivery program](delivery-program.md) is the sole mutable
+status ledger.
 
 **Parent:** [Live backend replacement architecture](../live-backend-replacement.md).
 
@@ -175,13 +177,16 @@ baseline evidence rather than copied here. Current comparable CPU and RSS are
 unknown. Every later artifact records its exact command, configuration, and
 checksum before the comparison is interpreted.
 
-The 30-minute paced run targets approximately 300 provider frames/s—the
+The exact 10-minute paced run targets 300 provider frames/s—the
 delivery program's documented rate, above the existing 216 frames/s fixture—
-unless pre-implementation characterization records a more representative 1.5x
-observed rate. Frame arrays supply complete all-symbol aggregate progress at
-the product cadence plus representative selected-row T/Q; frame rate is not
-mistaken for event rate. The manifest is validated before timing and cannot be
-silently reduced after a failure.
+with no alternate-duration or optional composition. Frame arrays supply
+complete all-symbol aggregate progress at the product cadence plus
+representative selected-row T/Q; frame rate is not mistaken for event rate.
+The manifest is validated before timing and cannot be silently reduced after a
+failure. Its exact duration-dependent totals are 600 timed seconds, 180,000
+frames, 3,416,400 base aggregates, 600 resource samples, 600 dashboard polls,
+and 11 ranking/accounting checkpoints; the frozen manifest owns the remaining
+event counts and recomputed digests.
 
 Sample once per second and record CPU core-equivalents, heap in use, RSS,
 allocation rate, goroutines, FIFO count/bytes/oldest age/slope, selection cycle,
@@ -199,22 +204,17 @@ Hard acceptance is:
   watermark-stale/readiness flap;
 - one-second API/UI polling remains usable and isolated from engine mutation.
 
-Every numeric design target in the parent is reported. A miss triggers exactly
-one measurement-verification/profile/focused-correction/rerun cycle. When the
-rerun satisfies hard acceptance, the measured deviation is recorded and work
-continues; there is no repeated optimization merely to reach a target. A hard
-failure reopens the narrowest implicated capability.
+Every numeric design target in the parent is reported from the one run. When
+hard acceptance passes, a target miss is recorded as a deviation and does not
+authorize a second timed trial. Measurement invalidity or a hard failure
+reopens the narrowest implicated capability; a later E2 activation again owns
+exactly one 10-minute run.
 
-## 7. Optional host-coexistence and live boundaries
+## 7. Single deterministic run and live boundary
 
-After the credential-free hard acceptance run, an optional host-coexistence
-observation may repeat the same composition while any owner-chosen ordinary
-local workload runs. Record scanner CPU/RSS, system memory pressure/swap, API/UI
-responsiveness, readiness, and obvious host interference. This is diagnostic
-evidence about practical headroom, not a named-application requirement or a
-completion gate. A bad observation becomes a blocker only when it exposes a
-scanner hard failure already defined in Section 6, such as unbounded growth,
-sustained backlog, readiness flapping, or unusable polling.
+E2 has no optional, fallback, diagnostic, host-coexistence, or non-gating
+repeat. Its exact 10-minute composition is the sole deterministic resource/
+stability run.
 
 `LBR-E3` is a separate exact-date market-hours observation only after
 deterministic acceptance. It may access credentials or Massive only when the
@@ -234,8 +234,8 @@ old-path sentinel failures, exact manifest accounting, and runtime identity
 therefore participate in `LBR-E1`/`E2`.
 
 Benchmark failure cannot be hidden by lowering event content, dropping T/Q,
-changing product delay/readiness, omitting warm-up, shortening the 30-minute
-plateau run, or accepting a stale dashboard. Measurement-tool failure is
+changing product delay/readiness, omitting warm-up, shortening or extending the
+10-minute run, or accepting a stale dashboard. Measurement-tool failure is
 distinguished from scanner failure and repaired once before interpretation.
 API/UI failure stays outside provider transport meaning. Credential refusal or
 closed market is lack of authorization/evidence, not deterministic failure.
@@ -245,7 +245,7 @@ closed market is lack of authorization/evidence, not deterministic failure.
 | Slice | Primary proof | Claim, dangerous counterexample, observable distinction, limitation |
 | --- | --- | --- | --- |
 | `LBR-E1` | `P-LBR-E1-CUTOVER` | Build/dependency/source inspection plus a production composition trace proves `cmd/scanner` constructs exactly one replacement owner/ingress/evaluator, uses only the parent-allowed bounded concurrency, preserves the component-defined common failure domains, leaves old sentinels unreachable, removes old product fields from active state/API, needs no engine checkpoint state when checkpoint-off, and keeps API-v2/UI/launcher goldens exact through startup/current/recovery/terminal/API/UI-failure cases. It detects a fallback, shadow mutation, competing owner, unjustified runtime worker/queue, or unsupported tool importing the live core. It does not prove sustained resources or provider traffic. |
-| `LBR-E2` | `P-LBR-E2-STABILITY` | The validated 30-minute deterministic manifest runs the complete backend/dashboard composition with one-second polling. It reports every parent target and proves exact final oracle/accounting, zero aggregate/control loss, bounded state/queue/heap/RSS/goroutine plateaus, no sustained backlog/readiness flap, and usable isolated polling. A numeric miss follows the single bounded rerun rule. An optional generic host-coexistence observation may record practical headroom but is not part of this primary proof. This is host/fixture evidence, not provider capacity or an SLA. |
+| `LBR-E2` | `P-LBR-E2-STABILITY` | The validated exact 10-minute deterministic manifest runs the complete backend/dashboard composition once with one-second polling. It reports every parent target and proves exact final oracle/accounting, zero aggregate/control loss, bounded state/queue/heap/RSS/goroutine plateaus, no sustained backlog/readiness flap, and usable isolated polling. A numeric miss is recorded from that one run when hard acceptance passes; no repeat composition is authorized. This is host/fixture evidence, not provider capacity or an SLA. |
 | `LBR-E3` | `P-LBR-E3-LIVE` | One exact-date authorized/owner-run market-hours observation follows the frozen procedure and records hydration/fence completion, continuous provider progression, exact observable ranking/TQ/API/UI behavior, transport terminals/recovery if observed, and resource slopes. It rejects a credentialed smoke test that never reaches current or silently restarts. It is bounded operational confirmation, not deterministic formula proof, exhaustive recovery, provider SLA, deployment, or expectancy evidence. |
 
 `LBR-E1` performs cutover and deletion after applying the owner source/tool
@@ -261,9 +261,9 @@ ticket combines these slices.
 
 `LBR-E1` runs its proof, all API/UI/launcher regressions, affected race tests,
 focused vet, `git diff --check`, and ordinary repository verification. `E2`
-runs the prevalidated non-short manifest with the delivery program's explicit
-30-minute exception and bounded stop conditions. It does not rerun an
-unchanged expensive trial except under the single target-miss response. `E3`
+runs the prevalidated non-short manifest once for exactly 10 minutes with an
+explicit 15-minute command timeout and bounded stop conditions. It does not
+append any optional or target-miss trial. `E3`
 uses the separately approved market-hours procedure and no credential access
 is implied by this spec.
 

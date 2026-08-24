@@ -60,7 +60,7 @@ golden are authority for behavior. Baseline old-feature tests are exclusion
 evidence only. The post-removal mature comparison must use the frozen
 5,694-symbol manifest in
 [`baseline-characterization.md`](../baseline-characterization.md), SHA-256
-`3a70dda5bc040d1a77fbe3e114d788d3fc04c93fbb51ff2e5eec646f4c10e6e3`, and
+`5745a6eed3e25891f61f58b40b06a4e9733c7b3f7d0914d411b142fe3ad8d62d`, and
 its current-product cycle route. Legacy diagnostics that directly construct
 removed price-range/Activity state are not a valid post-removal measurement
 implementation. Do not preserve private structures just to keep old tests
@@ -101,7 +101,7 @@ Observe unchanged current-product outputs/accounting and recorded mature
 cycle/allocation differential on the exact frozen 5,694-symbol manifest and
 checksum. The dangerous counterexample is dead-looking code that still mutates
 or remains selectable, or unsupported tooling that imports a legacy live owner
-back into the ordinary scanner. This proof is not the E2 30-minute whole-process
+back into the ordinary scanner. This proof is not the E2 10-minute whole-process
 resource acceptance and does not decide final replay/checkpoint tooling.
 
 ## 7. Verification and timeout policy

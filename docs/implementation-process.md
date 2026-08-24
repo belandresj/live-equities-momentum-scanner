@@ -4,7 +4,8 @@
 
 **Approved:** 2026-08-05
 
-**Revised:** 2026-08-23 for the live backend replacement program
+**Revised:** 2026-08-23 for the live backend replacement program and its exact
+one-run 10-minute E2 acceptance boundary
 
 **Scope:** Capability/component research, contracts, predecessor reuse, proof
 allocation, implementation assignments, correction, acceptance, integration,
@@ -399,13 +400,14 @@ checkpoint repair, and unrelated cleanup are not milestones.
 ## 9. Final replacement validation
 
 Final validation assembles the accepted capability evidence, ordinary and
-allocated race/vet verification, one exact API/UI composition, one mature
-resource/stability run, and the final integrated read-only review. Every numeric
-resource target is reported; a miss follows the single bounded response in the
-delivery program. Hard acceptance depends on correctness, bounded resource
-plateaus, sustained feed handling without loss/backlog/readiness flapping,
-usable one-second snapshot delivery. Optional generic host-coexistence evidence
-may characterize practical headroom but is not a separate completion gate.
+allocated race/vet verification, one exact API/UI composition, exactly one
+10-minute mature resource/stability run, and the final integrated read-only
+review. Every numeric resource target is reported; a hard-conforming miss is a
+recorded deviation and does not authorize another timed trial. Hard acceptance
+depends on correctness, bounded resource plateaus, sustained feed handling
+without loss/backlog/readiness flapping, and usable one-second snapshot
+delivery. No optional, fallback, diagnostic, host-coexistence, or non-gating
+repeat run exists.
 
 Separately authorized live observation is recorded as pending or confirmed; it
 is never inferred from deterministic evidence. The result establishes neither

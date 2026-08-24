@@ -1,6 +1,7 @@
 # LBR-P1 baseline characterization
 
-**Status:** Frozen deterministic comparison input for `LBR-P1`, 2026-08-23.
+**Status:** Frozen deterministic comparison input for `LBR-P1`, 2026-08-23;
+owner-revised to the exact 10-minute E2 manifest on 2026-08-23.
 
 **Authority:** [delivery program](delivery-program.md), Section 5, and
 [integration/removal/acceptance](integration-removal-and-acceptance.md),
@@ -68,7 +69,7 @@ These observations retain their original scope and limitation:
 | [replacement parent](../live-backend-replacement.md), Section 1 | The latest incident admitted and dispositioned 1,127,006 frames, rejected zero, reached 1,723/32,768 raw-frame slots and 659,669/134,217,728 queued bytes, then ended only after inbound progress stopped and the heartbeat deadline expired. | It is not a replacement capacity run and supplies no comparable CPU/RSS. |
 | [heartbeat correction](../live-aggregate-heartbeat-and-resubscription-correction.md) | A failed heartbeat with supported inbound progress is nonterminal; five seconds without inbound progress, a read failure, or independent transport failure retires the epoch. Deterministic retry/hydration/fence proofs passed. | No new provider chronology or provider SLA. |
 | [scanner recovery record](../live-scanner-recovery-narrow-fix.md), Gate F D4 | The exact 5,694-symbol/961-record fixture produced 60 advancing cycles with 399.871 ms mean and 601.020 ms maximum. | It is evaluator-only historical evidence, not whole-process latency. |
-| same, Gate F D4 and pre-retry headroom | The credential-free run dispositioned 12,960/12,960 frames at 216 frames/s, 25,920 aggregates, final queue zero, high-water 6 (later production-cap rerun: 2), and zero rejection. | It is a 60-second ingress composition, not a 30-minute heap/resource plateau. |
+| same, Gate F D4 and pre-retry headroom | The credential-free run dispositioned 12,960/12,960 frames at 216 frames/s, 25,920 aggregates, final queue zero, high-water 6 (later production-cap rerun: 2), and zero rejection. | It is a 60-second ingress composition, not the exact 10-minute E2 resource/stability run. |
 | same, corrected cached composition | 5,511/5,511 hydration requests completed in the cited live observation; the earlier deterministic cached composition completed 5,502 symbols/7,581,690 rows and ten coherent cycles. Successful empty, exact fence, and post-live recovery semantics remain approved. | Historical populations and cached bytes are not silently resized into the 5,694-symbol manifest. |
 | parent Section 1 durable evaluation records | Approximate 333-382 ms median cycles, 1.11-2.10 s maxima, and 1.28-2.25 GB heap in use on the former implementation. | Different incident/configuration ranges are diagnostic only, not a single comparable trial. |
 
@@ -82,12 +83,12 @@ must measure all parent targets directly.
 ### 4.1 Identity, host, and runtime
 
 ```text
-manifest schema:            lbr-mature-v1
+manifest schema:            lbr-mature-v2
 seed:                       0x4c42522d50312d31
-binding identity:           lbr-mature-v1:2026-08-12
+binding identity:           lbr-mature-v2:2026-08-12
 trading date:               2026-08-12
 session:                    [2026-08-12T08:00:00Z,2026-08-13T00:00:00Z)
-timed interval:             [2026-08-12T21:15:00Z,2026-08-12T21:45:00Z)
+timed interval:             [2026-08-12T21:15:00Z,2026-08-12T21:25:00Z)
 population:                 5,694 symbols, exact names S0000..S5693
 symbol-list SHA-256:        201aca43d3fbf758aa1a9859a0c2e86d76531d547139e69adb8b5b8037704866
 prior close:                valid finite 10.0 for every symbol
@@ -134,8 +135,8 @@ bar represents their earlier empty interval.
 
 ### 4.3 Timed stream and pacing
 
-The timed run is exactly 1,800 wall-clock seconds at exactly 300 complete
-provider frames per second: 540,000 frames. For each logical second, ordinary
+The timed run is exactly 600 wall-clock seconds at exactly 300 complete
+provider frames per second: 180,000 frames. For each logical second, ordinary
 aggregates for all 5,694 symbols are partitioned in frame order: the first 294
 frames contain 19 aggregates and the last six contain 18. Every frame is
 released on the deterministic 1/300-second pacing boundary; batching may not
@@ -165,15 +166,18 @@ progress is unchanged while quiet/quality/gap/pressure behavior is exercised.
 The fixed injection counts are:
 
 ```text
-frames=540000
-base_aggregates=10249200
-trades=35400
-quotes=35400
-tq_pressure_shed=1200
-aggregate_duplicates=1800
-aggregate_revisions=180
-aggregate_invalid=60
-aggregate_control=6
+frames=180000
+base_aggregates=3416400
+trades=11800
+quotes=11800
+tq_pressure_shed=400
+aggregate_duplicates=600
+aggregate_revisions=60
+aggregate_invalid=20
+aggregate_control=2
+resource_samples=600
+dashboard_polls=600
+ranking_checkpoints=11
 ```
 
 Duplicates occur once per second, revisions once per ten seconds, local invalid
@@ -188,17 +192,17 @@ canonical expected-count digest over the exact newline-terminated count lines
 in this order is:
 
 ```text
-d6cf18781095082d85aa988fcf722770ce72303b42f783f3f6e73aa6245ec65e
+895bec49c7d30fcb2e3ecb73fe724f73883c8aa437fea316272bf4daf5ab6ac8
 ```
 
 ### 4.4 Frozen expected identities and digests
 
-At `q=0,60,...,1800`, record the exact ordered top-20 symbols and primary
+At `q=0,60,...,600`, record the exact ordered top-20 symbols and primary
 population identity. Ranking checkpoints use the unique scalar above; the
 ranking SHA-256 over lines `ssss,SYMBOL,...,SYMBOL\n` is:
 
 ```text
-aaeb8d69c468b842144c3da840456267215a0a562f70f56d6f4a8765e2fa00c1
+d98e13cde289da133bb5ec0eeddd7c88f1628d4d3d646d8b9f660a0f837a529a
 ```
 
 Accounting lines are
@@ -207,7 +211,7 @@ At `q=0`, `N=5692`; at all one-minute checkpoints thereafter, `N=5694`.
 Their SHA-256 is:
 
 ```text
-0362200d25ca7b5d0dc450f00634886f19897ca4788d60a9d33c4e916b6fc364
+3ed737914233b2dc93892c2b321caef04d898b9ff23e321795a73322ba70d8c6
 ```
 
 The approved API-v2 and UI expected behavior is frozen by the API and UI
@@ -229,12 +233,13 @@ and becomes part of the final command configuration.
 
 Before timing, validate manifest schema/digests, population, session, 5,470,012
 hydration rows, terminal identities, fence, frame/event totals, injection
-counts, bounds, expected checkpoint count, and API/UI corpus checksum. Sample
-once per second exactly as integration Section 6 requires. Stop immediately on
+counts, bounds, exactly 600 resource samples, exactly 600 dashboard polls,
+exactly 11 ranking checkpoints, and the API/UI corpus checksum. Sample once per
+second exactly as integration Section 6 requires. Stop immediately on
 accounting incoherence, aggregate/control loss, unbounded queue/state growth,
-repeated readiness flap, unusable polling, fixture mismatch, or the 30-minute
-deadline. A numeric target miss alone follows the single bounded response and
-does not alter the manifest.
+repeated readiness flap, unusable polling, fixture mismatch, or the exact
+10-minute deadline. A numeric target miss is recorded from the one run when
+hard acceptance passes and does not alter the manifest or authorize a repeat.
 
 Frozen comparison commands are:
 
@@ -248,10 +253,11 @@ go test -count=1 -short -timeout 2m ./...
 ```
 
 The first two were rerun for `LBR-P1`; the last three reuse unchanged accepted
-evidence. `LBR-E2` owns the new manifest validator and explicitly authorized
-30-minute test command, which must name this manifest identity and record the
-binary/source commit, configuration, output checksum, and target table before
-interpretation.
+evidence. `LBR-E2` owns the new manifest validator and exactly one authorized
+10-minute timed command with an explicit 15-minute command timeout. It must name
+this manifest identity and record the binary/source commit, configuration,
+output checksum, and target table before interpretation. No optional, fallback,
+diagnostic, host-coexistence, or non-gating repeat command exists.
 
 ## 5. Artifact checksums
 

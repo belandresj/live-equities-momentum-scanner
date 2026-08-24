@@ -13,6 +13,7 @@ trader-facing status, and compact Rank-column revisions approved:** 2026-08-17
 **Live feature-set MVP program approved:** 2026-08-14
 
 **Live backend replacement architecture and delivery program approved:**
+2026-08-23; E2 owner-revised to exactly one 10-minute deterministic run on
 2026-08-23
 
 **Phase 2 sequence approved:** 2026-08-05
@@ -155,12 +156,12 @@ components, and V1 program are reusable evidence. They cannot preserve a
 superseded feature, queue, representation, evaluator, replay/checkpoint-live-
 core path, or proof gate. The API v2 and finished UI meanings remain fixed.
 
-Numeric resource values in the parent are design targets. A miss receives one
-bounded measurement/profile/correction/rerun response and a recorded
-deviation. Only correctness/loss, unbounded resource growth, sustained
-backlog/readiness failure, or unusable one-second API/dashboard behavior blocks
-completion. Optional generic host-coexistence evidence characterizes practical
-headroom without adding an application-specific gate.
+Numeric resource values in the parent are design targets. E2 executes exactly
+one 10-minute deterministic acceptance run; a hard-conforming target miss is
+recorded as a deviation without another timed trial. Only correctness/loss,
+unbounded resource growth, sustained backlog/readiness failure, or unusable
+one-second API/dashboard behavior blocks completion. No optional, fallback,
+diagnostic, host-coexistence, or non-gating repeat run exists.
 
 ## Historical Phase 2 focused component sequence
 

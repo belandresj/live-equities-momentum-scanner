@@ -93,7 +93,7 @@ UI/launcher goldens.
 
 Dangerous counterexamples are a fallback selected after an error, a shadow
 mutation, a second live queue, or unsupported tooling importing the live core.
-The proof does not establish 30-minute resource stability or provider wiring.
+The proof does not establish 10-minute E2 resource stability or provider wiring.
 
 ## 7. Verification and timeout policy
 
