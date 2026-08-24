@@ -62,13 +62,29 @@ pressure predicates, replay, and historical ledgers are rejected.
   full desired set. Ordinary cadence computes one diff, closes removals locally,
   writes at most one sorted unsubscribe batch, then one sorted additions batch
   after its write result. One dynamic write is in flight.
+- The ordinary supported scanner derives membership diffs from the accepted
+  one-second combined evaluation cadence. The production `DefaultConfig`/CLI
+  path and final live composition must preserve that one-second value; faster
+  deterministic test clocks do not revise the product cadence. Immediate trust
+  closure may reconcile local desired/coverage state but cannot issue an
+  ordinary rank-churn addition ahead of the next combined cadence.
 - A write records requested/failed only. Per-channel post-`B` data confirms
   coverage; generic success is diagnostic, silence is not failure, and provider
   error closes T/Q additions for the epoch without touching aggregates.
+- A successful subscribe write captures `B` as the greatest admitted complete
+  raw provider-frame sequence already read when the write returns. Broader
+  read-attempt, rejected-frame, array-element, status-count, or disposition
+  counters cannot advance `B`; the complete frame at `B` remains excluded.
 - Rank removal/epoch loss/control error/pressure/bound closes local coverage and
   invalidates generations immediately. Returning symbols always reconfirm.
 - Pressure samples are private, fixed-cardinality, in-order, one outstanding,
   and accepted within two seconds. Missing/late samples cannot create a streak.
+- The engine pressure sample contains only waiting slots/bytes and capacities,
+  oldest waiting-batch age, aggregate watermark lag while T/Q work exists, new
+  slot/byte capacity loss, closed transport/T/Q accounting, and the C1 global
+  retention-bound fact. Active-frame age, heap, goroutines, generic delivery
+  latency, and delivery-family attribution remain separate diagnostics and
+  cannot enter sample validation, streaks, transition, recovery, or reset.
 - Apply exact 10%/one-second/two-sample degraded, 25%/two-second/three-sample
   aggregate-only, guarded watermark-lag, immediate loss/accounting/bound, and
   five-sample below-1%/strictly-below-750ms recovery rules from the contract.
@@ -88,6 +104,13 @@ addition, write failure, generic/late status, data confirmation, quiet
 unconfirmed channels, provider error, exact pressure entries, early mixed-frame
 shedding, membership to zero, 749/750-ms recovery edge, gradual restoration,
 epoch reset, and immediate trust publication.
+
+It distinguishes an admitted complete-frame `B` from a larger raw read-attempt/
+rejection count, asserts the frame at `B` is excluded and the next complete
+frame may confirm, and mutates every excluded diagnostic without changing
+pressure. Exact occupancy ties at 10% and 25% enter their respective streaks;
+exactly 1% is not recovery, strictly below 1% is, and exactly 750 ms is not
+recovery while 749 ms may be.
 
 Observe one write, bounded members, exact generations/coverage/pressure/
 accounting, aggregate publication equality except T/Q revision, and zero
