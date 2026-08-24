@@ -4,6 +4,12 @@
 only through the [delivery program](../delivery-program.md); this file is not a
 mutable ledger.
 
+**Post-acceptance owner revision, 2026-08-24:** A2's canonical, generation,
+terminal, recovery, and fence evidence remains accepted. Its one-worker-only
+ordinary-live restriction is superseded by
+[`LBR-A3`](lbr-a3-bounded-parallel-hydration.md), which restores the bounded
+`1|2|4|8` worker surface before D1.
+
 **Activation gate:** `LBR-P1` and `LBR-A1` must be accepted in the
 [delivery program](../delivery-program.md), which must mark only `LBR-A2`
 active.

@@ -1,7 +1,8 @@
 # Specification map
 
 **Status:** Approved authority index; the 2026-08-23 live backend replacement
-is the current sequential delivery program.
+is the current sequential delivery program, owner-revised on 2026-08-24 to
+insert bounded parallel hydration `LBR-A3` before D1.
 
 **Phase 1 approved:** 2026-08-05
 
@@ -14,7 +15,7 @@ trader-facing status, and compact Rank-column revisions approved:** 2026-08-17
 
 **Live backend replacement architecture and delivery program approved:**
 2026-08-23; E2 owner-revised to exactly one 10-minute deterministic run on
-2026-08-23
+2026-08-23; bounded `1|2|4|8` live hydration restored on 2026-08-24
 
 **Phase 2 sequence approved:** 2026-08-05
 
@@ -61,7 +62,7 @@ records are never tie-breakers.
 | Document | Status and role |
 | --- | --- |
 | [`product/product-goals.md`](product/product-goals.md) | Approved product contract, 2026-08-05 and owner-revised 2026-08-14; highest product authority. The revised feature set supersedes conflicting lower-level formulas and displayed-field contracts pending sequential reconciliation. |
-| [`live-backend-replacement.md`](live-backend-replacement.md) | Approved 2026-08-23 current replacement architecture; controls the supported live topology, one owner/handoff, compact state, two-phase evaluation, retained hydration/recovery, target-versus-hard resource policy, and deletion boundary. |
+| [`live-backend-replacement.md`](live-backend-replacement.md) | Approved 2026-08-23 and owner-revised 2026-08-24 current replacement architecture; controls one state owner/handoff, bounded parallel hydration, compact state, two-phase evaluation, resource policy, and deletion boundary. |
 | [`architecture/system-overview.md`](architecture/system-overview.md) | Historical approved architecture and compatible evidence; superseded for conflicting replacement topology, state, queue, evaluation, replay/checkpoint-live-core, and resource decisions. |
 | [`architecture/data-time-and-event-contract.md`](architecture/data-time-and-event-contract.md) | Approved semantic architecture and compatible evidence; focused replacement specs route retained live session, identity, ordering, merge, coverage, and watermark meaning. Replay/checkpoint sections are non-gating. |
 | [`architecture/scanner-state-engine-lifecycle.md`](architecture/scanner-state-engine-lifecycle.md) | Approved lifecycle semantics and compatible evidence; focused replacement specs route retained live startup, hydration, recovery, currentness, suppression, session-end, and shutdown meaning. Replay/checkpoint states are non-gating. |
@@ -110,7 +111,7 @@ and review records.
 
 | Document | Status and role |
 | --- | --- |
-| [`live-backend-replacement/delivery-program.md`](live-backend-replacement/delivery-program.md) | Current owner-approved delivery authority, 2026-08-23: focused-contract gate, five sequential replacement capabilities, sole ledger, bounded agent/review execution, non-blocking resource targets, and hard integrated acceptance. |
+| [`live-backend-replacement/delivery-program.md`](live-backend-replacement/delivery-program.md) | Current owner-approved delivery authority, owner-revised 2026-08-24: A–C accepted, `LBR-A3` bounded parallel hydration next before inactive D1, sole ledger, bounded execution, and hard integrated acceptance. |
 | [`live-feature-mvp-program.md`](live-feature-mvp-program.md) | Historical accepted 2026-08-14 feature/API/UI/stability delivery evidence; superseded as the active implementation program. |
 | [`live-evaluation-cycle-coalescing-correction.md`](live-evaluation-cycle-coalescing-correction.md) | Accepted historical scanner-stability evidence: one fence-owned evaluation opportunity, maintenance-only following timer, and coalesced missed ticks. Its old evaluator implementation is not replacement authority. |
 | [`tq-publication-coalescing-correction.md`](tq-publication-coalescing-correction.md) | Accepted historical scanner-stability evidence: synchronous canonical T/Q mutation with one-second combined publication and immediate trust transitions. Its old T/Q representation is not replacement authority. |
@@ -137,14 +138,14 @@ The
 [`live backend replacement delivery program`](live-backend-replacement/delivery-program.md)
 supersedes conflicting historical implementation sequences and private
 representations for its scope. Keep one write-capable slice and finally review
-each capability. `LBR-P1` and Capability A are finally accepted after their
-allocated proofs, correction re-reviews, and Capability A final review. The
-next permitted slice is `LBR-B1` incremental qualification and selection; it
-is not yet active.
+each capability. `LBR-P1` and A1/A2/B/C evidence remain accepted. The
+2026-08-24 owner revision reopens Capability A only for bounded parallel live
+hydration. The next permitted slice is `LBR-A3`; D1 remains inactive.
 
 The active capability order is:
 
-1. canonical state and hydration;
+1. canonical state and hydration, including owner-inserted `LBR-A3` bounded
+   parallel acquisition before D1;
 2. incremental evaluation and immutable publication;
 3. compact selected-row T/Q under the approved 30-second late/duplicate policy;
 4. single-pass Massive ingress and one decoded-batch handoff; and

@@ -1,7 +1,8 @@
 # Live backend replacement architecture
 
 **Status:** Owner-approved replacement architecture, 2026-08-23; owner-revised
-E2 to exactly one 10-minute deterministic acceptance run on 2026-08-23.
+E2 to exactly one 10-minute deterministic acceptance run on 2026-08-23 and
+restored bounded parallel live hydration on 2026-08-24.
 
 **Baseline:** `0d043c1 stabilize live evaluation and local continuity` on
 `codex/live-backend-replacement`.
@@ -114,7 +115,7 @@ Massive WebSocket reader + single-pass decoder
   -> one bounded decoded-batch ingress ring
   -> ScannerStateEngine live loop
 
-one bounded REST hydration worker
+one bounded REST hydration pool (1, 2, 4, or 8 workers; default 8)
   -> bounded hydration results
   -> the same ScannerStateEngine and canonical aggregate merge
 
@@ -156,7 +157,8 @@ The justified concurrent work is:
 
 - one WebSocket reader/single-pass decoder;
 - one heartbeat operation while a socket is active;
-- one REST hydration worker while historical work is active;
+- one bounded REST hydration pool of 1, 2, 4, or 8 fact-producing workers
+  while historical work is active;
 - loopback HTTP request handling over immutable snapshots; and
 - private launcher/dashboard process supervision.
 
@@ -444,5 +446,15 @@ loss, unsupported readiness, or replay/checkpoint gate.
    aggregate correction horizon, ranking input, or backend-readiness rule.
 3. The numeric resource values are design targets governed by the bounded
    response above. Hard acceptance is behavioral and plateau-based.
-4. The owner separately authorizes or executes any market-hours run. E2 has
+4. The supported live hydrator restores the previously accepted bounded
+   `1|2|4|8` worker surface and defaults to eight. Workers own only blocking
+   REST acquisition and immutable bounded results; the engine retains one
+   generation/request ledger, one canonical mutation path, and the sole fence/
+   currentness decision. The 2026-08-24 live observation showed that the
+   one-worker restriction completed only 31.6% of a 5,566-symbol late-start
+   hydration in approximately five minutes while the WebSocket path itself
+   remained healthy. The historical incidents motivating this replacement
+   occurred after successful multiworker hydration and do not justify making
+   acquisition serial.
+5. The owner separately authorizes or executes any market-hours run. E2 has
    exactly one 10-minute deterministic run and no host-coexistence repeat.

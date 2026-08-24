@@ -83,10 +83,11 @@ owner-approved. Current status and the sequential roadmap live in the
 [`replacement delivery program`](docs/live-backend-replacement/delivery-program.md)
 and [`specification map`](docs/specification-map.md).
 
-`LBR-P1` and Capability A are accepted. The scanner now has the replacement
-compact canonical aggregate state plus one-worker fresh/gap hydration, including
-source-aware recovery across compacted sealed-live evidence. The next permitted
-slice is `LBR-B1` incremental qualification and selection; it is not yet active.
+Capabilities A–C are implemented and accepted for their recorded semantics.
+The 2026-08-24 owner revision reopens only the ordinary-live hydration topology:
+`LBR-A3` will restore bounded `1|2|4|8` acquisition with default 8 before D1.
+The current executable still accepts exactly one worker until A3 is implemented
+and accepted. D1 remains inactive.
 Historical numbered components and stability corrections remain evidence, not
 requirements to preserve their private representations.
 

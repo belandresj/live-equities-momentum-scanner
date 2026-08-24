@@ -2,8 +2,8 @@
 
 **Status:** Owner-approved focused replacement specification, 2026-08-23;
 owner-revised E2 to exactly one 10-minute deterministic acceptance run on
-2026-08-23. The [delivery program](delivery-program.md) is the sole mutable
-status ledger.
+2026-08-23 and restored bounded parallel live hydration on 2026-08-24. The
+[delivery program](delivery-program.md) is the sole mutable status ledger.
 
 **Parent:** [Live backend replacement architecture](../live-backend-replacement.md).
 
@@ -47,7 +47,7 @@ lowest unsuitable focused spec through the delivery program. The dependency
 graph is therefore acyclic and the supported production composition is:
 
 ```text
-reference binding + one REST worker + one decoded-batch ingress
+reference binding + one bounded REST worker pool + one decoded-batch ingress
   -> one ScannerStateEngine live owner
   -> one immutable publication
   -> loopback snapshot API v2
@@ -137,13 +137,14 @@ private Go struct or removed replay/checkpoint equality. An intentional neutral
 checkpoint-off source change is acceptable only if the same API-v2 live value
 and validation behavior remain observable.
 
-The supported live hydration topology is exactly one REST worker end to end.
-The wrapper script, private launcher, scanner CLI/help/validation, operations
-composition, and active runbook must default to, emit, and accept only one.
-Multiworker and checkpoint-backed live compositions are rejected before the
-runtime starts; generic constructors retained solely for unsupported tooling
-cannot be selected by the ordinary scanner. Compatibility does not preserve a
-historical multiworker flag surface that contradicts the replacement topology.
+The supported live hydration topology is one bounded REST worker pool end to
+end. The wrapper script, private launcher, scanner CLI/help/validation,
+operations composition, and active runbook accept exactly `1|2|4|8` and
+default to 8. This concurrency changes only blocking acquisition; every worker
+returns immutable bounded facts to the same engine generation ledger and
+canonical owner. Zero, other counts, checkpoint-backed live compositions, and
+worker-owned readiness/state are rejected before runtime starts. E1 must not
+mistake bounded hydration workers for additional state owners or queues.
 
 ## 6. Deterministic acceptance manifest
 

@@ -1,7 +1,8 @@
 # Live backend replacement delivery program
 
 **Status:** Owner-approved current delivery authority, 2026-08-23; owner-revised
-E2 to exactly one 10-minute deterministic acceptance run on 2026-08-23.
+E2 to exactly one 10-minute deterministic acceptance run on 2026-08-23 and
+inserted bounded parallel live hydration `LBR-A3` before D1 on 2026-08-24.
 
 **Parent:** [`../live-backend-replacement.md`](../live-backend-replacement.md).
 
@@ -65,6 +66,9 @@ reviewed as required below.
 - One persistent aggregate socket with selected-row T/Q on the same supported
   provider connection.
 - Existing fresh/gap hydration policy and exact live ingress fence.
+- One bounded live REST hydration pool accepting `1|2|4|8`, defaulting to 8,
+  with workers limited to immutable fact production and one engine-owned
+  generation/fence/currentness path.
 - Existing API v2 field meanings and finished dashboard behavior.
 - The owner-approved T/Q late/duplicate horizon: events more than 30 seconds
   older than committed `T` are ignored with accounting, and duplicate evidence
@@ -99,7 +103,7 @@ capabilities, and one integrated acceptance boundary:
 | Order | Capability | Focused contract | Slices |
 | ---: | --- | --- | --- |
 | 0 | Authority, focused contracts, and baseline characterization | Complete replacement set | `LBR-P0`, `LBR-P1` |
-| 1 | Canonical state and hydration | `canonical-state-and-hydration.md` | `LBR-A1`, `LBR-A2` |
+| 1 | Canonical state and hydration | `canonical-state-and-hydration.md` | `LBR-A1`, `LBR-A2`, owner-inserted `LBR-A3` before D1 |
 | 2 | Evaluation and publication | `evaluation-and-publication.md` | `LBR-B1`, `LBR-B2`, `LBR-B3` |
 | 3 | Compact selected-row T/Q | `tq-state.md` | `LBR-C1`, `LBR-C2` |
 | 4 | Single-pass live ingress and one handoff | `live-ingress.md` | `LBR-D1`, `LBR-D2` |
@@ -186,6 +190,30 @@ Primary proof covers value/empty/failure/cancellation, replacement epoch during
 hydration, post-live gap recovery, live-over-REST precedence, and currentness
 only after the exact fence. Acceptance makes old aggregate state and
 checkpoint/replay-driven live installation removable from the supported path.
+
+### `LBR-A3` — bounded parallel live hydration restoration
+
+Restore the previously accepted ordinary-live `1|2|4|8` REST worker surface
+with default 8. Workers perform only blocking acquisition and normalization;
+they return immutable bounded chunks/terminals to A2's one engine-owned
+generation ledger. Preserve the subscribed live tail, exact REST/live merge,
+one terminal per request, fence-after-all-terminal rule, currentness, and all
+accepted B/C behavior.
+
+Primary proof runs 1, 2, 4, and 8 workers with deliberately unequal request
+latency while live aggregates continue. It proves bounded active/resident work,
+out-of-order token correctness, no dropped or duplicated terminal, cancellation
+and joined shutdown, no sustained live-queue growth, one exact fence, and
+semantic/publication equivalence. Provider speedup remains a separately
+authorized observation, not deterministic acceptance.
+
+The 2026-08-24 observation at `5abaf2d` is motivation rather than acceptance:
+one-worker hydration reached 1,761/5,566 symbols (31.6%) in approximately five
+minutes while 113,037 live aggregate deliveries progressed, queue high-water
+remained 165/32,768, accounting stayed valid, and the connection did not
+restart. The historical failures motivating the backend replacement occurred
+after successful multiworker hydration, so serial acquisition is not a valid
+containment for that later failure domain.
 
 Capability A final review focuses on canonical uniqueness, correction
 equivalence, hydration false-success, memory bounds, and absence of writable
@@ -562,10 +590,17 @@ trading edge. `LBR-B1` is the next permitted write-capable slice.
 Post-acceptance specification clarification records the already-proven behavior
 without changing code or acceptance: the canonical/hydration contract now
 states the conservative REST disposition and recovery legality for live values
-that compacted before an exact gap request; the integration contract now states
-the one-worker invariant through wrapper, launcher, scanner, operations, and
-runbook. The program orchestration section now requires a pre-assignment
-cross-boundary counterexample audit and final-byte-only expensive verification.
+that compacted before an exact gap request; the then-current integration
+contract recorded the one-worker invariant through wrapper, launcher, scanner,
+operations, and runbook. The program orchestration section now requires a pre-
+assignment cross-boundary counterexample audit and final-byte-only expensive
+verification. The following owner revision supersedes only that delivery
+restriction.
+
+The owner revision on 2026-08-24 preserves every accepted A1/A2 semantic and
+proof result but reopens Capability A only for the one-worker delivery
+restriction. `LBR-A3` restores bounded parallel acquisition before D1; accepted
+B/C behavior remains valid and does not reopen.
 
 #### `LBR-B1` — accepted 2026-08-23
 
@@ -859,6 +894,16 @@ permitted ticket and remains inactive for a fresh task.
   independence, and the accepted one-second combined cadence. D1 remains
   inactive and requires its own fresh pre-assignment audit before activation.
 
+### Owner-approved bounded parallel hydration revision — 2026-08-24
+
+Stop before D1. The ordinary scanner must regain the previously working
+bounded `1|2|4|8` hydration surface with default 8 through `LBR-A3`. This is a
+blocking-acquisition pool, not another engine owner or mutation queue. A2's
+generation, terminal, merge, fence, and recovery meanings remain accepted;
+only its one-worker composition restriction is superseded. D1 stays inactive
+until A3 is implemented, verified, reviewed when triggered, accepted, and
+committed.
+
 ### Owner-approved E2 duration and manifest revision — 2026-08-23
 
 The owner revised E2 to exactly one 10-minute deterministic acceptance run. The
@@ -879,14 +924,15 @@ but copy no status.
 
 | Item | State | Gate / next action |
 | --- | --- | --- |
-| Parent architecture | `approved_owner_revised_e2_10m` | Current replacement architecture; E2 is exactly one 10-minute deterministic run. |
-| Delivery program | `approved_owner_revised_e2_10m` | Current replacement delivery authority; no optional/fallback/diagnostic repeat run exists. |
-| `LBR-P1` focused contracts and characterization | `accepted_owner_revised_e2_10m` | Five-spec review/owner acceptance remain valid. Owner-revised [`baseline-characterization.md`](baseline-characterization.md), SHA-256 `5745a6eed3e25891f61f58b40b06a4e9733c7b3f7d0914d411b142fe3ad8d62d`, freezes baseline `0d043c1`, the semantic/API/UI corpus, durable evidence, and exact 5,694-symbol/600-second/180,000-frame E2 manifest with recomputed event counts and digests. Comparable baseline CPU/RSS remain explicitly unknown. |
-| Capability A — canonical state and hydration | `finally_accepted` | A1/A2 proofs, verification, corrections, and Capability A final review are clean; accepted dependency for Capability B. |
+| Parent architecture | `approved_owner_revised_parallel_hydration` | Current replacement architecture; bounded live hydration accepts `1|2|4|8`, defaults to 8, and E2 remains exactly one 10-minute deterministic run. |
+| Delivery program | `approved_owner_revised_parallel_hydration` | `LBR-A3` is inserted before D1; no optional/fallback/diagnostic E2 repeat exists. |
+| `LBR-P1` focused contracts and characterization | `accepted_owner_revised_parallel_hydration` | Five-spec review/owner acceptance remains valid subject to the recorded A3 hydration-topology revision. The frozen baseline/manifest remains unchanged; comparable baseline CPU/RSS remain explicitly unknown. |
+| Capability A — canonical state and hydration | `reopened_lbr_a3_pending` | A1/A2 semantics and evidence remain accepted. Only the one-worker composition restriction is superseded; implement and accept bounded parallel `LBR-A3` before D1. |
+| `LBR-A3` bounded parallel live hydration | `not_started_next` | Perform its mandatory pre-assignment audit, then activate it as the sole write-capable slice. D1 remains inactive. |
 | `LBR-B3` removal slice | `accepted` | Commit `f697288`; removal proof, resource evidence, focused corrections, and final focused re-review are clean. |
-| Capability B — evaluation and publication | `finally_accepted` | B1/B2/B3 accepted; required final read-only review returned `CLEAN/PASS`. Next permitted ticket is C1, which is inactive. |
-| Capability C — selected-row T/Q | `finally_accepted` | C1/C2 proofs and final-byte gates pass. Required final review and focused re-reviews closed `CLEAN/PASS`; exact `B`/`B+1` ordering, bounded state, cadence, honest coverage, immediate trust closure, accounting, and aggregate independence are accepted. D1 is the next permitted ticket but remains inactive pending a fresh audit. |
-| Capability D — live ingress | `not_started` | Requires accepted state/TQ input interface |
+| Capability B — evaluation and publication | `finally_accepted` | B1/B2/B3 and the required final read-only review remain accepted and unaffected by A3. |
+| Capability C — selected-row T/Q | `finally_accepted` | C1/C2 remain accepted and unaffected by the A3 hydration-topology revision. |
+| Capability D — live ingress | `not_started` | Requires accepted `LBR-A3` plus the accepted state/TQ input interface. D1 is inactive. |
 | Capability E — integration/removal/acceptance | `not_started` | Requires Capabilities A-D accepted |
 | E2 deterministic duration/manifest revision | `owner_approved` | Exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |
 | Deterministic replacement | `not_started` | Requires `LBR-E1` and `LBR-E2` |
