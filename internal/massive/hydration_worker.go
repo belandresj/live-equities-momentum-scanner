@@ -134,13 +134,28 @@ func NewHydrationWorkerPlan(items []HydrationWorkItem, workers, rowsPerChunk int
 // NewLiveHydrationWorkerPlan is the supported replacement live seam. The
 // generic constructor remains only for separated historical tooling until E1
 // decides its source disposition.
-func NewLiveHydrationWorkerPlan(items []HydrationWorkItem, rowsPerChunk int, maximumResponseBytes, maximumNormalizedRecords, maximumResidentRecords int64) (HydrationWorkerPlan, error) {
+func NewLiveHydrationWorkerPlan(items []HydrationWorkItem, workers, rowsPerChunk int, maximumResponseBytes, maximumNormalizedRecords, maximumResidentRecords int64) (HydrationWorkerPlan, error) {
+	if !validLiveHydrationWorkers(workers) {
+		return HydrationWorkerPlan{}, errors.New("live hydration workers must be one of 1, 2, 4, or 8")
+	}
+	if maximumResidentRecords != int64(workers)*HydrationMaximumRows {
+		return HydrationWorkerPlan{}, errors.New("live hydration resident budget must equal workers * 57,600")
+	}
 	for _, item := range items {
 		if item.purpose != HydrationFreshStart && item.purpose != HydrationGapRecovery {
 			return HydrationWorkerPlan{}, errors.New("unsupported live hydration purpose")
 		}
 	}
-	return NewHydrationWorkerPlan(items, 1, rowsPerChunk, maximumResponseBytes, maximumNormalizedRecords, maximumResidentRecords)
+	return NewHydrationWorkerPlan(items, workers, rowsPerChunk, maximumResponseBytes, maximumNormalizedRecords, maximumResidentRecords)
+}
+
+func validLiveHydrationWorkers(workers int) bool {
+	switch workers {
+	case 1, 2, 4, 8:
+		return true
+	default:
+		return false
+	}
 }
 
 type HydrationTerminalState string

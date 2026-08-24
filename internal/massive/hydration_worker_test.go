@@ -448,6 +448,149 @@ func TestHydrationWorkerBoundsAndCancellation(t *testing.T) {
 	})
 }
 
+// TestPLBRA3LivePlanBoundsAndJoinedCancellation is the direct worker half of
+// P-LBR-A3-PARALLEL-HYDRATION. The operations proof composes the same plans
+// with the live pump, engine ledger, fence, evaluation, and publication.
+func TestPLBRA3LivePlanBoundsAndJoinedCancellation(t *testing.T) {
+	symbols := []string{"A", "B", "C", "D", "E", "F", "G", "H"}
+	binding := component4TestBinding(t, symbols)
+	start := binding.SessionStart()
+	end := start.Add(16 * time.Hour)
+	items := make([]HydrationWorkItem, len(symbols))
+	for index, symbol := range symbols {
+		items[index] = mustHydrationWork(t, binding, 1, uint64(index+1), symbol, start, end)
+	}
+	const rowsPerRequest = int64(57_600)
+	for _, workers := range []int{1, 2, 4, 8} {
+		t.Run(fmt.Sprintf("workers_%d", workers), func(t *testing.T) {
+			resident := int64(workers) * rowsPerRequest
+			plan, err := NewLiveHydrationWorkerPlan(items, workers, 256, 1<<20, int64(len(items))*rowsPerRequest, resident)
+			if err != nil || plan.workers != workers || plan.maximumResidentRecords != resident {
+				t.Fatalf("live plan workers/resident=%d/%d err=%v", plan.workers, plan.maximumResidentRecords, err)
+			}
+			if _, err := NewLiveHydrationWorkerPlan(items, workers, 256, 1<<20, int64(len(items))*rowsPerRequest, resident-1); err == nil {
+				t.Fatal("live plan accepted resident capacity below workers * 57,600")
+			}
+
+			var active atomic.Int64
+			var maximum atomic.Int64
+			allActive := make(chan struct{})
+			var once sync.Once
+			server := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+				current := active.Add(1)
+				updateAtomicMaximum(&maximum, current)
+				if current == int64(workers) {
+					once.Do(func() { close(allActive) })
+				}
+				<-request.Context().Done()
+				active.Add(-1)
+			}))
+			worker := testHydrationWorker(t, server)
+			workCtx, cancelWork := context.WithCancel(context.Background())
+			joined := make(chan HydrationWorkerResult, 1)
+			sink := &recordingHydrationSink{}
+			go func() { joined <- worker.Run(workCtx, context.Background(), plan, sink) }()
+			select {
+			case <-allActive:
+			case <-time.After(3 * time.Second):
+				t.Fatal("configured REST worker ceiling was not reached")
+			}
+			cancelWork()
+			var result HydrationWorkerResult
+			select {
+			case result = <-joined:
+			case <-time.After(3 * time.Second):
+				t.Fatal("canceled live worker pool did not join")
+			}
+			server.Close()
+			_, terminals := sink.snapshot()
+			if maximum.Load() != int64(workers) || result.Accounting().MaximumActiveWorkers != int64(workers) ||
+				result.Accounting().ProviderCanceled != int64(len(items)) || len(terminals) != len(items) {
+				t.Fatalf("joined cancellation maximum=%d accounting=%+v terminals=%d", maximum.Load(), result.Accounting(), len(terminals))
+			}
+			seen := make(map[uint64]struct{}, len(terminals))
+			for _, terminal := range terminals {
+				if terminal.State() != HydrationCanceled {
+					t.Fatalf("request=%d terminal=%s", terminal.WorkItem().RequestID(), terminal.State())
+				}
+				seen[terminal.WorkItem().RequestID()] = struct{}{}
+			}
+			if len(seen) != len(items) {
+				t.Fatalf("unique terminal identities=%d want=%d", len(seen), len(items))
+			}
+		})
+	}
+	for _, workers := range []int{0, 3, 5, 6, 7, 9} {
+		if _, err := NewLiveHydrationWorkerPlan(items, workers, 256, 1<<20, int64(len(items))*rowsPerRequest, 8*rowsPerRequest); err == nil {
+			t.Fatalf("unsupported live workers=%d accepted", workers)
+		}
+	}
+	if _, err := NewLiveHydrationWorkerPlan(items, 8, 256, 1<<20, int64(len(items))*rowsPerRequest, 8*rowsPerRequest+1); err == nil {
+		t.Fatal("live plan accepted resident capacity above workers * 57,600")
+	}
+
+	t.Run("response bodies transfer concurrently", func(t *testing.T) {
+		var active atomic.Int64
+		var maximum atomic.Int64
+		allReading := make(chan struct{})
+		release := make(chan struct{})
+		var once sync.Once
+		payload := `{"status":"OK","ticker":"A","adjusted":false,"results":[]}`
+		client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			symbol := strings.Split(request.URL.Path, "/")[4]
+			body := strings.Replace(payload, `"A"`, fmt.Sprintf("%q", symbol), 1)
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: &barrierReadCloser{
+				reader: strings.NewReader(body), entered: func() {
+					current := active.Add(1)
+					updateAtomicMaximum(&maximum, current)
+					if current == int64(len(items)) {
+						once.Do(func() { close(allReading) })
+					}
+				}, release: release, exited: func() { active.Add(-1) }}, Request: request}, nil
+		})}
+		worker, err := NewHydrationWorker("https://provider.invalid", func() (string, error) { return "test-token", nil }, client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, err := NewLiveHydrationWorkerPlan(items, 8, 256, 1<<20, int64(len(items))*rowsPerRequest, 8*rowsPerRequest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan HydrationWorkerResult, 1)
+		go func() {
+			done <- worker.Run(context.Background(), context.Background(), plan, &recordingHydrationSink{})
+		}()
+		select {
+		case <-allReading:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("response-body reads serialized; maximum concurrent reads=%d", maximum.Load())
+		}
+		close(release)
+		result := <-done
+		if maximum.Load() != 8 || result.Accounting().ProviderCompletedEmpty != int64(len(items)) {
+			t.Fatalf("body concurrency maximum=%d accounting=%+v", maximum.Load(), result.Accounting())
+		}
+	})
+}
+
+type barrierReadCloser struct {
+	reader          io.Reader
+	entered, exited func()
+	release         <-chan struct{}
+	once            sync.Once
+}
+
+func (r *barrierReadCloser) Read(destination []byte) (int, error) {
+	r.once.Do(func() {
+		r.entered()
+		<-r.release
+		r.exited()
+	})
+	return r.reader.Read(destination)
+}
+
+func (*barrierReadCloser) Close() error { return nil }
+
 type recordingHydrationSink struct {
 	mu         sync.Mutex
 	chunks     []HydrationResultChunk

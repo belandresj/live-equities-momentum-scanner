@@ -22,8 +22,18 @@ type LiveComponents struct {
 }
 
 func (c LiveComponents) valid() bool {
-	return c.Adapter != nil && c.Hydrator != nil && c.Store == nil && c.Workers == 1 && c.RowsPerChunk > 0 &&
+	return c.Adapter != nil && c.Hydrator != nil && c.Store == nil && validLiveHydrationWorkers(c.Workers) && c.RowsPerChunk > 0 &&
+		c.MaximumResidentRecords == int64(c.Workers)*massive.HydrationMaximumRows &&
 		c.MaximumResponseBytes > 0 && c.MaximumNormalizedRecords > 0 && c.MaximumResidentRecords > 0
+}
+
+func validLiveHydrationWorkers(workers int) bool {
+	switch workers {
+	case 1, 2, 4, 8:
+		return true
+	default:
+		return false
+	}
 }
 
 // ValidateLiveComponents applies the supported ordinary-live composition
@@ -489,11 +499,11 @@ func (r *Runtime) hydrate(ctx context.Context, components LiveComponents, attemp
 		}
 		work[index], tokens[token.RequestID()] = item, token
 	}
-	plan, err := massive.NewLiveHydrationWorkerPlan(work, components.RowsPerChunk, components.MaximumResponseBytes, components.MaximumNormalizedRecords, components.MaximumResidentRecords)
+	plan, err := massive.NewLiveHydrationWorkerPlan(work, components.Workers, components.RowsPerChunk, components.MaximumResponseBytes, components.MaximumNormalizedRecords, components.MaximumResidentRecords)
 	if err != nil {
 		return engine.HydrationFenceCommand{}, err
 	}
-	sink := &engineHydrationSink{owner: r.engine, tokens: tokens}
+	sink := &engineHydrationSink{owner: r.engine, tokens: tokens, terminalObserver: r.afterHydrationTerminal}
 	workCtx, cancelWork := context.WithCancel(ctx)
 	pumpCtx, cancelPump := context.WithCancel(ctx)
 	defer cancelPump()
@@ -525,6 +535,9 @@ func (r *Runtime) hydrate(ctx context.Context, components LiveComponents, attemp
 		}
 	}()
 	result := components.Hydrator.Run(workCtx, ctx, plan, sink)
+	if r.afterHydrationWorker != nil {
+		r.afterHydrationWorker(result.Accounting())
+	}
 	cancelWork()
 	accounting := result.Accounting()
 	fence, sinkErr := sink.result()
@@ -638,11 +651,12 @@ func (r *Runtime) finishEligibleFence(ctx context.Context, attempt *massive.Live
 }
 
 type engineHydrationSink struct {
-	owner  *engine.Engine
-	tokens map[uint64]engine.HydrationRequestToken
-	mu     sync.Mutex
-	fence  engine.HydrationFenceCommand
-	err    error
+	owner            *engine.Engine
+	tokens           map[uint64]engine.HydrationRequestToken
+	terminalObserver func(requestID, engineSequence uint64)
+	mu               sync.Mutex
+	fence            engine.HydrationFenceCommand
+	err              error
 }
 
 func (s *engineHydrationSink) result() (engine.HydrationFenceCommand, error) {
@@ -692,6 +706,9 @@ func (s *engineHydrationSink) AdmitHydrationTerminal(ctx context.Context, termin
 	case <-ctx.Done():
 		return ctx.Err()
 	case result := <-completion:
+		if s.terminalObserver != nil {
+			s.terminalObserver(token.RequestID(), result.EngineSequence)
+		}
 		if result.Code != engine.DispositionHydrationTerminalApplied {
 			s.mu.Lock()
 			s.err = errors.Join(s.err, errors.New("hydration terminal rejected"))

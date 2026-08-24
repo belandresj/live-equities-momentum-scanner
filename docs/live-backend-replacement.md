@@ -379,7 +379,7 @@ hard semantic, loss, plateau, backlog, readiness, and polling gate above.
 | Area | Decision |
 | --- | --- |
 | Schedule, universe, prior close, Float, caches, and binding | Retain behavior and adapt interfaces only when required |
-| REST hydration policy, one-worker default, terminal accounting, and ingress fence | Retain |
+| REST hydration policy, bounded `1|2|4|8` worker interface with default 8, terminal accounting, and ingress fence | Retain |
 | One socket, handshake facts, inbound-aware heartbeat, serialized retry, and exhaustion | Retain |
 | Aggregate identity, correction horizon, duplicate/revision/withdrawal, and REST/live precedence | Retain |
 | Snapshot API v2, loopback security, dashboard, and launcher continuity | Retain |

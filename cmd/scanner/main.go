@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -24,7 +25,10 @@ import (
 	"github.com/belandresj/live-equities-momentum-scanner/internal/snapshotapi"
 )
 
-const defaultCheckpointMode = "off"
+const (
+	defaultCheckpointMode       = "off"
+	defaultLiveHydrationWorkers = 8
+)
 
 const liveHydrationResponseByteBudget = int64(4 << 30)
 
@@ -103,7 +107,7 @@ func run(ctx context.Context, arguments []string) error {
 	replayArtifact := flags.String("replay-artifact", "", "validated complete aggregate replay artifact")
 	observationStart := flags.String("observation-start", "", "New York observation start HH:MM:SS")
 	observationEnd := flags.String("observation-end", "", "New York observation end HH:MM:SS")
-	hydrationWorkers := flags.Int("hydration-workers", 1, "live aggregate REST hydration workers: exactly 1")
+	hydrationWorkers := flags.Int("hydration-workers", defaultLiveHydrationWorkers, "live aggregate REST hydration workers: 1, 2, 4, or 8 (default 8)")
 	apiAddress := flags.String("api-address", snapshotapi.DefaultAddress, "private loopback snapshot API address")
 	var allowedOrigins originFlags
 	flags.Var(&allowedOrigins, "allow-origin", "exact browser origin allowed to read the snapshot API; repeatable")
@@ -281,10 +285,15 @@ func liveHydrationBounds(workers, population int) (maximumNormalizedRecords, max
 	if population <= 0 {
 		return 0, 0, errors.New("live hydration population is invalid")
 	}
-	if workers != 1 {
-		return 0, 0, errors.New("hydration-workers must be exactly 1")
+	switch workers {
+	case 1, 2, 4, 8:
+	default:
+		return 0, 0, errors.New("hydration-workers must be one of 1, 2, 4, or 8")
 	}
-	return int64(population) * 57_600, 57_600, nil
+	if int64(population) > math.MaxInt64/57_600 {
+		return 0, 0, errors.New("live hydration population exceeds normalized-record budget")
+	}
+	return int64(population) * 57_600, int64(workers) * 57_600, nil
 }
 
 func runReplay(ctx context.Context, cancelRun context.CancelFunc, config replaymode.StartupConfig, apiAddress string, allowedOrigins []string) error {

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +38,7 @@ type liveRESTProgressionFixture struct {
 
 type liveRESTProgressionResult struct {
 	workers, population, validPerCycle                              int
+	maximumRESTActive                                               int64
 	hydrationDuration, elapsed, maximumOldest, maximumDeliveryDelay time.Duration
 	tailDrain                                                       time.Duration
 	framesSent, framesRead, framesAdmitted, framesDispositioned     uint64
@@ -53,6 +55,130 @@ type liveRESTProgressionResult struct {
 	progressDuringLive, lifecycleReady, publicationCoherent         bool
 	stopReason                                                      string
 	err                                                             error
+	completionOutOfOrder                                            bool
+	publicationProblem                                              string
+	canonical                                                       []engine.ReplayCanonicalSymbol
+	evaluation                                                      engine.ReplayEvaluationView
+	tq                                                              engine.TQView
+	workerAccounting                                                massive.HydrationWorkerAccounting
+	terminalOrder                                                   []uint64
+	maximumTerminalSequence, fenceSequence                          uint64
+}
+
+// TestPLBRA3ParallelHydration is P-LBR-A3-PARALLEL-HYDRATION. It uses the
+// ordinary live composition at every supported worker count. The REST fixture
+// barriers the first wave at the configured ceiling and releases it in an
+// order different from the engine plan while the real fake WebSocket keeps
+// advancing aggregates through the independent live consumer.
+func TestPLBRA3ParallelHydration(t *testing.T) {
+	binding, fixture := liveRESTProgressionInputs(t, 32)
+	var baseline *liveRESTProgressionResult
+	for _, workers := range []int{1, 2, 4, 8} {
+		t.Run(fmt.Sprintf("workers_%d", workers), func(t *testing.T) {
+			result := runLiveRESTProgression(t, binding, fixture, workers)
+			assertLiveRESTProgression(t, result)
+			if result.maximumRESTActive != int64(workers) {
+				t.Fatalf("configured workers=%d maximum active REST requests=%d", workers, result.maximumRESTActive)
+			}
+			if workers > 1 && !result.completionOutOfOrder {
+				t.Fatal("latency-controlled REST completion retained plan order")
+			}
+			if workers > 1 {
+				terminalOutOfOrder := false
+				for index, requestID := range result.terminalOrder {
+					if requestID != uint64(index+1) {
+						terminalOutOfOrder = true
+						break
+					}
+				}
+				if !terminalOutOfOrder {
+					t.Fatal("latency-controlled engine terminal order retained plan order")
+				}
+			}
+			if baseline == nil {
+				baseline = &result
+			} else if canonicalEqual, evaluationEqual, tqEqual := equalLBRCanonicalMarket(result.canonical, baseline.canonical), equalLBREvaluation(result.evaluation, baseline.evaluation), equalLBRTQProduct(result.tq, baseline.tq); !canonicalEqual || !evaluationEqual || !tqEqual {
+				detail := ""
+				if !canonicalEqual {
+					detail = lbrCanonicalDifference(result.canonical, baseline.canonical)
+				}
+				t.Fatalf("workers=%d changed projection relative to one worker: canonical=%t ranking=%t TQ=%t detail=%s", workers, canonicalEqual, evaluationEqual, tqEqual, detail)
+			}
+		})
+	}
+}
+
+func equalLBRCanonicalMarket(left, right []engine.ReplayCanonicalSymbol) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		l, r := left[index], right[index]
+		if l.Symbol != r.Symbol || l.PriorStatus != r.PriorStatus || l.PriorClose != r.PriorClose || l.LatestWindowStart != r.LatestWindowStart ||
+			l.LatestValues != r.LatestValues || l.LatestAuthoritySource != r.LatestAuthoritySource || l.CommittedWindowStart != r.CommittedWindowStart ||
+			l.PresentSlots != r.PresentSlots || l.ProvenAbsentSlots != r.ProvenAbsentSlots || !reflect.DeepEqual(l.PresentBitmap, r.PresentBitmap) ||
+			!reflect.DeepEqual(l.ProvenAbsentBitmap, r.ProvenAbsentBitmap) || !reflect.DeepEqual(l.HistoricalConflict, r.HistoricalConflict) ||
+			l.TailCoverage != r.TailCoverage || len(l.Records) != len(r.Records) {
+			return false
+		}
+		for recordIndex := range l.Records {
+			lr, rr := l.Records[recordIndex], r.Records[recordIndex]
+			if lr.WindowStart != rr.WindowStart || lr.WindowEnd != rr.WindowEnd || lr.Values != rr.Values || lr.AuthoritySource != rr.AuthoritySource {
+				return false
+			}
+		}
+		l.Features.At, r.Features.At = time.Time{}, time.Time{}
+		l.Qualification.At, r.Qualification.At = time.Time{}, time.Time{}
+		if l.Features != r.Features || l.Qualification != r.Qualification {
+			return false
+		}
+	}
+	return true
+}
+
+func lbrCanonicalDifference(left, right []engine.ReplayCanonicalSymbol) string {
+	if len(left) != len(right) {
+		return fmt.Sprintf("length=%d/%d", len(left), len(right))
+	}
+	for index := range left {
+		l, r := left[index], right[index]
+		switch {
+		case l.LatestWindowStart != r.LatestWindowStart || l.LatestValues != r.LatestValues || l.LatestAuthoritySource != r.LatestAuthoritySource:
+			return fmt.Sprintf("symbol=%s latest=%v/%v authority=%s/%s", l.Symbol, l.LatestWindowStart, r.LatestWindowStart, l.LatestAuthoritySource, r.LatestAuthoritySource)
+		case l.CommittedWindowStart != r.CommittedWindowStart || l.PresentSlots != r.PresentSlots || l.ProvenAbsentSlots != r.ProvenAbsentSlots:
+			return fmt.Sprintf("symbol=%s committed=%v/%v present=%d/%d absent=%d/%d", l.Symbol, l.CommittedWindowStart, r.CommittedWindowStart, l.PresentSlots, r.PresentSlots, l.ProvenAbsentSlots, r.ProvenAbsentSlots)
+		case !reflect.DeepEqual(l.PresentBitmap, r.PresentBitmap) || !reflect.DeepEqual(l.ProvenAbsentBitmap, r.ProvenAbsentBitmap) || !reflect.DeepEqual(l.HistoricalConflict, r.HistoricalConflict):
+			return fmt.Sprintf("symbol=%s coverage bitmap/conflict", l.Symbol)
+		case l.TailCoverage != r.TailCoverage || len(l.Records) != len(r.Records):
+			return fmt.Sprintf("symbol=%s tail=%+v/%+v records=%d/%d", l.Symbol, l.TailCoverage, r.TailCoverage, len(l.Records), len(r.Records))
+		}
+		for recordIndex := range l.Records {
+			lr, rr := l.Records[recordIndex], r.Records[recordIndex]
+			if lr.WindowStart != rr.WindowStart || lr.WindowEnd != rr.WindowEnd || lr.Values != rr.Values || lr.AuthoritySource != rr.AuthoritySource {
+				return fmt.Sprintf("symbol=%s record=%d", l.Symbol, recordIndex)
+			}
+		}
+		l.Features.At, r.Features.At = time.Time{}, time.Time{}
+		l.Qualification.At, r.Qualification.At = time.Time{}, time.Time{}
+		if l.Features != r.Features || l.Qualification != r.Qualification {
+			return fmt.Sprintf("symbol=%s features=%+v/%+v qualification=%+v/%+v", l.Symbol, l.Features, r.Features, l.Qualification, r.Qualification)
+		}
+	}
+	return "unreported"
+}
+
+func equalLBREvaluation(left, right engine.ReplayEvaluationView) bool {
+	left.At, right.At = time.Time{}, time.Time{}
+	left.PopulationTransition, right.PopulationTransition = engine.ReplayPopulationTransitionDiagnosticView{}, engine.ReplayPopulationTransitionDiagnosticView{}
+	return reflect.DeepEqual(left, right)
+}
+
+func equalLBRTQProduct(left, right engine.TQView) bool {
+	left.PublicationID, right.PublicationID = 0, 0
+	left.Accounting, right.Accounting = engine.TQAccountingView{}, engine.TQAccountingView{}
+	left.Commands, right.Commands = engine.TQCommandAccountingView{}, engine.TQCommandAccountingView{}
+	left.PressureSample, right.PressureSample = engine.TQPressureSampleView{}, engine.TQPressureSampleView{}
+	return reflect.DeepEqual(left, right)
 }
 
 // TestLiveRESTHydrationProgression is the opt-in deterministic progression
@@ -150,6 +276,7 @@ func buildLiveRESTProgressionFixture(t *testing.T, symbols []string, windowStart
 
 type liveRESTProgressionServer struct {
 	server *httptest.Server
+	limit  int
 	start  chan time.Time
 	stop   chan struct{}
 	done   chan error
@@ -157,9 +284,9 @@ type liveRESTProgressionServer struct {
 	once   sync.Once
 }
 
-func newLiveRESTProgressionServer(t *testing.T, fixture liveRESTProgressionFixture) *liveRESTProgressionServer {
+func newLiveRESTProgressionServer(t *testing.T, fixture liveRESTProgressionFixture, limit int) *liveRESTProgressionServer {
 	t.Helper()
-	result := &liveRESTProgressionServer{start: make(chan time.Time, 1), stop: make(chan struct{}), done: make(chan error, 1)}
+	result := &liveRESTProgressionServer{limit: limit, start: make(chan time.Time, 1), stop: make(chan struct{}), done: make(chan error, 1)}
 	result.server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		result.once.Do(func() { result.serve(request, writer, fixture.frames) })
 	}))
@@ -204,6 +331,29 @@ func (s *liveRESTProgressionServer) serve(request *http.Request, writer http.Res
 		intervalStart := time.Duration(cycle) * liveContentionDuration
 		for _, interval := range liveContentionIntervals {
 			for index := 0; index < interval.frames; index++ {
+				if frameIndex == s.limit {
+					s.done <- nil
+					ticker := time.NewTicker(20 * time.Millisecond)
+					defer ticker.Stop()
+					for {
+						select {
+						case <-ctx.Done():
+							return
+						case <-s.stop:
+							<-ctx.Done()
+							return
+						case <-ticker.C:
+							// Keep the socket reader crossing transport read
+							// boundaries without adding another market/control
+							// frame to the fixed semantic fixture. This lets an
+							// ingress-fence request linearize even after the last
+							// application frame has been sent.
+							if err := connection.Ping(ctx); err != nil {
+								return
+							}
+						}
+					}
+				}
 				target := plannedStart.Add(intervalStart + time.Duration(index+1)*interval.duration/time.Duration(interval.frames))
 				timer := time.NewTimer(max(time.Until(target), 0))
 				select {
@@ -241,13 +391,18 @@ type liveRESTFixtureServer struct {
 	seen                                 []atomic.Uint32
 	requests, values, empties, afterLive atomic.Uint64
 	maximumBody                          atomic.Uint64
+	active, maximumActive                atomic.Int64
+	workers                              int
+	firstWave                            chan struct{}
+	firstWaveOnce                        sync.Once
 	mu                                   sync.Mutex
+	completionOrder                      []int
 	err                                  error
 }
 
-func newLiveRESTFixtureServer(t *testing.T, population int, liveSent *atomic.Uint64) *liveRESTFixtureServer {
+func newLiveRESTFixtureServer(t *testing.T, population, workers int, liveSent *atomic.Uint64) *liveRESTFixtureServer {
 	t.Helper()
-	result := &liveRESTFixtureServer{liveSent: liveSent, seen: make([]atomic.Uint32, population)}
+	result := &liveRESTFixtureServer{liveSent: liveSent, seen: make([]atomic.Uint32, population), workers: workers, firstWave: make(chan struct{})}
 	result.server = httptest.NewTLSServer(http.HandlerFunc(result.serve))
 	return result
 }
@@ -279,6 +434,29 @@ func (s *liveRESTFixtureServer) serve(writer http.ResponseWriter, request *http.
 		fail(fmt.Errorf("duplicate request for fixture index %d", index))
 		return
 	}
+	active := s.active.Add(1)
+	updateLiveRESTMaximum(&s.maximumActive, active)
+	defer s.active.Add(-1)
+	if len(s.seen) <= 128 {
+		if active == int64(s.workers) {
+			s.firstWaveOnce.Do(func() { close(s.firstWave) })
+		}
+		select {
+		case <-request.Context().Done():
+			return
+		case <-s.firstWave:
+		}
+		delay := time.Duration(1+(s.workers-index%s.workers)) * 5 * time.Millisecond
+		timer := time.NewTimer(delay)
+		select {
+		case <-request.Context().Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return
+		case <-timer.C:
+		}
+	}
 	s.requests.Add(1)
 	if s.liveSent.Load() > 0 {
 		s.afterLive.Add(1)
@@ -295,6 +473,14 @@ func (s *liveRESTFixtureServer) serve(writer http.ResponseWriter, request *http.
 	}
 	writer.Header().Set("Content-Type", "application/json")
 	_, _ = writer.Write([]byte(body))
+	s.mu.Lock()
+	s.completionOrder = append(s.completionOrder, index)
+	s.mu.Unlock()
+}
+
+func updateLiveRESTMaximum(target *atomic.Int64, value int64) {
+	for current := target.Load(); value > current && !target.CompareAndSwap(current, value); current = target.Load() {
+	}
 }
 
 func (s *liveRESTFixtureServer) failure() error {
@@ -372,18 +558,31 @@ func runLiveRESTProgression(t *testing.T, binding reference.Binding, fixture liv
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	live := newLiveRESTProgressionServer(t, fixture)
+	liveFrameLimit := len(fixture.frames)
+	if population <= 128 {
+		liveFrameLimit = liveContentionFrames
+	}
+	live := newLiveRESTProgressionServer(t, fixture, liveFrameLimit)
 	defer live.server.Close()
-	rest := newLiveRESTFixtureServer(t, population, &live.sent)
+	rest := newLiveRESTFixtureServer(t, population, workers, &live.sent)
 	defer rest.server.Close()
 	hydrator, err := massive.NewHydrationWorker(rest.server.URL, func() (string, error) { return "progression-fixture", nil }, rest.server.Client())
 	if err != nil {
 		result.err = err
 		return result
 	}
-	startedClock := time.Now()
 	base := binding.SessionStart().Add(8 * time.Hour).Truncate(time.Second)
-	clock := func() time.Time { return base.Add(time.Since(startedClock)).UTC() }
+	var fixedClock atomic.Int64
+	var movingClockStart atomic.Int64
+	clock := func() time.Time {
+		if fixed := fixedClock.Load(); fixed != 0 {
+			return time.Unix(0, fixed).UTC()
+		}
+		if started := movingClockStart.Load(); started != 0 {
+			return base.Add(max(time.Since(time.Unix(0, started)), 0)).UTC()
+		}
+		return base.UTC()
+	}
 	adapter, err := massive.NewLiveAdapter(binding, massive.LiveAdapterConfig{
 		Endpoint: "ws" + strings.TrimPrefix(live.server.URL, "http"), Credential: "progression-fixture",
 		Queue: massive.LiveQueueConfig{FrameSlots: 512, MaxFrameBytes: 8 << 20, TotalFrameBytes: 64 << 20}, Clock: clock,
@@ -406,6 +605,15 @@ func runLiveRESTProgression(t *testing.T, binding reference.Binding, fixture liv
 		}
 	}
 	defer shutdownRun()
+	var terminalMu sync.Mutex
+	type terminalObservation struct{ requestID, engineSequence uint64 }
+	terminalObservations := make([]terminalObservation, 0, population)
+	run.afterHydrationWorker = func(accounting massive.HydrationWorkerAccounting) { result.workerAccounting = accounting }
+	run.afterHydrationTerminal = func(requestID, engineSequence uint64) {
+		terminalMu.Lock()
+		terminalObservations = append(terminalObservations, terminalObservation{requestID: requestID, engineSequence: engineSequence})
+		terminalMu.Unlock()
+	}
 
 	establish, cancelEstablish := context.WithTimeout(ctx, config.ConnectionAttemptDeadline)
 	attempt, err := run.openAttempt(ctx, establish, LiveComponents{Adapter: adapter, Hydrator: hydrator, Workers: workers, RowsPerChunk: 256,
@@ -422,7 +630,8 @@ func runLiveRESTProgression(t *testing.T, binding reference.Binding, fixture liv
 	engineBaseline := run.Engine().ObserveOperational()
 	deliveryMaxBaseline := run.deliveryMaxNanos.Load()
 	cpuBaseline := goRuntimeCPUSeconds()
-	plannedStart := time.Now().Add(20 * time.Millisecond)
+	plannedStart := time.Now()
+	movingClockStart.Store(plannedStart.UnixNano())
 	live.start <- plannedStart
 
 	trialCtx, cancelTrial := context.WithCancel(ctx)
@@ -514,6 +723,12 @@ func runLiveRESTProgression(t *testing.T, binding reference.Binding, fixture liv
 	}
 
 	if result.err == nil && result.tailDrained {
+		if population <= 128 {
+			// The proof compares exact final bytes across independently paced
+			// worker runs. Pin the final engine time after the fixed live frame
+			// boundary so wall-clock scheduling cannot select an adjacent second.
+			fixedClock.Store(base.Add(6500 * time.Millisecond).UnixNano())
+		}
 		run.captureLiveCoverage(trialCtx)
 		admission, completion := run.Engine().AdmitTimer(trialCtx)
 		if admission != engine.AdmissionAdmitted || completion == nil {
@@ -537,9 +752,13 @@ func runLiveRESTProgression(t *testing.T, binding reference.Binding, fixture liv
 	result.stopReason = monitor.stopReason
 
 	timedQueue := attempt.QueueAccounting()
-	timedEngine := run.Engine().ObserveOperational()
+	timedSnapshot := run.Engine().ObserveSnapshot()
+	timedEngine := timedSnapshot.Operational
 	timedStatus := run.Status()
 	timedReplay := run.Engine().ObserveReplayDeterministic()
+	result.canonical = timedReplay.Canonical
+	result.evaluation = timedReplay.Evaluation
+	result.tq = timedSnapshot.TQ
 	result.elapsed = time.Since(plannedStart)
 	result.framesSent = live.sent.Load()
 	result.framesRead = timedQueue.FramesRead - queueBaseline.FramesRead
@@ -565,14 +784,22 @@ func runLiveRESTProgression(t *testing.T, binding reference.Binding, fixture liv
 	result.ingressFencesStarted = timedQueue.IngressFencesStarted - queueBaseline.IngressFencesStarted
 	result.ingressFencesDispositioned = timedQueue.IngressFencesDispositioned - queueBaseline.IngressFencesDispositioned
 	result.fenceApplied = timedEngine.Hydration.FenceReconciled
+	result.fenceSequence = run.Engine().ObserveFenceTiming().EngineSequence
 	result.publicationID = timedEngine.PublicationID
 	result.publicationSequence = timedEngine.LastEngineSequence
 	result.lifecycleReady = timedStatus.BackendReady && timedStatus.RankingCurrent && timedEngine.Lifecycle == "live" && timedEngine.Suppression == ""
-	result.publicationCoherent = timedReplay.Publication.PublicationID == timedEngine.PublicationID && timedReplay.Publication.LastEngineSequence == timedEngine.LastEngineSequence &&
-		timedReplay.Publication.Lifecycle == timedEngine.Lifecycle && timedReplay.Publication.CurrentMarketClaim && timedReplay.Publication.Watermark != nil && timedEngine.Watermark != nil &&
-		*timedReplay.Publication.Watermark == *timedEngine.Watermark && reflect.DeepEqual(timedReplay.Evaluation, timedReplay.Publication.AggregateEvaluation) &&
-		timedReplay.Evaluation.Population.UniverseTotal == uint64(population) && timedReplay.Evaluation.Population.ValidPriorClose == uint64(population) &&
-		timedReplay.Evaluation.Population.CoveredPopulation == uint64(population) && timedReplay.Evaluation.Population.UnresolvedPopulation == 0
+	publication := timedSnapshot.Publication
+	result.publicationCoherent = publication.PublicationID == timedEngine.PublicationID && publication.LastEngineSequence <= timedEngine.LastEngineSequence &&
+		publication.Lifecycle == timedEngine.Lifecycle && publication.CurrentMarketClaim && publication.Watermark != nil && timedEngine.Watermark != nil &&
+		*publication.Watermark == *timedEngine.Watermark && reflect.DeepEqual(timedReplay.Evaluation, timedReplay.Publication.AggregateEvaluation) &&
+		publication.AggregateEvaluation.Population.UniverseTotal == uint64(population) && publication.AggregateEvaluation.Population.ValidPriorClose == uint64(population) &&
+		publication.AggregateEvaluation.Population.CoveredPopulation == uint64(population) && publication.AggregateEvaluation.Population.UnresolvedPopulation == 0
+	if !result.publicationCoherent {
+		result.publicationProblem = fmt.Sprintf("snapshot_pub=%d/%d engine_pub=%d/%d lifecycle=%s/%s current=%t watermark=%v/%v eval_equal=%t population=%+v",
+			publication.PublicationID, publication.LastEngineSequence, timedEngine.PublicationID, timedEngine.LastEngineSequence,
+			publication.Lifecycle, timedEngine.Lifecycle, publication.CurrentMarketClaim,
+			publication.Watermark, timedEngine.Watermark, reflect.DeepEqual(timedReplay.Evaluation, timedReplay.Publication.AggregateEvaluation), publication.AggregateEvaluation.Population)
+	}
 	if maximum := run.deliveryMaxNanos.Load(); maximum > deliveryMaxBaseline {
 		result.maximumDeliveryDelay = time.Duration(maximum)
 	}
@@ -602,6 +829,25 @@ func runLiveRESTProgression(t *testing.T, binding reference.Binding, fixture liv
 	if restErr := rest.failure(); restErr != nil && result.err == nil {
 		result.err = restErr
 	}
+	result.maximumRESTActive = rest.maximumActive.Load()
+	rest.mu.Lock()
+	for index, completed := range rest.completionOrder {
+		if completed != index {
+			result.completionOutOfOrder = true
+			break
+		}
+	}
+	rest.mu.Unlock()
+	terminalMu.Lock()
+	sort.Slice(terminalObservations, func(left, right int) bool {
+		return terminalObservations[left].engineSequence < terminalObservations[right].engineSequence
+	})
+	result.terminalOrder = make([]uint64, len(terminalObservations))
+	for index, observation := range terminalObservations {
+		result.terminalOrder[index] = observation.requestID
+		result.maximumTerminalSequence = max(result.maximumTerminalSequence, observation.engineSequence)
+	}
+	terminalMu.Unlock()
 	if rest.requests.Load() != uint64(population) || rest.values.Load() != uint64((population+1)/2) || rest.empties.Load() != uint64(population/2) || rest.maximumBody.Load() > 256 {
 		if result.err == nil {
 			result.err = fmt.Errorf("REST fixture accounting requests=%d values=%d empty=%d max_body=%d", rest.requests.Load(), rest.values.Load(), rest.empties.Load(), rest.maximumBody.Load())
@@ -645,8 +891,15 @@ func assertLiveRESTProgression(t *testing.T, result liveRESTProgressionResult) {
 	if !result.progressDuringLive || !result.fenceApplied || result.ingressFencesStarted == 0 || result.ingressFencesStarted != result.ingressFencesDispositioned {
 		problems = append(problems, fmt.Sprintf("progress=%t fence=%t ingress_fences=%d/%d", result.progressDuringLive, result.fenceApplied, result.ingressFencesStarted, result.ingressFencesDispositioned))
 	}
+	worker := result.workerAccounting
+	if worker.ItemsStarted != int64(result.population) || worker.MaximumActiveWorkers != int64(result.workers) ||
+		worker.MaximumResidentRecords > int64(result.workers)*57_600 || worker.ResponseBytes <= 0 || worker.ResponseBytes > 512<<20 ||
+		worker.NormalizedRows != int64(wantValues) || len(result.terminalOrder) != result.population ||
+		result.maximumTerminalSequence == 0 || result.fenceSequence <= result.maximumTerminalSequence {
+		problems = append(problems, fmt.Sprintf("worker accounting=%+v terminal_order=%d terminal_max=%d fence_sequence=%d", worker, len(result.terminalOrder), result.maximumTerminalSequence, result.fenceSequence))
+	}
 	if !result.lifecycleReady || !result.publicationCoherent || result.publicationID == 0 || result.publicationSequence == 0 {
-		problems = append(problems, fmt.Sprintf("ready=%t publication_coherent=%t publication=%d sequence=%d", result.lifecycleReady, result.publicationCoherent, result.publicationID, result.publicationSequence))
+		problems = append(problems, fmt.Sprintf("ready=%t publication_coherent=%t publication=%d sequence=%d detail=%s", result.lifecycleReady, result.publicationCoherent, result.publicationID, result.publicationSequence, result.publicationProblem))
 	}
 	if !result.accountingReconciled {
 		problems = append(problems, "adapter/queue/engine accounting did not reconcile at shutdown")

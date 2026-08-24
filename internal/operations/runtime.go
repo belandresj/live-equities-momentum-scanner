@@ -88,6 +88,11 @@ type Runtime struct {
 	// hook is the complete production behavior; tests use it only to hold the
 	// consumer while exercising the fixed production queue ceiling.
 	beforeHydrationPump func(*massive.LiveAttempt)
+	// The A3 proof hooks observe immutable worker accounting and completed
+	// engine terminal dispositions. Nil hooks are the complete production
+	// behavior and confer no scheduling or mutation authority.
+	afterHydrationWorker   func(massive.HydrationWorkerAccounting)
+	afterHydrationTerminal func(requestID, engineSequence uint64)
 }
 
 // automaticTimerObservation is a package-private, read-only test seam for an

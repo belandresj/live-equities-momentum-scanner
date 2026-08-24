@@ -47,7 +47,7 @@ build environments. It reaches only the scanner child environment.
 The public command shape is:
 
 ```text
-./scripts/run-private-scanner [--trading-date YYYY-MM-DD] [--hydration-workers 1] [--open]
+./scripts/run-private-scanner [--trading-date YYYY-MM-DD] [--hydration-workers 1|2|4|8] [--open]
 ```
 
 `--open` asks macOS to open the dashboard once its listener is healthy; during
@@ -56,8 +56,9 @@ nonfatal. `--trading-date` is for an exact date correction; it does not
 authorize historical replay through the live provider path. The launcher and
 scanner use the same validated exchange schedule. Automatic selection skips
 weekends and holidays; an explicit weekend, holiday, unsupported, or ended date
-is rejected. Hydration uses exactly one worker; `--hydration-workers 1` is
-accepted only as an explicit restatement of that fixed topology. It does not
+is rejected. Hydration defaults to eight workers; `--hydration-workers`
+accepts exactly `1`, `2`, `4`, or `8`. This changes only bounded REST
+acquisition concurrency. It does not
 change the universe, interval, merge rules, ranking, readiness, or T/Q path.
 
 The launcher invokes the scanner with these exact settings:
@@ -65,7 +66,7 @@ The launcher invokes the scanner with these exact settings:
 ```text
 --run-mode live
 --trading-date <current America/New_York date or explicit override>
---hydration-workers 1
+--hydration-workers 8
 --reference-dir <repo>/var/reference
 --checkpoint-dir <repo>/var/checkpoints
 --checkpoint-mode off
@@ -76,7 +77,8 @@ The launcher invokes the scanner with these exact settings:
 
 For the 2026-08-12 owner-run retry, the scanner's internal bounded delivery
 settings are 32,768 raw-frame slots, 128 MiB total queued payload, 8 MiB per
-frame, a 4-GiB cumulative (not resident) hydration-transfer allowance, and five
+frame, a 4-GiB cumulative (not resident) hydration-transfer allowance, at most
+57,600 resident normalized records per configured hydration worker, and five
 finite connection/recovery attempts. These settings add containment headroom
 only; exact readiness,
 coverage, accounting, page/request limits, and fail-closed terminal behavior

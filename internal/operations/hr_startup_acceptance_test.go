@@ -104,7 +104,7 @@ func TestPHRStartupLossCancelsAndReplansThroughFence(t *testing.T) {
 	durations.HeartbeatInterval = 250 * time.Millisecond
 	durations.HeartbeatDeadline = 100 * time.Millisecond
 	components := LiveComponents{Adapter: adapter, Hydrator: hydrator, Workers: 1, RowsPerChunk: 1,
-		MaximumResponseBytes: 4 << 20, MaximumNormalizedRecords: int64(len(symbols)) * 57_600, MaximumResidentRecords: int64(len(symbols)) * 57_600, Durations: durations}
+		MaximumResponseBytes: 4 << 20, MaximumNormalizedRecords: int64(len(symbols)) * 57_600, MaximumResidentRecords: 57_600, Durations: durations}
 	ctx, cancel := context.WithCancel(context.Background())
 	joined := make(chan error, 1)
 	go func() { joined <- run.RunLive(ctx, components) }()

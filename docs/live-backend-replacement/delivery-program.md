@@ -904,6 +904,74 @@ only its one-worker composition restriction is superseded. D1 stays inactive
 until A3 is implemented, verified, reviewed when triggered, accepted, and
 committed.
 
+#### `LBR-A3` pre-assignment audit and activation — 2026-08-24
+
+- **Production constructor audit:** the public wrapper, private launcher,
+  scanner flag/budget construction, `operations.LiveComponents`, and Massive
+  live-plan seam form one ordinary-live path. They currently enforce the A2
+  one-worker restriction; the separated generic worker constructor remains
+  reachable only by historical/offline tooling and is not a production
+  fallback.
+- **Concurrency and false-success audit:** the retained worker pool already
+  bounds blocking acquisition, copies immutable chunks, joins every started
+  worker, and returns one cleanup terminal per planned request. The engine
+  remains the only generation/request-ledger, merge, terminal, fence, and
+  currentness owner. The independent live pump remains active until all REST
+  work is reconciled, and cancellation/epoch loss closes provider work and
+  fences late facts. The allocated primary proof directly distinguishes an
+  active-worker overshoot, out-of-order missing/duplicate terminal, early
+  fence, resident-budget overflow, stalled live consumer, and unjoined
+  cancellation.
+- **Bounds and edge cases:** supported counts are exactly `1|2|4|8`; default is
+  8; normalized capacity remains `population * 57,600`; resident capacity is
+  exactly `workers * 57,600`; multiplication is checked before runtime start.
+  Empty, malformed, failed, canceled, fenced, duplicate/foreign-token, and
+  long-stall recovery meanings remain owned by accepted A1/A2 evidence and are
+  not revised. Checkpoint/replay constructors stay unsupported by the live
+  seam.
+- **Activation:** no consequential ambiguity requires pre-code narrow review.
+  `LBR-A3` is the sole active write-capable slice; D1 remains inactive.
+
+#### `LBR-A3` — accepted after final-review correction 2026-08-24
+
+- **Coherent behavior:** the ordinary wrapper, private launcher, scanner,
+  operations live seam, and retained Massive blocking-acquisition pool now
+  accept exactly `1|2|4|8` workers and default to 8. Normalized capacity is
+  exactly `population * 57,600`; resident capacity is exactly
+  `workers * 57,600`; checked multiplication and composition validation occur
+  before runtime or credential access. REST responses transfer concurrently
+  without surrendering the shared cumulative response-byte limit.
+- **Ownership and ordering:** workers return immutable bounded chunks and one
+  terminal per request. The one engine remains the sole canonical merge,
+  generation/request-ledger, fence, lifecycle, and currentness owner. The live
+  consumer continues independently while REST work is active; shutdown stops
+  scheduling, contains late work, cancels provider calls, and joins the full
+  pool.
+- **Proof:** `P-LBR-A3-PARALLEL-HYDRATION` passes at `1`, `2`, `4`, and `8`
+  with 32 symbols. A deterministic barrier observes maximum active REST work
+  of exactly the configured count, unequal releases force both response and
+  engine-terminal order away from plan order, all 32 terminal identities
+  reconcile before the ingress fence, live aggregate frames advance during
+  hydration, and final canonical/ranking/TQ product projections are identical.
+  The API boundary separately captures the runtime, maps through the production
+  v2 mapper, and compares encoded product output across all counts after
+  out-of-order terminal completion. Direct proofs establish exact resident and
+  cumulative budgets plus joined cancellation at every supported count.
+- **Verification/review:** the focused proof matrix passed three repetitions;
+  affected Massive/operations/scanner/launcher short and race suites, API-v2
+  mapping proof, focused vet, wrapper argument tests, diff hygiene, and exact
+  ordinary repository short verification pass on final code bytes. Final
+  read-only review first reopened serialized response-body reads, a flaky fence
+  observation, a permissive resident-cap seam, missing engine terminal/budget
+  observation, and the API-v2 proof boundary. Corrections passed focused
+  re-review `CLEAN/PASS` with no remaining P1/P2/P3 finding.
+- **Limitation and handoff:** this proves bounded local composition and semantic
+  equivalence, not Massive speedup, provider rate-limit behavior, provider
+  availability, market-hours readiness, whole-process resource plateaus, or a
+  trading edge. Accepted A1/A2 and B/C meanings are unchanged. D1 receives the
+  same ordered Massive ingress/state/TQ interface and is next but inactive
+  until its fresh pre-assignment audit.
+
 ### Owner-approved E2 duration and manifest revision — 2026-08-23
 
 The owner revised E2 to exactly one 10-minute deterministic acceptance run. The
@@ -927,12 +995,12 @@ but copy no status.
 | Parent architecture | `approved_owner_revised_parallel_hydration` | Current replacement architecture; bounded live hydration accepts `1|2|4|8`, defaults to 8, and E2 remains exactly one 10-minute deterministic run. |
 | Delivery program | `approved_owner_revised_parallel_hydration` | `LBR-A3` is inserted before D1; no optional/fallback/diagnostic E2 repeat exists. |
 | `LBR-P1` focused contracts and characterization | `accepted_owner_revised_parallel_hydration` | Five-spec review/owner acceptance remains valid subject to the recorded A3 hydration-topology revision. The frozen baseline/manifest remains unchanged; comparable baseline CPU/RSS remain explicitly unknown. |
-| Capability A — canonical state and hydration | `reopened_lbr_a3_pending` | A1/A2 semantics and evidence remain accepted. Only the one-worker composition restriction is superseded; implement and accept bounded parallel `LBR-A3` before D1. |
-| `LBR-A3` bounded parallel live hydration | `not_started_next` | Perform its mandatory pre-assignment audit, then activate it as the sole write-capable slice. D1 remains inactive. |
+| Capability A — canonical state and hydration | `finally_accepted_lbr_a3` | A1/A2 semantics remain accepted; A3 supersedes only their one-worker ordinary-live composition restriction. |
+| `LBR-A3` bounded parallel live hydration | `accepted` | Exact `1|2|4|8`, default 8, bounded concurrency/budgets, terminal/fence/live-tail/API equivalence, joined cancellation, and final focused review are clean. |
 | `LBR-B3` removal slice | `accepted` | Commit `f697288`; removal proof, resource evidence, focused corrections, and final focused re-review are clean. |
 | Capability B — evaluation and publication | `finally_accepted` | B1/B2/B3 and the required final read-only review remain accepted and unaffected by A3. |
 | Capability C — selected-row T/Q | `finally_accepted` | C1/C2 remain accepted and unaffected by the A3 hydration-topology revision. |
-| Capability D — live ingress | `not_started` | Requires accepted `LBR-A3` plus the accepted state/TQ input interface. D1 is inactive. |
+| Capability D — live ingress | `not_started_next` | A3 and the state/TQ input interface are accepted. D1 is next but inactive pending its fresh pre-assignment audit. |
 | Capability E — integration/removal/acceptance | `not_started` | Requires Capabilities A-D accepted |
 | E2 deterministic duration/manifest revision | `owner_approved` | Exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |
 | Deterministic replacement | `not_started` | Requires `LBR-E1` and `LBR-E2` |

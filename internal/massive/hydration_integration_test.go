@@ -74,7 +74,7 @@ func TestPLBRA2HydrationWorkerAndFence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workerPlan, err := NewLiveHydrationWorkerPlan([]HydrationWorkItem{work}, 8, budgets.MaximumResponseBytes, budgets.MaximumNormalizedRecords, budgets.MaximumResidentRecords)
+	workerPlan, err := NewLiveHydrationWorkerPlan([]HydrationWorkItem{work}, budgets.Workers, 8, budgets.MaximumResponseBytes, budgets.MaximumNormalizedRecords, budgets.MaximumResidentRecords)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestPLBRA2HydrationWorkerAndFence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewLiveHydrationWorkerPlan([]HydrationWorkItem{checkpointWork}, 8, budgets.MaximumResponseBytes, budgets.MaximumNormalizedRecords, budgets.MaximumResidentRecords); err == nil {
+	if _, err := NewLiveHydrationWorkerPlan([]HydrationWorkItem{checkpointWork}, budgets.Workers, 8, budgets.MaximumResponseBytes, budgets.MaximumNormalizedRecords, budgets.MaximumResidentRecords); err == nil {
 		t.Fatal("supported live worker accepted checkpoint catch-up work")
 	}
 

@@ -83,11 +83,10 @@ owner-approved. Current status and the sequential roadmap live in the
 [`replacement delivery program`](docs/live-backend-replacement/delivery-program.md)
 and [`specification map`](docs/specification-map.md).
 
-Capabilities A–C are implemented and accepted for their recorded semantics.
-The 2026-08-24 owner revision reopens only the ordinary-live hydration topology:
-`LBR-A3` will restore bounded `1|2|4|8` acquisition with default 8 before D1.
-The current executable still accepts exactly one worker until A3 is implemented
-and accepted. D1 remains inactive.
+Capabilities A–C and the inserted `LBR-A3` bounded parallel hydration slice are
+implemented and accepted for their recorded semantics. Ordinary-live hydration
+accepts exactly `1|2|4|8` workers and defaults to 8. D1 is next but remains
+inactive until its fresh pre-assignment audit.
 Historical numbered components and stability corrections remain evidence, not
 requirements to preserve their private representations.
 
@@ -113,9 +112,9 @@ ordinary scanner for the current or next exchange-declared trading session.
 Starting at approximately 03:55 remains the shortest path. It builds and
 supervises the existing scanner and dashboard and reports authoritative
 liveness and readiness without moving market-state ownership into the launcher. For the current MVP,
-checkpoint mode stays off and restart uses fresh hydration. Hydration uses
-exactly one worker; `--hydration-workers 1` is the only accepted explicit
-value. The manual commands below remain useful for development and
+checkpoint mode stays off and restart uses fresh hydration. Hydration defaults
+to eight workers; `--hydration-workers` accepts exactly `1`, `2`, `4`, or `8`.
+The manual commands below remain useful for development and
 independent-process inspection.
 
 The dashboard is an independent loopback process. Start the scanner API with

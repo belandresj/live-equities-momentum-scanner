@@ -452,31 +452,126 @@ func setFixedAggregateQuery(value *url.URL) {
 var errResponseBudget = errors.New("offline response byte budget exceeded")
 
 type responseBudget struct {
-	mu      sync.Mutex
-	used    int64
-	maximum int64
+	mu                 sync.Mutex
+	condition          *sync.Cond
+	used, reserved     int64
+	maximum            int64
+	exhausted, proving bool
 }
 
 func (b *responseBudget) read(source io.Reader) ([]byte, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	remaining := b.maximum - b.used
-	if remaining <= 0 {
+	if source == nil || b.maximum <= 0 {
 		return nil, errResponseBudget
 	}
-	limit := min(OfflinePageByteLimit, remaining)
-	body, err := io.ReadAll(io.LimitReader(source, limit+1))
-	if int64(len(body)) > limit {
-		b.used = b.maximum
-		// The extra byte proves the cumulative boundary was exceeded, but it
-		// is not part of the accepted response budget. Returning it would make
-		// the provider terminal claim more bytes than the engine-authorized
-		// plan and turn an ordinary bounded provider failure into an accounting
-		// integrity failure.
-		return body[:limit], errResponseBudget
+	return io.ReadAll(&responseBudgetReader{source: source, budget: b, pageRemaining: OfflinePageByteLimit})
+}
+
+type responseBudgetReader struct {
+	source        io.Reader
+	budget        *responseBudget
+	pageRemaining int64
+}
+
+func (r *responseBudgetReader) Read(destination []byte) (int, error) {
+	if len(destination) == 0 {
+		return 0, nil
 	}
-	b.used += int64(len(body))
-	return body, err
+	want := min(int64(len(destination)), r.pageRemaining)
+	if want > 0 {
+		reserved := r.budget.reserve(want)
+		if reserved > 0 {
+			read, err := r.source.Read(destination[:reserved])
+			r.budget.commit(reserved, int64(read))
+			r.pageRemaining -= int64(read)
+			return read, err
+		}
+	}
+	return r.proveBoundary()
+}
+
+func (r *responseBudgetReader) proveBoundary() (int, error) {
+	if !r.budget.beginProof() {
+		return 0, errResponseBudget
+	}
+	defer r.budget.endProof()
+	var proof [1]byte
+	read, err := r.source.Read(proof[:])
+	if read == 0 && errors.Is(err, io.EOF) {
+		return 0, io.EOF
+	}
+	if read == 0 && err != nil {
+		return 0, err
+	}
+	r.budget.fail()
+	return 0, errResponseBudget
+}
+
+func (b *responseBudget) reserve(want int64) int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.initializeConditionLocked()
+	for {
+		if b.exhausted {
+			return 0
+		}
+		remaining := b.maximum - b.used - b.reserved
+		if remaining <= 0 && b.reserved > 0 {
+			b.condition.Wait()
+			continue
+		}
+		if remaining <= 0 {
+			return 0
+		}
+		reserved := min(want, remaining)
+		b.reserved += reserved
+		return reserved
+	}
+}
+
+func (b *responseBudget) commit(reserved, read int64) {
+	b.mu.Lock()
+	b.initializeConditionLocked()
+	b.reserved -= reserved
+	b.used += read
+	b.condition.Broadcast()
+	b.mu.Unlock()
+}
+
+func (b *responseBudget) beginProof() bool {
+	b.mu.Lock()
+	b.initializeConditionLocked()
+	for b.proving && !b.exhausted {
+		b.condition.Wait()
+	}
+	if b.exhausted {
+		b.mu.Unlock()
+		return false
+	}
+	b.proving = true
+	b.mu.Unlock()
+	return true
+}
+
+func (b *responseBudget) endProof() {
+	b.mu.Lock()
+	b.initializeConditionLocked()
+	b.proving = false
+	b.condition.Broadcast()
+	b.mu.Unlock()
+}
+
+func (b *responseBudget) fail() {
+	b.mu.Lock()
+	b.initializeConditionLocked()
+	b.exhausted = true
+	b.condition.Broadcast()
+	b.mu.Unlock()
+}
+
+func (b *responseBudget) initializeConditionLocked() {
+	if b.condition == nil {
+		b.condition = sync.NewCond(&b.mu)
+	}
 }
 
 func decodeRESTPage(body []byte, symbol string) (restPage, DownloadReason) {
