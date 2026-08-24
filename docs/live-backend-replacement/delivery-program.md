@@ -807,6 +807,17 @@ permitted ticket and remains inactive for a fresh task.
   on final bytes. The reopened C2 claim is reaccepted subject to focused
   re-review by the same final reviewer; all other preserved evidence remains
   valid and `LBR-D1` remains inactive.
+- **Focused re-review reopening:** the production correction passed focused
+  inspection, including lock ownership, reader independence, sole runtime
+  path, cancellation, failure, and lock-order behavior. The adversarial test
+  did not, however, prove that its raw-delivery goroutine had actually started
+  contending before command release; a late-scheduled goroutine could let the
+  pre-correction split path pass. Only the deterministic dangerous-
+  counterexample claim is reopened. Add an explicit raw-call rendezvous and
+  hook-based proof that raw engine delivery cannot enter while the command is
+  paused, then retain every ordering, coverage, aggregate/control, and
+  accounting assertion. Production code and all unrelated evidence remain
+  accepted; `LBR-D1` remains inactive.
 
 ### Owner-approved E2 duration and manifest revision — 2026-08-23
 
@@ -834,7 +845,7 @@ but copy no status.
 | Capability A — canonical state and hydration | `finally_accepted` | A1/A2 proofs, verification, corrections, and Capability A final review are clean; accepted dependency for Capability B. |
 | `LBR-B3` removal slice | `accepted` | Commit `f697288`; removal proof, resource evidence, focused corrections, and final focused re-review are clean. |
 | Capability B — evaluation and publication | `finally_accepted` | B1/B2/B3 accepted; required final read-only review returned `CLEAN/PASS`. Next permitted ticket is C1, which is inactive. |
-| Capability C — selected-row T/Q | `lbr_c1_c2_accepted_focused_rereview_pending` | The reopened command/data seam is corrected and its overtaking proof plus affected final-byte gates pass. C1 and C2 are accepted at slice level; run the same final reviewer on the corrected boundary before final Capability C acceptance. `LBR-D1` remains inactive. |
+| Capability C — selected-row T/Q | `lbr_c2_reopened_deterministic_overtaking_proof` | Production linearization passed focused review, but the proof lacked a rendezvous showing raw delivery was contending before command release. Correct only that deterministic counterexample, rerun the narrow affected gates, and return to the same reviewer. C1 and all other C2 evidence remain accepted; `LBR-D1` remains inactive. |
 | Capability D — live ingress | `not_started` | Requires accepted state/TQ input interface |
 | Capability E — integration/removal/acceptance | `not_started` | Requires Capabilities A-D accepted |
 | E2 deterministic duration/manifest revision | `owner_approved` | Exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |
