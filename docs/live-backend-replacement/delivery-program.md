@@ -831,6 +831,34 @@ permitted ticket and remains inactive for a fresh task.
   proof claim is reaccepted subject to final focused re-review. `LBR-D1`
   remains inactive.
 
+#### Capability C — finally accepted 2026-08-23
+
+- **Accepted capability:** C1 and C2 together provide bounded selected-row
+  Tape/Spread state, exact event/receipt horizons, honest independently
+  confirmed Trade/Quote coverage, immediate trust closure, one-second combined
+  membership publication, removal-before-addition batching, cadence-gated
+  pressure recovery, and exact command/data ordering. Aggregate ranking and
+  readiness remain byte-for-byte independent of T/Q availability and health.
+- **Final review:** the required read-only Capability C review first reopened
+  the production `B+1` overtaking seam, then rejected a nondeterministic first
+  version of its counterexample. The same implementer corrected each narrow
+  claim sequentially. Final focused re-review returned `CLEAN/PASS` with no
+  model substitution: the corrected proof passed 20 repetitions and focused
+  race detection, while production remained byte-identical to the approved
+  linearization correction.
+- **Evidence and limitations:** all C1/C2 primary proofs, affected short/race
+  suites, focused vet, source exclusion, diff hygiene, API golden/HTTP checks,
+  and exact ordinary repository verification pass on their recorded final
+  bytes. Deterministic local evidence does not establish provider acceptance,
+  credentialed behavior, whole-process heap/RSS under E2 load, or live-market
+  chronology; those claims were neither made nor required here.
+- **D1 handoff:** Capability D may consume one ordered Massive ingress whose
+  T/Q command result is installed before any admitted frame strictly after its
+  exact boundary. D1 must preserve aggregate/control classification and loss
+  accounting, selected-row T/Q bounds and trust closure, aggregate readiness
+  independence, and the accepted one-second combined cadence. D1 remains
+  inactive and requires its own fresh pre-assignment audit before activation.
+
 ### Owner-approved E2 duration and manifest revision — 2026-08-23
 
 The owner revised E2 to exactly one 10-minute deterministic acceptance run. The
@@ -857,7 +885,7 @@ but copy no status.
 | Capability A — canonical state and hydration | `finally_accepted` | A1/A2 proofs, verification, corrections, and Capability A final review are clean; accepted dependency for Capability B. |
 | `LBR-B3` removal slice | `accepted` | Commit `f697288`; removal proof, resource evidence, focused corrections, and final focused re-review are clean. |
 | Capability B — evaluation and publication | `finally_accepted` | B1/B2/B3 accepted; required final read-only review returned `CLEAN/PASS`. Next permitted ticket is C1, which is inactive. |
-| Capability C — selected-row T/Q | `lbr_c1_c2_accepted_final_focused_rereview_pending` | The production correction and deterministic overtaking proof are accepted with allocated gates green. Return the corrected proof to the same reviewer for final focused closure; `LBR-D1` remains inactive. |
+| Capability C — selected-row T/Q | `finally_accepted` | C1/C2 proofs and final-byte gates pass. Required final review and focused re-reviews closed `CLEAN/PASS`; exact `B`/`B+1` ordering, bounded state, cadence, honest coverage, immediate trust closure, accounting, and aggregate independence are accepted. D1 is the next permitted ticket but remains inactive pending a fresh audit. |
 | Capability D — live ingress | `not_started` | Requires accepted state/TQ input interface |
 | Capability E — integration/removal/acceptance | `not_started` | Requires Capabilities A-D accepted |
 | E2 deterministic duration/manifest revision | `owner_approved` | Exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |
