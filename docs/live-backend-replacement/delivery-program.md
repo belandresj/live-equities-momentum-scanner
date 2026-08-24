@@ -818,6 +818,18 @@ permitted ticket and remains inactive for a fresh task.
   paused, then retain every ordering, coverage, aggregate/control, and
   accounting assertion. Production code and all unrelated evidence remain
   accepted; `LBR-D1` remains inactive.
+- **Deterministic-proof correction and reacceptance:** the raw-delivery
+  goroutine now rendezvous-signals immediately before calling the production
+  dequeue path. With the command paused after exact `B` capture and before
+  engine completion, its Trade engine-entry hook remains unreachable for a
+  bounded contention interval; after command release, the test requires that
+  hook and raw completion. The retained assertions establish command result,
+  fenced `B`, then applied `B+1`, independent Trade-only confirmation,
+  unchanged aggregate/control state, and reconciled adapter/queue accounting.
+  Production bytes are unchanged. The narrow proof, Massive short/race,
+  focused vet, diff hygiene, and exact ordinary repository suite pass; the
+  proof claim is reaccepted subject to final focused re-review. `LBR-D1`
+  remains inactive.
 
 ### Owner-approved E2 duration and manifest revision — 2026-08-23
 
@@ -845,7 +857,7 @@ but copy no status.
 | Capability A — canonical state and hydration | `finally_accepted` | A1/A2 proofs, verification, corrections, and Capability A final review are clean; accepted dependency for Capability B. |
 | `LBR-B3` removal slice | `accepted` | Commit `f697288`; removal proof, resource evidence, focused corrections, and final focused re-review are clean. |
 | Capability B — evaluation and publication | `finally_accepted` | B1/B2/B3 accepted; required final read-only review returned `CLEAN/PASS`. Next permitted ticket is C1, which is inactive. |
-| Capability C — selected-row T/Q | `lbr_c2_reopened_deterministic_overtaking_proof` | Production linearization passed focused review, but the proof lacked a rendezvous showing raw delivery was contending before command release. Correct only that deterministic counterexample, rerun the narrow affected gates, and return to the same reviewer. C1 and all other C2 evidence remain accepted; `LBR-D1` remains inactive. |
+| Capability C — selected-row T/Q | `lbr_c1_c2_accepted_final_focused_rereview_pending` | The production correction and deterministic overtaking proof are accepted with allocated gates green. Return the corrected proof to the same reviewer for final focused closure; `LBR-D1` remains inactive. |
 | Capability D — live ingress | `not_started` | Requires accepted state/TQ input interface |
 | Capability E — integration/removal/acceptance | `not_started` | Requires Capabilities A-D accepted |
 | E2 deterministic duration/manifest revision | `owner_approved` | Exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |

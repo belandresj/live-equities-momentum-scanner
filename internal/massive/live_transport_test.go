@@ -891,12 +891,17 @@ func TestPLBRC2CommandResultPrecedesPostBoundaryRawDelivery(t *testing.T) {
 	beforeEvaluation := state.ObserveReplayDeterministic().Evaluation
 	beforeOperational := state.ObserveOperational()
 	captured := make(chan engine.LivePosition, 1)
+	rawEntered := make(chan AdapterDelivery, 1)
 	release := make(chan struct{})
 	attempt.mu.Lock()
 	attempt.beforeEngineDelivery = func(delivery AdapterDelivery) {
 		if delivery.Control.Kind == engine.TradeQuoteCommandWriteResult {
 			captured <- delivery.TQWriteBoundary
 			<-release
+			return
+		}
+		if delivery.Kind == DeliveryTrade {
+			rawEntered <- delivery
 		}
 	}
 	attempt.mu.Unlock()
@@ -924,15 +929,22 @@ func TestPLBRC2CommandResultPrecedesPostBoundaryRawDelivery(t *testing.T) {
 	if reason != FrameAdmitted || queuedNext.sequence != queuedB.sequence+1 {
 		t.Fatalf("B+1 = %+v/%s", queuedNext, reason)
 	}
+	rawCallStarted := make(chan struct{})
 	rawDone := make(chan deliveredResult, 1)
 	go func() {
+		close(rawCallStarted)
 		result, ok, deliveryErr := attempt.DeliverNextToEngine(context.Background(), state)
 		rawDone <- deliveredResult{result: result, ok: ok, err: deliveryErr}
 	}()
 	select {
-	case result := <-rawDone:
-		t.Fatalf("raw delivery crossed paused command result: %+v", result)
-	default:
+	case <-rawCallStarted:
+	case <-time.After(time.Second):
+		t.Fatal("raw delivery call did not start")
+	}
+	select {
+	case delivery := <-rawEntered:
+		t.Fatalf("raw delivery entered while command result was paused: %+v", delivery)
+	case <-time.After(100 * time.Millisecond):
 	}
 	close(release)
 	var commandResult deliveredResult
@@ -943,6 +955,14 @@ func TestPLBRC2CommandResultPrecedesPostBoundaryRawDelivery(t *testing.T) {
 	}
 	if commandResult.err != nil || !commandResult.ok || commandResult.result.TQDisposition.Code != engine.DispositionTQApplied {
 		t.Fatalf("command result = %+v", commandResult)
+	}
+	select {
+	case delivery := <-rawEntered:
+		if delivery.Kind != DeliveryTrade || delivery.Position.FrameSequence != queuedB.sequence {
+			t.Fatalf("unexpected raw entry after command result: %+v", delivery)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("raw delivery did not enter after command result")
 	}
 	var atBoundary deliveredResult
 	select {
