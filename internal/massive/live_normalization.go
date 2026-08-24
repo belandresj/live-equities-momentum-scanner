@@ -5,24 +5,29 @@ package massive
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
 	"strconv"
 	"time"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/belandresj/live-equities-momentum-scanner/internal/engine"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/reference"
 )
 
 const (
-	MaximumLiveFrameBytes = 8 << 20
-	maximumTradeIDBytes   = 128
-	maximumScalarBytes    = 32
-	maximumMetadataValues = 16
-	maximumCommandBytes   = 256
-	providerFutureSkew    = 250 * time.Millisecond
-	FrameLocalTQBudget    = 500 * time.Millisecond
+	MaximumLiveFrameBytes       = 8 << 20
+	maximumTradeIDBytes         = 128
+	maximumScalarBytes          = 32
+	maximumMetadataValues       = 16
+	maximumCommandBytes         = 256
+	providerFutureSkew          = 250 * time.Millisecond
+	FrameLocalTQBudget          = 500 * time.Millisecond
+	MaximumDecodedBatchElements = 65_536
+	MaximumDecodedBatchCharge   = 32 << 20
+	decodedBatchInitialCapacity = 1
 )
 
 type LiveResultKind string
@@ -51,6 +56,8 @@ type LiveRejectionReason string
 const (
 	LiveRejectFrameBounds       LiveRejectionReason = "frame_bounds"
 	LiveRejectFrameSyntax       LiveRejectionReason = "frame_syntax"
+	LiveRejectBatchElements     LiveRejectionReason = "batch_elements"
+	LiveRejectBatchCharge       LiveRejectionReason = "batch_charge"
 	LiveRejectEventFamily       LiveRejectionReason = "event_family"
 	LiveRejectDuplicateMember   LiveRejectionReason = "duplicate_recognized_member"
 	LiveRejectSymbol            LiveRejectionReason = "symbol"
@@ -250,6 +257,24 @@ type LiveFrameAccounting struct {
 	FrameIngressAmbiguity int
 }
 
+// DecodedBatch is the sole-owned immutable result of one streaming pass over
+// one provider frame. The temporary D1 bridge reads its private backing in
+// order; callers cannot retain or mutate the source frame through this value.
+type DecodedBatch struct {
+	BindingIdentity string
+	ConnectionEpoch uint64
+	FrameSequence   uint64
+	ReceivedAt      time.Time
+	EncodedBytes    int
+	RetainedCharge  int
+	accounting      LiveFrameAccounting
+	results         []LiveResult
+	parsePasses     uint8
+}
+
+func (b DecodedBatch) Accounting() LiveFrameAccounting { return b.accounting }
+func (b DecodedBatch) Len() int                        { return len(b.results) }
+
 func (a LiveFrameAccounting) Reconciles() bool {
 	classified := a.ArrayElementsExamined == a.NormalizedAggregates+a.NormalizedTrades+
 		a.NormalizedQuotes+a.NormalizedControls+a.AttributableRejected+a.IngressAmbiguity &&
@@ -268,113 +293,313 @@ func (a LiveFrameAccounting) Reconciles() bool {
 // seam for comparing the existing bounded frame accounting with engine
 // admission; production delivery remains LiveAttempt.DeliverNextToEngine.
 func ConsumeLiveFrameForAttribution(frame LiveFrame, statusContext *StatusContext, options LiveNormalizationOptions) (LiveFrameAccounting, int) {
-	cursor := newLiveFrameCursor(frame, statusContext, options)
-	consumed := 0
-	for {
-		_, ok := cursor.Next()
-		if !ok {
-			return cursor.Accounting(), consumed
-		}
-		consumed++
+	batch := decodeLiveFrame(frame, statusContext, options)
+	return batch.accounting, len(batch.results)
+}
+
+type liveBatchCursor struct {
+	batch DecodedBatch
+	index int
+}
+
+func newLiveFrameCursor(frame LiveFrame, statusContext *StatusContext, options LiveNormalizationOptions) *liveBatchCursor {
+	return &liveBatchCursor{batch: decodeLiveFrame(frame, statusContext, options)}
+}
+
+func (c *liveBatchCursor) Next() (LiveResult, bool) {
+	if c == nil || c.index >= len(c.batch.results) {
+		return LiveResult{}, false
 	}
+	result := c.batch.results[c.index]
+	c.index++
+	return result, true
 }
 
-type liveFrameAnalysis struct {
-	arrayKnown               bool
-	declared, ambiguityIndex int
-	statusCount              int
-	budgetShed               bool
-	budgetShedFrom           int
-	ambiguityReason          LiveRejectionReason
-	frameAmbiguity           bool
-	frameAmbiguityReason     LiveRejectionReason
+func (c *liveBatchCursor) Accounting() LiveFrameAccounting { return c.batch.accounting }
+
+type wireValue struct {
+	shape      MetadataShape
+	kind       wireValueKind
+	scalar     string
+	vector     [maximumMetadataValues]int64
+	count      uint8
+	classified bool
 }
 
-type liveFrameCursor struct {
-	frame                 LiveFrame
-	status                *StatusContext
-	options               LiveNormalizationOptions
-	decoder               *json.Decoder
-	analysis              liveFrameAnalysis
-	accounting            LiveFrameAccounting
-	index                 int
-	statusSeen            int
-	classificationStarted time.Time
-	done                  bool
+type wireValueKind uint8
+
+const (
+	wireNull wireValueKind = iota + 1
+	wireString
+	wireNumber
+	wireBool
+	wireArray
+	wireObject
+)
+
+type objectMembers struct {
+	values map[string]wireValue
+	counts map[string]int
 }
 
-// newLiveFrameCursor performs a bounded first pass for exact array/status
-// cardinality, then exposes one immutable result at a time. It never retains a
-// result slice or a second decoded tree.
-func newLiveFrameCursor(frame LiveFrame, statusContext *StatusContext, options LiveNormalizationOptions) *liveFrameCursor {
+func decodeLiveFrame(frame LiveFrame, statusContext *StatusContext, options LiveNormalizationOptions) DecodedBatch {
+	batch := DecodedBatch{BindingIdentity: frame.Binding.Identity(), ConnectionEpoch: frame.ConnectionEpoch, FrameSequence: frame.FrameSequence,
+		ReceivedAt: frame.ReceivedAt, EncodedBytes: len(frame.Data), parsePasses: 1}
 	started := classificationNow(options)
 	if !validFrameContext(frame) {
-		return &liveFrameCursor{frame: frame, status: statusContext, options: options, analysis: liveFrameAnalysis{frameAmbiguity: true, frameAmbiguityReason: LiveRejectFrameBounds}}
+		appendBatchResult(&batch, ambiguity(engine.LivePosition{ConnectionEpoch: frame.ConnectionEpoch, FrameSequence: frame.FrameSequence}, LiveRejectFrameBounds))
+		batch.accounting.FrameIngressAmbiguity = 1
+		return batch
 	}
-	data := frame.Data
-	if !utf8.Valid(data) || len(bytes.TrimSpace(data)) == 0 {
-		return &liveFrameCursor{frame: frame, status: statusContext, options: options, analysis: liveFrameAnalysis{frameAmbiguity: true, frameAmbiguityReason: LiveRejectFrameSyntax}}
+	if !utf8.Valid(frame.Data) || len(bytes.TrimSpace(frame.Data)) == 0 {
+		appendBatchResult(&batch, ambiguity(engine.LivePosition{ConnectionEpoch: frame.ConnectionEpoch, FrameSequence: frame.FrameSequence}, LiveRejectFrameSyntax))
+		batch.accounting.FrameIngressAmbiguity = 1
+		return batch
 	}
-	analysis := analyzeLiveFrame(frame, statusContext, options, started)
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	opening, err := decoder.Token()
-	if err != nil || opening != json.Delim('[') {
-		analysis.frameAmbiguity, analysis.frameAmbiguityReason = true, LiveRejectFrameSyntax
-		return &liveFrameCursor{frame: frame, status: statusContext, options: options, analysis: analysis}
-	}
-	accounting := LiveFrameAccounting{ArrayCardinalityKnown: analysis.arrayKnown}
-	if analysis.arrayKnown {
-		accounting.DeclaredArrayElements = analysis.declared
-	}
-	return &liveFrameCursor{frame: frame, status: statusContext, options: options, decoder: decoder, analysis: analysis, accounting: accounting, classificationStarted: started}
-}
-
-func analyzeLiveFrame(frame LiveFrame, statusContext *StatusContext, options LiveNormalizationOptions, started time.Time) liveFrameAnalysis {
 	decoder := json.NewDecoder(bytes.NewReader(frame.Data))
 	decoder.UseNumber()
 	opening, err := decoder.Token()
 	if err != nil || opening != json.Delim('[') {
-		return liveFrameAnalysis{frameAmbiguity: true, frameAmbiguityReason: LiveRejectFrameSyntax}
+		appendBatchResult(&batch, ambiguity(engine.LivePosition{ConnectionEpoch: frame.ConnectionEpoch, FrameSequence: frame.FrameSequence}, LiveRejectFrameSyntax))
+		batch.accounting.FrameIngressAmbiguity = 1
+		return batch
 	}
-	analysis := liveFrameAnalysis{ambiguityIndex: -1, budgetShedFrom: -1}
+	statusIndexes := make([]int, 0, 2)
+	ambiguous := false
 	for index := 0; decoder.More(); index++ {
-		var raw json.RawMessage
-		if err := decoder.Decode(&raw); err != nil {
-			analysis.ambiguityIndex, analysis.ambiguityReason = index, LiveRejectFrameSyntax
-			return analysis
-		}
-		analysis.declared++
-		if analysis.ambiguityIndex >= 0 {
+		position := engine.LivePosition{ConnectionEpoch: frame.ConnectionEpoch, FrameSequence: frame.FrameSequence, ArrayIndex: uint32(index)}
+		if ambiguous {
+			if err := skipJSONValue(decoder); err != nil {
+				batch.accounting.ArrayCardinalityKnown = false
+				return finalizeDecodedBatch(batch, statusIndexes, statusContext)
+			}
+			batch.accounting.FencedRemainder++
 			continue
 		}
-		position := engine.LivePosition{ConnectionEpoch: frame.ConnectionEpoch, FrameSequence: frame.FrameSequence, ArrayIndex: uint32(index)}
-		if !analysis.budgetShed && classificationBudgetExceeded(options, started) {
-			analysis.budgetShed, analysis.budgetShedFrom = true, index
+		members, ok := decodeObjectMembers(decoder)
+		if !ok {
+			appendClassifiedResult(&batch, ambiguity(position, LiveRejectEventFamily))
+			ambiguous = true
+			continue
 		}
 		elementOptions := options
-		if analysis.budgetShed && index >= analysis.budgetShedFrom {
+		if classificationBudgetExceeded(options, started) {
 			elementOptions.ShedTradesQuotes = true
 		}
-		result, ambiguous := normalizeElement(frame, position, raw, statusContext, elementOptions)
+		result, terminal := normalizeElement(frame, position, members, statusContext, elementOptions)
+		chargeReason := ambiguity(position, LiveRejectBatchCharge)
+		if len(batch.results)+2 > MaximumDecodedBatchElements || !batchCanAppendPair(&batch, result, chargeReason) {
+			reason := LiveRejectBatchCharge
+			if len(batch.results)+2 > MaximumDecodedBatchElements {
+				reason = LiveRejectBatchElements
+			}
+			appendClassifiedResult(&batch, ambiguity(position, reason))
+			ambiguous = true
+			continue
+		}
+		appendClassifiedResult(&batch, result)
 		if result.Kind == LiveResultStatus {
-			analysis.statusCount++
+			statusIndexes = append(statusIndexes, len(batch.results)-1)
 		}
-		if ambiguous {
-			analysis.ambiguityIndex, analysis.ambiguityReason = index, result.Rejection.Reason
-		}
+		ambiguous = terminal
 	}
 	closing, err := decoder.Token()
 	if err != nil || closing != json.Delim(']') {
-		analysis.ambiguityIndex, analysis.ambiguityReason = analysis.declared, LiveRejectFrameSyntax
-		return analysis
+		position := engine.LivePosition{ConnectionEpoch: frame.ConnectionEpoch, FrameSequence: frame.FrameSequence, ArrayIndex: uint32(batch.accounting.ArrayElementsExamined)}
+		if !ambiguous {
+			appendClassifiedResult(&batch, ambiguity(position, LiveRejectFrameSyntax))
+		}
+		return finalizeDecodedBatch(batch, statusIndexes, statusContext)
 	}
-	var trailing json.RawMessage
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		analysis.frameAmbiguity, analysis.frameAmbiguityReason = true, LiveRejectFrameSyntax
+	batch.accounting.ArrayCardinalityKnown = true
+	batch.accounting.DeclaredArrayElements = batch.accounting.ArrayElementsExamined + batch.accounting.FencedRemainder
+	if _, trailingErr := decoder.Token(); !errors.Is(trailingErr, io.EOF) {
+		if !ambiguous {
+			position := engine.LivePosition{ConnectionEpoch: frame.ConnectionEpoch, FrameSequence: frame.FrameSequence, ArrayIndex: uint32(batch.accounting.DeclaredArrayElements)}
+			appendBatchResult(&batch, ambiguity(position, LiveRejectFrameSyntax))
+		}
+		batch.accounting.FrameIngressAmbiguity = 1
 	}
-	analysis.arrayKnown = true
-	return analysis
+	return finalizeDecodedBatch(batch, statusIndexes, statusContext)
+}
+
+func finalizeDecodedBatch(batch DecodedBatch, statusIndexes []int, context *StatusContext) DecodedBatch {
+	for ordinal, index := range statusIndexes {
+		status := &batch.results[index].Status
+		status.ObservedCount = len(statusIndexes)
+		status.FinalInFrame = ordinal == len(statusIndexes)-1
+		if (context == nil || len(statusIndexes) > context.ExpectedCount) && status.Disposition == StatusAcknowledged {
+			status.Disposition, status.Reason = StatusAmbiguous, LiveRejectStatusCorrelation
+		}
+	}
+	return batch
+}
+
+func appendBatchResult(batch *DecodedBatch, result LiveResult) {
+	if len(batch.results) == cap(batch.results) {
+		oldCapacity := cap(batch.results)
+		capacity := nextDecodedBatchCapacity(oldCapacity)
+		backing := make([]LiveResult, len(batch.results), capacity)
+		copy(backing, batch.results)
+		batch.results = backing
+		batch.RetainedCharge += (capacity - oldCapacity) * int(unsafe.Sizeof(LiveResult{}))
+	}
+	batch.results = append(batch.results, result)
+	batch.RetainedCharge += retainedResultDynamicCharge(result)
+}
+
+func appendClassifiedResult(batch *DecodedBatch, result LiveResult) {
+	appendBatchResult(batch, result)
+	batch.accounting.ArrayElementsExamined++
+	switch result.Kind {
+	case LiveResultAggregate:
+		batch.accounting.NormalizedAggregates++
+	case LiveResultTrade:
+		batch.accounting.NormalizedTrades++
+	case LiveResultQuote:
+		batch.accounting.NormalizedQuotes++
+	case LiveResultStatus:
+		batch.accounting.NormalizedControls++
+	case LiveResultRejected:
+		batch.accounting.AttributableRejected++
+		if result.Rejection.Reason == LiveRejectOptionalShed {
+			if result.Rejection.Family == LiveFamilyTrade {
+				batch.accounting.PressureShedTrades++
+			} else if result.Rejection.Family == LiveFamilyQuote {
+				batch.accounting.PressureShedQuotes++
+			}
+		}
+	case LiveResultAmbiguous:
+		batch.accounting.IngressAmbiguity++
+	}
+}
+
+func retainedResultCharge(result LiveResult) int {
+	return int(unsafe.Sizeof(result)) + retainedResultDynamicCharge(result)
+}
+
+func retainedResultDynamicCharge(result LiveResult) int {
+	charge := 0
+	charge += len(result.Aggregate.SchemaVersion) + len(result.Aggregate.BindingIdentity) + len(result.Aggregate.Symbol)
+	charge += len(result.Trade.SchemaVersion) + len(result.Trade.BindingIdentity) + len(result.Trade.TradingDate) + len(result.Trade.Symbol) + len(result.Trade.TradeID) + len(result.Trade.LifecycleEvidence.Scalar)
+	charge += len(result.Quote.SchemaVersion) + len(result.Quote.BindingIdentity) + len(result.Quote.TradingDate) + len(result.Quote.Symbol)
+	charge += len(result.Status.BindingIdentity) + len(result.Status.CommandToken)
+	charge += len(result.Rejection.BindingIdentity) + len(result.Rejection.TradingDate) + len(result.Rejection.Symbol)
+	return charge
+}
+
+func batchCanAppendPair(batch *DecodedBatch, first, second LiveResult) bool {
+	length, capacity, charge := len(batch.results), cap(batch.results), batch.RetainedCharge
+	for _, result := range [...]LiveResult{first, second} {
+		if length == capacity {
+			newCapacity := nextDecodedBatchCapacity(capacity)
+			charge += (newCapacity - capacity) * int(unsafe.Sizeof(LiveResult{}))
+			capacity = newCapacity
+		}
+		charge += retainedResultDynamicCharge(result)
+		length++
+	}
+	return charge <= MaximumDecodedBatchCharge
+}
+
+func nextDecodedBatchCapacity(current int) int {
+	if current == 0 {
+		return decodedBatchInitialCapacity
+	}
+	return min(current*2, MaximumDecodedBatchElements)
+}
+
+func decodeObjectMembers(decoder *json.Decoder) (objectMembers, bool) {
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('{') {
+		return objectMembers{}, false
+	}
+	members := objectMembers{values: make(map[string]wireValue), counts: make(map[string]int)}
+	for decoder.More() {
+		nameToken, err := decoder.Token()
+		name, named := nameToken.(string)
+		if err != nil || !named {
+			return objectMembers{}, false
+		}
+		if !recognizedWireMember(name) {
+			if err := skipJSONValue(decoder); err != nil {
+				return objectMembers{}, false
+			}
+			continue
+		}
+		value, ok := decodeWireValue(decoder)
+		if !ok {
+			return objectMembers{}, false
+		}
+		members.counts[name]++
+		if members.counts[name] == 1 {
+			members.values[name] = value
+		}
+	}
+	closing, err := decoder.Token()
+	return members, err == nil && closing == json.Delim('}')
+}
+
+func recognizedWireMember(name string) bool {
+	switch name {
+	case "ev", "sym", "s", "e", "o", "h", "l", "c", "dv", "v", "vw", "z", "x", "i", "p", "ds", "pt", "t", "q", "trfi", "trft", "bx", "ax", "bp", "ap", "bs", "as", "status":
+		return true
+	default:
+		return false
+	}
+}
+
+func decodeWireValue(decoder *json.Decoder) (wireValue, bool) {
+	token, err := decoder.Token()
+	if err != nil {
+		return wireValue{}, false
+	}
+	switch value := token.(type) {
+	case nil:
+		return wireValue{shape: MetadataNull, kind: wireNull, scalar: "null", classified: true}, true
+	case string:
+		return wireValue{shape: MetadataScalar, kind: wireString, scalar: value, classified: utf8.ValidString(value)}, true
+	case json.Number:
+		return wireValue{shape: MetadataScalar, kind: wireNumber, scalar: string(value), classified: true}, true
+	case bool:
+		return wireValue{shape: MetadataScalar, kind: wireBool, scalar: strconv.FormatBool(value), classified: true}, true
+	case json.Delim:
+		switch value {
+		case '[':
+			result := wireValue{shape: MetadataArray, kind: wireArray, classified: true}
+			for decoder.More() {
+				element, ok := decodeWireValue(decoder)
+				if !ok {
+					return wireValue{}, false
+				}
+				integer, exact := wireExactInt64(element)
+				if !exact || result.count == maximumMetadataValues {
+					result.classified = false
+				} else if result.classified {
+					result.vector[result.count], result.count = integer, result.count+1
+				}
+			}
+			closing, err := decoder.Token()
+			return result, err == nil && closing == json.Delim(']')
+		case '{':
+			for decoder.More() {
+				if _, err := decoder.Token(); err != nil || skipJSONValue(decoder) != nil {
+					return wireValue{}, false
+				}
+			}
+			closing, err := decoder.Token()
+			return wireValue{shape: MetadataObject, kind: wireObject}, err == nil && closing == json.Delim('}')
+		}
+	}
+	return wireValue{}, false
+}
+
+func skipJSONValue(decoder *json.Decoder) error {
+	_, ok := decodeWireValue(decoder)
+	if !ok {
+		return strconv.ErrSyntax
+	}
+	return nil
 }
 
 func validFrameContext(frame LiveFrame) bool {
@@ -399,135 +624,8 @@ func classificationBudgetExceeded(options LiveNormalizationOptions, started time
 	return options.ClassificationClock().Sub(started) >= options.FrameTQBudget
 }
 
-func (c *liveFrameCursor) Next() (LiveResult, bool) {
-	if c.done {
-		return LiveResult{}, false
-	}
-	position := engine.LivePosition{ConnectionEpoch: c.frame.ConnectionEpoch, FrameSequence: c.frame.FrameSequence, ArrayIndex: uint32(c.index)}
-	if c.decoder == nil {
-		c.done = true
-		c.accounting.FrameIngressAmbiguity = 1
-		return ambiguity(position, c.analysis.frameAmbiguityReason), true
-	}
-	if c.analysis.ambiguityIndex == c.index {
-		c.done = true
-		c.accounting.ArrayElementsExamined++
-		c.accounting.IngressAmbiguity++
-		if c.analysis.arrayKnown {
-			c.accounting.FencedRemainder = c.analysis.declared - c.index - 1
-		}
-		return ambiguity(position, c.analysis.ambiguityReason), true
-	}
-	if c.decoder.More() {
-		var raw json.RawMessage
-		if err := c.decoder.Decode(&raw); err != nil {
-			c.done = true
-			c.accounting.ArrayElementsExamined++
-			c.accounting.IngressAmbiguity++
-			return ambiguity(position, LiveRejectFrameSyntax), true
-		}
-		if !c.analysis.budgetShed && classificationBudgetExceeded(c.options, c.classificationStarted) {
-			c.analysis.budgetShed, c.analysis.budgetShedFrom = true, c.index
-		}
-		elementOptions := c.options
-		if c.analysis.budgetShed && c.index >= c.analysis.budgetShedFrom {
-			elementOptions.ShedTradesQuotes = true
-		}
-		result, ambiguous := normalizeElement(c.frame, position, raw, c.status, elementOptions)
-		c.index++
-		c.accounting.ArrayElementsExamined++
-		switch result.Kind {
-		case LiveResultAggregate:
-			c.accounting.NormalizedAggregates++
-		case LiveResultTrade:
-			c.accounting.NormalizedTrades++
-		case LiveResultQuote:
-			c.accounting.NormalizedQuotes++
-		case LiveResultStatus:
-			c.accounting.NormalizedControls++
-			c.statusSeen++
-			result.Status.ObservedCount = c.analysis.statusCount
-			result.Status.FinalInFrame = c.statusSeen == c.analysis.statusCount
-			// Status acknowledgements form an asynchronous stream. Partial batches
-			// are valid; cumulative completion belongs to the transport accumulator.
-			if c.status == nil || c.analysis.statusCount > c.status.ExpectedCount {
-				if result.Status.Disposition == StatusAcknowledged {
-					result.Status.Disposition, result.Status.Reason = StatusAmbiguous, LiveRejectStatusCorrelation
-				}
-			}
-		case LiveResultRejected:
-			c.accounting.AttributableRejected++
-			if result.Rejection.Reason == LiveRejectOptionalShed {
-				if result.Rejection.Family == LiveFamilyTrade {
-					c.accounting.PressureShedTrades++
-				} else if result.Rejection.Family == LiveFamilyQuote {
-					c.accounting.PressureShedQuotes++
-				}
-			}
-		case LiveResultAmbiguous:
-			c.accounting.IngressAmbiguity++
-		}
-		if ambiguous {
-			c.done = true
-			if c.analysis.arrayKnown {
-				c.accounting.FencedRemainder = c.analysis.declared - c.index
-			}
-		}
-		return result, true
-	}
-	_, _ = c.decoder.Token()
-	c.done = true
-	if c.analysis.frameAmbiguity {
-		c.accounting.FrameIngressAmbiguity = 1
-		return ambiguity(position, c.analysis.frameAmbiguityReason), true
-	}
-	return LiveResult{}, false
-}
-
-func (c *liveFrameCursor) Accounting() LiveFrameAccounting { return c.accounting }
-
-type objectMembers struct {
-	values map[string]json.RawMessage
-	counts map[string]int
-}
-
-func decodeObjectMembers(raw json.RawMessage) (objectMembers, bool) {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	opening, err := decoder.Token()
-	if err != nil || opening != json.Delim('{') {
-		return objectMembers{}, false
-	}
-	members := objectMembers{values: make(map[string]json.RawMessage), counts: make(map[string]int)}
-	for decoder.More() {
-		nameToken, err := decoder.Token()
-		name, named := nameToken.(string)
-		if err != nil || !named {
-			return objectMembers{}, false
-		}
-		var value json.RawMessage
-		if err := decoder.Decode(&value); err != nil {
-			return objectMembers{}, false
-		}
-		members.counts[name]++
-		if members.counts[name] == 1 {
-			members.values[name] = append(json.RawMessage(nil), value...)
-		}
-	}
-	closing, err := decoder.Token()
-	if err != nil || closing != json.Delim('}') {
-		return objectMembers{}, false
-	}
-	var trailing json.RawMessage
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		return objectMembers{}, false
-	}
-	return members, true
-}
-
-func normalizeElement(frame LiveFrame, position engine.LivePosition, raw json.RawMessage, statusContext *StatusContext, options LiveNormalizationOptions) (LiveResult, bool) {
-	members, ok := decodeObjectMembers(raw)
-	if !ok || members.counts["ev"] != 1 {
+func normalizeElement(frame LiveFrame, position engine.LivePosition, members objectMembers, statusContext *StatusContext, options LiveNormalizationOptions) (LiveResult, bool) {
+	if members.counts["ev"] != 1 {
 		return ambiguity(position, LiveRejectEventFamily), true
 	}
 	event, ok := rawString(members.values["ev"])
@@ -786,18 +884,11 @@ func validStatusContext(context *StatusContext, epoch uint64) bool {
 	}
 }
 
-func rawString(raw json.RawMessage) (string, bool) {
-	if len(raw) == 0 {
-		return "", false
-	}
-	var value string
-	if err := json.Unmarshal(raw, &value); err != nil || !utf8.ValidString(value) {
-		return "", false
-	}
-	return value, true
+func rawString(raw wireValue) (string, bool) {
+	return raw.scalar, raw.kind == wireString && raw.classified && utf8.ValidString(raw.scalar)
 }
 
-func boundedSymbol(raw json.RawMessage) (string, bool) {
+func boundedSymbol(raw wireValue) (string, bool) {
 	symbol, ok := rawString(raw)
 	return symbol, ok && symbol != "" && len(symbol) <= 64
 }
@@ -810,21 +901,25 @@ func bestEffortSymbol(members objectMembers) string {
 	return symbol
 }
 
-func rawExactInt64(raw json.RawMessage) (int64, bool) {
-	if len(raw) == 0 {
-		return 0, false
-	}
-	return exactJSONInt64(json.Number(raw))
+func rawExactInt64(raw wireValue) (int64, bool) {
+	return wireExactInt64(raw)
 }
 
-func rawFiniteFloat(raw json.RawMessage) (float64, bool) {
-	if len(raw) == 0 {
+func wireExactInt64(raw wireValue) (int64, bool) {
+	if raw.kind != wireNumber || !raw.classified || raw.scalar == "" {
 		return 0, false
 	}
-	return finiteJSONFloat(json.Number(raw))
+	return exactJSONInt64(json.Number(raw.scalar))
 }
 
-func rawDecimalString(raw json.RawMessage, positive bool, maximum float64, maximumBytes int) (float64, bool) {
+func rawFiniteFloat(raw wireValue) (float64, bool) {
+	if raw.kind != wireNumber || !raw.classified || raw.scalar == "" {
+		return 0, false
+	}
+	return finiteJSONFloat(json.Number(raw.scalar))
+}
+
+func rawDecimalString(raw wireValue, positive bool, maximum float64, maximumBytes int) (float64, bool) {
 	text, ok := rawString(raw)
 	if !ok || len(text) == 0 || len(text) > maximumBytes || !plainDecimal(text) {
 		return 0, false
@@ -868,7 +963,7 @@ func decodeEventTime(members objectMembers, name string, frame LiveFrame) (time.
 
 func decodeOptionalInt(members objectMembers, name string, minimum, maximum int64) OptionalInt64 {
 	raw, present := members.values[name]
-	if !present || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+	if !present || raw.shape == MetadataNull {
 		return OptionalInt64{Present: present, Classified: !present}
 	}
 	value, ok := rawExactInt64(raw)
@@ -883,7 +978,7 @@ func decodeConditions(members objectMembers, name string, scalarAllowed bool) Bo
 	if !present {
 		return BoundedIntVector{Shape: MetadataAbsent, Classified: true}
 	}
-	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+	if raw.shape == MetadataNull {
 		return BoundedIntVector{Shape: MetadataNull, Classified: true}
 	}
 	if scalarAllowed {
@@ -893,64 +988,26 @@ func decodeConditions(members objectMembers, name string, scalarAllowed bool) Bo
 			return result
 		}
 	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	opening, err := decoder.Token()
-	if err != nil || opening != json.Delim('[') {
+	if raw.shape != MetadataArray {
 		return BoundedIntVector{Shape: MetadataUnclassified}
 	}
-	result := BoundedIntVector{Shape: MetadataArray}
-	for decoder.More() {
-		if result.Count == maximumMetadataValues {
-			return BoundedIntVector{Shape: MetadataUnclassified}
-		}
-		var number json.Number
-		if err := decoder.Decode(&number); err != nil {
-			return BoundedIntVector{Shape: MetadataUnclassified}
-		}
-		value, ok := exactJSONInt64(number)
-		if !ok {
-			return BoundedIntVector{Shape: MetadataUnclassified}
-		}
-		result.Values[result.Count] = value
-		result.Count++
-	}
-	closing, err := decoder.Token()
-	if err != nil || closing != json.Delim(']') {
-		return BoundedIntVector{Shape: MetadataUnclassified}
-	}
-	var trailing json.RawMessage
-	if err := decoder.Decode(&trailing); err != io.EOF {
+	if !raw.classified {
 		return BoundedIntVector{Shape: MetadataUnclassified}
 	}
 	// Classified means the provider shape is syntactically bounded and exact;
 	// only the engine-owned C9 fixture decides semantic feature eligibility.
-	result.Classified = true
+	result := BoundedIntVector{Shape: MetadataArray, Classified: true, Count: raw.count, Values: raw.vector}
 	return result
 }
 
-func boundedLifecycleEvidence(raw json.RawMessage) LifecycleEvidence {
-	evidence := LifecycleEvidence{Present: true, JSONType: MetadataUnclassified}
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 {
-		return evidence
+func boundedLifecycleEvidence(raw wireValue) LifecycleEvidence {
+	shape := raw.shape
+	if raw.kind == wireNull {
+		shape = MetadataScalar
 	}
-	switch trimmed[0] {
-	case '"':
-		evidence.JSONType = MetadataScalar
-		value, ok := rawString(raw)
-		if ok && len(value) <= maximumScalarBytes {
-			evidence.Classified, evidence.Scalar = true, value
-		}
-	case 'n', 't', 'f', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-		evidence.JSONType = MetadataScalar
-		if len(trimmed) <= maximumScalarBytes {
-			evidence.Classified, evidence.Scalar = true, string(trimmed)
-		}
-	case '[':
-		evidence.JSONType = MetadataArray
-	case '{':
-		evidence.JSONType = MetadataObject
+	evidence := LifecycleEvidence{Present: true, JSONType: shape}
+	if (raw.kind == wireString || raw.kind == wireNumber || raw.kind == wireBool || raw.kind == wireNull) && raw.classified && len(raw.scalar) <= maximumScalarBytes {
+		evidence.Classified, evidence.Scalar = true, raw.scalar
 	}
 	return evidence
 }

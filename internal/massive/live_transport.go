@@ -454,7 +454,7 @@ type LiveAttempt struct {
 	cleanupDone                   chan struct{}
 	pending                       *pendingCommand
 	currentFrame                  *queuedLiveFrame
-	currentCursor                 *liveFrameCursor
+	currentCursor                 *liveBatchCursor
 	currentFrameCompleted         bool
 	openCommandPending            bool
 	openCommandPendingAck         bool
@@ -837,6 +837,7 @@ func (a *LiveAttempt) awaitHandshakeStatus(parent context.Context, status Status
 			return append(deliveries, a.finishTerminal(frame)), errTransportFailed
 		}
 		cursor := newLiveFrameCursor(LiveFrame{Binding: a.binding, ConnectionEpoch: a.epoch, FrameSequence: frame.sequence, ReceivedAt: frame.receivedAt, Data: frame.data}, &status, LiveNormalizationOptions{})
+		frame.data = nil
 		found, failed := false, false
 		for {
 			result, ok := cursor.Next()
@@ -1186,8 +1187,9 @@ func (a *LiveAttempt) next(ctx context.Context) (AdapterDelivery, bool) {
 			a.queue.complete(frame, true)
 			continue
 		}
-		a.currentFrame = &frame
 		a.currentCursor = newLiveFrameCursor(LiveFrame{Binding: a.binding, ConnectionEpoch: a.epoch, FrameSequence: frame.sequence, ReceivedAt: frame.receivedAt, Data: frame.data}, nil, LiveNormalizationOptions{ShedTradesQuotes: a.shedTQ.Load(), ClassificationClock: a.classificationClock, FrameTQBudget: FrameLocalTQBudget})
+		frame.data = nil
+		a.currentFrame = &frame
 		a.currentFrameCompleted = false
 	}
 }

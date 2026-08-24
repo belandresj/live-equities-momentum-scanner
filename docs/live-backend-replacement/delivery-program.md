@@ -1017,6 +1017,130 @@ committed.
   the correction. D1 is the next permitted slice and remains inactive until its
   normal pre-assignment audit.
 
+#### `LBR-D1` pre-assignment audit and activation — 2026-08-24
+
+- **Authority and dependency audit:** `AGENTS.md`, the replacement parent and
+  program, the D1 ticket, the complete ingress contract, and its routed
+  canonical, evaluation/publication, T/Q, provider-normalization,
+  transport/epoch, heartbeat, data-confirmed-subscription, and retained
+  `DTE-*` dependencies agree on one boundary. D1 may replace only the
+  double-pass Massive frame decoder with one bounded immutable decoded batch
+  and a decode-free temporary bridge. The raw-frame queue, engine FIFO,
+  command/write linearization, heartbeat/retry execution, fence production,
+  lifecycle, and canonical/evaluation/TQ owners remain unchanged until their
+  allocated later slices.
+- **Production-constructor and fallback audit:** the ordinary scanner has one
+  production `massive.NewLiveAdapter` constructor in `cmd/scanner`; its queue
+  configuration reaches the adapter's sole final validator and caps a source
+  frame at 8 MiB. The current `liveFrameCursor` is the only production frame
+  classifier used by handshake and ordinary dequeue. It performs the rejected
+  pre-analysis/full second decode and retains per-element `json.RawMessage`
+  copies, so D1 replaces that implementation in place. No alternate decoder,
+  private launcher default, unsupported tool, or old-code fallback constructs
+  a second production normalization path. The existing raw queue and
+  per-result adapter delivery remain explicitly temporary D2 dependencies, not
+  D1 fallbacks.
+- **Boundary and false-success audit:** correction, event-time, duplicate,
+  cadence, and watermark horizons remain owned by accepted A/B/C state; D1
+  preserves their normalized inputs exactly. The decoder owns the exact
+  500-ms T/Q classification-budget equality, 8-MiB source-frame bound, 65,536
+  element bound, and 32-MiB retained-batch charge. Empty input, malformed or
+  truncated JSON, missing/malformed/duplicate discriminator, duplicate
+  recognized members, localizable malformed A/T/Q, unsupported families,
+  unknown additive members, pressure shed, and oversize/charge failure each
+  receive one closed ordered disposition. The dangerous false success is an
+  ambiguous or unadmitted aggregate/control suffix followed by a current
+  claim; earliest ambiguity therefore preserves only its complete causal
+  prefix and forces the existing epoch-integrity terminal, while pressure shed
+  continues classifying later aggregate/control elements.
+- **Accepted-handoff and long-stall audit:** the accepted C handoff requires
+  command result installation before any frame strictly after `B`, independent
+  T/Q trust closure, aggregate readiness independence, and the one-second
+  combined cadence. D1 changes none of those locks, boundaries, consumers, or
+  state transitions; its temporary bridge emits the same ordered normalized
+  facts and terminal ambiguity. A duration beyond every aggregate/TQ retention
+  horizon with stalled committed time remains owned by accepted A/B/C behavior,
+  and the preserved watermark diagnostic observes the same engine completion
+  sequence rather than decoder-private timing or state.
+- **Proof and review decision:** `P-LBR-D1-DECODE` directly distinguishes a
+  second JSON pass/raw alias, mutable batch backing, lost causal prefix,
+  silently accepted ambiguous suffix, incorrect duplicate localization,
+  pressure shedding that hides later aggregate/control, element/charge
+  overflow, and semantic drift across the approved fixture corpus. These
+  boundaries are construction- and primary-proof-resolved, so no additional
+  pre-code narrow review is required. The user-required independent read-only
+  D1 implementation review remains mandatory before acceptance and commit.
+- **Activation:** `LBR-D1` is the sole active write-capable slice. D2,
+  credentials/provider requests, the private scanner, and every market,
+  readiness, T/Q, queue, state-owner, and handoff change remain inactive.
+
+#### `LBR-D1` acceptance — 2026-08-24
+
+- **Behavior now available:** Massive classifies each admitted source frame in
+  one `json.Decoder` token pass into one private, ordered `DecodedBatch`. The
+  batch owns its normalized results and envelope/accounting metadata without
+  retaining the source bytes. It enforces the existing 8-MiB frame ceiling,
+  the 65,536-result ceiling, and a 32-MiB retained charge that includes result
+  slice capacity and dynamic string storage. Recognized fields retain their
+  JSON scalar kinds; unknown additive values are structurally skipped. The
+  earliest ambiguous array element preserves its causal prefix, drains only a
+  structurally valid fenced suffix, and cannot be duplicated by trailing frame
+  corruption. Exact 500-ms pressure sheds only T/Q and continues classifying
+  later aggregate/control input. Handshake and ordinary delivery consume this
+  batch through the existing one-result bridge in unchanged order.
+- **Ownership and deferral:** D1 changes no canonical, evaluation, readiness,
+  T/Q, event-time, watermark, lifecycle, heartbeat, recovery, queue, engine
+  FIFO, command-lock, or fence ownership. The raw-frame queue, temporary
+  result-at-a-time bridge, and engine FIFO are intentionally retained for D2;
+  D1 neither introduces an alternate decoder nor begins the one-handoff
+  cutover. The accepted A/B/C/A3 behavior and the watermark-stall diagnostic
+  remain on their prior state and completion sequence.
+- **Primary proof and dangerous counterexamples:** `P-LBR-D1-DECODE` covers a
+  mixed A/T/Q/status/unsupported oracle, exact positions and envelope, source
+  mutation after decode, duplicate recognized members, locally rejected
+  malformed events, strict scalar-kind violations, valid and corrupt trailing
+  input, composed array-plus-frame ambiguity, exact-budget T/Q shedding with a
+  later retained aggregate/control suffix, frame/batch bounds, and production
+  source exclusion of a second decoder, `json.RawMessage`, `json.Unmarshal`,
+  and the old analysis pass. Invalid retained source aliases and a second
+  production decode path are prevented by construction. Runtime validation
+  closes malformed provider syntax, type, element-count, and charge evidence.
+- **Verification on accepted bytes:** `P-LBR-D1-DECODE` passed in 0.581s;
+  Massive short passed in 1.649s; the ten direct operations regressions,
+  including all A3 worker counts, passed in 27.841s; the four direct operations
+  race regressions passed in 3.666s; focused vet and `git diff --check` passed;
+  and ordinary repository verification
+  `go test -count=1 -short -timeout 2m ./...` passed, with the longest package,
+  operations, completing in 85.145s. The final isolated race rerun of the sole
+  contended handshake counterexample passed in 1.533s. The isolated 256-
+  aggregate decoder benchmark on Apple M1 (`20x`) measured 3,910,931 ns/op,
+  7.53 MB/s, 2,481,890 B/op, and 46,870 allocs/op; it excludes engine work and
+  is characterization, not an acceptance threshold.
+- **Corrections and independent review:** the required read-only
+  `gpt-5.6-sol` medium review first found two P2 defects: recognized scalar
+  kinds were being collapsed, and trailing JSON could be silently accepted or
+  charged as array work. After correction, focused re-review found one adjacent
+  P2: an array ambiguity followed by trailing corruption emitted two ambiguity
+  results. The corrected implementation preserves the earliest causal array
+  ambiguity and records trailing corruption only in frame accounting. During
+  final verification, two ordinary-suite attempts with an eight-result initial
+  batch allocation timed out in accepted A3 fence reconciliation at about
+  121s, although A3 passed alone in 25.069s. Reducing the private initial
+  capacity to one removed seven unused union slots from common one-result
+  frames; the next ordinary run passed. A concurrently loaded full Massive
+  race run then hit one existing unawaited-handshake timing assertion; its
+  isolated race rerun passed. Final read-only re-review checked the one-slot
+  growth/charge/reserve mechanics and the complete diff and reported no
+  P1/P2/P3 findings. Reviewers made no writes and performed no prohibited work.
+- **Limitations and next action:** D1 proves deterministic offline decoder
+  semantics and bounded ownership, not provider conformance, market-hours
+  stability, end-to-end resource acceptance, or executable trading
+  expectancy. No credentials or provider requests were used and the private
+  scanner was not run. D2 is the next permitted slice, but remains inactive
+  until its own fresh pre-assignment audit; its only permitted outcome is the
+  parent-authorized decoded-batch FIFO and causal-fence handoff with preserved
+  connection semantics.
+
 ### Owner-approved E2 duration and manifest revision — 2026-08-23
 
 The owner revised E2 to exactly one 10-minute deterministic acceptance run. The
@@ -1046,7 +1170,7 @@ but copy no status.
 | `LBR-B3` removal slice | `accepted` | Commit `f697288`; removal proof, resource evidence, focused corrections, and final focused re-review are clean. |
 | Capability B — evaluation and publication | `finally_accepted` | B1/B2/B3 and the required final read-only review remain accepted and unaffected by A3. |
 | Capability C — selected-row T/Q | `finally_accepted` | C1/C2 remain accepted and unaffected by the A3 hydration-topology revision. |
-| Capability D — live ingress | `not_started_next` | A3, the state/TQ input interface, and the diagnostic-preservation correction are accepted. D1 is next but inactive pending its fresh pre-assignment audit. |
+| Capability D — live ingress | `lbr_d1_accepted_d2_next` | D1's single-pass bounded batch, primary proof, final-byte gates, and read-only review are accepted. D2 is next but inactive pending its fresh pre-assignment audit. |
 | Capability E — integration/removal/acceptance | `not_started` | Requires Capabilities A-D accepted |
 | E2 deterministic duration/manifest revision | `owner_approved` | Exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |
 | Deterministic replacement | `not_started` | Requires `LBR-E1` and `LBR-E2` |

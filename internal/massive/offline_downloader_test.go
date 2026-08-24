@@ -241,7 +241,7 @@ func testOfflineDownloader(t *testing.T, server *httptest.Server) *OfflineDownlo
 	return downloader
 }
 
-func component4TestBinding(t *testing.T, symbols []string) reference.Binding {
+func component4TestBinding(t testing.TB, symbols []string) reference.Binding {
 	t.Helper()
 	schedule, err := session.Load()
 	if err != nil {
