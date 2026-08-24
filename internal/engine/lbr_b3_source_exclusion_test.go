@@ -25,7 +25,7 @@ var b3RemovedNames = []string{
 var b3ClosedStructFields = map[string]map[string]struct{}{
 	"symbolAggregateState": b3NameSet("prefix", "tail", "presence", "sealedLive", "provenAbsent", "historicalConflict", "latest", "olderLatest", "committedLatest", "selectionAt", "priorSelectionAt", "priorSelectionMark", "recomputations", "canonicalRevision", "affected", "tailBoundHits", "lastConflict", "invalidStarts", "priceRange", "mvpMeasurements", "qualification", "tailCoverage", "tailCoverageBuilt", "tailCoverageUsable", "evaluationTailPresence"),
 	"Config":               b3NameSet("Mode", "Clock", "Capacity", "RequiredReserve", "EvaluationDelay", "CheckpointSubmitter", "FloatLookup", "RecoveryBackoffInitial", "RecoveryBackoffMaximum"),
-	"Engine":               b3NameSet("mu", "mode", "clock", "capacity", "reserve", "delay", "queue", "internalQueued", "changed", "done", "sealed", "exhausted", "lastReserved", "nextSequence", "lastSystem", "lastClock", "hasClock", "state", "counters", "transitions", "publications", "publication", "sentinels", "lastPubID", "replayFastForwardThrough", "buildCandidate", "beforeConsume", "terminal", "publicationFault", "evaluationFault", "evaluationTimingClock", "checkpointSubmitter", "tqLimits", "tqPressurePolicy", "recoveryPolicy", "floatLookup"),
+	"Engine":               b3NameSet("mu", "mode", "clock", "capacity", "reserve", "delay", "queue", "internalQueued", "changed", "done", "sealed", "exhausted", "lastReserved", "nextSequence", "lastSystem", "lastClock", "hasClock", "state", "counters", "transitions", "publications", "publication", "activeAggregateEvaluation", "sentinels", "lastPubID", "replayFastForwardThrough", "buildCandidate", "beforeConsume", "beforeActiveAggregateEvaluationPhase", "terminal", "publicationFault", "evaluationFault", "evaluationTimingClock", "checkpointSubmitter", "tqLimits", "tqPressurePolicy", "recoveryPolicy", "floatLookup"),
 }
 
 var b3ClosedFieldTypes = map[string]map[string]string{
@@ -40,13 +40,14 @@ var b3ClosedFieldTypes = map[string]map[string]string{
 		"CheckpointSubmitter": "checkpoint.Submitter", "FloatLookup": "reference.FloatLookup", "RecoveryBackoffInitial": "time.Duration", "RecoveryBackoffMaximum": "time.Duration",
 	},
 	"Engine": {
-		"mode": "RunMode", "state": "*engineState", "publication": "atomic.Pointer[privatePublication]",
+		"mode": "RunMode", "state": "*engineState", "publication": "atomic.Pointer[privatePublication]", "activeAggregateEvaluation": "atomic.Pointer[ActiveAggregateEvaluationView]",
 		"buildCandidate": "func(frozenBinding) (*installedBinding, error)", "evaluationFault": "bool", "checkpointSubmitter": "checkpoint.Submitter",
 	},
 }
 
 var b3EvaluationFunctions = b3NameSet(
 	"runAggregateFeatureContributorLocked", "commitTrustCorrectionCycleLocked", "selectedTrustClosureCandidateLocked",
+	"recordTrustCorrectionTimingLocked",
 	"runAggregateEvaluatorLocked", "latchEvaluatorIntegrityLocked", "applyStagedAggregateCandidateLocked",
 	"stageAggregateEvaluationLocked", "stageAggregateEvaluationAtLocked", "enrichSelectedRowsLocked", "enrichSelectedRowLocked",
 	"validateAggregateEvaluation", "cloneAggregateEvaluation", "aggregateEvaluationEqual", "validTQPublication", "replayEvaluationView",

@@ -134,6 +134,7 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 			}
 			target = *e.state.committedT
 		}
+		e.startActiveAggregateEvaluationLocked(node, target, AggregateEvaluationPhaseMaintenance)
 		maintenanceStarted := e.evaluationTimingStart()
 		maintainSymbol := func(index int) {
 			symbol := &e.state.binding.symbols[index]
@@ -236,6 +237,7 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 				if !node.aggregate.WindowStart.Before(*e.state.committedT) {
 					return nil
 				}
+				e.startActiveAggregateEvaluationSourceLocked(node, *e.state.committedT, AggregateEvaluationPhaseStage, AggregateEvaluationTrustCorrection)
 				started := e.evaluationTimingStart()
 				staged := e.stageAggregateEvaluationAtLocked(*e.state.committedT, node.admissionTime)
 				elapsed := e.evaluationTimingElapsed(started)
@@ -245,11 +247,18 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 				return e.commitTrustCorrectionCycleLocked(node, staged, elapsed)
 			}
 			if qualification.result != qualificationBefore {
+				e.startActiveAggregateEvaluationSourceLocked(node, *e.state.committedT, AggregateEvaluationPhaseStage, AggregateEvaluationTrustCorrection)
 				started := e.evaluationTimingStart()
 				staged := e.stageAggregateEvaluationAtLocked(*e.state.committedT, node.admissionTime)
 				return e.commitTrustCorrectionCycleLocked(node, staged, e.evaluationTimingElapsed(started))
 			}
-			return e.selectedTrustClosureCandidateLocked(index, *e.state.committedT)
+			started := e.evaluationTimingStart()
+			staged := e.selectedTrustClosureCandidateLocked(node, index, *e.state.committedT)
+			if staged == nil {
+				return nil
+			}
+			e.recordTrustCorrectionTimingLocked(node, *staged, e.evaluationTimingElapsed(started))
+			return staged
 		}
 		if e.deferReplayAggregateProjectionLocked(node) {
 			return nil
@@ -276,11 +285,15 @@ func (e *Engine) commitTrustCorrectionCycleLocked(node *queueNode, staged aggreg
 		target:          staged.at,
 		trustRevision:   e.state.trustCorrectionRevision,
 	}
+	e.recordTrustCorrectionTimingLocked(node, staged, stage)
+	return &staged
+}
+
+func (e *Engine) recordTrustCorrectionTimingLocked(node *queueNode, staged aggregateEvaluationResult, stage time.Duration) {
 	view := &e.state.evaluationTiming
 	view.EngineSequence, view.Source, view.Target = node.engineSequence, AggregateEvaluationTrustCorrection, staged.at
 	view.Stage, view.Apply, view.Publication = stage, 0, 0
 	view.Starts.TrustCorrection++
-	return &staged
 }
 
 func (e *Engine) duplicateTrustCorrectionCycleLocked(node *queueNode, target time.Time) bool {
@@ -312,7 +325,7 @@ func maintainCurrentFieldStatuses(binding *installedBinding, symbol *coreSymbol,
 	measurements.result = mvpMeasurementFieldStatuses(binding, state, at, invalid)
 }
 
-func (e *Engine) selectedTrustClosureCandidateLocked(symbolIndex int, at time.Time) *aggregateEvaluationResult {
+func (e *Engine) selectedTrustClosureCandidateLocked(node *queueNode, symbolIndex int, at time.Time) *aggregateEvaluationResult {
 	current := e.state.aggregateEvaluator.current
 	if e.state.binding == nil || !current.at.Equal(at) || current.mode == rankingUnavailable || current.mode == rankingStale || current.mode == rankingSuppressed {
 		return nil
@@ -327,6 +340,7 @@ func (e *Engine) selectedTrustClosureCandidateLocked(symbolIndex int, at time.Ti
 	if rowIndex < 0 {
 		return nil
 	}
+	e.startActiveAggregateEvaluationSourceLocked(node, at, AggregateEvaluationPhaseStage, AggregateEvaluationTrustCorrection)
 	state := e.state.binding.symbols[symbolIndex].aggregates
 	candidate := cloneAggregateEvaluation(current)
 	candidate.updates = make([]aggregateSymbolEvaluationUpdate, len(e.state.binding.symbols))
@@ -480,6 +494,7 @@ func (e *Engine) aggregateEvaluationTargetLocked(node *queueNode) (time.Time, bo
 func (e *Engine) recordAggregateEvaluationStartLocked(node *queueNode, target time.Time) {
 	view := &e.state.evaluationTiming
 	view.Target = target
+	e.startOrAdvanceActiveAggregateEvaluationLocked(node, target, AggregateEvaluationPhaseStage)
 	switch node.kind {
 	case inputLiveCoverageFence:
 		view.Source = AggregateEvaluationLiveCoverageFence

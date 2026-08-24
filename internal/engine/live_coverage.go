@@ -53,6 +53,7 @@ type LiveCoverageFenceDisposition struct {
 	Code                   DispositionCode
 	Reason                 DispositionReason
 	SuppressionDisposition SuppressionDisposition
+	EvaluationTiming       EvaluationTimingView
 }
 
 type LiveCoverageFenceInput struct {

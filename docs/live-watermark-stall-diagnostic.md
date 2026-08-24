@@ -1,13 +1,17 @@
 # Live watermark-stall diagnostic
 
-**Status:** Accepted focused diagnostic correction on 2026-08-20 after owner-run
-evidence invalidated the original one-second trigger.
+**Status:** Accepted baseline correction, semantically forward-ported into the
+live-backend-replacement architecture after accepted `LBR-A3` and before
+inactive `LBR-D1` on 2026-08-24. Offline replacement proofs and final read-only
+review pass. No replacement-branch provider run has exercised the corrected
+diagnostic.
 
-**Parent authority:** The current [Live feature-set MVP program](live-feature-mvp-program.md)
-and the accepted scanner-stability corrections. This document owns only the
-bounded causal evidence and private persistence described here; it does not
-create a new component, readiness owner, watermark, evaluator, or publication
-path.
+**Parent authority:** The current
+[live backend replacement program](live-backend-replacement/delivery-program.md),
+the [replacement architecture](live-backend-replacement.md), and compatible
+accepted scanner-stability evidence. This document owns only the bounded causal
+evidence and private persistence described here; it does not create a new
+component, readiness owner, watermark, evaluator, or publication path.
 
 ## 1. Outcome and fixed boundary
 
@@ -69,6 +73,19 @@ or live/provider validation.
   and after, causal target and lag before/after, publication and engine
   progress, queue frames/bytes/oldest age, processing-delay views, T/Q
   pressure mode/cause, and the cached heap/goroutine/GC scalars.
+- The runtime retains one fixed-cardinality active-cycle view while an ordinary
+  cycle is in progress. It distinguishes live-coverage capture/enqueue,
+  ordered coverage completion, timer admission/completion, and combines that
+  phase with the engine's fixed-cardinality active aggregate-evaluation phase
+  (`maintenance`, `stage`, `apply`, or `publication`). When the readiness path
+  retains a stale crossing it also retains the then-observed active view with
+  that view's own observation timestamp. The status sample and active
+  observation are ordered but intentionally do not pretend to be one atomic
+  engine snapshot. The view retains no event, symbol, goroutine stack, or
+  unbounded history.
+- A completed ordinary live-coverage cycle correlates evaluation timing with
+  the live-coverage disposition's engine sequence. Its following
+  maintenance-only timer sequence is not the evaluation owner.
 - Every runtime status derivation records its fixed-cardinality result in one
   lock-free diagnostic latch. This includes the exact sealed capture used by
   `/readyz`, so a crossing observed by the launcher cannot be erased by the
@@ -151,6 +168,110 @@ temporary-file publication, and nonfatal terminal output; reject ingress
 incident schema, provider-facing evidence, and any second lifecycle owner.
 
 ## 7. Acceptance record
+
+### Replacement forward-port after `LBR-A3`
+
+The corrected baseline behavior was preserved in commit
+`e88eef766940bcc953fec2e4b1bc8f213c3ef7a0` on
+`codex/live-backend-stability-baseline`, whose parent is replacement baseline
+`0d043c16cea43e3739abe11c766e3496b3ea0fcd`. The replacement branch uses that
+commit as semantic provenance rather than merging or cherry-picking it.
+
+The forward-port retains one fixed-cardinality active observation and maps its
+phases onto the accepted replacement evaluator: owner-local symbol/qualification
+maintenance, compact selection plus selected-row enrichment staging, candidate
+application, and the sole immutable publication. Completed live-coverage timing
+is sealed with the disposition's actual engine sequence before the following
+maintenance-only timer can overwrite singleton timing. The runtime separately
+records live-coverage enqueue and ordered-completion durations and retains the
+exact ready-to-`watermark_stale` crossing through the existing shared latch.
+
+This is diagnostic-only. It adds no canonical aggregate copy, qualification
+clone, full-population legacy evaluator, second publication owner, ingress
+handoff, readiness input, or D1 decoder/interface change. The B3 source-
+exclusion proof permits only the diagnostic atomic pointer and package-private
+phase-pause seam while continuing to reject superseded evaluator/state owners.
+Final review found that live aggregate trust-correction cycles could still run
+the replacement full-population selection/enrichment path without an active
+view while ordered live-coverage completion waited. The correction now starts
+an explicit `trust_correction` active stage before that production scan and
+tracks its apply/publication phases. Focused re-review then found the adjacent
+same-`T` selected-row trust-closure candidate had the same omission; it now
+uses the same source/phase path. Deterministic production regressions hold and
+observe stage/apply/publication for both the full selection repair and selected-
+row trust closure. A second focused re-review found that the first selected-row
+timing seal also advanced B's semantic trust-correction coalescing identity.
+Timing capture is now separate from that revision/latch, and the production
+regression proves both remain unchanged. Replacement short, repository, race, vet,
+and diff proofs pass, and focused re-review reports `CLEAN/PASS` with no
+remaining finding.
+
+The 2026-08-24 incident below remains historical evidence from baseline commit
+`0d043c16cea4`, not evidence produced by the replacement architecture. Its
+ignored runtime JSON remains outside Git. No provider request or private
+scanner run exercised the forward-ported replacement binary, so an actual
+replacement ready-to-`watermark_stale` attribution remains unconfirmed.
+
+### 2026-08-24 live-evidence correction
+
+An owner-authorized ordinary scanner run on revision `0d043c16cea4`, explicit
+eight-worker hydration, completed all 5,566 work items and reached ready. In a
+four-minute post-hydration observation it crossed
+`ready -> watermark_stale -> ready`: the causal-target lag reached three
+seconds, the provider connection stayed on epoch 1, recovery attempts remained
+zero, accounting remained valid, and the scanner recovered without
+intervention after approximately four seconds. The protected incident is
+`var/diagnostics/watermark-stale-20260824T172145.288951000Z.json`.
+
+That evidence invalidates two lower-level diagnostic claims while preserving
+the transition latch and bounded persistence claims. First, the final retained
+cycle completed at `17:21:42.734195Z`, while the stale observation occurred at
+`17:21:45.288951Z`; the in-progress cycle overlapping the crossing was absent
+because the ring records only completions. Second, all 87 retained ordinary
+cycles reported `evaluation_observed=false`: correlation compared the
+live-coverage-owned evaluation with the later maintenance timer or historical
+ingress-fence sequence instead of the live-coverage disposition sequence.
+Consequently the accepted file proved a delayed ordinary cycle but could not
+separate ordered coverage wait from evaluator stage/apply/publication.
+
+The narrow correction retains the active runtime and engine evaluation views
+as one coherent bounded observation with its own timestamp after the status
+sample; it does not claim that status and phase are one atomic snapshot. It
+maps that observation into the existing one-shot protected document and
+correlates completed live-coverage timing with its actual disposition. It does
+not change the cycle, queue, evaluator, watermark, readiness tolerance,
+publication, provider, API, or UI. Primary correction proofs deterministically
+hold each active phase, require timestamped phase attribution when the
+readiness path retains the incident, require live-coverage
+maintenance/stage/apply/publication timing to be observed, and preserve the
+existing exclusion, fixed-capacity, concurrency, and nonblocking proofs.
+
+The first independent correction review found four distinguishing
+counterexamples. The readiness sample timestamp could predate a later phase
+load; full-universe symbol maintenance occurred before the active stage;
+singleton evaluation timing could be overwritten between live-coverage
+completion and the following timer; and the retained aggregate-ingress fence
+timing fields had been inadvertently zeroed. The correction now timestamps the
+active observation independently, marks maintenance before its production
+scan, seals evaluation timing into the live-coverage disposition at engine
+completion, and preserves the prior ingress-fence timing fields alongside the
+new live-coverage enqueue/completion durations. Deterministic regressions cover
+preemption between snapshot sampling and readiness observation, an actually
+held production maintenance scan, overwritten later singleton timing, and the
+retained fields.
+
+Focused short tests passed for `internal/engine`, `internal/operations`, and
+`cmd/scanner`, including the active maintenance/stage/apply/publication,
+ordered-wait, preemption, sealed-correlation, persistence, exclusion, and
+bounded-ring regressions. The complete affected packages passed the short tier;
+the repository-wide `go test -count=1 -short -timeout 2m ./...` tier passed;
+the affected race tier passed with a five-minute timeout; focused vet and
+`git diff --check` passed. The first independent review's three P1 and one P2
+findings were corrected; focused re-review then reported `CLEAN/PASS`. These
+proofs establish diagnostic attribution and noninterference offline. They do
+not establish that the live latency source has been identified until another
+separately authorized incident or clean observation exercises the corrected
+binary.
 
 The original implementation and focused deterministic verification completed
 on 2026-08-20, but its acceptance claim was invalidated by the first owner-run

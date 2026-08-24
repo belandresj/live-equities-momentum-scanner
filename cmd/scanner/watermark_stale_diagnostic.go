@@ -68,6 +68,18 @@ func (r *watermarkStaleDiagnosticRecorder) observeTransition(transition operatio
 		return nil
 	}
 	r.previous, r.hasPrior = current, true
+	if transition.ActiveObserved {
+		baseEvidence := evidence
+		evidence = func() operations.WatermarkStallEvidence {
+			var result operations.WatermarkStallEvidence
+			if baseEvidence != nil {
+				result = baseEvidence()
+			}
+			active := transition.Active
+			result.Active = &active
+			return result
+		}
+	}
 	return r.persistTransition(previous, current, evidence, directory, output, persist)
 }
 
@@ -149,11 +161,31 @@ func watermarkStaleTriggerMatches(previous, current watermarkStaleStatusSample) 
 }
 
 type watermarkStaleDiagnosticDocument struct {
-	Schema       int                             `json:"schema"`
-	Trigger      watermarkStaleDiagnosticTrigger `json:"trigger"`
-	RingCapacity int                             `json:"ring_capacity"`
-	RecordCount  int                             `json:"record_count"`
-	Cycles       []watermarkStaleDiagnosticCycle `json:"cycles"`
+	Schema       int                                  `json:"schema"`
+	Trigger      watermarkStaleDiagnosticTrigger      `json:"trigger"`
+	RingCapacity int                                  `json:"ring_capacity"`
+	RecordCount  int                                  `json:"record_count"`
+	Cycles       []watermarkStaleDiagnosticCycle      `json:"cycles"`
+	ActiveCycle  *watermarkStaleDiagnosticActiveCycle `json:"active_cycle,omitempty"`
+}
+
+type watermarkStaleDiagnosticActiveCycle struct {
+	Sequence                 uint64     `json:"sequence"`
+	StartedAt                time.Time  `json:"started_at"`
+	PhaseStartedAt           time.Time  `json:"phase_started_at"`
+	ObservedAt               time.Time  `json:"observed_at"`
+	ElapsedNS                int64      `json:"elapsed_ns"`
+	PhaseElapsedNS           int64      `json:"phase_elapsed_ns"`
+	Phase                    string     `json:"phase"`
+	EvaluationActive         bool       `json:"evaluation_active"`
+	EvaluationEngineSequence uint64     `json:"evaluation_engine_sequence"`
+	EvaluationSource         string     `json:"evaluation_source"`
+	EvaluationTarget         *time.Time `json:"evaluation_target,omitempty"`
+	EvaluationPhase          string     `json:"evaluation_phase"`
+	EvaluationStartedAt      *time.Time `json:"evaluation_started_at,omitempty"`
+	EvaluationPhaseStartedAt *time.Time `json:"evaluation_phase_started_at,omitempty"`
+	EvaluationElapsedNS      int64      `json:"evaluation_elapsed_ns"`
+	EvaluationPhaseElapsedNS int64      `json:"evaluation_phase_elapsed_ns"`
 }
 
 type watermarkStaleDiagnosticTrigger struct {
@@ -174,6 +206,8 @@ type watermarkStaleDiagnosticCycle struct {
 	CycleDurationNS             int64      `json:"cycle_duration_ns"`
 	DiagnosticSampledAt         time.Time  `json:"diagnostic_sampled_at"`
 	CoverageFenceDisposition    string     `json:"coverage_fence_disposition"`
+	LiveCoverageEnqueueNS       int64      `json:"live_coverage_enqueue_ns"`
+	LiveCoverageCompletionNS    int64      `json:"live_coverage_completion_ns"`
 	CoverageFenceFinalizationNS int64      `json:"coverage_fence_finalization_ns"`
 	CoverageFenceTotalNS        int64      `json:"coverage_fence_total_ns"`
 	CoverageFenceValid          bool       `json:"coverage_fence_valid"`
@@ -232,7 +266,7 @@ func newWatermarkStaleDiagnosticDocument(previous, current watermarkStaleStatusS
 	for index, record := range records {
 		cycles[index] = watermarkStaleDiagnosticCycleFromEvidence(record)
 	}
-	return watermarkStaleDiagnosticDocument{
+	document := watermarkStaleDiagnosticDocument{
 		Schema: watermarkStaleDiagnosticSchema, Trigger: watermarkStaleDiagnosticTrigger{
 			PreviousBackendReady: previous.BackendReady, CurrentBackendReady: current.BackendReady,
 			CurrentReason: string(current.Reason), RunMode: string(current.RunMode), Lifecycle: current.Lifecycle,
@@ -240,6 +274,24 @@ func newWatermarkStaleDiagnosticDocument(previous, current watermarkStaleStatusS
 			CurrentWatermarkLagNS: int64(nonnegativeDiagnosticDuration(current.WatermarkLag)), CurrentCausalTarget: current.CausalTarget,
 		}, RingCapacity: operations.WatermarkStallRingCapacity, RecordCount: len(cycles), Cycles: cycles,
 	}
+	if evidence.Active != nil {
+		document.ActiveCycle = watermarkStaleDiagnosticActiveCycleFromEvidence(*evidence.Active)
+	}
+	return document
+}
+
+func watermarkStaleDiagnosticActiveCycleFromEvidence(value operations.WatermarkStallActiveCycleEvidence) *watermarkStaleDiagnosticActiveCycle {
+	result := &watermarkStaleDiagnosticActiveCycle{
+		Sequence: value.Sequence, StartedAt: value.StartedAt.UTC(), PhaseStartedAt: value.PhaseStartedAt.UTC(), ObservedAt: value.ObservedAt.UTC(),
+		ElapsedNS: int64(nonnegativeDiagnosticDuration(value.Elapsed)), PhaseElapsedNS: int64(nonnegativeDiagnosticDuration(value.PhaseElapsed)), Phase: string(value.Phase),
+		EvaluationActive: value.EvaluationActive, EvaluationElapsedNS: int64(nonnegativeDiagnosticDuration(value.EvaluationElapsed)), EvaluationPhaseElapsedNS: int64(nonnegativeDiagnosticDuration(value.EvaluationPhaseElapsed)),
+	}
+	if value.EvaluationActive {
+		target, started, phaseStarted := value.Evaluation.Target.UTC(), value.Evaluation.StartedAt.UTC(), value.Evaluation.PhaseStartedAt.UTC()
+		result.EvaluationEngineSequence, result.EvaluationSource, result.EvaluationPhase = value.Evaluation.EngineSequence, string(value.Evaluation.Source), string(value.Evaluation.Phase)
+		result.EvaluationTarget, result.EvaluationStartedAt, result.EvaluationPhaseStartedAt = &target, &started, &phaseStarted
+	}
+	return result
 }
 
 func watermarkStaleDiagnosticCycleFromEvidence(record operations.WatermarkStallCycleEvidence) watermarkStaleDiagnosticCycle {
@@ -248,6 +300,8 @@ func watermarkStaleDiagnosticCycleFromEvidence(record operations.WatermarkStallC
 		CycleStartedAt: record.CycleStartedAt.UTC(), CycleCompletedAt: record.CycleCompletedAt.UTC(),
 		CycleDurationNS: int64(nonnegativeDiagnosticDuration(record.CycleDuration)), DiagnosticSampledAt: record.DiagnosticSampledAt.UTC(),
 		CoverageFenceDisposition:    nonemptyDiagnosticCode(string(record.CoverageFenceDisposition), "not_observed"),
+		LiveCoverageEnqueueNS:       int64(nonnegativeDiagnosticDuration(record.LiveCoverageEnqueue)),
+		LiveCoverageCompletionNS:    int64(nonnegativeDiagnosticDuration(record.LiveCoverageCompletion)),
 		CoverageFenceFinalizationNS: int64(nonnegativeDiagnosticDuration(record.CoverageFenceFinalization)), CoverageFenceTotalNS: int64(nonnegativeDiagnosticDuration(record.CoverageFenceTotal)), CoverageFenceValid: record.CoverageFenceValid,
 		TimerPolicy: string(record.TimerPolicy), EvaluationObserved: record.EvaluationObserved, EvaluationSource: string(record.EvaluationSource), EvaluationTarget: evaluationTarget,
 		EvaluationStageNS: int64(nonnegativeDiagnosticDuration(record.EvaluationStage)), EvaluationApplyNS: int64(nonnegativeDiagnosticDuration(record.EvaluationApply)), EvaluationPublicationNS: int64(nonnegativeDiagnosticDuration(record.EvaluationPublication)),

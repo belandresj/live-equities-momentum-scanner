@@ -328,6 +328,7 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 		// gate. It cannot apply candidate-T state and is not itself corruption.
 		return true
 	}
+	e.advanceActiveAggregateEvaluationLocked(node.engineSequence, AggregateEvaluationPhaseApply)
 	applyStarted := e.evaluationTimingStart()
 	e.applyStagedAggregateCandidateLocked(staged, node.admissionTime)
 	e.state.evaluationAppliedSequence = node.engineSequence

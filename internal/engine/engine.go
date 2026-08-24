@@ -523,18 +523,19 @@ type Engine struct {
 	sealed         bool
 	exhausted      bool
 
-	lastReserved uint64
-	nextSequence uint64
-	lastSystem   uint64
-	lastClock    time.Time
-	hasClock     bool
-	state        *engineState
-	counters     admissionCounters
-	transitions  transitionCounters
-	publications publicationCounters
-	publication  atomic.Pointer[privatePublication]
-	sentinels    [8]*privatePublication
-	lastPubID    uint64
+	lastReserved              uint64
+	nextSequence              uint64
+	lastSystem                uint64
+	lastClock                 time.Time
+	hasClock                  bool
+	state                     *engineState
+	counters                  admissionCounters
+	transitions               transitionCounters
+	publications              publicationCounters
+	publication               atomic.Pointer[privatePublication]
+	activeAggregateEvaluation atomic.Pointer[ActiveAggregateEvaluationView]
+	sentinels                 [8]*privatePublication
+	lastPubID                 uint64
 	// replayFastForwardThrough is immutable replay execution policy installed
 	// before ReplayStart. Groups before it still mutate the sole canonical
 	// state, but defer full-population projection/publication to the boundary.
@@ -542,17 +543,18 @@ type Engine struct {
 
 	// Test-only fault/pause points are package-private and have no production
 	// constructor or exported mutation path.
-	buildCandidate        func(frozenBinding) (*installedBinding, error)
-	beforeConsume         func(*queueNode)
-	terminal              *Disposition
-	publicationFault      publicationFault
-	evaluationFault       bool
-	evaluationTimingClock func() time.Time
-	checkpointSubmitter   checkpoint.Submitter
-	tqLimits              tqRetentionLimits
-	tqPressurePolicy      tqPressurePolicy
-	recoveryPolicy        recoveryPolicy
-	floatLookup           reference.FloatLookup
+	buildCandidate                       func(frozenBinding) (*installedBinding, error)
+	beforeConsume                        func(*queueNode)
+	beforeActiveAggregateEvaluationPhase func(AggregateEvaluationPhase)
+	terminal                             *Disposition
+	publicationFault                     publicationFault
+	evaluationFault                      bool
+	evaluationTimingClock                func() time.Time
+	checkpointSubmitter                  checkpoint.Submitter
+	tqLimits                             tqRetentionLimits
+	tqPressurePolicy                     tqPressurePolicy
+	recoveryPolicy                       recoveryPolicy
+	floatLookup                          reference.FloatLookup
 }
 
 func (e *Engine) ArmEvaluationTimingForTest(clock func() time.Time) {
@@ -913,7 +915,8 @@ func (e *Engine) consume() {
 			node.checkpointInstall <- finalizeCheckpointInstall(disposition.checkpointInstall, disposition)
 			close(node.checkpointInstall)
 		} else if node.kind == inputLiveCoverageFence {
-			result := LiveCoverageFenceDisposition{EngineSequence: disposition.EngineSequence, Code: disposition.Code, Reason: disposition.Reason, SuppressionDisposition: disposition.SuppressionDisposition}
+			result := LiveCoverageFenceDisposition{EngineSequence: disposition.EngineSequence, Code: disposition.Code, Reason: disposition.Reason, SuppressionDisposition: disposition.SuppressionDisposition,
+				EvaluationTiming: e.ObserveEvaluationTiming()}
 			node.liveCoverageCompletion <- result
 			close(node.liveCoverageCompletion)
 			e.finishLiveCoverageCommand(node, result)
@@ -949,6 +952,7 @@ type transitionDisposition struct {
 }
 
 func (e *Engine) transition(node *queueNode) transitionDisposition {
+	defer e.clearActiveAggregateEvaluation(node.engineSequence)
 	code := DispositionIllegalLifecycle
 	reason := ReasonLifecycle
 	var stagedHydrationPlan HydrationPlanResult

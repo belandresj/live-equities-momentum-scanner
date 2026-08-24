@@ -83,6 +83,8 @@ type Runtime struct {
 	recoveryAttempt            recoveryAttemptLatch
 	ingressHistory             ingressDiagnosticHistory
 	watermarkStallRing         watermarkStallRing
+	watermarkActiveCycle       atomic.Pointer[watermarkStallActiveCycle]
+	watermarkCycleSequence     atomic.Uint64
 	readinessObservations      atomic.Pointer[readinessObservationState]
 	// beforeHydrationPump is a package-private diagnostic-test seam. A nil
 	// hook is the complete production behavior; tests use it only to hold the
@@ -104,6 +106,11 @@ type automaticTimerObservation struct {
 	cycleTime   time.Duration
 	capture     SnapshotCapture
 	captureErr  error
+}
+
+type liveCoverageCycleResult struct {
+	disposition                         engine.LiveCoverageFenceDisposition
+	enqueueDuration, completionDuration time.Duration
 }
 
 func New(ctx context.Context, binding reference.Binding, config Config, clock func() time.Time) (*Runtime, error) {
@@ -226,17 +233,21 @@ func nextEvaluationCadenceDelay(anchor time.Time, cadence time.Duration, now tim
 func (r *Runtime) runEvaluationCycle(ctx context.Context) {
 	cycleStarted := time.Now()
 	cycleStartedAt := r.clock().UTC()
+	activeCycle := r.beginWatermarkStallCycle(cycleStartedAt)
+	defer r.clearWatermarkStallCycle(activeCycle.Sequence)
 	cycleBefore := r.engine.ObserveEvaluationCycle()
-	fenceDisposition := r.captureLiveCoverage(ctx)
+	liveCoverage := r.captureLiveCoverage(ctx, activeCycle.Sequence)
+	fenceDisposition := liveCoverage.disposition
 	fenceTiming := engine.FenceTimingView{}
-	if fenceDisposition == engine.DispositionLiveCoverageFenceApplied {
+	if fenceDisposition.Code == engine.DispositionLiveCoverageFenceApplied {
 		fenceTiming = r.engine.ObserveFenceTiming()
 	}
+	r.advanceWatermarkStallCycle(activeCycle.Sequence, WatermarkStallCycleTimerAdmission)
 	timerStarted := time.Now()
 	var admission engine.AdmissionResult
 	var completion <-chan engine.TimerDisposition
 	timerPolicy := WatermarkStallTimerEvaluationFallback
-	if fenceDisposition == engine.DispositionLiveCoverageFenceApplied {
+	if fenceDisposition.Code == engine.DispositionLiveCoverageFenceApplied {
 		timerPolicy = WatermarkStallTimerMaintenanceOnly
 		admission, completion = r.engine.AdmitMaintenanceTimer(ctx)
 	} else {
@@ -245,6 +256,7 @@ func (r *Runtime) runEvaluationCycle(ctx context.Context) {
 	if admission != engine.AdmissionAdmitted || completion == nil {
 		return
 	}
+	r.advanceWatermarkStallCycle(activeCycle.Sequence, WatermarkStallCycleTimerCompletion)
 	select {
 	case <-ctx.Done():
 		return
@@ -252,7 +264,7 @@ func (r *Runtime) runEvaluationCycle(ctx context.Context) {
 		r.recordDeliveryLatency(time.Since(timerStarted), DeliveryLatencyTimer)
 		cycleCompletedAt := r.clock().UTC()
 		r.recordWatermarkStallCycle(cycleStartedAt, cycleCompletedAt, time.Since(cycleStarted), fenceDisposition, timerPolicy,
-			cycleBefore, r.engine.ObserveEvaluationCycle(), fenceTiming, disposition, r.engine.ObserveEvaluationTiming(), r.cachedMetrics())
+			cycleBefore, r.engine.ObserveEvaluationCycle(), fenceTiming, disposition, r.engine.ObserveEvaluationTiming(), r.cachedMetrics(), liveCoverage.enqueueDuration, liveCoverage.completionDuration)
 		r.captureAutomaticTimerObservation(disposition, time.Since(cycleStarted))
 		r.recordEngineDispositionIncident(disposition.Code, disposition.Reason)
 		r.syncTQCommand(ctx)
@@ -581,34 +593,46 @@ func (r *Runtime) syncTQCommand(ctx context.Context) {
 	}
 }
 
-func (r *Runtime) captureLiveCoverage(ctx context.Context) engine.DispositionCode {
+func (r *Runtime) captureLiveCoverage(ctx context.Context, cycleSequence ...uint64) liveCoverageCycleResult {
+	sequence := uint64(0)
+	if len(cycleSequence) > 0 {
+		sequence = cycleSequence[0]
+	}
+	r.advanceWatermarkStallCycle(sequence, WatermarkStallCycleLiveCoverageEnqueue)
 	r.metricsMu.Lock()
 	attempt := r.attempt
 	r.metricsMu.Unlock()
 	if attempt == nil {
-		return ""
+		return liveCoverageCycleResult{}
 	}
 	command, err := r.engine.IssueLiveCoverageFence()
 	if err != nil {
-		return ""
+		return liveCoverageCycleResult{}
 	}
+	enqueueStarted := time.Now()
 	if err := attempt.CaptureLiveCoverageFence(ctx, r.engine, command); err != nil {
+		enqueueDuration := time.Since(enqueueStarted)
 		admission, completion := r.engine.AdmitLiveCoverageFenceCancellation(ctx, command)
 		if admission == engine.AdmissionAdmitted && completion != nil {
+			r.advanceWatermarkStallCycle(sequence, WatermarkStallCycleLiveCoverageCompletion)
+			completionStarted := time.Now()
 			select {
 			case <-ctx.Done():
-				return ""
+				return liveCoverageCycleResult{enqueueDuration: enqueueDuration, completionDuration: time.Since(completionStarted)}
 			case disposition := <-completion:
-				return disposition.Code
+				return liveCoverageCycleResult{disposition: disposition, enqueueDuration: enqueueDuration, completionDuration: time.Since(completionStarted)}
 			}
 		}
-		return ""
+		return liveCoverageCycleResult{enqueueDuration: enqueueDuration}
 	}
+	enqueueDuration := time.Since(enqueueStarted)
+	r.advanceWatermarkStallCycle(sequence, WatermarkStallCycleLiveCoverageCompletion)
+	completionStarted := time.Now()
 	disposition, err := command.Wait(ctx)
 	if err != nil {
-		return ""
+		return liveCoverageCycleResult{enqueueDuration: enqueueDuration, completionDuration: time.Since(completionStarted)}
 	}
-	return disposition.Code
+	return liveCoverageCycleResult{disposition: disposition, enqueueDuration: enqueueDuration, completionDuration: time.Since(completionStarted)}
 }
 
 func (r *Runtime) Engine() *engine.Engine { return r.engine }

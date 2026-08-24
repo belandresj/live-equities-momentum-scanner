@@ -19,6 +19,32 @@ const (
 	WatermarkStallTimerEvaluationFallback WatermarkStallTimerPolicy = "evaluation_fallback"
 )
 
+type WatermarkStallCyclePhase string
+
+const (
+	WatermarkStallCycleStarted                WatermarkStallCyclePhase = "started"
+	WatermarkStallCycleLiveCoverageEnqueue    WatermarkStallCyclePhase = "live_coverage_enqueue"
+	WatermarkStallCycleLiveCoverageCompletion WatermarkStallCyclePhase = "live_coverage_completion"
+	WatermarkStallCycleTimerAdmission         WatermarkStallCyclePhase = "timer_admission"
+	WatermarkStallCycleTimerCompletion        WatermarkStallCyclePhase = "timer_completion"
+)
+
+type watermarkStallActiveCycle struct {
+	Sequence                  uint64
+	StartedAt, PhaseStartedAt time.Time
+	Phase                     WatermarkStallCyclePhase
+}
+
+type WatermarkStallActiveCycleEvidence struct {
+	Sequence                                  uint64
+	StartedAt, PhaseStartedAt, ObservedAt     time.Time
+	Elapsed, PhaseElapsed                     time.Duration
+	Phase                                     WatermarkStallCyclePhase
+	Evaluation                                engine.ActiveAggregateEvaluationView
+	EvaluationActive                          bool
+	EvaluationElapsed, EvaluationPhaseElapsed time.Duration
+}
+
 // WatermarkStallCycleEvidence contains only fixed-cardinality, symbol-free
 // facts. It is not part of SnapshotCapture or the public API schema.
 type WatermarkStallCycleEvidence struct {
@@ -27,6 +53,8 @@ type WatermarkStallCycleEvidence struct {
 	DiagnosticSampledAt              time.Time
 
 	CoverageFenceDisposition  engine.DispositionCode
+	LiveCoverageEnqueue       time.Duration
+	LiveCoverageCompletion    time.Duration
 	CoverageFenceFinalization time.Duration
 	CoverageFenceTotal        time.Duration
 	CoverageFenceValid        bool
@@ -69,14 +97,17 @@ type WatermarkStallCycleEvidence struct {
 type WatermarkStallEvidence struct {
 	Capacity int
 	Records  []WatermarkStallCycleEvidence
+	Active   *WatermarkStallActiveCycleEvidence
 }
 
 // WatermarkStaleTransition is the first exact runtime-observed crossing from
 // ready to watermark_stale. Snapshot capture may contribute the observation,
 // but it performs no persistence and does not wait for the scanner recorder.
 type WatermarkStaleTransition struct {
-	Previous Status
-	Current  Status
+	Previous       Status
+	Current        Status
+	Active         WatermarkStallActiveCycleEvidence
+	ActiveObserved bool
 }
 
 type readinessObservationState struct {
@@ -102,6 +133,7 @@ func (r *Runtime) recordReadinessObservation(status Status) {
 		next := &readinessObservationState{latest: status, hasLatest: true}
 		if prior != nil && prior.hasLatest && readinessTransitionMatches(prior.latest, status) {
 			transition := WatermarkStaleTransition{Previous: cloneReadinessDiagnosticStatus(prior.latest), Current: status}
+			transition.Active, transition.ActiveObserved = r.observeWatermarkStallActive()
 			next.transition = &transition
 		}
 		if r.readinessObservations.CompareAndSwap(prior, next) {
@@ -130,7 +162,7 @@ func (r *Runtime) ObserveWatermarkStaleTransition() (WatermarkStaleTransition, b
 }
 
 func cloneWatermarkStaleTransition(value WatermarkStaleTransition) WatermarkStaleTransition {
-	return WatermarkStaleTransition{Previous: cloneReadinessDiagnosticStatus(value.Previous), Current: cloneReadinessDiagnosticStatus(value.Current)}
+	return WatermarkStaleTransition{Previous: cloneReadinessDiagnosticStatus(value.Previous), Current: cloneReadinessDiagnosticStatus(value.Current), Active: value.Active, ActiveObserved: value.ActiveObserved}
 }
 
 func cloneReadinessDiagnosticStatus(value Status) Status {
@@ -181,13 +213,84 @@ func (r *Runtime) ObserveWatermarkStallEvidence() WatermarkStallEvidence {
 	if r == nil {
 		return WatermarkStallEvidence{Capacity: WatermarkStallRingCapacity}
 	}
-	return r.watermarkStallRing.snapshot()
+	result := r.watermarkStallRing.snapshot()
+	if r.watermarkActiveCycle.Load() == nil || r.clock == nil {
+		return result
+	}
+	active, ok := r.observeWatermarkStallActive()
+	if !ok {
+		return result
+	}
+	result.Active = &active
+	return result
+}
+
+func (r *Runtime) observeWatermarkStallActive() (WatermarkStallActiveCycleEvidence, bool) {
+	if r == nil || r.engine == nil || r.clock == nil {
+		return WatermarkStallActiveCycleEvidence{}, false
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		active := r.watermarkActiveCycle.Load()
+		if active == nil {
+			return WatermarkStallActiveCycleEvidence{}, false
+		}
+		evaluation, evaluationActive := r.engine.ObserveActiveAggregateEvaluation()
+		if r.watermarkActiveCycle.Load() != active {
+			continue
+		}
+		observedAt := r.clock().UTC()
+		view := WatermarkStallActiveCycleEvidence{
+			Sequence: active.Sequence, StartedAt: active.StartedAt, PhaseStartedAt: active.PhaseStartedAt, ObservedAt: observedAt,
+			Elapsed: nonnegativeDuration(observedAt.Sub(active.StartedAt)), PhaseElapsed: nonnegativeDuration(observedAt.Sub(active.PhaseStartedAt)), Phase: active.Phase,
+		}
+		if evaluationActive {
+			view.Evaluation, view.EvaluationActive = evaluation, true
+			view.EvaluationElapsed = nonnegativeDuration(observedAt.Sub(evaluation.StartedAt))
+			view.EvaluationPhaseElapsed = nonnegativeDuration(observedAt.Sub(evaluation.PhaseStartedAt))
+		}
+		return view, true
+	}
+	return WatermarkStallActiveCycleEvidence{}, false
+}
+
+func (r *Runtime) beginWatermarkStallCycle(at time.Time) watermarkStallActiveCycle {
+	value := watermarkStallActiveCycle{Sequence: r.watermarkCycleSequence.Add(1), StartedAt: at, PhaseStartedAt: at, Phase: WatermarkStallCycleStarted}
+	r.watermarkActiveCycle.Store(&value)
+	return value
+}
+
+func (r *Runtime) advanceWatermarkStallCycle(sequence uint64, phase WatermarkStallCyclePhase) {
+	if r == nil || sequence == 0 {
+		return
+	}
+	current := r.watermarkActiveCycle.Load()
+	if current == nil || current.Sequence != sequence {
+		return
+	}
+	value := *current
+	value.Phase, value.PhaseStartedAt = phase, r.clock().UTC()
+	r.watermarkActiveCycle.CompareAndSwap(current, &value)
+}
+
+func (r *Runtime) clearWatermarkStallCycle(sequence uint64) {
+	if r == nil || sequence == 0 {
+		return
+	}
+	for {
+		current := r.watermarkActiveCycle.Load()
+		if current == nil || current.Sequence != sequence {
+			return
+		}
+		if r.watermarkActiveCycle.CompareAndSwap(current, nil) {
+			return
+		}
+	}
 }
 
 func (r *Runtime) recordWatermarkStallCycle(startedAt, completedAt time.Time, cycleDuration time.Duration,
-	fenceDisposition engine.DispositionCode, timerPolicy WatermarkStallTimerPolicy,
+	fenceDisposition engine.LiveCoverageFenceDisposition, timerPolicy WatermarkStallTimerPolicy,
 	before, after engine.EvaluationCycleState, fenceTiming engine.FenceTimingView,
-	timerDisposition engine.TimerDisposition, timing engine.EvaluationTimingView, metrics Metrics) {
+	timerDisposition engine.TimerDisposition, timing engine.EvaluationTimingView, metrics Metrics, liveCoverageEnqueue, liveCoverageCompletion time.Duration) {
 	if r == nil {
 		return
 	}
@@ -196,7 +299,13 @@ func (r *Runtime) recordWatermarkStallCycle(startedAt, completedAt time.Time, cy
 	}
 	causalBefore, hasCausalBefore := watermarkDiagnosticTarget(r.binding, r.config, startedAt)
 	causalAfter, hasCausalAfter := watermarkDiagnosticTarget(r.binding, r.config, completedAt)
-	timingObserved := timing.EngineSequence == timerDisposition.EngineSequence
+	if fenceTiming := fenceDisposition.EvaluationTiming; fenceTiming.EngineSequence != 0 && fenceTiming.EngineSequence == fenceDisposition.EngineSequence {
+		timing = fenceTiming
+	}
+	timingObserved := timing.EngineSequence != 0 && timing.EngineSequence == fenceDisposition.EngineSequence
+	if !timingObserved {
+		timingObserved = timing.EngineSequence == timerDisposition.EngineSequence
+	}
 	if !timingObserved && fenceTiming.EngineSequence != 0 {
 		timingObserved = timing.EngineSequence == fenceTiming.EngineSequence
 	}
@@ -210,7 +319,8 @@ func (r *Runtime) recordWatermarkStallCycle(startedAt, completedAt time.Time, cy
 	record := WatermarkStallCycleEvidence{
 		CycleStartedAt: startedAt.UTC(), CycleCompletedAt: completedAt.UTC(), CycleDuration: nonnegativeDuration(cycleDuration),
 		DiagnosticSampledAt:      metrics.SampledAt,
-		CoverageFenceDisposition: fenceDisposition, TimerPolicy: timerPolicy,
+		CoverageFenceDisposition: fenceDisposition.Code, TimerPolicy: timerPolicy,
+		LiveCoverageEnqueue: nonnegativeDuration(liveCoverageEnqueue), LiveCoverageCompletion: nonnegativeDuration(liveCoverageCompletion),
 		CoverageFenceFinalization: nonnegativeDuration(fenceTiming.CoverageFinalization), CoverageFenceTotal: nonnegativeDuration(fenceTiming.Total),
 		CoverageFenceValid: fenceTiming.Valid && fenceTiming.EngineSequence != 0,
 		EvaluationObserved: timingObserved, EvaluationSource: evaluationSource, EvaluationTarget: evaluationTarget,

@@ -249,7 +249,7 @@ func TestLiveAggregateEvaluationCoalescing(t *testing.T) {
 		fenceTiming := e.ObserveEvaluationTiming()
 		if afterFence.watermark == nil || !afterFence.watermark.Equal(fenceTarget) || afterFence.aggregateEvaluation.at != fenceTarget ||
 			afterFence.lastEngineSequence != disposition.EngineSequence || afterFence.publicationID != initial.publicationID+1 ||
-			fenceTiming.Source != AggregateEvaluationLiveCoverageFence || !fenceTiming.Target.Equal(fenceTarget) {
+			fenceTiming.Source != AggregateEvaluationLiveCoverageFence || !fenceTiming.Target.Equal(fenceTarget) || disposition.EvaluationTiming != fenceTiming {
 			t.Fatalf("accepted fence did not commit its exact target: initial=%+v after=%+v", initial, afterFence)
 		}
 

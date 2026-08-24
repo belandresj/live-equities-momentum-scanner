@@ -76,10 +76,45 @@ func TestWatermarkStaleRecorderExactTransitionPersistsOneBoundedIncident(t *test
 		t.Fatalf("cycle JSON=%s err=%v", raw["cycles"], decodeErr)
 	}
 	cycleRaw := cycles[0]
-	for _, key := range []string{"cycle_started_at", "cycle_completed_at", "coverage_fence_disposition", "timer_policy", "evaluation_stage_ns", "evaluation_apply_ns", "evaluation_publication_ns", "watermark_before", "watermark_after", "queue_current_frames", "queue_high_frames", "queue_current_bytes", "queue_high_bytes", "processing_delay_ns", "processing_delay_one_second_ns", "tq_pressure", "tq_pressure_cause", "heap_alloc_bytes", "heap_in_use_bytes", "gc_cycles", "gc_pause_total_ns", "last_gc_pause_ns"} {
+	for _, key := range []string{"cycle_started_at", "cycle_completed_at", "coverage_fence_disposition", "live_coverage_enqueue_ns", "live_coverage_completion_ns", "timer_policy", "evaluation_stage_ns", "evaluation_apply_ns", "evaluation_publication_ns", "watermark_before", "watermark_after", "queue_current_frames", "queue_high_frames", "queue_current_bytes", "queue_high_bytes", "processing_delay_ns", "processing_delay_one_second_ns", "tq_pressure", "tq_pressure_cause", "heap_alloc_bytes", "heap_in_use_bytes", "gc_cycles", "gc_pause_total_ns", "last_gc_pause_ns"} {
 		if _, ok := cycleRaw[key]; !ok {
 			t.Fatalf("missing cycle JSON key %q: %s", key, data)
 		}
+	}
+}
+
+func TestWatermarkStaleTransitionPersistsCrossingTimeActiveCycle(t *testing.T) {
+	base := time.Date(2026, 8, 24, 17, 21, 43, 0, time.UTC)
+	target := base.Add(-4 * time.Second)
+	transition := operations.WatermarkStaleTransition{
+		Previous:       watermarkTestSample(base, true, operations.ReasonNone, "live", engine.RunModeLive).Status,
+		Current:        watermarkTestSample(base.Add(2*time.Second), false, operations.ReasonWatermarkStale, "live", engine.RunModeLive).Status,
+		ActiveObserved: true,
+		Active: operations.WatermarkStallActiveCycleEvidence{
+			Sequence: 7, StartedAt: base, PhaseStartedAt: base.Add(100 * time.Millisecond), ObservedAt: base.Add(2 * time.Second),
+			Elapsed: 2 * time.Second, PhaseElapsed: 1900 * time.Millisecond, Phase: operations.WatermarkStallCycleLiveCoverageCompletion,
+			EvaluationActive: true, EvaluationElapsed: 1500 * time.Millisecond, EvaluationPhaseElapsed: 1400 * time.Millisecond,
+			Evaluation: engine.ActiveAggregateEvaluationView{EngineSequence: 88, Source: engine.AggregateEvaluationLiveCoverageFence, Target: target,
+				Phase: engine.AggregateEvaluationPhaseStage, StartedAt: base.Add(500 * time.Millisecond), PhaseStartedAt: base.Add(600 * time.Millisecond)},
+		},
+	}
+	var captured *watermarkStaleDiagnosticDocument
+	recorder := &watermarkStaleDiagnosticRecorder{}
+	if err := recorder.observeTransition(transition, func() operations.WatermarkStallEvidence {
+		// Model recorder delay after the cycle completed. The retained crossing
+		// must win over the later empty active view.
+		return operations.WatermarkStallEvidence{Capacity: operations.WatermarkStallRingCapacity}
+	}, t.TempDir(), nil, func(_ string, document *watermarkStaleDiagnosticDocument) (string, error) {
+		copyValue := *document
+		captured = &copyValue
+		return "active.json", nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if captured == nil || captured.ActiveCycle == nil || captured.ActiveCycle.Phase != string(operations.WatermarkStallCycleLiveCoverageCompletion) ||
+		!captured.ActiveCycle.EvaluationActive || captured.ActiveCycle.EvaluationPhase != string(engine.AggregateEvaluationPhaseStage) ||
+		captured.ActiveCycle.EvaluationEngineSequence != 88 || captured.ActiveCycle.EvaluationPhaseElapsedNS != int64(1400*time.Millisecond) {
+		t.Fatalf("active cycle document=%+v", captured)
 	}
 }
 

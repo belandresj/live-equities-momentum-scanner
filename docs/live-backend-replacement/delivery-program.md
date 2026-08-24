@@ -1,8 +1,9 @@
 # Live backend replacement delivery program
 
 **Status:** Owner-approved current delivery authority, 2026-08-23; owner-revised
-E2 to exactly one 10-minute deterministic acceptance run on 2026-08-23 and
-inserted bounded parallel live hydration `LBR-A3` before D1 on 2026-08-24.
+E2 to exactly one 10-minute deterministic acceptance run on 2026-08-23,
+inserted bounded parallel live hydration `LBR-A3` before D1, and accepted the
+narrow diagnostic-preservation correction between A3 and D1 on 2026-08-24.
 
 **Parent:** [`../live-backend-replacement.md`](../live-backend-replacement.md).
 
@@ -972,6 +973,50 @@ committed.
   same ordered Massive ingress/state/TQ interface and is next but inactive
   until its fresh pre-assignment audit.
 
+### Watermark-stall diagnostic preservation correction — 2026-08-24
+
+- **Provenance and placement:** baseline diagnostic commit
+  `e88eef766940bcc953fec2e4b1bc8f213c3ef7a0`, descended from replacement
+  baseline `0d043c16cea4`, corrected incomplete active-cycle attribution after
+  an owner-authorized baseline incident. Its behavior was semantically
+  forward-ported after accepted A3 and before D1 without merging the baseline
+  branch, changing the A→B→C→D→E route, or reopening accepted A/B/C semantics.
+- **Coherent behavior:** one fixed-cardinality atomic engine observation now
+  follows replacement maintenance, compact selection/selected-row enrichment
+  staging, candidate application, and sole immutable publication. Runtime
+  evidence separately times live-coverage enqueue and ordered completion;
+  completed evaluation timing is correlated with the live-coverage
+  disposition's own engine sequence. The existing shared latch retains the
+  exact ready-to-`watermark_stale` crossing for one protected, bounded,
+  create-without-overwrite persistence attempt under `var/diagnostics`.
+- **Ownership and non-scope:** the observation owns no symbol, event, payload,
+  provider, readiness, or publication state. B3 exclusion remains strict: no
+  removed evaluator, qualification clone, parallel feature state, second
+  publication owner, legacy fallback, or D1 ingress/decoder interface was
+  restored. Readiness semantics, four-second target, two-second tolerance,
+  watermark ownership, ranking, API v2, T/Q policy, replay, and checkpoints are
+  unchanged.
+- **Proof and review:** focused engine/operations/scanner proofs, complete
+  affected packages, ordinary repository short verification, affected engine/
+  operations/scanner race coverage, focused vet, and diff hygiene pass. Final
+  read-only review first found that a live aggregate trust-correction cycle
+  could perform replacement selection/enrichment without an active view while
+  ordered live-coverage completion waited. The correction now starts an
+  explicit `trust_correction` stage before that production scan and tracks its
+  apply/publication phases. Focused re-review found the adjacent same-`T`
+  selected-row trust-closure candidate had the same omission; it now uses the
+  same source/phase path. A second focused re-review found that the initial
+  selected-row timing seal also advanced B's semantic trust-correction
+  coalescing identity. Timing capture is now separate from that revision/latch,
+  and the production regression proves both remain unchanged. All three
+  deterministic counterexamples pass, and final focused re-review returned
+  `CLEAN/PASS` with no remaining finding.
+- **Evidence limitation and handoff:** the historical 2026-08-24 incident was
+  produced by the baseline architecture and remains an ignored runtime artifact,
+  not replacement live evidence. No replacement-branch provider run exercised
+  the correction. D1 is the next permitted slice and remains inactive until its
+  normal pre-assignment audit.
+
 ### Owner-approved E2 duration and manifest revision — 2026-08-23
 
 The owner revised E2 to exactly one 10-minute deterministic acceptance run. The
@@ -997,10 +1042,11 @@ but copy no status.
 | `LBR-P1` focused contracts and characterization | `accepted_owner_revised_parallel_hydration` | Five-spec review/owner acceptance remains valid subject to the recorded A3 hydration-topology revision. The frozen baseline/manifest remains unchanged; comparable baseline CPU/RSS remain explicitly unknown. |
 | Capability A — canonical state and hydration | `finally_accepted_lbr_a3` | A1/A2 semantics remain accepted; A3 supersedes only their one-worker ordinary-live composition restriction. |
 | `LBR-A3` bounded parallel live hydration | `accepted` | Exact `1|2|4|8`, default 8, bounded concurrency/budgets, terminal/fence/live-tail/API equivalence, joined cancellation, and final focused review are clean. |
+| Watermark-stall diagnostic preservation | `accepted_between_a3_d1` | Baseline commit `e88eef7` was semantically forward-ported with offline verification and clean final review; diagnostic-only, no A/B/C reopening or D1 activation. |
 | `LBR-B3` removal slice | `accepted` | Commit `f697288`; removal proof, resource evidence, focused corrections, and final focused re-review are clean. |
 | Capability B — evaluation and publication | `finally_accepted` | B1/B2/B3 and the required final read-only review remain accepted and unaffected by A3. |
 | Capability C — selected-row T/Q | `finally_accepted` | C1/C2 remain accepted and unaffected by the A3 hydration-topology revision. |
-| Capability D — live ingress | `not_started_next` | A3 and the state/TQ input interface are accepted. D1 is next but inactive pending its fresh pre-assignment audit. |
+| Capability D — live ingress | `not_started_next` | A3, the state/TQ input interface, and the diagnostic-preservation correction are accepted. D1 is next but inactive pending its fresh pre-assignment audit. |
 | Capability E — integration/removal/acceptance | `not_started` | Requires Capabilities A-D accepted |
 | E2 deterministic duration/manifest revision | `owner_approved` | Exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |
 | Deterministic replacement | `not_started` | Requires `LBR-E1` and `LBR-E2` |

@@ -289,6 +289,9 @@ func (e *Engine) completePublicationDecisionLocked(node *queueNode, disposition 
 				nextID := e.lastPubID + 1
 				prospectivePublications = advancePublicationCounters(prospectivePublications, decisionReplaced)
 				var err error
+				if e.state.evaluationTiming.EngineSequence == node.engineSequence {
+					e.advanceActiveAggregateEvaluationLocked(node.engineSequence, AggregateEvaluationPhasePublication)
+				}
 				publicationStarted := e.evaluationTimingStart()
 				candidate, err = e.buildPublicationLocked(nextID, node.engineSequence, disposition, generatedAt,
 					prospectiveAdmission, prospectiveTransitions, prospectivePublications)

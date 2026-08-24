@@ -71,6 +71,79 @@ func TestWatermarkStallRingConcurrentSnapshotsNeverExposePartialRecords(t *testi
 	writers.Wait()
 }
 
+func TestWatermarkStallActiveCycleDistinguishesOrderedWaitPhases(t *testing.T) {
+	base := time.Date(2026, 8, 24, 17, 21, 43, 0, time.UTC)
+	now := base
+	delay := time.Duration(0)
+	owner, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return now }, Capacity: 8, RequiredReserve: 1,
+		EvaluationDelay: &delay, RecoveryBackoffInitial: time.Second, RecoveryBackoffMaximum: 2 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	runtime := &Runtime{engine: owner, clock: func() time.Time { return now }}
+	active := runtime.beginWatermarkStallCycle(base)
+
+	for _, step := range []struct {
+		phase WatermarkStallCyclePhase
+		at    time.Time
+	}{
+		{WatermarkStallCycleLiveCoverageEnqueue, base.Add(100 * time.Millisecond)},
+		{WatermarkStallCycleLiveCoverageCompletion, base.Add(300 * time.Millisecond)},
+		{WatermarkStallCycleTimerAdmission, base.Add(600 * time.Millisecond)},
+		{WatermarkStallCycleTimerCompletion, base.Add(900 * time.Millisecond)},
+	} {
+		now = step.at
+		runtime.advanceWatermarkStallCycle(active.Sequence, step.phase)
+		now = now.Add(250 * time.Millisecond)
+		evidence := runtime.ObserveWatermarkStallEvidence()
+		if evidence.Active == nil || evidence.Active.Phase != step.phase || evidence.Active.PhaseElapsed != 250*time.Millisecond || evidence.Active.Elapsed != now.Sub(base) || evidence.Active.EvaluationActive {
+			t.Fatalf("phase=%s evidence=%+v", step.phase, evidence.Active)
+		}
+	}
+	runtime.clearWatermarkStallCycle(active.Sequence)
+	if evidence := runtime.ObserveWatermarkStallEvidence(); evidence.Active != nil {
+		t.Fatalf("completed cycle remained active: %+v", evidence.Active)
+	}
+}
+
+func TestWatermarkStaleTransitionTimestampsActiveObservationAfterPreemption(t *testing.T) {
+	base := time.Date(2026, 8, 24, 17, 21, 43, 0, time.UTC)
+	now := base
+	delay := time.Duration(0)
+	owner, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return now }, Capacity: 8, RequiredReserve: 1,
+		EvaluationDelay: &delay, RecoveryBackoffInitial: time.Second, RecoveryBackoffMaximum: 2 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	runtime := &Runtime{engine: owner, clock: func() time.Time { return now }}
+	active := runtime.beginWatermarkStallCycle(base)
+	ready := func(at time.Time, backendReady bool) Status {
+		watermark, target := at.Add(-5*time.Second), at.Add(-4*time.Second)
+		status := Status{ProcessLive: true, BackendReady: backendReady, RankingCurrent: true, Lifecycle: "live", SampledAt: at, Watermark: &watermark, CausalTarget: &target}
+		if !backendReady {
+			status.Reason, status.WatermarkLag = ReasonWatermarkStale, 3*time.Second
+		}
+		return status
+	}
+	runtime.recordReadinessObservation(ready(base, true))
+
+	// The stale snapshot was sampled at t+1, then its goroutine was delayed.
+	// The active phase changed at t+2 before the readiness observation CAS.
+	// The retained phase must carry its own t+3 observation timestamp rather
+	// than borrowing the older snapshot timestamp and clipping durations.
+	now = base.Add(2 * time.Second)
+	runtime.advanceWatermarkStallCycle(active.Sequence, WatermarkStallCycleLiveCoverageCompletion)
+	now = base.Add(3 * time.Second)
+	runtime.recordReadinessObservation(ready(base.Add(time.Second), false))
+	transition, ok := runtime.ObserveWatermarkStaleTransition()
+	if !ok || !transition.ActiveObserved || transition.Active.Phase != WatermarkStallCycleLiveCoverageCompletion ||
+		!transition.Active.ObservedAt.Equal(now) || transition.Active.ObservedAt.Before(transition.Active.PhaseStartedAt) || transition.Active.PhaseElapsed != time.Second {
+		t.Fatalf("preempted transition=%+v ok=%t", transition, ok)
+	}
+}
+
 func TestWatermarkStallCycleEvidenceDistinguishesFailurePlanes(t *testing.T) {
 	binding := operationsBinding(t)
 	runtime := &Runtime{binding: binding, config: DefaultConfig()}
@@ -89,14 +162,23 @@ func TestWatermarkStallCycleEvidenceDistinguishesFailurePlanes(t *testing.T) {
 		beforeWatermark, afterWatermark := target.Add(-2*time.Second), target.Add(-time.Second)
 		timingSequence := afterSequence
 		fenceSequence := uint64(0)
+		evaluationSource := engine.AggregateEvaluationTimer
 		if policy == WatermarkStallTimerMaintenanceOnly {
 			timingSequence = beforeSequence
 			fenceSequence = beforeSequence
+			evaluationSource = engine.AggregateEvaluationLiveCoverageFence
+		}
+		evaluationTiming := engine.EvaluationTimingView{EngineSequence: timingSequence, Source: evaluationSource, Target: target, Stage: stage, Apply: 10 * time.Millisecond, Publication: 2 * time.Millisecond}
+		fenceResult := engine.LiveCoverageFenceDisposition{EngineSequence: fenceSequence, Code: fence}
+		observedAfterTimer := evaluationTiming
+		if policy == WatermarkStallTimerMaintenanceOnly {
+			fenceResult.EvaluationTiming = evaluationTiming
+			observedAfterTimer = engine.EvaluationTimingView{EngineSequence: afterSequence + 100, Source: engine.AggregateEvaluationIngressFence, Target: target, Stage: 9 * time.Second}
 		}
 		runtime.recordWatermarkStallCycle(base.Add(time.Duration(index)*time.Second), base.Add(time.Duration(index+1)*time.Second), 50*time.Millisecond,
-			fence, policy, state(beforeSequence, uint64(index*2+1), beforeWatermark, pressure, cause), state(afterSequence, uint64(index*2+2), afterWatermark, pressure, cause),
+			fenceResult, policy, state(beforeSequence, uint64(index*2+1), beforeWatermark, pressure, cause), state(afterSequence, uint64(index*2+2), afterWatermark, pressure, cause),
 			engine.FenceTimingView{EngineSequence: fenceSequence, CoverageFinalization: fenceTotal, Total: fenceTotal + stage, Valid: fenceSequence != 0},
-			engine.TimerDisposition{EngineSequence: afterSequence}, engine.EvaluationTimingView{EngineSequence: timingSequence, Source: engine.AggregateEvaluationTimer, Target: target, Stage: stage, Apply: 10 * time.Millisecond, Publication: 2 * time.Millisecond}, metrics(delay, delay))
+			engine.TimerDisposition{EngineSequence: afterSequence}, observedAfterTimer, metrics(delay, delay), 3*time.Millisecond, fenceTotal)
 	}
 	cycle(0, WatermarkStallTimerEvaluationFallback, engine.DispositionLiveCoverageFenceRejected, 0, 900*time.Millisecond, 0, "", "")
 	cycle(1, WatermarkStallTimerMaintenanceOnly, engine.DispositionLiveCoverageFenceApplied, 1500*time.Millisecond, 40*time.Millisecond, 0, "", "")
@@ -112,6 +194,9 @@ func TestWatermarkStallCycleEvidenceDistinguishesFailurePlanes(t *testing.T) {
 	}
 	if got.Records[1].CoverageFenceFinalization != 1500*time.Millisecond || got.Records[1].EvaluationStage != 40*time.Millisecond || got.Records[1].TimerPolicy != WatermarkStallTimerMaintenanceOnly {
 		t.Fatalf("late fence evidence=%+v", got.Records[1])
+	}
+	if !got.Records[1].EvaluationObserved || got.Records[1].EvaluationSource != engine.AggregateEvaluationLiveCoverageFence || got.Records[1].LiveCoverageEnqueue != 3*time.Millisecond || got.Records[1].LiveCoverageCompletion != 1500*time.Millisecond {
+		t.Fatalf("live-coverage correlation=%+v", got.Records[1])
 	}
 	if got.Records[2].QueueOldestWaitingAge != 1200*time.Millisecond || got.Records[2].ProcessingDelayOneSecond != 1200*time.Millisecond || got.Records[2].TQPressureCause != engine.TQPressureCauseOldestWaitingFrame {
 		t.Fatalf("queue/delivery evidence=%+v", got.Records[2])

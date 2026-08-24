@@ -2,7 +2,8 @@
 
 **Status:** Approved authority index; the 2026-08-23 live backend replacement
 is the current sequential delivery program, owner-revised on 2026-08-24 to
-insert bounded parallel hydration `LBR-A3` before D1.
+insert bounded parallel hydration `LBR-A3` and the accepted narrow watermark-
+diagnostic preservation correction before D1.
 
 **Phase 1 approved:** 2026-08-05
 
@@ -111,12 +112,12 @@ and review records.
 
 | Document | Status and role |
 | --- | --- |
-| [`live-backend-replacement/delivery-program.md`](live-backend-replacement/delivery-program.md) | Current owner-approved delivery authority, owner-revised 2026-08-24: A–C accepted, `LBR-A3` bounded parallel hydration next before inactive D1, sole ledger, bounded execution, and hard integrated acceptance. |
+| [`live-backend-replacement/delivery-program.md`](live-backend-replacement/delivery-program.md) | Current owner-approved delivery authority, owner-revised 2026-08-24: A–C and `LBR-A3` accepted; the diagnostic-preservation correction is accepted between A3 and inactive D1; sole ledger, bounded execution, and hard integrated acceptance. |
 | [`live-feature-mvp-program.md`](live-feature-mvp-program.md) | Historical accepted 2026-08-14 feature/API/UI/stability delivery evidence; superseded as the active implementation program. |
 | [`live-evaluation-cycle-coalescing-correction.md`](live-evaluation-cycle-coalescing-correction.md) | Accepted historical scanner-stability evidence: one fence-owned evaluation opportunity, maintenance-only following timer, and coalesced missed ticks. Its old evaluator implementation is not replacement authority. |
 | [`tq-publication-coalescing-correction.md`](tq-publication-coalescing-correction.md) | Accepted historical scanner-stability evidence: synchronous canonical T/Q mutation with one-second combined publication and immediate trust transitions. Its old T/Q representation is not replacement authority. |
 | [`snapshot-capture-and-dashboard-transport-isolation-correction.md`](snapshot-capture-and-dashboard-transport-isolation-correction.md) | Accepted reusable API-isolation evidence: atomic engine capture, cached diagnostics, cancellation containment, and dashboard/API/provider failure distinction. |
-| [`live-watermark-stall-diagnostic.md`](live-watermark-stall-diagnostic.md) | Focused diagnostic correction: bounded ordinary-cycle evidence and one private ready-to-`watermark_stale` incident record; diagnostic-only, no readiness or market-semantics change. |
+| [`live-watermark-stall-diagnostic.md`](live-watermark-stall-diagnostic.md) | Accepted focused diagnostic correction and replacement forward-port after A3: bounded active/ordinary-cycle evidence and one private ready-to-`watermark_stale` incident record; diagnostic-only, no readiness or market-semantics change. The 2026-08-24 incident is baseline history; no replacement provider run is claimed. |
 | [`live-aggregate-heartbeat-and-resubscription-correction.md`](live-aggregate-heartbeat-and-resubscription-correction.md) | Accepted focused correction, 2026-08-17: ordered one-at-a-time aggregate attempt retirement, individually paced finite recovery, preserved redacted handshake facts, inbound-aware heartbeat evidence, and startup/post-live return to current only through the existing hydration fence. Deterministic acceptance and final read-only review passed; credentialed provider chronology remains unobserved and separately authorized. |
 | [`v1-release-program.md`](v1-release-program.md) | Accepted 2026-08-07 authority and evidence for the former C7-C11 field set. Its conflicting delivery gates are superseded; still-compatible semantic and proof decisions remain usable evidence. |
 | [`implementation-process.md`](implementation-process.md) | Owner-approved process, revised 2026-08-23: contract-first replacement planning, correction/reopening, bounded verification, risk-based review, and integrated validation. |
@@ -139,8 +140,10 @@ The
 supersedes conflicting historical implementation sequences and private
 representations for its scope. Keep one write-capable slice and finally review
 each capability. `LBR-P1` and A1/A2/B/C evidence remain accepted. The
-2026-08-24 owner revision reopens Capability A only for bounded parallel live
-hydration. The next permitted slice is `LBR-A3`; D1 remains inactive.
+2026-08-24 owner revision reopened Capability A only for bounded parallel live
+hydration; A3 is now accepted. The corrected watermark-stall diagnostic was
+then semantically forward-ported without reopening A/B/C. The next permitted
+slice is D1, which remains inactive pending its pre-assignment audit.
 
 The active capability order is:
 
