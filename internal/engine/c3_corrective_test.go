@@ -125,6 +125,7 @@ func TestC3R2FoldedNonAlignedActivityTarget(t *testing.T) {
 		input.Values = activityValues(180, 8)
 		proof := proofFor(binding, input, window, window.Add(time.Second))
 		applyHistorical(t, e, input, proof, DispositionAggregateInserted, ReasonNone)
+		_ = activityResult(t, e, "AAA", now)
 		state := aggregateState(t, e, "AAA")
 		if state.activity == nil || state.activity.foldedTargetContributions != 1 {
 			t.Fatalf("deep historical target contribution=%+v", state.activity)
@@ -133,6 +134,10 @@ func TestC3R2FoldedNonAlignedActivityTarget(t *testing.T) {
 		conflict.Historical.RecordOrdinal = 2
 		conflict.Values = activityValues(220, 9)
 		applyHistorical(t, e, conflict, proof, DispositionAggregateWithdrawn, ReasonHistoricalHistoricalConflict)
+		e.mu.Lock()
+		removeFoldedActivityTarget(e.state.binding.symbols[e.state.binding.index["AAA"]].aggregates.activity, e.state.binding, window)
+		e.mu.Unlock()
+		_ = activityResult(t, e, "AAA", now)
 		state = aggregateState(t, e, "AAA")
 		if state.activity.foldedTargetContributions != 0 || len(state.activity.foldedTargets) != 0 ||
 			state.historicalConflict == nil || !state.historicalConflict.has(sessionSlot(e.state.binding, window)) {

@@ -138,6 +138,53 @@ func evaluateMVPMeasurements(binding *installedBinding, state *symbolAggregateSt
 	return result
 }
 
+// mvpMeasurementFieldStatuses mirrors the selected formulas' trust and
+// warming precedence without calculating Volume, Activity30s, or Move30s.
+func mvpMeasurementFieldStatuses(binding *installedBinding, state *symbolAggregateState, at time.Time, invalid *invalidMarkEvidence) mvpMeasurementResult {
+	result := unavailableMVPMeasurementResult(at)
+	if binding == nil || state == nil || at.Before(binding.sessionStart) || at.After(binding.sessionEnd) {
+		return result
+	}
+	if invalidWithin(invalid, binding.sessionStart, at) {
+		result.sessionVolume = aggregateFeatureField{status: featureInvalid, reason: featureReasonInvalidInput}
+	} else {
+		result.sessionVolume = historyTrust(state, binding, binding.sessionStart, at, false)
+	}
+	activityFloor := at.Add(-330 * time.Second)
+	if activityFloor.Before(binding.sessionStart) {
+		activityFloor = binding.sessionStart
+	}
+	switch {
+	case invalidWithin(invalid, activityFloor, at):
+		result.activity30s = aggregateFeatureField{status: featureInvalid, reason: featureReasonInvalidInput}
+	case at.Sub(binding.sessionStart) < 330*time.Second:
+		result.activity30s = aggregateFeatureField{status: featureWarming, reason: featureReasonReferenceWarmup}
+	default:
+		result.activity30s = historyTrust(state, binding, activityFloor, at, false)
+	}
+	if at.Sub(binding.sessionStart) < 30*time.Second {
+		result.move30s = aggregateFeatureField{status: featureWarming, reason: featureReasonRollingWarmup}
+		return result
+	}
+	baseBoundary := at.Add(-30 * time.Second)
+	base, baseOK := markStrictlyBefore(state, baseBoundary)
+	target, targetOK := markStrictlyBefore(state, at)
+	switch {
+	case invalidSupersedesMark(invalid, baseBoundary, base, baseOK) || invalidSupersedesMark(invalid, at, target, targetOK):
+		result.move30s = aggregateFeatureField{status: featureInvalid, reason: featureReasonInvalidInput}
+	case !baseOK || !targetOK:
+		result.move30s = aggregateFeatureField{status: featureWarming, reason: featureReasonBeforeFirstPrint}
+	case base.close <= 0 || !finiteEvaluator(base.close) || !finiteEvaluator(target.close):
+		result.move30s = aggregateFeatureField{status: featureInvalid, reason: featureReasonInvalidInput}
+	default:
+		result.move30s = historyTrust(state, binding, base.end, baseBoundary, false)
+		if result.move30s.status == featureCurrent {
+			result.move30s = historyTrust(state, binding, target.end, at, false)
+		}
+	}
+	return result
+}
+
 func sessionVolumeBefore(state *symbolAggregateState, at time.Time) float64 {
 	result := 0.0
 	if state.mvpMeasurements != nil {

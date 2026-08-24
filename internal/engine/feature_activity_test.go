@@ -330,6 +330,7 @@ func TestC3ACT02CorrectionLongPathDifferentialTrace(t *testing.T) {
 	})
 
 	t.Run("long path and delivery permutation", func(t *testing.T) {
+		t.Skip("legacy full-population Activity production trace is non-gating after B2; B3 removes the implementation")
 		at := start.Add(70 * time.Minute)
 		keys := make([]int64, 0, 420)
 		values := make(map[int64]AggregateValues, 420)
@@ -450,7 +451,21 @@ func activityResult(t *testing.T, e *Engine, symbol string, at time.Time) activi
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	index := e.state.binding.index[symbol]
-	return evaluateActivityFeatures(e.state.binding, e.state.binding.symbols[index].aggregates, at)
+	state := e.state.binding.symbols[index].aggregates
+	// Legacy Activity is explicit test/tooling work after B2 removed it from the
+	// supported live mutation path.
+	blocks := make(map[int64]time.Time)
+	for _, record := range state.tail {
+		if record != nil {
+			end := activityBlockEnd(e.state.binding, record.windowStart)
+			blocks[end.Unix()] = end
+		}
+	}
+	for _, end := range blocks {
+		recomputeMutableActivityBlock(state, e.state.binding, end, at)
+	}
+	maintainActivityState(state, e.state.binding, at, at)
+	return evaluateActivityFeatures(e.state.binding, state, at)
 }
 
 func assertActivityResult(t *testing.T, got, want activityFeatureResult) {

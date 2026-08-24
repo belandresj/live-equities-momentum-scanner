@@ -174,7 +174,7 @@ func (e *Engine) extendOrdinaryLiveCoverageLocked(start, end time.Time) {
 	}
 	for index := range e.state.binding.symbols {
 		state := ensureAggregateState(&e.state.binding.symbols[index])
-		invalid, hasInvalid := e.state.aggregateEvaluator.invalidMarks[index]
+		invalid, hasInvalid := e.invalidMarkBeforeLocked(index, end)
 		var invalidEvidence *invalidMarkEvidence
 		if hasInvalid {
 			invalidEvidence = &invalid

@@ -132,6 +132,7 @@ const (
 	AggregateEvaluationTimer             AggregateEvaluationSource = "timer"
 	AggregateEvaluationIngressFence      AggregateEvaluationSource = "aggregate_ingress_fence"
 	AggregateEvaluationReplay            AggregateEvaluationSource = "replay"
+	AggregateEvaluationTrustCorrection   AggregateEvaluationSource = "trust_correction"
 )
 
 // AggregateEvaluationStartsView counts full-universe evaluation starts without
@@ -141,6 +142,13 @@ type AggregateEvaluationStartsView struct {
 	Timer                 uint64
 	AggregateIngressFence uint64
 	Replay                uint64
+	TrustCorrection       uint64
+}
+
+type aggregateTrustCycleIdentity struct {
+	bindingIdentity string
+	target          time.Time
+	trustRevision   uint64
 }
 
 // FenceTimingView partitions the most recent aggregate-ingress fence handled
@@ -413,6 +421,8 @@ type engineState struct {
 	checkpointProjection        *checkpointProjectionWork
 	tq                          tqState
 	evaluationTiming            EvaluationTimingView
+	trustCorrectionRevision     uint64
+	lastTrustCorrectionCycle    aggregateTrustCycleIdentity
 	fenceTiming                 FenceTimingView
 	fenceTimingStarted          time.Time
 	lastCoherentPublication     *privatePublication
@@ -1020,7 +1030,7 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 			(e.state.greatestIngressPosition.ConnectionEpoch == 0 || compareLive(node.aggregate.Live, e.state.greatestIngressPosition) > 0) {
 			e.state.greatestIngressPosition = node.aggregate.Live
 		}
-		if e.mode == RunModeLive {
+		if e.mode == RunModeLive && (code == DispositionAggregateInserted || code == DispositionAggregateRevised || code == DispositionAggregateWithdrawn) {
 			// Canonical mutation and aggregate accounting remain synchronous, but
 			// the immutable market projection is coalesced at the next accepted
 			// timer or aggregate-ingress fence.

@@ -212,7 +212,9 @@ func TestC3FEAT02CorrectionPermutationDifferentialTrace(t *testing.T) {
 	reference[lastWindow.Unix()] = corrected.Values
 	want := fullPriceRangeReference(binding, reference, evaluationT)
 	e.mu.Lock()
-	stored := symbol.aggregates.priceRange.result
+	// B2 removed full-population display-formula evaluation from live aggregate
+	// mutation; retain this legacy formula differential as explicit test tooling.
+	stored := evaluatePriceRangeFeatures(e.state.binding, symbol, evaluationT)
 	e.mu.Unlock()
 	assertPriceRangeResult(t, stored, want)
 

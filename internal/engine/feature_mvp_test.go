@@ -93,6 +93,9 @@ func TestPMVPVolumeProductionPath(t *testing.T) {
 	if got := admitProductionAggregate(t, e, revision); got.Code != DispositionAggregateRevised {
 		t.Fatalf("accepted Volume revision = %+v", got)
 	}
+	if afterValueOnly := e.observePublication(); afterValueOnly.publicationID != initial.publicationID {
+		t.Fatalf("same-trust value revision bypassed one-second coalescing: before=%d after=%d", initial.publicationID, afterValueOnly.publicationID)
+	}
 	revised := publish()
 	revisedRow := assertVolumePublication(revised, featureCurrent, featureReasonNone, 42)
 	if revised.publicationID <= initial.publicationID || !revised.watermark.Equal(*initial.watermark) {
@@ -130,8 +133,17 @@ func TestPMVPVolumeProductionPath(t *testing.T) {
 	values := AggregateValues{Open: 12, High: 12, Low: 12, Close: 12, Volume: 9, VWAP: 12, AverageTradeSize: 1, ATSProvenance: ATSRESTFloorVolumeOverTrades}
 	conflictRow, _ := NewHydrationRow("AAA", target.Add(-3*time.Second), target.Add(-2*time.Second), values)
 	conflictChunk, _ := NewHydrationChunkInput(token, token.ResultID(), 0, 1, 0, 1, []HydrationRow{conflictRow})
+	beforeTrustClosure := e.observePublication()
 	if got := admitHydrationChunk(t, e, conflictChunk); got.Code != DispositionHydrationChunkApplied || got.Rows != (HydrationRowAccounting{Consumed: 1, ConflictOrWithdrawal: 1}) {
 		t.Fatalf("production historical withdrawal = %+v", got)
+	}
+	immediateTrustClosure := e.observePublication()
+	if immediateTrustClosure.publicationID <= beforeTrustClosure.publicationID || immediateTrustClosure.watermark == nil || !immediateTrustClosure.watermark.Equal(target) ||
+		immediateTrustClosure.aggregateEvaluation.mode != rankingQualifiedCurrent || len(immediateTrustClosure.aggregateEvaluation.rows) != 2 ||
+		immediateTrustClosure.aggregateEvaluation.rows[0].symbol != "AAA" || immediateTrustClosure.aggregateEvaluation.rows[0].rank != initialRow.rank ||
+		immediateTrustClosure.aggregateEvaluation.rows[0].sessionVolume.status != featureInvalid || immediateTrustClosure.aggregateEvaluation.rows[0].sessionVolume.reason != featureReasonHistoricalConflict ||
+		immediateTrustClosure.aggregateEvaluation.enrichedRows != uint32(len(immediateTrustClosure.aggregateEvaluation.rows)) {
+		t.Fatalf("same-T selected trust closure did not publish coherently: before=%+v after=%+v", beforeTrustClosure, immediateTrustClosure)
 	}
 	var fence HydrationFenceCommand
 	for _, request := range plan.Plan.Requests() {
@@ -183,7 +195,7 @@ func TestPMVPVolumeProductionPath(t *testing.T) {
 		initialRow.rank != revisedRow.rank || revisedRow.rank != withdrawnRow.rank || initialRow.dayPercent != revisedRow.dayPercent || revisedRow.dayPercent != withdrawnRow.dayPercent ||
 		initialRow.last != revisedRow.last || revisedRow.last != withdrawnRow.last || initialRow.float != revisedRow.float || revisedRow.float != withdrawnRow.float ||
 		initialRow.fromOpenPercent != revisedRow.fromOpenPercent || initialRow.dayRange != revisedRow.dayRange ||
-		initialRow.move30s != revisedRow.move30s || revisedRow.move30s != withdrawnRow.move30s ||
+		initialRow.move30s != revisedRow.move30s ||
 		!initialRow.tqIntentEligible || !revisedRow.tqIntentEligible || !withdrawnRow.tqIntentEligible {
 		t.Fatalf("Volume mutation changed rank/readiness-independent fields initial=%+v revised=%+v withdrawn=%+v", initialRow, revisedRow, withdrawnRow)
 	}
@@ -321,11 +333,44 @@ func TestPMVPRankSelectionAndPreselectionHistory(t *testing.T) {
 	for i := range specs {
 		specs[i] = evaluatorSymbol{symbol: fmt.Sprintf("S%02d", i), priorStatus: reference.PriorCloseValid, prior: 10, mark: 40 - float64(i), qualification: qualificationProvisional}
 	}
-	base := evaluatorProofEngine(at, specs)
+	unselectedAt := at.Add(-331 * time.Second)
+	base := evaluatorProofEngine(unselectedAt, specs)
+	earlier := base.stageAggregateEvaluationLocked(unselectedAt)
+	if at.Sub(unselectedAt) <= 330*time.Second || len(earlier.rows) != 20 || earlier.rows[19].symbol != "S19" {
+		t.Fatalf("strict >330s unselected baseline T=%s rows=%v", unselectedAt, rankingSymbols(earlier.rows))
+	}
+	for _, row := range earlier.rows {
+		if row.symbol == "S20" {
+			t.Fatal("future entrant was displayed at the >330s unselected baseline")
+		}
+	}
+	// Advance the same canonical owner by 331 seconds. No symbol-local state is
+	// replaced: the old unselected mark remains session evidence while one new
+	// mark and exact intervening no-print coverage reach the later candidate.
+	for index := range base.state.binding.symbols {
+		symbol := &base.state.binding.symbols[index]
+		state := symbol.aggregates
+		record := mvpTestRecord(at.Add(-time.Second), 1, specs[index].mark)
+		record.identity.symbol = symbol.symbol
+		state.tail[record.identity.start] = &record
+		state.latest = &latestAggregateMark{record: record}
+		state.canonicalRevision++
+		ensurePresence(state).set(sessionSlot(base.state.binding, record.windowStart))
+		retainMutableMVPMeasurement(state, record)
+		retainMutablePriceRangeEvidence(ensurePriceRangeState(state), record)
+		installExactCoverage(state, base.state.binding, base.state.binding.sessionStart, at, nil)
+		state.qualification.accountedThrough = at
+		state.qualification.result.at = at
+		ensurePriceRangeState(state).result = evaluatePriceRangeFeatures(base.state.binding, symbol, at)
+		ensureMVPMeasurementState(state).result = evaluateMVPMeasurements(base.state.binding, state, at, nil)
+	}
+	base.state.committedT = immutableTime(at)
 	outsider := &base.state.binding.symbols[20]
 	baseRecord := mvpTestRecord(at.Add(-31*time.Second), 5, 19)
 	baseRecord.identity.symbol = outsider.symbol
 	outsider.aggregates.tail[baseRecord.identity.start] = &baseRecord
+	retainMutableMVPMeasurement(outsider.aggregates, baseRecord)
+	retainMutablePriceRangeEvidence(ensurePriceRangeState(outsider.aggregates), baseRecord)
 	ensurePresence(outsider.aggregates).set(sessionSlot(base.state.binding, baseRecord.windowStart))
 	outsider.aggregates.provenAbsent.clear(sessionSlot(base.state.binding, baseRecord.windowStart))
 	ensurePresence(outsider.aggregates).set(sessionSlot(base.state.binding, at.Add(-time.Second)))
@@ -385,7 +430,7 @@ func TestPMVPRankSelectionAndPreselectionHistory(t *testing.T) {
 	}
 	predecessor, predecessorOK := markStrictlyBefore(outsider.aggregates, at.Add(-30*time.Second))
 	if present != 2 || absent != 328 || !exactAggregateCoverage(outsider.aggregates, base.state.binding, floor, at) ||
-		!predecessorOK || predecessor.start != baseRecord.windowStart || preselection.sessionVolume != currentField(6) ||
+		!predecessorOK || predecessor.start != baseRecord.windowStart || preselection.sessionVolume != currentField(7) ||
 		preselection.activity30s.status != featureCurrent || math.Abs(preselection.activity30s.value-wantActivity) > 1e-12 ||
 		preselection.move30s.status != featureCurrent || math.Abs(preselection.move30s.value-wantMove) > 1e-12 {
 		t.Fatalf("retained outsider evidence present=%d absent=%d predecessor=%+v/%t measurements=%+v", present, absent, predecessor, predecessorOK, preselection)

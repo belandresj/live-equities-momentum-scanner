@@ -609,6 +609,49 @@ cross-boundary counterexample audit and final-byte-only expensive verification.
   Temporary full-population display adapters remain until B2/B3. `LBR-B2`
   remains valid and is next but inactive pending its pre-assignment audit.
 
+#### `LBR-B2` — accepted 2026-08-23
+
+- **Coherent behavior:** one revision- and `T`-bound enrichment pass computes
+  Volume, From Open, Day Range, Activity 30s, and Move 30s for at most the 20
+  retained B1 rows. Full-population maintenance derives only fixed field
+  status/reason scalars; supported live display formulas do not run for
+  discarded symbols. One validated evaluation plus immutable T/Q projection is
+  sealed under the owner and atomically replaces the existing publication cell;
+  Runtime/API capture performs one load with cached diagnostics.
+- **Proof:** `P-LBR-B2-PUBLICATION` composes one-engine 331-second unselected
+  history followed by Day-%-only entry with immediate exact aggregate fields and
+  T/Q warming; more than 16 minutes of future-to-`T` compaction, epoch loss,
+  exact-gap recovery, and old-`T` field exclusion; correction/revision fencing;
+  genuine zero/no-print; and malformed, incomplete/failed, successful-empty
+  before/after exact fence, canceled, late, and replaced evidence through
+  Runtime capture and API mapping. Concurrent enriched captures, blocked writer,
+  and slow/canceled HTTP preserve one publication identity and row bytes.
+- **Trust/cadence:** selected field degradation, qualification revocation, and
+  applicable structural coverage/rankability loss publish coherent same-`T`
+  closure immediately. Value-only changes coalesce. Rare full trust restages
+  have an explicit source/count/timing identity; unchanged following timer/live
+  fence work deduplicates, while recovery ingress and ended lifecycle cannot.
+  Right-open invalid evidence at `T`/`T+1` is neutral until its later boundary
+  and remains bounded to the 961-identity correction horizon.
+- **Ownership/removal:** a candidate-bound selected view zeros and marks prefix
+  scalars unusable when its folded prefix is ahead of `T`. Live values are
+  selected-only, stale revision/mark/accounting fails closed, and T/Q cannot
+  alter aggregate rank/watermark/readiness. Full-universe display evaluation,
+  separately sampled engine/TQ joins, mutable publication members, and lock-
+  coupled/per-request-expensive capture are now removable.
+- **Verification/review:** composed primary proof, affected short/race packages,
+  focused vet, API-v2 golden, diff hygiene, and ordinary repository verification
+  pass on final bytes. Focused review reopened future-prefix seam safety,
+  selected-only formula enforcement, same-`T` qualification/coverage/field
+  closure, correction-cycle identity, right-open structural evidence, recovery/
+  lifecycle dedupe, and literal publisher/capture composition; all focused
+  corrections passed final re-review `CLEAN/PASS`.
+- **Limitation/next gate:** B2 does not establish final T/Q formulas, provider
+  traffic, browser presentation beyond the unchanged API-v2 golden, or mature
+  resources. Legacy HOD/rolling/old Activity state/formulas and explicit
+  replay/checkpoint/test-tool seams remain for B3/E1 removal. `LBR-B3` remains
+  valid and is next but inactive pending its pre-assignment audit.
+
 ## 14. Sole delivery ledger
 
 This table is the only mutable program status. Focused specs name allocations
@@ -620,7 +663,7 @@ but copy no status.
 | Delivery program | `approved` | Current replacement delivery authority |
 | `LBR-P1` focused contracts and characterization | `accepted` | Five-spec independent cross-review and owner acceptance are recorded; [`baseline-characterization.md`](baseline-characterization.md), SHA-256 `3a70dda5bc040d1a77fbe3e114d788d3fc04c93fbb51ff2e5eec646f4c10e6e3`, freezes baseline `0d043c1`, the semantic/API/UI corpus, durable queue/heartbeat/hydration/cycle/memory evidence, and the exact 5,694-symbol deterministic manifest. Comparable baseline CPU/RSS remain explicitly unknown. |
 | Capability A — canonical state and hydration | `finally_accepted` | A1/A2 proofs, verification, two A1 re-reviews, the A2 long-stall/launcher correction, and Capability A final focused re-review are clean. Next: activate only [`LBR-B1`](tickets/lbr-b1-incremental-qualification-and-selection.md). |
-| Capability B — evaluation and publication | `lbr_b2_active` | `LBR-B1` is accepted. The B2 pre-assignment audit corrected strict as-of-`T` enrichment after >16-minute compaction/recovery and terminal false-success proof allocation; focused re-review is `CLEAN/PASS`. Implement only [`LBR-B2`](tickets/lbr-b2-selected-enrichment-and-publication.md). |
+| Capability B — evaluation and publication | `lbr_b2_accepted_b3_next` | `LBR-B1` and `LBR-B2` proofs, affected verification, correction reviews, and final focused B2 re-review are clean. Audit [`LBR-B3`](tickets/lbr-b3-remove-superseded-evaluation.md) before activation; B3 is not active. |
 | Capability C — selected-row T/Q | `not_started` | Requires Capability B publication/selection interface |
 | Capability D — live ingress | `not_started` | Requires accepted state/TQ input interface |
 | Capability E — integration/removal/acceptance | `not_started` | Requires Capabilities A-D accepted |

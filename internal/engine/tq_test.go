@@ -263,6 +263,7 @@ func TestPC9TAQ(t *testing.T) {
 	e.state.aggregateEvaluator.current.mode = rankingStale
 	e.state.aggregateEvaluator.current.reason = ""
 	e.state.aggregateEvaluator.current.rows = nil
+	e.state.aggregateEvaluator.current.enrichedRows = 0
 	e.reconcileTQLocked(now)
 	e.mu.Unlock()
 	view = e.ObserveTQ()

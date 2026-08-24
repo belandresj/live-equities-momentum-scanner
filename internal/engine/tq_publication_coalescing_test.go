@@ -222,6 +222,7 @@ func TestTQPublicationCoalescingImmediateTrustTransitions(t *testing.T) {
 	fixture.e.mu.Lock()
 	evaluation := &fixture.e.state.aggregateEvaluator.current
 	evaluation.mode, evaluation.reason, evaluation.rows, evaluation.tqIntentAvailable = rankingUnavailable, rankingReasonNoTrustedMarks, nil, false
+	evaluation.enrichedRows = 0
 	fixture.e.mu.Unlock()
 	beforeRemoval := fixture.e.ObserveSnapshot()
 	if admission, completion := fixture.e.AdmitMaintenanceTimer(context.Background()); admission != AdmissionAdmitted || completion == nil || awaitTimerDisposition(t, completion).Code != DispositionTimerApplied {
@@ -405,6 +406,7 @@ func TestTQPublicationCoalescingCadenceOracle(t *testing.T) {
 		fixture.e.mu.Lock()
 		evaluation := &fixture.e.state.aggregateEvaluator.current
 		evaluation.mode, evaluation.reason, evaluation.rows, evaluation.tqIntentAvailable = rankingUnavailable, rankingReasonNoTrustedMarks, nil, false
+		evaluation.enrichedRows = 0
 		fixture.e.mu.Unlock()
 		admission, completion := fixture.e.AdmitMaintenanceTimer(context.Background())
 		if admission != AdmissionAdmitted || completion == nil || awaitTimerDisposition(t, completion).Code != DispositionTimerApplied {

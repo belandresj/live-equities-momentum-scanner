@@ -464,8 +464,15 @@ func TestEvaluationCoalescingSemanticDifferential(t *testing.T) {
 	// compact selection. The semantic oracle mirrors that phase explicitly;
 	// stageAggregateEvaluationAtLocked is now a nonmutating candidate read.
 	for index := range e.state.binding.symbols {
-		if state := e.state.binding.symbols[index].aggregates; state != nil {
+		symbol := &e.state.binding.symbols[index]
+		if state := symbol.aggregates; state != nil {
 			evaluateQualificationThrough(state, e.state.binding, target, now)
+			var invalid *invalidMarkEvidence
+			if evidence, ok := e.state.aggregateEvaluator.invalidMarks[index]; ok {
+				copyEvidence := evidence
+				invalid = &copyEvidence
+			}
+			maintainCurrentFieldStatuses(e.state.binding, symbol, target, invalid)
 		}
 	}
 	oracle := e.stageAggregateEvaluationAtLocked(target, now)

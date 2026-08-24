@@ -262,6 +262,7 @@ func (e *Engine) decideConnectionControlLocked(node *queueNode, input Connection
 			e.state.hydration.supportedT = immutableTime(*e.state.committedT)
 			stale := cloneAggregateEvaluation(e.state.aggregateEvaluator.current)
 			stale.mode, stale.reason, stale.rows, stale.tqIntentAvailable = rankingStale, "", nil, false
+			stale.enrichedRows = 0
 			e.state.aggregateEvaluator.current = stale
 			e.state.evaluationRevision++
 			e.state.exposedRevision++
@@ -335,6 +336,7 @@ func (e *Engine) routeRecoverableAggregateLossLocked(node *queueNode) bool {
 	e.state.hydration.supportedT = immutableTime(*e.state.committedT)
 	stale := cloneAggregateEvaluation(e.state.aggregateEvaluator.current)
 	stale.mode, stale.reason, stale.rows, stale.tqIntentAvailable = rankingStale, "", nil, false
+	stale.enrichedRows = 0
 	e.state.aggregateEvaluator.current = stale
 	e.state.evaluationRevision++
 	e.state.exposedRevision++

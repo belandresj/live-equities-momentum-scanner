@@ -189,7 +189,7 @@ func TestC3PROJ01ModesAndIndependentFields(t *testing.T) {
 		t.Fatalf("suppressed projection = %+v", suppressed)
 	}
 	stale := cloneAggregateEvaluation(exact)
-	stale.mode, stale.rows = rankingStale, nil
+	stale.mode, stale.rows, stale.enrichedRows = rankingStale, nil, 0
 	if validateAggregateEvaluation(stale) != nil {
 		t.Fatalf("stale consequence rejected: %+v", stale)
 	}
@@ -359,6 +359,10 @@ func evaluatorProofEngine(at time.Time, specs []evaluatorSymbol) *Engine {
 				coverageStart = coverageStart.Add(time.Second)
 			}
 			installExactCoverage(binding.symbols[i].aggregates, binding, coverageStart, at, nil)
+			state := binding.symbols[i].aggregates
+			ensurePriceRangeState(state).result = evaluatePriceRangeFeatures(binding, &binding.symbols[i], at)
+			ensureMVPMeasurementState(state).result = evaluateMVPMeasurements(binding, state, at, nil)
+			applyActivityResult(state, binding, evaluateActivityFeatures(binding, state, at))
 		}
 	}
 	engine := &Engine{mode: RunModeLive, state: &engineState{binding: binding, lifecycle: lifecycleLive, committedT: immutableTime(at), clockMonotonic: true}}

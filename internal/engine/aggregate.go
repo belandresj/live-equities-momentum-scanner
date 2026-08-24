@@ -196,6 +196,7 @@ type symbolAggregateState struct {
 	affected           aggregateAffectedState
 	tailBoundHits      uint64
 	lastConflict       *aggregateConflictEvidence
+	invalidStarts      []int64
 	// These feature structs are temporary one-way projections for the existing
 	// evaluator. Canonical merge never reads them; LBR-B3 removes them.
 	priceRange      *priceRangeFeatureState
@@ -363,6 +364,8 @@ func (e *Engine) updateInvalidMarkEvidenceLocked(input frozenAggregateInput, now
 		}
 		invalid := invalidMarkEvidence{windowStart: input.WindowStart}
 		state := ensureAggregateState(&e.state.binding.symbols[index])
+		insertInvalidStart(state, input.WindowStart.Unix())
+		currentRelevant := e.state.committedT == nil || input.WindowStart.Before(*e.state.committedT)
 		hadAbsence := state.provenAbsent != nil && state.provenAbsent.has(sessionSlot(e.state.binding, invalid.windowStart))
 		if state.provenAbsent != nil {
 			state.provenAbsent.clear(sessionSlot(e.state.binding, invalid.windowStart))
@@ -381,16 +384,61 @@ func (e *Engine) updateInvalidMarkEvidenceLocked(input frozenAggregateInput, now
 		if replaced {
 			e.state.aggregateEvaluator.invalidMarks[index] = invalid
 		}
-		if hadAbsence || replaced {
+		if currentRelevant && (hadAbsence || replaced) {
 			state.notifyAggregate(canonicalAggregate{identity: aggregateIdentity{symbol: input.Symbol, start: input.WindowStart.Unix()}, windowStart: input.WindowStart, windowEnd: input.WindowEnd}, aggregateProofAll)
 		}
 		return
 	}
 	if code == DispositionAggregateInserted || code == DispositionAggregateRevised {
+		state := ensureAggregateState(&e.state.binding.symbols[index])
+		removeInvalidStartsThrough(state, input.WindowStart.Unix())
 		if prior, exists := e.state.aggregateEvaluator.invalidMarks[index]; exists && !input.WindowStart.Before(prior.windowStart) {
 			delete(e.state.aggregateEvaluator.invalidMarks, index)
 		}
 	}
+}
+
+func insertInvalidStart(state *symbolAggregateState, start int64) {
+	if state == nil {
+		return
+	}
+	index := sort.Search(len(state.invalidStarts), func(index int) bool { return state.invalidStarts[index] >= start })
+	if index < len(state.invalidStarts) && state.invalidStarts[index] == start {
+		return
+	}
+	state.invalidStarts = append(state.invalidStarts, 0)
+	copy(state.invalidStarts[index+1:], state.invalidStarts[index:])
+	state.invalidStarts[index] = start
+	if len(state.invalidStarts) > maximumTailRecords {
+		state.invalidStarts = state.invalidStarts[len(state.invalidStarts)-maximumTailRecords:]
+	}
+}
+
+func removeInvalidStartsThrough(state *symbolAggregateState, through int64) {
+	if state == nil || len(state.invalidStarts) == 0 {
+		return
+	}
+	index := sort.Search(len(state.invalidStarts), func(index int) bool { return state.invalidStarts[index] > through })
+	state.invalidStarts = append(state.invalidStarts[:0], state.invalidStarts[index:]...)
+}
+
+func (e *Engine) invalidMarkBeforeLocked(index int, at time.Time) (invalidMarkEvidence, bool) {
+	if e.state.binding == nil || index < 0 || index >= len(e.state.binding.symbols) {
+		return invalidMarkEvidence{}, false
+	}
+	state := e.state.binding.symbols[index].aggregates
+	if state != nil && len(state.invalidStarts) != 0 && !at.IsZero() {
+		position := sort.Search(len(state.invalidStarts), func(position int) bool { return state.invalidStarts[position] >= at.Unix() })
+		if position > 0 {
+			return invalidMarkEvidence{windowStart: time.Unix(state.invalidStarts[position-1], 0).UTC()}, true
+		}
+		return invalidMarkEvidence{}, false
+	}
+	evidence, ok := e.state.aggregateEvaluator.invalidMarks[index]
+	if ok && !at.IsZero() && !evidence.windowStart.Before(at) {
+		return invalidMarkEvidence{}, false
+	}
+	return evidence, ok
 }
 
 func (e *Engine) decideAggregateLocked(input frozenAggregateInput, now time.Time) (DispositionCode, DispositionReason) {

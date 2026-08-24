@@ -241,8 +241,16 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 					// independent of publication acceptance; it creates no mark,
 					// coverage, selection membership, or watermark.
 					evaluateQualificationThrough(state, e.state.binding, target, node.admissionTime)
+					if e.mode == RunModeLive {
+						var invalid *invalidMarkEvidence
+						if evidence, ok := e.invalidMarkBeforeLocked(index, target); ok {
+							copyEvidence := evidence
+							invalid = &copyEvidence
+						}
+						maintainCurrentFieldStatuses(e.state.binding, symbol, target, invalid)
+					}
 				}
-				if !e.hiddenReplayWarmupLocked(node) {
+				if e.mode == RunModeReplay && !e.hiddenReplayWarmupLocked(node) {
 					maintainActivityState(state, e.state.binding, node.admissionTime, maintenanceAt)
 				}
 			}
@@ -265,6 +273,9 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 		if !evaluate {
 			return nil
 		}
+		if e.duplicateTrustCorrectionCycleLocked(node, target) {
+			return nil
+		}
 		started := e.evaluationTimingStart()
 		e.recordAggregateEvaluationStartLocked(node, target)
 		staged := e.stageAggregateEvaluationAtLocked(target, node.admissionTime)
@@ -284,7 +295,8 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 		return nil
 	}
 	changed := code == DispositionAggregateInserted || code == DispositionAggregateRevised || code == DispositionAggregateWithdrawn
-	if !changed {
+	structuralTrustChange := code == DispositionAggregateRejected && reason == ReasonStructural
+	if !changed && !structuralTrustChange {
 		return nil
 	}
 	index, ok := e.state.binding.index[node.aggregate.Symbol]
@@ -295,22 +307,24 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 	if state == nil {
 		return nil
 	}
-	ensurePriceRangeState(state)
-	activity := ensureActivityState(state)
-	if code == DispositionAggregateWithdrawn {
-		removeFoldedActivityTarget(activity, e.state.binding, node.aggregate.WindowStart)
+	if e.mode == RunModeReplay {
+		activity := ensureActivityState(state)
+		if code == DispositionAggregateWithdrawn {
+			removeFoldedActivityTarget(activity, e.state.binding, node.aggregate.WindowStart)
+		}
+		blockEnd := activityBlockEnd(e.state.binding, node.aggregate.WindowStart)
+		recomputeMutableActivityBlock(state, e.state.binding, blockEnd, node.admissionTime)
+		boundary := node.admissionTime
+		if e.state.committedT != nil {
+			boundary = *e.state.committedT
+		} else if e.state.latestTarget != nil {
+			boundary = *e.state.latestTarget
+		}
+		maintainActivityState(state, e.state.binding, node.admissionTime, boundary)
 	}
-	blockEnd := activityBlockEnd(e.state.binding, node.aggregate.WindowStart)
-	recomputeMutableActivityBlock(state, e.state.binding, blockEnd, node.admissionTime)
-	boundary := node.admissionTime
-	if e.state.committedT != nil {
-		boundary = *e.state.committedT
-	} else if e.state.latestTarget != nil {
-		boundary = *e.state.latestTarget
-	}
-	maintainActivityState(state, e.state.binding, node.admissionTime, boundary)
 	if e.state.committedT != nil {
 		qualification := ensureQualificationState(state)
+		qualificationBefore := qualification.result
 		first := node.aggregate.WindowStart.Add(time.Second)
 		last := node.aggregate.WindowStart.Add(qualificationWindow)
 		if first.Before(e.state.binding.sessionStart) {
@@ -322,22 +336,32 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 		markQualificationProofsDirty(qualification, first, last)
 		if e.mode == RunModeLive {
 			evaluateQualificationThrough(state, e.state.binding, *e.state.committedT, node.admissionTime)
-			evaluationState := *state
-			if state.tailCoverageBuilt {
-				if state.tailCoverageUsable {
-					evaluationState.evaluationTailPresence = &state.tailCoverage
-				}
-			} else {
-				var tailPresence evaluationTailWindow
-				if buildEvaluationTailPresence(state, e.state.binding, &tailPresence) {
-					evaluationState.evaluationTailPresence = &tailPresence
-				}
+			var invalid *invalidMarkEvidence
+			if evidence, ok := e.invalidMarkBeforeLocked(index, *e.state.committedT); ok {
+				copyEvidence := evidence
+				invalid = &copyEvidence
 			}
-			evaluationSymbol := e.state.binding.symbols[index]
-			evaluationSymbol.aggregates = &evaluationState
-			ensurePriceRangeState(state).result = e.evaluatePriceRangeFeaturesLocked(e.state.binding, &evaluationSymbol, *e.state.committedT)
-			applyActivityResult(state, e.state.binding, evaluateActivityFeatures(e.state.binding, &evaluationState, *e.state.committedT))
-			return nil
+			maintainCurrentFieldStatuses(e.state.binding, &e.state.binding.symbols[index], *e.state.committedT, invalid)
+			if structuralTrustChange {
+				// [S,T) is right-open. Evidence at T or later cannot change
+				// current-T population, rankability, or field trust.
+				if !node.aggregate.WindowStart.Before(*e.state.committedT) {
+					return nil
+				}
+				started := e.evaluationTimingStart()
+				staged := e.stageAggregateEvaluationAtLocked(*e.state.committedT, node.admissionTime)
+				elapsed := e.evaluationTimingElapsed(started)
+				if aggregateEvaluationEqual(e.state.aggregateEvaluator.current, staged) {
+					return nil
+				}
+				return e.commitTrustCorrectionCycleLocked(node, staged, elapsed)
+			}
+			if qualification.result != qualificationBefore {
+				started := e.evaluationTimingStart()
+				staged := e.stageAggregateEvaluationAtLocked(*e.state.committedT, node.admissionTime)
+				return e.commitTrustCorrectionCycleLocked(node, staged, e.evaluationTimingElapsed(started))
+			}
+			return e.selectedTrustClosureCandidateLocked(index, *e.state.committedT)
 		}
 		if e.deferReplayAggregateProjectionLocked(node) {
 			return nil
@@ -355,6 +379,171 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 		return nil
 	}
 	return nil
+}
+
+func (e *Engine) commitTrustCorrectionCycleLocked(node *queueNode, staged aggregateEvaluationResult, stage time.Duration) *aggregateEvaluationResult {
+	e.state.trustCorrectionRevision++
+	e.state.lastTrustCorrectionCycle = aggregateTrustCycleIdentity{
+		bindingIdentity: e.state.binding.identity,
+		target:          staged.at,
+		trustRevision:   e.state.trustCorrectionRevision,
+	}
+	view := &e.state.evaluationTiming
+	view.EngineSequence, view.Source, view.Target = node.engineSequence, AggregateEvaluationTrustCorrection, staged.at
+	view.Stage, view.Apply, view.Publication = stage, 0, 0
+	view.Starts.TrustCorrection++
+	return &staged
+}
+
+func (e *Engine) duplicateTrustCorrectionCycleLocked(node *queueNode, target time.Time) bool {
+	last := e.state.lastTrustCorrectionCycle
+	if node == nil || node.kind != inputTimer && node.kind != inputLiveCoverageFence ||
+		e.mode != RunModeLive || e.state.binding == nil || e.state.aggregateProjectionPending ||
+		(e.state.lifecycle != lifecycleLive && e.state.lifecycle != lifecycleHydrating) || last.bindingIdentity == "" ||
+		last.bindingIdentity != e.state.binding.identity || last.trustRevision != e.state.trustCorrectionRevision || !last.target.Equal(target) {
+		return false
+	}
+	return e.state.aggregateEvaluationDeadline == nil || !node.admissionTime.After(*e.state.aggregateEvaluationDeadline)
+}
+
+// maintainCurrentFieldStatuses owns the fixed full-population status scalars
+// read by B2 selection. It proves support/reason only; current-product values
+// remain selected-row work and are never calculated here.
+func maintainCurrentFieldStatuses(binding *installedBinding, symbol *coreSymbol, at time.Time, invalid *invalidMarkEvidence) {
+	if binding == nil || symbol == nil || symbol.aggregates == nil {
+		return
+	}
+	state := symbol.aggregates
+	mark, hasMark := latestMarkBeforeCompact(state, at)
+	priceStatuses := priceRangeFieldStatuses(binding, symbol, at, mark, hasMark)
+	price := ensurePriceRangeState(state)
+	price.result.at = at
+	price.result.from4AMPercent = priceStatuses.from4AMPercent
+	price.result.sessionRange = priceStatuses.sessionRange
+	measurements := ensureMVPMeasurementState(state)
+	measurements.result = mvpMeasurementFieldStatuses(binding, state, at, invalid)
+}
+
+func (e *Engine) selectedTrustClosureCandidateLocked(symbolIndex int, at time.Time) *aggregateEvaluationResult {
+	current := e.state.aggregateEvaluator.current
+	if e.state.binding == nil || !current.at.Equal(at) || current.mode == rankingUnavailable || current.mode == rankingStale || current.mode == rankingSuppressed {
+		return nil
+	}
+	rowIndex := -1
+	for index := range current.rows {
+		if current.rows[index].symbolIndex == symbolIndex {
+			rowIndex = index
+			break
+		}
+	}
+	if rowIndex < 0 {
+		return nil
+	}
+	state := e.state.binding.symbols[symbolIndex].aggregates
+	candidate := cloneAggregateEvaluation(current)
+	candidate.updates = make([]aggregateSymbolEvaluationUpdate, len(e.state.binding.symbols))
+	if state == nil || candidate.enrichedRows == 0 {
+		candidate.invalidSupport = true
+		candidate.invalidSupportSymbol = candidate.rows[rowIndex].symbol
+		candidate.invalidSupportReason = "selected_trust_closure_state"
+		return &candidate
+	}
+	rowBefore := candidate.rows[rowIndex]
+	mark, hasMark := e.latestSelectionMarkLocked(state, at)
+	if !hasMark || mark.values.Close != rowBefore.last || at.Sub(mark.windowEnd) != rowBefore.markAge {
+		// A correction to the ranking mark needs the ordinary full-population
+		// cycle; it is not a display-field trust closure and cannot preserve order.
+		return nil
+	}
+	candidate.rows[rowIndex].canonicalRevision = state.canonicalRevision
+	update := &candidate.updates[symbolIndex]
+	update.present, update.qualification = true, state.qualification
+	if state.activity != nil {
+		update.activity = state.activity.result
+	}
+	update.committedLatest = committedMark(mark)
+	candidate.enrichedRows--
+	e.enrichSelectedRowLocked(&candidate, rowIndex, at)
+	if candidate.invalidSupport {
+		return &candidate
+	}
+	if !selectedFieldsLessTrusted(rowBefore, candidate.rows[rowIndex]) {
+		return nil
+	}
+	return &candidate
+}
+
+func selectedFieldsLessTrusted(before, after aggregateRankingRow) bool {
+	beforeFields := [...]aggregateFeatureField{before.sessionVolume, before.fromOpenPercent, before.dayRange, before.activity30s, before.move30s}
+	afterFields := [...]aggregateFeatureField{after.sessionVolume, after.fromOpenPercent, after.dayRange, after.activity30s, after.move30s}
+	for index := range beforeFields {
+		beforeRank, afterRank := featureTrustRank(beforeFields[index]), featureTrustRank(afterFields[index])
+		if afterRank < beforeRank || afterRank == beforeRank && afterFields[index].reason != beforeFields[index].reason {
+			return true
+		}
+	}
+	return false
+}
+
+func featureTrustRank(field aggregateFeatureField) int {
+	switch field.status {
+	case featureCurrent:
+		return 3
+	case featureWarming:
+		return 2
+	case featureUnavailable:
+		return 1
+	case featureInvalid:
+		return 0
+	default:
+		return -1
+	}
+}
+
+func priceRangeFieldStatuses(binding *installedBinding, symbol *coreSymbol, at time.Time, mark canonicalAggregate, hasMark bool) priceRangeFeatureResult {
+	result := unavailablePriceRangeResult(at)
+	state := symbol.aggregates
+	features := ensurePriceRangeState(state)
+	if !hasMark {
+		return result
+	}
+	if features.boundExceeded {
+		invalid := aggregateFeatureField{status: featureInvalid, reason: featureReasonStateBoundExceeded}
+		result.from4AMPercent, result.sessionRange = invalid, invalid
+		return result
+	}
+	tail := priceRangeTailViewAt(state, features, binding, at)
+	firstStart, firstOpen, hasFirst := features.firstStart, features.firstOpen, features.hasFirst
+	if tail.hasFirst && (!hasFirst || tail.firstStart < firstStart) {
+		firstStart, firstOpen, hasFirst = tail.firstStart, tail.firstOpen, true
+	}
+	if hasFirst {
+		result.from4AMPercent = historyTrust(state, binding, binding.sessionStart, time.Unix(firstStart, 0).UTC(), false)
+		if result.from4AMPercent.status == featureCurrent && (!finitePositiveFeature(mark.values.Close) || !finitePositiveFeature(firstOpen)) {
+			result.from4AMPercent = aggregateFeatureField{status: featureInvalid, reason: featureReasonInvalidInput}
+		}
+	}
+	sessionLow, sessionHigh, hasSession := 0.0, 0.0, false
+	if features.hasSessionExtrema && features.finalizedThrough <= at.Unix() {
+		sessionLow, sessionHigh, hasSession = features.sessionLow, features.sessionHigh, true
+	} else {
+		sessionLow, sessionHigh, hasSession = extremaEvidenceWithin(features.sessionLows, features.sessionHighs, binding.sessionStart.Unix(), at.Unix())
+	}
+	if tail.hasSession {
+		sessionLow, sessionHigh, hasSession = mergeRangeEvidence(sessionLow, sessionHigh, hasSession, tail.sessionLow, tail.sessionHigh)
+	}
+	if hasSession {
+		result.sessionRange = historyTrust(state, binding, binding.sessionStart, at, false)
+		if result.sessionRange.status == featureCurrent {
+			switch {
+			case !finitePositiveFeature(mark.values.Close) || !finitePositiveFeature(sessionLow) || !finitePositiveFeature(sessionHigh) || sessionLow > sessionHigh:
+				result.sessionRange = aggregateFeatureField{status: featureInvalid, reason: featureReasonInvalidInput}
+			case sessionLow == sessionHigh:
+				result.sessionRange = aggregateFeatureField{status: featureUnavailable, reason: featureReasonZeroWidth}
+			}
+		}
+	}
+	return result
 }
 
 // aggregateEvaluationTargetLocked chooses the sole full-population projection

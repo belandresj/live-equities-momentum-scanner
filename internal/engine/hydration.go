@@ -1040,7 +1040,7 @@ func (e *Engine) applyHydrationTerminalLocked(node *queueNode) (DispositionCode,
 			return DispositionHydrationIntegrity, ReasonHydrationToken
 		}
 		state := ensureAggregateState(&e.state.binding.symbols[index])
-		invalid, hasInvalid := e.state.aggregateEvaluator.invalidMarks[index]
+		invalid, hasInvalid := e.invalidMarkBeforeLocked(index, input.token.end)
 		var invalidEvidence *invalidMarkEvidence
 		if hasInvalid {
 			invalidEvidence = &invalid
@@ -1049,18 +1049,16 @@ func (e *Engine) applyHydrationTerminalLocked(node *queueNode) (DispositionCode,
 			return DispositionHydrationIntegrity, ReasonHydrationInterval
 		}
 		// Once this symbol's exact terminal is accepted, its historical prefix no
-		// longer needs to remain pinned for another symbol's work. Fold and
-		// evaluate that prefix now so the final ingress fence performs only the
-		// short live-tail continuation. Publication and readiness remain fenced.
+		// longer needs to remain pinned for another symbol's work. Fold and maintain
+		// owner-local proof/status scalars now; selected display values remain final
+		// ingress-fence work. Publication and readiness remain fenced.
 		e.compactSymbolLocked(state, e.state.binding, input.token.symbol, node.admissionTime)
-		maintainActivityState(state, e.state.binding, node.admissionTime, input.token.end)
 		if generation.purpose == HydrationFreshBootstrap {
 			completeFreshHydrationQualification(state, e.state.binding, input.token.end, node.admissionTime, entry.coverage == hydrationCoverageCandidateComplete)
 		} else {
 			evaluateQualificationThrough(state, e.state.binding, input.token.end, node.admissionTime)
 		}
-		ensurePriceRangeState(state).result = e.evaluatePriceRangeFeaturesLocked(e.state.binding, &e.state.binding.symbols[index], input.token.end)
-		applyActivityResult(state, e.state.binding, evaluateActivityFeatures(e.state.binding, state, input.token.end))
+		maintainCurrentFieldStatuses(e.state.binding, &e.state.binding.symbols[index], input.token.end, invalidEvidence)
 	}
 	e.state.hydration.revision++
 	return DispositionHydrationTerminalApplied, ReasonNone
@@ -1121,7 +1119,7 @@ func (e *Engine) applyAggregateIngressFenceLocked(node *queueNode) (DispositionC
 			coverage = hydrationCoverageUnknown
 		}
 		state := ensureAggregateState(symbol)
-		invalid, hasInvalid := e.state.aggregateEvaluator.invalidMarks[index]
+		invalid, hasInvalid := e.invalidMarkBeforeLocked(index, target)
 		var invalidEvidence *invalidMarkEvidence
 		if hasInvalid {
 			invalidEvidence = &invalid

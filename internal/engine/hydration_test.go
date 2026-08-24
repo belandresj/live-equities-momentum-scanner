@@ -208,6 +208,9 @@ func TestC6START01FreshCheckpointLifecycleTrace(t *testing.T) {
 	if terminalResult.FenceCommand.CommandToken() == 0 || e.state.lifecycle != lifecycleHydrating {
 		t.Fatalf("terminal improperly finalized startup: disposition=%+v lifecycle=%s", terminalResult, e.state.lifecycle)
 	}
+	if pending := e.observePublication(); pending.currentMarketClaim || len(pending.aggregateEvaluation.rows) != 0 || pending.aggregateEvaluation.enrichedRows != 0 {
+		t.Fatalf("successful empty appeared current before exact fence/evaluation: %+v", pending)
+	}
 	now = start.Add(3 * time.Second)
 	staleCommand := terminalResult.FenceCommand
 	staleCommand.commandToken++
@@ -228,7 +231,32 @@ func TestC6START01FreshCheckpointLifecycleTrace(t *testing.T) {
 	if admission != AdmissionAdmitted || got.Code != DispositionAggregateIngressFenceApplied || e.state.lifecycle != lifecycleLive || e.state.committedT == nil || *e.state.committedT != now {
 		t.Fatalf("fence finalization = %s %+v lifecycle=%s committed=%v", admission, got, e.state.lifecycle, e.state.committedT)
 	}
+	if resolved := e.observePublication(); !resolved.currentMarketClaim || resolved.aggregateEvaluation.mode != rankingQualifiedCurrent ||
+		len(resolved.aggregateEvaluation.rows) != 0 || resolved.aggregateEvaluation.enrichedRows != 0 || resolved.aggregateEvaluation.population.noPrintThroughT != 1 {
+		t.Fatalf("successful empty did not resolve only at exact fence/evaluation: %+v", resolved)
+	}
 	closeAndWait(t, e)
+
+	now = start.Add(2 * time.Second)
+	incomplete, incompleteToken := plannedHydrationEngine(t, binding, &now)
+	beforeMalformed := incomplete.observePublication()
+	if _, malformedErr := NewHydrationTerminalInput(incompleteToken, incompleteToken.ResultID(), HydrationCompletedValue, HydrationReasonNone, 1, 1, 10, -1, 1, 2); malformedErr == nil {
+		t.Fatal("malformed/incomplete success terminal was constructible")
+	}
+	if afterMalformed := incomplete.observePublication(); afterMalformed.publicationID != beforeMalformed.publicationID || afterMalformed.currentMarketClaim || len(afterMalformed.aggregateEvaluation.rows) != 0 || afterMalformed.aggregateEvaluation.enrichedRows != 0 {
+		t.Fatalf("malformed terminal changed B2 publication: before=%+v after=%+v", beforeMalformed, afterMalformed)
+	}
+	failedTerminal, failedTerminalErr := NewHydrationTerminalInput(incompleteToken, incompleteToken.ResultID(), HydrationFailed, HydrationReasonHTTPRetryExhausted, 1, 3, 0, 0, 0, 0)
+	if failedTerminalErr != nil {
+		t.Fatal(failedTerminalErr)
+	}
+	if failed := admitHydrationTerminal(t, incomplete, failedTerminal); failed.Code != DispositionHydrationTerminalApplied {
+		t.Fatalf("incomplete terminal disposition=%+v", failed)
+	}
+	if incompletePublication := incomplete.observePublication(); incompletePublication.currentMarketClaim || len(incompletePublication.aggregateEvaluation.rows) != 0 || incompletePublication.aggregateEvaluation.enrichedRows != 0 {
+		t.Fatalf("incomplete/failed terminal appeared current or enriched: %+v", incompletePublication)
+	}
+	closeAndWait(t, incomplete)
 
 	now = start.Add(2 * time.Second)
 	lost, _ := plannedHydrationEngine(t, binding, &now)
@@ -236,6 +264,9 @@ func TestC6START01FreshCheckpointLifecycleTrace(t *testing.T) {
 	observed := lost.observeHydration()
 	if observed.Active || observed.Accounting.Canceled != 1 || lost.state.lifecycle != lifecycleAwaitingAggregateAck {
 		t.Fatalf("epoch-loss cancellation = %+v lifecycle=%s", observed, lost.state.lifecycle)
+	}
+	if canceled := lost.observePublication(); canceled.currentMarketClaim || len(canceled.aggregateEvaluation.rows) != 0 || canceled.aggregateEvaluation.enrichedRows != 0 {
+		t.Fatalf("canceled generation appeared current/complete: %+v", canceled)
 	}
 	closeAndWait(t, lost)
 
@@ -249,10 +280,15 @@ func TestC6START01FreshCheckpointLifecycleTrace(t *testing.T) {
 	if canceled := awaitHydrationDisposition(t, canceledCompletion); canceled.Code != DispositionAggregateIngressFenceRejected || tracing.state.lifecycle != lifecycleAwaitingAggregateAck || tracing.state.hydration.generation.active {
 		t.Fatalf("queued-marker loss consequence = %+v lifecycle=%s active=%v", canceled, tracing.state.lifecycle, tracing.state.hydration.generation.active)
 	}
+	beforeReplaced := tracing.observePublication()
 	lateComplete, _ := NewAggregateIngressFenceInput(traceResult.FenceCommand, AggregateIngressFenceComplete, 1, 1, now)
 	_, lateCompletion := tracing.AdmitAggregateIngressFence(context.Background(), lateComplete)
 	if late := awaitHydrationDisposition(t, lateCompletion); late.Code != DispositionAggregateIngressFenceFenced || tracing.state.lifecycle != lifecycleAwaitingAggregateAck {
 		t.Fatalf("old generation completed after loss = %+v lifecycle=%s", late, tracing.state.lifecycle)
+	}
+	if replaced := tracing.observePublication(); replaced.currentMarketClaim || replaced.publicationID != beforeReplaced.publicationID ||
+		len(replaced.aggregateEvaluation.rows) != 0 || replaced.aggregateEvaluation.enrichedRows != 0 {
+		t.Fatalf("replaced generation changed publication/currentness: before=%+v after=%+v", beforeReplaced, replaced)
 	}
 	closeAndWait(t, tracing)
 
@@ -1034,11 +1070,7 @@ func TestC6MERGE01ProductionHistoricalDispositionMatrix(t *testing.T) {
 		canonical := e.ObserveReplayDeterministic().Canonical[0]
 		state := aggregateState(t, e, "AAA")
 		if state.historicalConflict == nil || !state.historicalConflict.has(sessionSlot(e.state.binding, start)) ||
-			exactAggregateCoverage(state, e.state.binding, start, now) || canonical.Qualification.Status != "unresolved" ||
-			canonical.Features.HODDrawdown.Status != "invalid" || canonical.Features.HODDrawdown.Reason != "historical_conflict" ||
-			canonical.Features.SessionRange.Status != "invalid" || canonical.Features.Rolling30.Status != "invalid" ||
-			canonical.Features.Rolling60.Status != "invalid" || canonical.Features.Activity.Status != "unavailable" ||
-			canonical.Features.Activity.Reason != "history_incomplete" {
+			exactAggregateCoverage(state, e.state.binding, start, now) || canonical.Qualification.Status != "unresolved" {
 			t.Fatalf("historical/historical ambiguity did not remain fail-closed: canonical=%+v state=%+v", canonical, state)
 		}
 		closeAndWait(t, e)

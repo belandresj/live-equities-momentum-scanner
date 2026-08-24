@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -389,9 +390,32 @@ func TestSlice2LocalDefectProductionComposition(t *testing.T) {
 	}
 
 	invalid := engine.AggregateInput{SchemaVersion: engine.AggregateSchemaV1, BindingIdentity: binding.Identity(), Source: engine.AggregateSourceLive,
-		Symbol: "BBB", WindowStart: markStart, WindowEnd: markStart.Add(time.Second), DeliveryTime: now,
+		Symbol: "BBB", WindowStart: now.Add(-time.Second), WindowEnd: now, DeliveryTime: now,
 		Values: engine.AggregateValues{Open: 10, High: 10, Low: 10, Close: 10, Volume: math.NaN(), VWAP: 10, AverageTradeSize: 10, ATSProvenance: engine.ATSLiveProviderAverage},
-		Live:   engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 3}}
+		Live:   engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 5}}
+	beforeInvalidCapture, beforeInvalidErr := runtime.CaptureSnapshot()
+	beforeInvalid, beforeInvalidOK := operations.InspectSnapshotCapture(beforeInvalidCapture)
+	if beforeInvalidErr != nil || !beforeInvalidOK {
+		t.Fatalf("pre-invalid capture=%v/%t", beforeInvalidErr, beforeInvalidOK)
+	}
+	committedBoundary := *beforeInvalid.Engine.Publication.Watermark
+	invalid.WindowStart, invalid.WindowEnd = committedBoundary.Add(-time.Second), committedBoundary
+	startsBeforeInvalid := owner.ObserveEvaluationTiming().Starts
+	for offset, frame := range []uint64{3, 4} {
+		outside := invalid
+		outside.WindowStart = committedBoundary.Add(time.Duration(offset) * time.Second)
+		outside.WindowEnd = outside.WindowStart.Add(time.Second)
+		outside.Live.FrameSequence = frame
+		beforeOutside := owner.ObserveSnapshot().Publication.PublicationID
+		if admittedOutside, completedOutside := owner.AdmitAggregate(ctx, outside); admittedOutside != engine.AdmissionAdmitted || completedOutside == nil {
+			t.Fatalf("outside invalid admission=%s offset=%d", admittedOutside, offset)
+		} else if result := <-completedOutside; result.Code != engine.DispositionAggregateRejected || result.Reason != engine.ReasonStructural {
+			t.Fatalf("outside invalid offset=%d disposition=%+v", offset, result)
+		}
+		if afterOutside := owner.ObserveSnapshot(); afterOutside.Publication.PublicationID != beforeOutside || owner.ObserveEvaluationTiming().Starts != startsBeforeInvalid {
+			t.Fatalf("right-open/outside invalid started a cycle offset=%d beforeID=%d after=%+v timing=%+v", offset, beforeOutside, afterOutside.Publication, owner.ObserveEvaluationTiming())
+		}
+	}
 	admitted, invalidCompletion := owner.AdmitAggregate(ctx, invalid)
 	if admitted != engine.AdmissionAdmitted || invalidCompletion == nil {
 		t.Fatal("attributable invalid aggregate was not admitted to the owner FIFO")
@@ -399,8 +423,40 @@ func TestSlice2LocalDefectProductionComposition(t *testing.T) {
 	if result := <-invalidCompletion; result.Code != engine.DispositionAggregateRejected || result.Reason != engine.ReasonStructural {
 		t.Fatalf("invalid aggregate=%+v", result)
 	}
+	afterInvalidCapture, afterInvalidErr := runtime.CaptureSnapshot()
+	afterInvalid, afterInvalidOK := operations.InspectSnapshotCapture(afterInvalidCapture)
+	trustTiming := owner.ObserveEvaluationTiming()
+	if afterInvalidErr != nil || !afterInvalidOK || afterInvalid.Engine.Publication.PublicationID <= beforeInvalid.Engine.Publication.PublicationID ||
+		afterInvalid.Engine.Publication.Watermark == nil || beforeInvalid.Engine.Publication.Watermark == nil ||
+		!afterInvalid.Engine.Publication.Watermark.Equal(*beforeInvalid.Engine.Publication.Watermark) ||
+		afterInvalid.Engine.Publication.AggregateEvaluation.Mode != "degraded_current" || len(afterInvalid.Engine.Publication.AggregateEvaluation.Rows) != 1 ||
+		afterInvalid.Engine.Publication.AggregateEvaluation.Rows[0].Symbol != "AAA" ||
+		afterInvalid.Engine.Publication.AggregateEvaluation.Population.UnknownDueFailureOrFence != 1 {
+		t.Fatalf("late structural-invalid trust closure was not immediate/coherent: before=%+v after=%+v err=%v ok=%t", beforeInvalid.Engine.Publication, afterInvalid.Engine.Publication, afterInvalidErr, afterInvalidOK)
+	}
+	if trustTiming.Source != engine.AggregateEvaluationTrustCorrection || !trustTiming.Target.Equal(committedBoundary) || trustTiming.Starts.TrustCorrection != startsBeforeInvalid.TrustCorrection+1 {
+		t.Fatalf("structural trust cycle attribution=%+v before=%+v", trustTiming, startsBeforeInvalid)
+	}
+	afterTrustID := afterInvalid.Engine.Publication.PublicationID
 	if admitted, completed := owner.AdmitTimer(ctx); admitted != engine.AdmissionAdmitted || (<-completed).Code != engine.DispositionTimerApplied {
 		t.Fatal("same-target evaluation timer was not applied")
+	}
+	if afterTimer := owner.ObserveSnapshot(); afterTimer.Publication.PublicationID != afterTrustID || owner.ObserveEvaluationTiming().Starts != trustTiming.Starts {
+		t.Fatalf("timer duplicated structural trust revision/T: before=%+v after=%+v", trustTiming, owner.ObserveEvaluationTiming())
+	}
+	coverageCommand, coverageCommandErr := owner.IssueLiveCoverageFence()
+	if coverageCommandErr != nil {
+		t.Fatal(coverageCommandErr)
+	}
+	coverageInput, coverageInputErr := engine.NewLiveCoverageFenceInput(coverageCommand, engine.LiveCoverageFenceComplete, 5, 2, now)
+	if coverageInputErr != nil {
+		t.Fatal(coverageInputErr)
+	}
+	if coverageAdmission, coverageCompletion := owner.AdmitLiveCoverageFence(ctx, coverageInput); coverageAdmission != engine.AdmissionAdmitted || (<-coverageCompletion).Code != engine.DispositionLiveCoverageFenceApplied {
+		t.Fatalf("same-target coverage fence admission=%s", coverageAdmission)
+	}
+	if owner.ObserveEvaluationTiming().Starts != trustTiming.Starts {
+		t.Fatalf("fence duplicated structural trust revision/T: before=%+v after=%+v", trustTiming, owner.ObserveEvaluationTiming())
 	}
 
 	capture, err := runtime.CaptureSnapshot()
@@ -435,7 +491,7 @@ func TestSlice2LocalDefectProductionComposition(t *testing.T) {
 		t.Fatalf("partial snapshot HTTP=%d body=%s", response.Code, response.Body.String())
 	}
 	lost := engine.ConnectionControlInput{SchemaVersion: engine.ConnectionControlSchemaV1, BindingIdentity: binding.Identity(), Kind: engine.ConnectionLost,
-		ConnectionEpoch: 1, Position: engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 4}, ReceiptTime: now, Outcome: engine.ControlFailed}
+		ConnectionEpoch: 1, Position: engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 6}, ReceiptTime: now, Outcome: engine.ControlFailed}
 	if admitted, completed := owner.AdmitConnectionControl(ctx, lost); admitted != engine.AdmissionAdmitted || (<-completed).Code != engine.DispositionConnectionControlApplied {
 		t.Fatal("global transport loss was not applied")
 	}
@@ -639,8 +695,13 @@ func TestPC10HTTPBoundsLoopbackCancellationAndProgress(t *testing.T) {
 }
 
 func TestP2ConcurrentCapturesDoNotWaitBehindBlockedWriter(t *testing.T) {
-	runtime, _, _ := newSnapshotRuntime(t)
+	runtime, _, _ := newQualifiedTapeRuntime(t)
 	t.Cleanup(func() { shutdownSnapshotRuntime(t, runtime) })
+	baselineCapture, baselineCaptureErr := runtime.CaptureSnapshot()
+	baseline, baselineMapErr := Map(baselineCapture)
+	if baselineCaptureErr != nil || baselineMapErr != nil || len(baseline.Rows) != 1 || baseline.Rows[0].Volume.ValueShares == nil {
+		t.Fatalf("current enriched capture baseline=%+v captureErr=%v mapErr=%v", baseline, baselineCaptureErr, baselineMapErr)
+	}
 	handler, err := NewHandler(runtime, HandlerConfig{})
 	if err != nil {
 		t.Fatal(err)
@@ -660,9 +721,10 @@ func TestP2ConcurrentCapturesDoNotWaitBehindBlockedWriter(t *testing.T) {
 
 	const total = 128
 	type result struct {
-		id      string
-		elapsed time.Duration
-		err     error
+		id       string
+		snapshot Snapshot
+		elapsed  time.Duration
+		err      error
 	}
 	results := make(chan result, total)
 	var group sync.WaitGroup
@@ -681,7 +743,7 @@ func TestP2ConcurrentCapturesDoNotWaitBehindBlockedWriter(t *testing.T) {
 			} else if decodeErr != nil {
 				requestErr = decodeErr
 			}
-			results <- result{id: snapshot.Sample.ID, elapsed: time.Since(started), err: requestErr}
+			results <- result{id: snapshot.Sample.ID, snapshot: snapshot, elapsed: time.Since(started), err: requestErr}
 		}()
 	}
 	group.Wait()
@@ -699,6 +761,9 @@ func TestP2ConcurrentCapturesDoNotWaitBehindBlockedWriter(t *testing.T) {
 		if result.err != nil {
 			t.Fatal(result.err)
 		}
+		if result.snapshot.Publication.ID != baseline.Publication.ID || len(result.snapshot.Rows) != 1 || !reflect.DeepEqual(result.snapshot.Rows[0], baseline.Rows[0]) {
+			t.Fatalf("capture pressure changed enriched publication identity: baseline=%+v got=%+v", baseline, result.snapshot)
+		}
 		id, parseErr := strconv.ParseUint(result.id, 10, 64)
 		if parseErr != nil {
 			t.Fatalf("invalid sample ID %q: %v", result.id, parseErr)
@@ -708,7 +773,7 @@ func TestP2ConcurrentCapturesDoNotWaitBehindBlockedWriter(t *testing.T) {
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	for index, id := range ids {
-		want := uint64(index + 2) // the blocked request owns sample 1.
+		want := uint64(index + 3) // baseline and blocked requests own samples 1-2.
 		if id != want {
 			t.Fatalf("sample IDs were not unique/contiguous: index=%d got=%d want=%d ids=%v", index, id, want, ids)
 		}
@@ -721,10 +786,143 @@ func TestP2ConcurrentCapturesDoNotWaitBehindBlockedWriter(t *testing.T) {
 	}
 }
 
+func TestPLBRB2TerminalCaptureMatrix(t *testing.T) {
+	type fixture struct {
+		run     *operations.Runtime
+		binding reference.Binding
+		now     *time.Time
+		token   engine.HydrationRequestToken
+	}
+	newFixture := func(t *testing.T) fixture {
+		binding := snapshotBinding(t, "AAA")
+		now := binding.SessionStart().Add(time.Minute)
+		config := operations.DefaultConfig()
+		config.SampleCadence = 10 * time.Minute
+		run, err := operations.New(context.Background(), binding, config, func() time.Time { return now })
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { shutdownSnapshotRuntime(t, run) })
+		ackAt := now.Add(-config.EvaluationDelay)
+		applySnapshotControl(t, run.Engine(), binding, engine.ConnectionAttempt, 1, 1, engine.LivePosition{}, ackAt)
+		applySnapshotControl(t, run.Engine(), binding, engine.AggregateCommandWriteResult, 1, 2, engine.LivePosition{}, ackAt)
+		applySnapshotControl(t, run.Engine(), binding, engine.AggregateSubscriptionResult, 1, 2, engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 1}, ackAt)
+		budgets := engine.HydrationPlanBudgets{Workers: 1, RowsPerChunk: 1, MaximumResponseBytes: 1 << 20, MaximumNormalizedRecords: 57_600, MaximumResidentRecords: 57_600}
+		admission, completion := run.Engine().AdmitHydrationPlan(context.Background(), engine.HydrationPlanInput{SchemaVersion: engine.HydrationPlanSchemaV1, BindingIdentity: binding.Identity(), Purpose: engine.HydrationFreshBootstrap, ConnectionEpoch: 1, Budgets: budgets})
+		if admission != engine.AdmissionAdmitted || completion == nil {
+			t.Fatalf("terminal matrix plan admission=%s", admission)
+		}
+		plan := <-completion
+		if plan.Code != engine.DispositionHydrationPlanApplied || len(plan.Plan.Requests()) != 1 {
+			t.Fatalf("terminal matrix plan=%+v", plan)
+		}
+		return fixture{run: run, binding: binding, now: &now, token: plan.Plan.Requests()[0]}
+	}
+	capture := func(t *testing.T, run *operations.Runtime) (operations.SnapshotCaptureView, Snapshot) {
+		sealed, err := run.CaptureSnapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		view, ok := operations.InspectSnapshotCapture(sealed)
+		mapped, mapErr := Map(sealed)
+		if !ok || mapErr != nil {
+			t.Fatalf("terminal matrix capture ok=%t mapErr=%v", ok, mapErr)
+		}
+		return view, mapped
+	}
+	assertClosed := func(t *testing.T, view operations.SnapshotCaptureView, mapped Snapshot) {
+		if view.Engine.Publication.CurrentMarketClaim || len(view.Engine.Publication.AggregateEvaluation.Rows) != 0 || mapped.Status.RankingCurrent || len(mapped.Rows) != 0 {
+			t.Fatalf("terminal evidence appeared current/enriched: engine=%+v mapped=%+v", view.Engine.Publication, mapped)
+		}
+	}
+
+	t.Run("malformed neutral and incomplete failed", func(t *testing.T) {
+		f := newFixture(t)
+		beforeView, beforeMapped := capture(t, f.run)
+		if _, err := engine.NewHydrationTerminalInput(f.token, f.token.ResultID(), engine.HydrationCompletedValue, engine.HydrationReasonNone, 1, 1, 10, -1, 1, 1); err == nil {
+			t.Fatal("malformed terminal was constructible")
+		}
+		afterMalformedView, afterMalformedMapped := capture(t, f.run)
+		if afterMalformedView.Engine.Publication.PublicationID != beforeView.Engine.Publication.PublicationID || afterMalformedMapped.Publication.ID != beforeMapped.Publication.ID {
+			t.Fatal("unconstructible malformed terminal changed publication")
+		}
+		assertClosed(t, afterMalformedView, afterMalformedMapped)
+		failed, _ := engine.NewHydrationTerminalInput(f.token, f.token.ResultID(), engine.HydrationFailed, engine.HydrationReasonHTTPRetryExhausted, 1, 3, 0, 0, 0, 0)
+		_, completion := f.run.Engine().AdmitHydrationTerminal(context.Background(), failed)
+		if result := <-completion; result.Code != engine.DispositionHydrationTerminalApplied {
+			t.Fatalf("failed terminal=%+v", result)
+		}
+		view, mapped := capture(t, f.run)
+		assertClosed(t, view, mapped)
+	})
+
+	t.Run("successful empty fence", func(t *testing.T) {
+		f := newFixture(t)
+		empty, _ := engine.NewHydrationTerminalInput(f.token, f.token.ResultID(), engine.HydrationCompletedEmpty, engine.HydrationReasonNone, 1, 1, 10, 0, 0, 0)
+		_, completion := f.run.Engine().AdmitHydrationTerminal(context.Background(), empty)
+		terminal := <-completion
+		pendingView, pendingMapped := capture(t, f.run)
+		assertClosed(t, pendingView, pendingMapped)
+		fence, _ := engine.NewAggregateIngressFenceInput(terminal.FenceCommand, engine.AggregateIngressFenceComplete, 1, 1, *f.now)
+		_, fenceCompletion := f.run.Engine().AdmitAggregateIngressFence(context.Background(), fence)
+		if result := <-fenceCompletion; result.Code != engine.DispositionAggregateIngressFenceApplied {
+			t.Fatalf("empty fence=%+v", result)
+		}
+		view, mapped := capture(t, f.run)
+		if !view.Engine.Publication.CurrentMarketClaim || len(view.Engine.Publication.AggregateEvaluation.Rows) != 0 || !mapped.Status.RankingCurrent || len(mapped.Rows) != 0 {
+			t.Fatalf("successful empty did not resolve through capture/map: engine=%+v mapped=%+v", view.Engine.Publication, mapped)
+		}
+	})
+
+	t.Run("canceled and replaced", func(t *testing.T) {
+		f := newFixture(t)
+		canceled, _ := engine.NewHydrationTerminalInput(f.token, f.token.ResultID(), engine.HydrationCanceled, engine.HydrationReasonCanceled, 0, 0, 0, 0, 0, 0)
+		_, completion := f.run.Engine().AdmitHydrationTerminal(context.Background(), canceled)
+		if result := <-completion; result.Code != engine.DispositionHydrationTerminalApplied {
+			t.Fatalf("canceled terminal=%+v", result)
+		}
+		beforeView, beforeMapped := capture(t, f.run)
+		assertClosed(t, beforeView, beforeMapped)
+		_, lateCompletion := f.run.Engine().AdmitHydrationTerminal(context.Background(), canceled)
+		if late := <-lateCompletion; late.Code != engine.DispositionHydrationRejected {
+			t.Fatalf("replaced/late terminal=%+v", late)
+		}
+		afterView, afterMapped := capture(t, f.run)
+		assertClosed(t, afterView, afterMapped)
+		if afterView.Engine.Publication.PublicationID != beforeView.Engine.Publication.PublicationID || afterMapped.Publication.ID != beforeMapped.Publication.ID {
+			t.Fatal("late canceled terminal changed publication identity")
+		}
+
+		replaced := newFixture(t)
+		lost := engine.ConnectionControlInput{SchemaVersion: engine.ConnectionControlSchemaV1, BindingIdentity: replaced.binding.Identity(), Kind: engine.ConnectionLost,
+			ConnectionEpoch: 1, Position: engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 2}, ReceiptTime: *replaced.now, Outcome: engine.ControlFailed}
+		_, lossCompletion := replaced.run.Engine().AdmitConnectionControl(context.Background(), lost)
+		if loss := <-lossCompletion; loss.Code != engine.DispositionConnectionControlApplied {
+			t.Fatalf("replacement loss=%+v", loss)
+		}
+		beforeReplacedView, beforeReplacedMapped := capture(t, replaced.run)
+		assertClosed(t, beforeReplacedView, beforeReplacedMapped)
+		oldTerminal, _ := engine.NewHydrationTerminalInput(replaced.token, replaced.token.ResultID(), engine.HydrationCanceled, engine.HydrationReasonCanceled, 0, 0, 0, 0, 0, 0)
+		_, oldCompletion := replaced.run.Engine().AdmitHydrationTerminal(context.Background(), oldTerminal)
+		if old := <-oldCompletion; old.Code != engine.DispositionHydrationFenced {
+			t.Fatalf("replaced generation terminal=%+v", old)
+		}
+		afterReplacedView, afterReplacedMapped := capture(t, replaced.run)
+		assertClosed(t, afterReplacedView, afterReplacedMapped)
+		if afterReplacedView.Engine.Publication.PublicationID != beforeReplacedView.Engine.Publication.PublicationID || afterReplacedMapped.Publication.ID != beforeReplacedMapped.Publication.ID {
+			t.Fatal("replaced generation terminal changed publication identity")
+		}
+	})
+}
+
 func TestP4CancellationStopsMappingAndDiagnostics(t *testing.T) {
-	runtime, binding, now := newSnapshotRuntime(t)
-	makeSnapshotReady(t, runtime.Engine(), binding, *now)
+	runtime, _, _ := newQualifiedTapeRuntime(t)
 	t.Cleanup(func() { shutdownSnapshotRuntime(t, runtime) })
+	baselineCapture, baselineCaptureErr := runtime.CaptureSnapshot()
+	baseline, baselineMapErr := Map(baselineCapture)
+	if baselineCaptureErr != nil || baselineMapErr != nil || len(baseline.Rows) != 1 {
+		t.Fatalf("qualified cancellation baseline=%+v captureErr=%v mapErr=%v", baseline, baselineCaptureErr, baselineMapErr)
+	}
 	diagnostics := NewMappingDiagnostics()
 	source := &countingCaptureSource{runtime: runtime}
 	handlerValue, err := NewHandler(source, HandlerConfig{Diagnostics: diagnostics})
@@ -749,6 +947,12 @@ func TestP4CancellationStopsMappingAndDiagnostics(t *testing.T) {
 	snapshotHandler.testAfterCapture = nil
 	if response.Body.Len() != 0 {
 		t.Fatalf("post-capture cancellation wrote a body: %q", response.Body.String())
+	}
+	afterCanceledCapture, afterCanceledErr := runtime.CaptureSnapshot()
+	afterCanceled, afterCanceledMapErr := Map(afterCanceledCapture)
+	if afterCanceledErr != nil || afterCanceledMapErr != nil || afterCanceled.Publication.ID != baseline.Publication.ID ||
+		len(afterCanceled.Rows) != 1 || !reflect.DeepEqual(afterCanceled.Rows[0], baseline.Rows[0]) {
+		t.Fatalf("cancellation changed enriched publication identity: baseline=%+v after=%+v captureErr=%v mapErr=%v", baseline, afterCanceled, afterCanceledErr, afterCanceledMapErr)
 	}
 
 	invalidCapture, captureErr := runtime.CaptureSnapshot()

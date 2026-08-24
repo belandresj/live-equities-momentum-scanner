@@ -116,6 +116,7 @@ func TestPC9DiagnosticsAndQuietWindowsDoNotGatePressure(t *testing.T) {
 	e.mu.Lock()
 	e.state.tq.members, e.state.tq.desired = nil, nil
 	e.state.aggregateEvaluator.current.mode, e.state.aggregateEvaluator.current.rows = rankingStale, nil
+	e.state.aggregateEvaluator.current.enrichedRows = 0
 	e.state.tq.pressure.mode, e.state.tq.pressure.cause, e.state.tq.aggregateOnly = TQPressureAggregateOnly, TQPressureCauseWaitingFrames, true
 	e.mu.Unlock()
 	quiet := diagnosticSpike
@@ -387,6 +388,7 @@ func TestPC9PressureEpochReplacementPreservesMonotonicAuthority(t *testing.T) {
 	e.state.aggregateEvaluator.current = pressureQualifiedEvaluation(start)
 	e.state.aggregateEvaluator.current.mode = rankingStale
 	e.state.aggregateEvaluator.current.rows = nil
+	e.state.aggregateEvaluator.current.enrichedRows = 0
 	e.reconcileTQLocked(start.Add(time.Second))
 	e.advanceTQPressureTimerLocked(start.Add(time.Second))
 	e.mu.Unlock()

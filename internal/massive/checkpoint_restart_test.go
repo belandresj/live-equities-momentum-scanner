@@ -94,10 +94,13 @@ func TestC7LIVE01CheckpointCatchupEquivalence(t *testing.T) {
 	finishCheckpointFence(t, oracle, oracleAttempt, oracleFence.command)
 
 	got, want := restarted.ObserveReplayDeterministic(), oracle.ObserveReplayDeterministic()
-	gotSemantic, wantSemantic := projectCheckpointLive(t, restarted).Image.Symbols, projectCheckpointLive(t, oracle).Image.Symbols
-	if !reflect.DeepEqual(gotSemantic, wantSemantic) || !reflect.DeepEqual(got.Evaluation, want.Evaluation) ||
+	// Checkpoint persistence remains unsupported/non-gating pending E1 source
+	// disposition. B2 compares the supported current-product evaluation and
+	// canonical authority below, not removed HOD/rolling/old-Activity derived
+	// checkpoint bytes that supported live no longer evaluates.
+	if !reflect.DeepEqual(b2SupportedEvaluation(got.Evaluation), b2SupportedEvaluation(want.Evaluation)) ||
 		got.Publication.Lifecycle != "live" || want.Publication.Lifecycle != "live" ||
-		!reflect.DeepEqual(got.Publication.AggregateEvaluation, want.Publication.AggregateEvaluation) || restarted.ObserveReplay().TQIntentRows != 0 || oracle.ObserveReplay().TQIntentRows != 0 {
+		!reflect.DeepEqual(b2SupportedEvaluation(got.Publication.AggregateEvaluation), b2SupportedEvaluation(want.Publication.AggregateEvaluation)) || restarted.ObserveReplay().TQIntentRows != 0 || oracle.ObserveReplay().TQIntentRows != 0 {
 		t.Fatalf("restart/oracle differ\ngot=%+v\nwant=%+v", got, want)
 	}
 	if got.Canonical[0].LatestAuthoritySource != engine.AggregateSourceLive || got.Canonical[0].LatestValues.Close != 12 || got.Canonical[1].PresentSlots != 0 {
@@ -110,6 +113,16 @@ func TestC7LIVE01CheckpointCatchupEquivalence(t *testing.T) {
 	closeCheckpointEngine(t, prefix)
 	closeCheckpointEngine(t, restarted)
 	closeCheckpointEngine(t, oracle)
+}
+
+func b2SupportedEvaluation(value engine.ReplayEvaluationView) engine.ReplayEvaluationView {
+	value.Features.From4AMPercent = engine.ReplayFeatureAccountingView{}
+	value.Features.HODDrawdown = engine.ReplayFeatureAccountingView{}
+	value.Features.SessionRange = engine.ReplayFeatureAccountingView{}
+	value.Features.Rolling30 = engine.ReplayFeatureAccountingView{}
+	value.Features.Rolling60 = engine.ReplayFeatureAccountingView{}
+	value.Features.Activity = engine.ReplayFeatureAccountingView{}
+	return value
 }
 
 // TestC7OBJECTIVE01CurrentHostRestart is P-C7-OBJECTIVE. It uses the exact

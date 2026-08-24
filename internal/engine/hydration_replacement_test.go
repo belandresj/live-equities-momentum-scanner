@@ -317,10 +317,15 @@ func TestPLBRA2Hydration(t *testing.T) {
 			t.Fatalf("compacted gap terminal accounting = %+v", terminal)
 		}
 		gapFence, _ := NewAggregateIngressFenceInput(terminal.FenceCommand, AggregateIngressFenceComplete, 1, 1, now)
+		startsBeforeRecoveryFence := e.ObserveEvaluationTiming().Starts
 		_, gapCompletion := e.AdmitAggregateIngressFence(context.Background(), gapFence)
 		if got := awaitHydrationDisposition(t, gapCompletion); got.Code != DispositionAggregateIngressFenceApplied || !e.ObserveOperational().CurrentMarketClaim ||
 			e.state.committedT == nil || !e.state.committedT.Equal(r) {
 			t.Fatalf("compacted gap did not restore current = %+v view=%+v", got, e.ObserveOperational())
+		}
+		if recoveryTiming := e.ObserveEvaluationTiming(); recoveryTiming.Source != AggregateEvaluationIngressFence ||
+			recoveryTiming.Starts.AggregateIngressFence != startsBeforeRecoveryFence.AggregateIngressFence+1 {
+			t.Fatalf("same-T recovery ingress fence was deduplicated: before=%+v after=%+v", startsBeforeRecoveryFence, recoveryTiming)
 		}
 		if state.historicalConflict != nil && (state.historicalConflict.has(sessionSlot(e.state.binding, committed)) ||
 			state.historicalConflict.has(sessionSlot(e.state.binding, committed.Add(time.Second)))) {
@@ -337,6 +342,14 @@ func TestPLBRA2Hydration(t *testing.T) {
 			recoveredEvaluation.population.trustedRankableMark != 1 || len(recoveredEvaluation.rows) != 1 ||
 			recoveredEvaluation.rows[0].symbol != "AAA" || recoveredEvaluation.rows[0].last != 9 {
 			t.Fatalf("post-recovery production evaluator at old T = %+v validation=%v", recoveredEvaluation, validation)
+		}
+		recoveredRow := recoveredEvaluation.rows[0]
+		if recoveredRow.sessionVolume != currentField(100) || recoveredRow.fromOpenPercent != currentField(0) ||
+			recoveredRow.dayRange.status != featureUnavailable || recoveredRow.dayRange.reason != featureReasonZeroWidth ||
+			recoveredRow.activity30s.status != featureWarming || recoveredRow.activity30s.reason != featureReasonReferenceWarmup ||
+			recoveredRow.move30s.status != featureWarming || recoveredRow.move30s.reason != featureReasonRollingWarmup ||
+			!state.prefix.foldedThrough.After(committed) {
+			t.Fatalf("post-recovery B2 as-of-T fields admitted compacted future evidence: row=%+v foldedThrough=%s T=%s", recoveredRow, state.prefix.foldedThrough, committed)
 		}
 
 		now = r.Add(time.Second)

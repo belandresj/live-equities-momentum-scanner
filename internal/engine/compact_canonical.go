@@ -111,9 +111,13 @@ type CanonicalAggregateView struct {
 // sorted and copied so callers cannot mutate or depend on map iteration order.
 type SelectedAggregateView struct {
 	SelectionStateView
-	PrefixFoldedThrough time.Time
-	Tail                []CanonicalAggregateView
-	Bounds              CanonicalBoundsView
+	CandidateT                time.Time
+	AcceptedCanonicalRevision uint64
+	RevisionMatched           bool
+	PrefixUsableAtCandidate   bool
+	PrefixFoldedThrough       time.Time
+	Tail                      []CanonicalAggregateView
+	Bounds                    CanonicalBoundsView
 }
 
 type CanonicalBoundsView struct {
@@ -229,19 +233,38 @@ func (e *Engine) selectionStateViewAtLocked(index int, at time.Time) SelectionSt
 		view.TrustedMark, view.TrustedMarkAt, view.MarkAvailable = mark.values, mark.windowStart, true
 		view.Coverage = coverageClassAt(state, e.state.binding, mark.windowStart)
 	}
-	if invalid, ok := e.state.aggregateEvaluator.invalidMarks[index]; ok && (!view.MarkAvailable || !invalid.windowStart.Before(view.TrustedMarkAt)) {
+	invalidAt := at
+	if invalidAt.IsZero() && state.latest != nil {
+		invalidAt = state.latest.record.windowEnd.Add(time.Second)
+	}
+	if invalid, ok := e.invalidMarkBeforeLocked(index, invalidAt); ok && (!view.MarkAvailable || !invalid.windowStart.Before(view.TrustedMarkAt)) {
 		view.Coverage = AggregateCoverageInvalid
 	}
 	return view
 }
 
 func (e *Engine) selectedAggregateViewLocked(index int) SelectedAggregateView {
-	view := SelectedAggregateView{SelectionStateView: e.selectionStateViewLocked(index)}
+	return e.selectedAggregateViewAtLocked(index, time.Time{}, 0)
+}
+
+func (e *Engine) selectedAggregateViewAtLocked(index int, at time.Time, acceptedRevision uint64) SelectedAggregateView {
+	selection := e.selectionStateViewLocked(index)
+	if !at.IsZero() {
+		selection = e.selectionStateViewAtLocked(index, at)
+	}
+	view := SelectedAggregateView{SelectionStateView: selection, CandidateT: at, AcceptedCanonicalRevision: acceptedRevision}
 	state := e.state.binding.symbols[index].aggregates
 	if state == nil {
 		return view
 	}
+	view.RevisionMatched = acceptedRevision == 0 || state.canonicalRevision == acceptedRevision
 	view.PrefixFoldedThrough = state.prefix.foldedThrough
+	view.PrefixUsableAtCandidate = at.IsZero() || !state.prefix.foldedThrough.After(at)
+	if !view.PrefixUsableAtCandidate {
+		view.PrefixVolume, view.PrefixPrints = 0, 0
+		view.PrefixFirstOpen, view.PrefixHigh, view.PrefixLow = 0, 0, 0
+		view.PrefixFirstOpenTrusted, view.PrefixExtremaTrusted, view.PrefixLatestTrusted = false, false, false
+	}
 	coverageBytes := 0
 	for _, bitmap := range []*slotBitmap{state.presence, state.sealedLive, state.provenAbsent, state.historicalConflict} {
 		if bitmap != nil {
@@ -256,7 +279,9 @@ func (e *Engine) selectedAggregateViewLocked(index int) SelectedAggregateView {
 		if record == nil {
 			continue
 		}
-		view.Tail = append(view.Tail, CanonicalAggregateView{WindowStart: record.windowStart, WindowEnd: record.windowEnd, Values: record.values, Source: record.authority.source})
+		if at.IsZero() || record.windowStart.Before(at) {
+			view.Tail = append(view.Tail, CanonicalAggregateView{WindowStart: record.windowStart, WindowEnd: record.windowEnd, Values: record.values, Source: record.authority.source})
+		}
 	}
 	sort.Slice(view.Tail, func(i, j int) bool { return view.Tail[i].WindowStart.Before(view.Tail[j].WindowStart) })
 	return view

@@ -502,6 +502,7 @@ func (e *Engine) buildSuppressedPublicationLocked(node *queueNode, disposition t
 	}
 	evaluation := cloneAggregateEvaluation(e.state.aggregateEvaluator.current)
 	evaluation.mode, evaluation.reason, evaluation.rows, evaluation.tqIntentAvailable = rankingSuppressed, rankingReasonGlobalSuppression, nil, false
+	evaluation.enrichedRows = 0
 	candidate.aggregateEvaluation = evaluation
 	candidate.currentMarketClaim = false
 	candidate.tq = cloneTQView(e.tqViewLocked())

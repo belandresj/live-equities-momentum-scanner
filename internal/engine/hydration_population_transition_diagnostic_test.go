@@ -151,15 +151,8 @@ func TestResolvedRESTLiveDiscrepancyPreservesQualificationAndFeatures(t *testing
 		view.Evaluation.Mode != "qualified_current" || view.Evaluation.TotalPassers != 1 || len(view.Evaluation.Rows) != 1 {
 		t.Fatalf("resolved discrepancy did not preserve qualification/ranking: canonical=%+v evaluation=%+v", canonical, view.Evaluation)
 	}
-	for name, field := range map[string]ReplayFieldView{
-		"hod": canonical.Features.HODDrawdown, "session": canonical.Features.SessionRange,
-		"rolling30": canonical.Features.Rolling30, "rolling60": canonical.Features.Rolling60,
-		"activity": canonical.Features.Activity,
-	} {
-		if field.Status != "current" {
-			t.Fatalf("%s unavailable after resolved discrepancy: %+v features=%+v", name, field, canonical.Features)
-		}
-	}
+	// B2 does not evaluate removed HOD/rolling/legacy Activity fields for the
+	// full population; current-product selected fields have their own proof.
 	state := aggregateState(t, e, "AAA")
 	if state.historicalConflict != nil && state.historicalConflict.has(sessionSlot(e.state.binding, start)) ||
 		!exactAggregateCoverage(state, e.state.binding, start, now) {
