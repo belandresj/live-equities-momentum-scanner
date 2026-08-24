@@ -558,10 +558,9 @@ func (r *Runtime) syncTQCommand(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	delivery, writeErr := attempt.ChangeTQ(ctx, adapterCommand)
-	if delivery.Kind != "" {
-		started := time.Now()
-		result, _ := massive.DeliverToEngine(ctx, r.engine, delivery)
+	started := time.Now()
+	result, delivered, writeErr := attempt.ChangeTQAndDeliver(ctx, r.engine, adapterCommand)
+	if delivered {
 		r.observeDelivery(started, result)
 	} else if writeErr != nil {
 		input, inputErr := engine.NewTQCommandResultInput(command, engine.LivePosition{}, r.clock().UTC(), engine.ControlFailed)

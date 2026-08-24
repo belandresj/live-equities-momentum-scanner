@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -778,6 +779,195 @@ func TestPLBRC2GenericStatusIsInformationalAndProviderErrorIsBounded(t *testing.
 	}
 	if strings.Contains(fmt.Sprint(delivery), "must-not-escape") || !adapter.Accounting().Reconciles() {
 		t.Fatalf("provider prose/accounting escaped: delivery=%+v accounting=%+v", delivery, adapter.Accounting())
+	}
+}
+
+func TestPLBRC2CommandResultPrecedesPostBoundaryRawDelivery(t *testing.T) {
+	binding := component4TestBinding(t, []string{"AAA"})
+	now := binding.SessionStart().Add(20 * time.Minute)
+	delay := time.Duration(0)
+	state, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return now }, Capacity: 64, RequiredReserve: 8, EvaluationDelay: &delay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		state.Close()
+		waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = state.Wait(waitCtx)
+	}()
+	admission, completion := state.AdmitBinding(context.Background(), engine.BindingInstall{SchemaVersion: engine.BindingInstallSchemaV1, BindingIdentity: binding.Identity(), Binding: binding})
+	if admission != engine.AdmissionAdmitted || (<-completion).Code != engine.DispositionBindingInstalled {
+		t.Fatal("binding install")
+	}
+
+	socket := newFakeLiveSocket()
+	enqueueHandshake(socket)
+	adapter, open := testLiveAdapterForBinding(t, socket, binding)
+	adapter.clock = func() time.Time { return now }
+	attempt, started, handshake := startHandshake(t, adapter, open)
+	defer closeAttemptForTest(t, attempt, 90)
+	if result, err := DeliverToEngine(context.Background(), state, started); err != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
+		t.Fatalf("connection attempt = %+v/%v", result, err)
+	}
+	for _, delivery := range handshake {
+		if result, err := DeliverToEngine(context.Background(), state, delivery); err != nil || result.ControlDisposition.Code != engine.DispositionConnectionControlApplied {
+			t.Fatalf("handshake = %+v/%v", result, err)
+		}
+	}
+
+	budgets := engine.HydrationPlanBudgets{Workers: 1, RowsPerChunk: 1, MaximumResponseBytes: 1 << 20, MaximumNormalizedRecords: 57_600, MaximumResidentRecords: 57_600}
+	planAdmission, planCompletion := state.AdmitHydrationPlan(context.Background(), engine.HydrationPlanInput{SchemaVersion: engine.HydrationPlanSchemaV1, BindingIdentity: binding.Identity(), Purpose: engine.HydrationFreshBootstrap, ConnectionEpoch: attempt.Epoch(), Budgets: budgets})
+	if planAdmission != engine.AdmissionAdmitted {
+		t.Fatal("hydration plan")
+	}
+	plan := <-planCompletion
+	var fence engine.HydrationFenceCommand
+	for _, token := range plan.Plan.Requests() {
+		terminal, terminalErr := engine.NewHydrationTerminalInput(token, token.ResultID(), engine.HydrationCompletedEmpty, engine.HydrationReasonNone, 1, 1, 10, 0, 0, 0)
+		if terminalErr != nil {
+			t.Fatal(terminalErr)
+		}
+		_, terminalCompletion := state.AdmitHydrationTerminal(context.Background(), terminal)
+		terminalResult := <-terminalCompletion
+		if terminalResult.FenceCommand.CommandToken() != 0 {
+			fence = terminalResult.FenceCommand
+		}
+	}
+	fenceInput, err := engine.NewAggregateIngressFenceInput(fence, engine.AggregateIngressFenceComplete, 3, 1, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, fenceCompletion := state.AdmitAggregateIngressFence(context.Background(), fenceInput)
+	if got := <-fenceCompletion; got.Code != engine.DispositionAggregateIngressFenceApplied {
+		t.Fatalf("hydration fence = %+v", got)
+	}
+
+	base := now
+	for index := 0; index < 60; index++ {
+		window := base.Add(time.Duration(index) * time.Second)
+		now = window.Add(time.Second)
+		input := engine.AggregateInput{SchemaVersion: engine.AggregateSchemaV1, BindingIdentity: binding.Identity(), Source: engine.AggregateSourceLive, Symbol: "AAA",
+			WindowStart: window, WindowEnd: window.Add(time.Second), Values: engine.AggregateValues{Open: 12, High: 12, Low: 12, Close: 12, Volume: 10_000, VWAP: 12, AverageTradeSize: 10, ATSProvenance: engine.ATSLiveProviderAverage},
+			DeliveryTime: now, Live: engine.LivePosition{ConnectionEpoch: attempt.Epoch(), FrameSequence: 4, ArrayIndex: uint32(index + 1)}}
+		aggregateAdmission, aggregateCompletion := state.AdmitAggregate(context.Background(), input)
+		if aggregateAdmission != engine.AdmissionAdmitted || (<-aggregateCompletion).Code != engine.DispositionAggregateInserted {
+			t.Fatalf("aggregate %d", index)
+		}
+	}
+	coverageCommand, err := state.IssueLiveCoverageFence()
+	if err != nil {
+		t.Fatal(err)
+	}
+	coverageInput, err := engine.NewLiveCoverageFenceInput(coverageCommand, engine.LiveCoverageFenceComplete, 4, 2, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, coverageCompletion := state.AdmitLiveCoverageFence(context.Background(), coverageInput)
+	if got := <-coverageCompletion; got.Code != engine.DispositionLiveCoverageFenceApplied {
+		t.Fatalf("coverage fence = %+v", got)
+	}
+	_, timerCompletion := state.AdmitTimer(context.Background())
+	if got := <-timerCompletion; got.Code != engine.DispositionTimerApplied {
+		t.Fatalf("qualification timer = %+v", got)
+	}
+	command, err := state.IssueTQCommand()
+	if err != nil {
+		t.Fatalf("T/Q command = %v view=%+v", err, state.ObserveTQ())
+	}
+	adapterCommand, err := ChangeTQCommandFromEngine(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	receivedAt := time.Now().UTC()
+	tradeAt := now.Add(-100 * time.Millisecond)
+	frameB := fmt.Sprintf(`[{"ev":"T","sym":"AAA","x":4,"i":"at-b","p":12,"s":1,"t":%d}]`, tradeAt.UnixMilli())
+	queuedB, reason, _ := attempt.queue.tryEnqueue(attempt.Epoch(), socketMessageText, receivedAt, []byte(frameB))
+	if reason != FrameAdmitted {
+		t.Fatal(reason)
+	}
+
+	beforeEvaluation := state.ObserveReplayDeterministic().Evaluation
+	beforeOperational := state.ObserveOperational()
+	captured := make(chan engine.LivePosition, 1)
+	release := make(chan struct{})
+	attempt.mu.Lock()
+	attempt.beforeEngineDelivery = func(delivery AdapterDelivery) {
+		if delivery.Control.Kind == engine.TradeQuoteCommandWriteResult {
+			captured <- delivery.TQWriteBoundary
+			<-release
+		}
+	}
+	attempt.mu.Unlock()
+	type deliveredResult struct {
+		result EngineDeliveryResult
+		ok     bool
+		err    error
+	}
+	commandDone := make(chan deliveredResult, 1)
+	go func() {
+		result, ok, changeErr := attempt.ChangeTQAndDeliver(context.Background(), state, adapterCommand)
+		commandDone <- deliveredResult{result: result, ok: ok, err: changeErr}
+	}()
+	var boundary engine.LivePosition
+	select {
+	case boundary = <-captured:
+	case <-time.After(time.Second):
+		t.Fatal("command did not pause after B capture")
+	}
+	if boundary.FrameSequence != queuedB.sequence {
+		t.Fatalf("captured B = %+v queued=%+v", boundary, queuedB)
+	}
+	frameNext := fmt.Sprintf(`[{"ev":"T","sym":"AAA","x":4,"i":"after-b","p":12,"s":1,"t":%d}]`, tradeAt.Add(time.Millisecond).UnixMilli())
+	queuedNext, reason, _ := attempt.queue.tryEnqueue(attempt.Epoch(), socketMessageText, receivedAt.Add(time.Microsecond), []byte(frameNext))
+	if reason != FrameAdmitted || queuedNext.sequence != queuedB.sequence+1 {
+		t.Fatalf("B+1 = %+v/%s", queuedNext, reason)
+	}
+	rawDone := make(chan deliveredResult, 1)
+	go func() {
+		result, ok, deliveryErr := attempt.DeliverNextToEngine(context.Background(), state)
+		rawDone <- deliveredResult{result: result, ok: ok, err: deliveryErr}
+	}()
+	select {
+	case result := <-rawDone:
+		t.Fatalf("raw delivery crossed paused command result: %+v", result)
+	default:
+	}
+	close(release)
+	var commandResult deliveredResult
+	select {
+	case commandResult = <-commandDone:
+	case <-time.After(time.Second):
+		t.Fatal("command result did not complete")
+	}
+	if commandResult.err != nil || !commandResult.ok || commandResult.result.TQDisposition.Code != engine.DispositionTQApplied {
+		t.Fatalf("command result = %+v", commandResult)
+	}
+	var atBoundary deliveredResult
+	select {
+	case atBoundary = <-rawDone:
+	case <-time.After(time.Second):
+		t.Fatal("frame B did not complete")
+	}
+	if atBoundary.err != nil || !atBoundary.ok || atBoundary.result.TQDisposition.Code != engine.DispositionTQFenced ||
+		commandResult.result.TQDisposition.EngineSequence >= atBoundary.result.TQDisposition.EngineSequence {
+		t.Fatalf("frame B ordering = command=%+v B=%+v", commandResult, atBoundary)
+	}
+	afterBoundary, ok, deliveryErr := attempt.DeliverNextToEngine(context.Background(), state)
+	if deliveryErr != nil || !ok || afterBoundary.TQDisposition.Code != engine.DispositionTQApplied ||
+		atBoundary.result.TQDisposition.EngineSequence >= afterBoundary.TQDisposition.EngineSequence {
+		t.Fatalf("frame B+1 ordering = B=%+v B+1=%+v/%v/%v", atBoundary, afterBoundary, ok, deliveryErr)
+	}
+	view := state.ObserveTQ()
+	if !view.Rows[0].TradeCoverage || view.Rows[0].QuoteCoverage || view.Rows[0].ProviderPresent {
+		t.Fatalf("B+1 did not independently confirm T: %+v", view)
+	}
+	afterOperational := state.ObserveOperational()
+	if !reflect.DeepEqual(beforeEvaluation, state.ObserveReplayDeterministic().Evaluation) ||
+		!reflect.DeepEqual(beforeOperational.Aggregates, afterOperational.Aggregates) || !reflect.DeepEqual(beforeOperational.Connection, afterOperational.Connection) ||
+		!adapter.Accounting().Reconciles() || !attempt.QueueAccounting().Reconciles() {
+		t.Fatalf("aggregate/control/accounting changed: before=%+v after=%+v adapter=%+v queue=%+v", beforeOperational, afterOperational, adapter.Accounting(), attempt.QueueAccounting())
 	}
 }
 

@@ -934,6 +934,12 @@ func handshakeTerminalReason(phase StatusPhase, outcome engine.ConnectionControl
 }
 
 func (a *LiveAttempt) ChangeTQ(ctx context.Context, command ChangeTQCommand) (AdapterDelivery, error) {
+	a.deliveryMu.Lock()
+	defer a.deliveryMu.Unlock()
+	return a.changeTQLocked(ctx, command)
+}
+
+func (a *LiveAttempt) changeTQLocked(ctx context.Context, command ChangeTQCommand) (AdapterDelivery, error) {
 	a.mu.Lock()
 	if ctx == nil || !a.handshaken || a.finished || a.terminal != nil || a.pending != nil {
 		a.mu.Unlock()
@@ -1013,6 +1019,29 @@ func (a *LiveAttempt) ChangeTQ(ctx context.Context, command ChangeTQCommand) (Ad
 		return delivery, errCommandWrite
 	}
 	return delivery, nil
+}
+
+// ChangeTQAndDeliver serializes the local socket write, exact admitted-frame
+// boundary capture, and engine completion against raw dequeue. The read worker
+// does not take deliveryMu and may continue queueing later complete frames.
+func (a *LiveAttempt) ChangeTQAndDeliver(ctx context.Context, state *engine.Engine, command ChangeTQCommand) (EngineDeliveryResult, bool, error) {
+	a.deliveryMu.Lock()
+	defer a.deliveryMu.Unlock()
+	delivery, writeErr := a.changeTQLocked(ctx, command)
+	if delivery.Kind == "" {
+		return EngineDeliveryResult{}, false, writeErr
+	}
+	a.mu.Lock()
+	beforeEngineDelivery := a.beforeEngineDelivery
+	a.mu.Unlock()
+	if beforeEngineDelivery != nil {
+		beforeEngineDelivery(delivery)
+	}
+	result, deliveryErr := DeliverToEngine(context.Background(), state, delivery)
+	if deliveryErr != nil {
+		return result, true, errors.Join(writeErr, deliveryErr)
+	}
+	return result, true, writeErr
 }
 
 func (a *LiveAttempt) validTQCommand(command ChangeTQCommand) bool {
