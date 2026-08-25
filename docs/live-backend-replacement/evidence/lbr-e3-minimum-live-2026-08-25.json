@@ -1,0 +1,193 @@
+{
+  "schema": "lbr-e3-minimum-live-evidence-v1",
+  "slice": "LBR-E3",
+  "trading_date": "2026-08-25",
+  "classification": "correction_required",
+  "classification_reason": "The minimum connection/read objective passed end to end, but two honest ready-to-watermark_stale-to-ready flaps occurred in roughly seven minutes after first readiness. Recurring readiness flapping is a hard normal-operation failure under the replacement parent rather than an entitlement, market-condition, or short-window limitation. The first protected diagnostic attributes the threshold crossing to an active full-population live-coverage/maintenance cycle.",
+  "authorization": {
+    "environment": "ordinary Massive production US-equities environment with the existing private account and entitlements",
+    "credential_chain": "already-exported MASSIVE_API_KEY, otherwise the existing runbook-defined macOS Keychain item",
+    "credential_source_used": "macOS Keychain",
+    "credential_exposed_logged_or_persisted": false,
+    "provider_requests_occurred": true,
+    "authorized_duration_seconds": 600,
+    "retry_authorized": false,
+    "induced_recovery_pressure_or_shedding_authorized": false,
+    "induced_recovery_pressure_or_shedding_performed": false
+  },
+  "provenance": {
+    "branch": "codex/live-backend-replacement",
+    "code_commit": "1467ed6d2de74bf73a2e0e8e69acf30f44d92fc9",
+    "activation_commit": "5236a2665671a986d627f2d9a38c32303e6ee3f6",
+    "worktree_clean_before_credential_access": true,
+    "go_version": "go1.26.5 darwin/arm64",
+    "host": "Apple M1, 8 GiB RAM, macOS 26.2 arm64",
+    "wrapper_sha256": "945353d31517945f148e86a890046a40d6fb7b29fb4292edd39ca328d34560b8"
+  },
+  "configuration": {
+    "command": "./scripts/run-private-scanner --trading-date 2026-08-25 --hydration-workers 8 --open",
+    "hydration_workers": 8,
+    "api_address": "127.0.0.1:8080",
+    "dashboard_address": "127.0.0.1:4173",
+    "allowed_origin": "http://127.0.0.1:4173",
+    "production_code_or_configuration_changed_during_run": false,
+    "replay_or_checkpoint_accessed": false
+  },
+  "timeline": {
+    "launcher_start_utc": "2026-08-25T19:43:23Z",
+    "launcher_start_local": "2026-08-25T12:43:23-07:00",
+    "launcher_start_epoch": 1787687003,
+    "connection_active_observed_by_utc": "2026-08-25T19:43:40Z",
+    "first_hydrating_sample_utc": "2026-08-25T19:43:40Z",
+    "first_ready_observed_utc": "2026-08-25T19:46:13Z",
+    "first_ready_elapsed_seconds_upper_bound": 170,
+    "first_watermark_stale_utc": "2026-08-25T19:47:26.020224Z",
+    "first_watermark_stale_recovered": true,
+    "tq_degraded_observed_utc": "2026-08-25T19:51:35Z",
+    "tq_normal_reobserved_utc": "2026-08-25T19:51:55Z",
+    "second_watermark_stale_observed_between_utc": [
+      "2026-08-25T19:52:35Z",
+      "2026-08-25T19:53:23Z"
+    ],
+    "second_watermark_stale_recovered_before_shutdown": true,
+    "duration_reached_utc": "2026-08-25T19:53:23Z",
+    "launcher_end_utc": "2026-08-25T19:53:23Z",
+    "launcher_end_epoch": 1787687603,
+    "elapsed_seconds": 600,
+    "launcher_exit_status": 0,
+    "controlled_shutdown_clean": true,
+    "post_shutdown_private_processes": 0,
+    "post_shutdown_loopback_listeners": 0
+  },
+  "provider_and_hydration": {
+    "credential_load": "succeeded",
+    "connection_active": true,
+    "connection_epoch": 1,
+    "aggregate_subscription_acknowledged": true,
+    "planned_symbols": 5554,
+    "completed_value": 5502,
+    "completed_empty_no_print": 52,
+    "failed": 0,
+    "canceled": 0,
+    "hydration_rows_consumed": 5798677,
+    "hydration_rows_rejected": 0,
+    "hydration_integrity_errors": 0,
+    "fence_reconciled": true,
+    "natural_disconnect_observed": false,
+    "natural_connection_epoch_change_observed": false,
+    "recovery_observed": false,
+    "heartbeat_or_connection_terminal_anomaly": false
+  },
+  "live_observations": {
+    "committed_time_advanced": true,
+    "accounting_valid_all_samples": true,
+    "ranking_mode": "qualified_current",
+    "ranked_rows": 20,
+    "passer_count_range": [108, 112],
+    "selected_tq_desired": 20,
+    "selected_tq_known_present_range_after_warmup": [17, 20],
+    "selected_tq_integrity_errors": 0,
+    "selected_tq_last_observed_facts_consumed": 72979,
+    "selected_tq_natural_degradation": {
+      "observed": true,
+      "mode": "taq_degraded",
+      "shed": true,
+      "aggregate_ranking_remained_ready": true,
+      "recovered_to_normal": true
+    },
+    "one_second_api_polling": {
+      "polls": 20,
+      "failures": 0,
+      "ready_responses": 20,
+      "sample_id_advances": 19,
+      "max_latency_ms": 57
+    },
+    "one_second_readiness_polling": {
+      "polls": 90,
+      "ready": 90,
+      "not_ready": 0,
+      "failures": 0,
+      "transitions": 0,
+      "limitation": "This bounded interval did not overlap either brief watermark_stale transition."
+    },
+    "dashboard": {
+      "listener_available": true,
+      "browser_title": "MOMENTUM SCANNER",
+      "live_status_visible": true,
+      "rendered_table_rows_including_two_headers": 22,
+      "rendered_ranked_rows": 20,
+      "browser_console_warnings_or_errors": 0,
+      "bounded_top_symbols_observed": ["AIXI", "NCPL", "DAIC", "PMI", "JEM"]
+    }
+  },
+  "resource_and_queue_summary": {
+    "aggregate_deliveries_last_observed": 102865,
+    "queue_capacity_frames": 4096,
+    "queue_high_frames": 386,
+    "queue_high_bytes": 4210490,
+    "queue_repeatedly_drained_to_zero": true,
+    "mean_processing_delay_ms_range": [4, 6],
+    "scanner_cpu_percent_observed_range": [9.3, 112.6],
+    "scanner_rss_kib_observed_range": [622624, 1198400],
+    "heap_in_use_bytes_observed_range": [967098368, 1683841024],
+    "live_goroutines_observed_range": [12, 13],
+    "hydration_goroutines_observed_range": [28, 31],
+    "unbounded_queue_or_resource_growth_observed": false,
+    "limitation": "The 10-minute window is sufficient for trend screening, not an E2 plateau or deterministic capacity claim."
+  },
+  "watermark_stale_observation": {
+    "count_observed_in_terminal_status": 2,
+    "honest_not_ready_transitions": true,
+    "recovered_each_time": true,
+    "false_ready_observed": false,
+    "diagnostic_path": "var/diagnostics/watermark-stale-20260825T194726.020224000Z.json",
+    "diagnostic_sha256": "d54f8d869d5ef152ca575e9a3404c61e3b75c6e6ae6bb565b528f9359747afe6",
+    "diagnostic_size_bytes": 127316,
+    "first_trigger_lag_ns": 3000000000,
+    "first_trigger_active_cycle": {
+      "phase": "live_coverage_completion",
+      "elapsed_ns": 1106241000,
+      "evaluation_source": "live_coverage_fence",
+      "evaluation_phase": "maintenance",
+      "evaluation_elapsed_ns": 730050000
+    },
+    "diagnostic_limitation": "The process persists at most the first qualifying transition, so the second event is bounded by terminal ordering but has no second diagnostic file."
+  },
+  "correction_boundary": {
+    "reopened": true,
+    "boundary": "full-population canonical maintenance feeding evaluation/publication",
+    "candidate_owners": [
+      "LBR-A1 compact canonical state maintenance",
+      "LBR-B1/B2 evaluation and publication maintenance cycle"
+    ],
+    "narrower_owner_not_yet_claimed": true,
+    "reason": "The first transition observed 3 seconds of watermark lag while the active live-coverage cycle had elapsed 1.106241 seconds in live_coverage_completion and its engine maintenance evaluation had elapsed 730.050 milliseconds. Focused offline attribution must distinguish compactSymbolLocked/canonical maintenance cost from qualification and field-maintenance/evaluation cost before implementation ownership is narrowed.",
+    "replacement_design_target_max_ms": 250,
+    "live_connection_read_facts_preserved": true,
+    "provider_rerun_authorized": false
+  },
+  "reference_artifacts": {
+    "universe_2026_08_25_sha256": "4977bed8b501b464a7f0ea5c5b174191524bdcdfc9279de9bb519ab94436f800",
+    "prior_close_2026_08_24_sha256": "8a9ac627e7220728eae6c460f9e8da3e8ff097435060104775682d9cdcaca782",
+    "float_latest_sha256": "dfd796c75ad00e40858bb3f6251e72b05b521cfc0046d68b155bb6ab0993da16"
+  },
+  "claim_limits": [
+    "This establishes a minimum viable ordinary Massive connection, read, hydrate, fence, readiness, ranking, T/Q, API, dashboard, and clean-shutdown observation.",
+    "Two recovered watermark_stale transitions require correction of the full-population maintenance/evaluation performance boundary before live_stability_confirmed or another provider retry.",
+    "No induced recovery or pressure case was performed and no provider SLA is claimed.",
+    "E2 remains deferred/non-gating; deterministic 300-frames/s capacity remains unestablished.",
+    "No public deployment, replay/checkpoint support, or trading expectancy is claimed."
+  ],
+  "independent_review": {
+    "model": "gpt-5.6-sol",
+    "reasoning": "medium",
+    "result": "FAIL_correction_required",
+    "mechanical_evidence_redaction_and_topology_checks": "pass",
+    "finding": "The initial observed_limitation classification was invalid because recurring watermark-stale readiness flapping is a hard parent condition; reopen full-population canonical maintenance/evaluation performance attribution.",
+    "corrected_handoff_re_review": {
+      "result": "CLEAN_PASS",
+      "finding_count": 0,
+      "summary": "The corrected evidence and sole ledger consistently classify correction_required, preserve the passed minimum connection/read facts, reopen A1 and B1/B2 only as candidate owners pending offline attribution, and retain all claim and authorization limits."
+    }
+  }
+}

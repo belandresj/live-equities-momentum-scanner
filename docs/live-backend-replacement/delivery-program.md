@@ -1762,6 +1762,57 @@ committed.
   replay/checkpoint, public deployment, provider SLA, deterministic capacity,
   or trading-expectancy claim is permitted.
 
+#### `LBR-E3` minimum live connection/read result — 2026-08-25
+
+- **Minimum path passed:** the corrected launcher loaded the credential from
+  macOS Keychain without exposure, connected/authenticated to ordinary Massive
+  production, and retained connection epoch 1 with aggregate acknowledgement.
+  Eight hydration workers completed the exact 5,554-symbol plan as 5,502 value
+  plus 52 successful-empty/no-print terminals with zero failure, cancellation,
+  row rejection, or integrity error across 5,798,677 consumed rows. The fence
+  reconciled and first observed readiness occurred within 170 seconds.
+- **Live product behavior observed:** committed time advanced, accounting stayed
+  valid, ranking remained `qualified_current` with 20 rows and 108-112 passers,
+  and selected T/Q warmed to 20/20. One natural `taq_degraded`/shed transition
+  recovered to normal without affecting aggregate readiness. Twenty one-second
+  API polls had zero failure, 20 ready responses, 19 sample advances, and 57 ms
+  maximum latency. The browser rendered `LIVE`, the 20 ranked rows, current
+  market fields/T/Q status, and no console warning/error. Ninety further one-
+  second readiness polls were all ready. The launcher stopped cleanly at the
+  exact 600-second deadline with no remaining process or listener.
+- **Bounded queues/resources:** the aggregate queue reached 386/4,096 frames and
+  4,210,490/67,108,864 bytes and repeatedly drained to zero. Live goroutines
+  remained 12-13; observed RSS ranged 622,624-1,198,400 KiB and heap-in-use
+  ranged 967,098,368-1,683,841,024 bytes without monotonic growth in this short
+  window. These are live trend facts, not E2 plateau or capacity evidence.
+- **Hard observed defect and classification:** after first readiness, terminal
+  status recorded two honest `ready -> watermark_stale -> ready` flaps in
+  roughly seven minutes. The first bounded diagnostic records the 3-second lag
+  crossing while a full-population live-coverage cycle had been active for
+  1.106241 seconds in `live_coverage_completion`, including 730.050 ms in
+  engine `maintenance`, above the replacement's sub-250 ms maximum design
+  target. Recurring readiness flapping is a parent hard condition, so the result
+  is `correction_required`, not `observed_limitation`, even though each
+  transition recovered and no false-ready state was observed.
+- **Correction ownership and no retry:** reopen the full-population canonical-
+  maintenance/evaluation performance boundary spanning A1 compact-state
+  maintenance feeding B1/B2 evaluation/publication. Do not claim a narrower
+  owner until focused offline attribution distinguishes canonical
+  `compactSymbolLocked` work from qualification/field maintenance. Preserve all
+  minimum connection/read facts. No closing-bell or other provider rerun is
+  authorized before correction and new exact owner authorization.
+- **Evidence and review:** the bounded redacted record is
+  `evidence/lbr-e3-minimum-live-2026-08-25.json`, SHA-256
+  `330b629ce44f3056587587ad9a6772ed83e043245b05c9ce057ae8ec2fe1e5f2`.
+  Its protected watermark diagnostic is 127,316 bytes, SHA-256
+  `d54f8d869d5ef152ca575e9a3404c61e3b75c6e6ae6bb565b528f9359747afe6`.
+  The required read-only review passed redaction, checksum, hydration,
+  accounting, shutdown, topology, E2, and claim-limit checks but first returned
+  `FAIL` until the result was corrected from `observed_limitation` to
+  `correction_required` and the maintenance/evaluation boundary reopened.
+  Focused re-review of that corrected handoff returned `CLEAN/PASS` with no
+  finding. The reviewer made no edits.
+
 ### Owner-approved E2 duration and manifest revision — 2026-08-23
 
 The owner revised E2 to exactly one 10-minute deterministic acceptance run. The
@@ -1782,22 +1833,22 @@ but copy no status.
 
 | Item | State | Gate / next action |
 | --- | --- | --- |
-| Parent architecture | `approved_e3_minimum_live_observation_active_e2_deferred` | Current replacement architecture remains unchanged; A3 is corrected and one exact 10-minute E3 connection/read observation is active. |
-| Delivery program | `lbr_e3_minimum_live_observation_active` | One 10-minute provider attempt is authorized from the clean A3-corrected commit; no retry or separate closing-bell run is authorized. E2 remains deferred/non-gating. |
+| Parent architecture | `approved_e3_minimum_read_passed_correction_required_e2_deferred` | Current architecture remains unchanged. Minimum live connection/read passed, but recurring watermark-stale readiness flapping reopens full-population maintenance/evaluation performance. |
+| Delivery program | `lbr_e3_correction_required_maintenance_attribution_next` | Preserve passed minimum live facts; no provider retry. Focused offline A1 versus B1/B2 maintenance attribution is next. E2 remains deferred/non-gating. |
 | `LBR-P1` focused contracts and characterization | `accepted_frozen_e2_deferred` | Five-spec review/owner acceptance remains valid. The frozen E2 baseline/manifest is retained for optional future reactivation and does not gate E3; comparable baseline CPU/RSS remain explicitly unknown. |
-| Capability A — canonical state and hydration | `finally_accepted_lbr_a3_launcher_correction` | A1/A2/A3 hydration semantics remain accepted; the isolated-wrapper/atomic-build correction and focused re-review are clean. |
+| Capability A — canonical state and hydration | `reopened_full_population_maintenance_attribution` | A2/A3 hydration and launcher semantics remain accepted. A1 compact-state maintenance is a candidate owner of the observed live-coverage cycle cost pending focused attribution. |
 | `LBR-A3` bounded parallel live hydration | `accepted_launcher_isolation_correction` | Wrapper tests are isolated; atomic replacement, failure preservation, startup/steady-state process-group retirement, and cleanup are proven without changing exact `1|2|4|8` hydration semantics. |
 | Watermark-stall diagnostic preservation | `accepted_between_a3_d1` | Baseline commit `e88eef7` was semantically forward-ported with offline verification and clean final review; diagnostic-only, no A/B/C reopening or D1 activation. |
 | `LBR-B3` removal slice | `accepted` | Commit `f697288`; removal proof, resource evidence, focused corrections, and final focused re-review are clean. |
-| Capability B — evaluation and publication | `finally_accepted` | B1/B2/B3 and the required final read-only review remain accepted and unaffected by A3. |
+| Capability B — evaluation and publication | `reopened_full_population_maintenance_attribution` | Ranking/publication semantics remain accepted. B1/B2 qualification/field maintenance is a candidate owner of the observed live-coverage cycle cost pending focused attribution. |
 | Capability C — selected-row T/Q | `finally_accepted` | C1/C2 remain accepted and unaffected by the A3 hydration-topology revision. |
 | Capability D — live ingress | `finally_accepted` | D1/D2, one decoded-batch FIFO/owner handoff, exact connection semantics, final-byte gates, corrections, and final read-only review are clean and preserved by E1. |
-| Capability E — integration/removal/acceptance | `lbr_e3_minimum_connection_read_active` | E1 remains accepted and A3 is corrected. One exact 10-minute connection/read observation is active; E2 remains deferred/non-gating. |
+| Capability E — integration/removal/acceptance | `lbr_e3_minimum_read_passed_correction_required` | E1 and the corrected launcher remain accepted; minimum connection/read passed, but recurring watermark-stale readiness flapping blocks live stability and provider retry. |
 | E2 deterministic duration/manifest revision | `deferred_non_gating` | If reactivated: exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |
 | Deterministic capacity characterization | `not_established_deferred` | No timed E2 evidence exists. This optional status requires a newly authorized E2 activation and conforming run but does not gate E3. |
-| `LBR-E3` authorized observation | `minimum_connection_read_active_10m` | A new exact 10-minute attempt is authorized to test credential/provider connection, incoming data, hydration progress, and local surfaces; no retry or separate closing-bell run is authorized. |
-| Live stability confirmation | `not_confirmed_correction_required` | Required hydration/fence, sustained honest readiness, API/dashboard, accounting, and resource evidence is unavailable because the provider path never started. |
-| Final integrated program review | `clean_pass_correction_handoff` | After the initial documentation findings were corrected, focused re-review returned `CLEAN/PASS` with no P1/P2/P3 finding; production topology and claim limits remain intact. |
+| `LBR-E3` authorized observation | `minimum_read_passed_correction_required_no_retry` | Credential/provider/hydration/fence/ranking/TQ/API/UI/shutdown passed; two recovered watermark-stale flaps require offline correction before any newly authorized provider attempt. |
+| Live stability confirmation | `not_confirmed_recurring_watermark_stale` | The minimum path worked, but two honest readiness flaps violate the hard normal-operation condition. |
+| Final integrated program review | `clean_pass_correction_handoff` | The corrected live-evidence handoff passed focused re-review with no finding. Program acceptance remains open because the observed maintenance/evaluation defect still requires correction and new live evidence. |
 | A3 launcher correction review | `clean_pass` | Final focused re-review found no P1/P2/P3 issue after atomic replacement, process-group containment, and isolated-test corrections. |
 
 ## 15. Git and milestone policy
