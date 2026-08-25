@@ -1732,6 +1732,36 @@ committed.
   requires a new exact-duration owner authorization; this correction supplies
   none.
 
+#### `LBR-E3` minimum live connection/read activation — 2026-08-25
+
+- **Exact new authorization:** after accepting the A3 launcher correction, the
+  owner authorized one new 10-minute private/local Massive production run for
+  trading date `2026-08-25` using the existing approved credential chain. No
+  induced recovery, queue pressure, or shedding and no retry are authorized.
+  The attempt stops at 600 seconds from launcher start or immediately on the
+  existing mandatory E3 stop conditions.
+- **Purpose and claim limit:** this minimum observation first tests ordinary
+  credential acquisition, provider connection/authentication, incoming live
+  aggregate/T/Q reading, hydration/fence progress, API/dashboard availability,
+  and immediate integrity/resource behavior. Because a 15:42 New York late
+  start must hydrate the full elapsed extended session, the 10-minute window is
+  not assumed sufficient for first readiness and cannot by itself establish
+  `live_stability_confirmed` unless every E3 acceptance fact is actually
+  observed. A desired closing-bell observation is separate and not authorized
+  by this activation.
+- **Clean execution base and host:** exact clean commit
+  `1467ed6d2de74bf73a2e0e8e69acf30f44d92fc9` on
+  `codex/live-backend-replacement`; required loopback ports are free. The
+  credential-free launcher artifact is a valid arm64 executable and its
+  corrected wrapper SHA-256 is
+  `945353d31517945f148e86a890046a40d6fb7b29fb4292edd39ca328d34560b8`.
+  Available disk is 4.0 GiB at 99% occupancy and swap use is 4,171 MiB, so disk,
+  swap, RSS, and unsafe-host impact are explicit immediate stop watches.
+- **Activation:** this 10-minute E3 connection/read observation is the sole
+  active execution slice. No production/configuration semantic edit, E2,
+  replay/checkpoint, public deployment, provider SLA, deterministic capacity,
+  or trading-expectancy claim is permitted.
+
 ### Owner-approved E2 duration and manifest revision — 2026-08-23
 
 The owner revised E2 to exactly one 10-minute deterministic acceptance run. The
@@ -1752,8 +1782,8 @@ but copy no status.
 
 | Item | State | Gate / next action |
 | --- | --- | --- |
-| Parent architecture | `approved_e3_attempted_a3_corrected_e2_deferred` | Current replacement architecture remains unchanged; the E3 attempt reached no provider path, and its reopened A3 launcher-test-isolation defect is corrected and reviewed. |
-| Delivery program | `lbr_a3_launcher_correction_accepted_live_authority_required` | The A3 correction and focused review are clean. Another E3/live WebSocket attempt requires a new exact-duration authorization; E2 remains deferred/non-gating. |
+| Parent architecture | `approved_e3_minimum_live_observation_active_e2_deferred` | Current replacement architecture remains unchanged; A3 is corrected and one exact 10-minute E3 connection/read observation is active. |
+| Delivery program | `lbr_e3_minimum_live_observation_active` | One 10-minute provider attempt is authorized from the clean A3-corrected commit; no retry or separate closing-bell run is authorized. E2 remains deferred/non-gating. |
 | `LBR-P1` focused contracts and characterization | `accepted_frozen_e2_deferred` | Five-spec review/owner acceptance remains valid. The frozen E2 baseline/manifest is retained for optional future reactivation and does not gate E3; comparable baseline CPU/RSS remain explicitly unknown. |
 | Capability A — canonical state and hydration | `finally_accepted_lbr_a3_launcher_correction` | A1/A2/A3 hydration semantics remain accepted; the isolated-wrapper/atomic-build correction and focused re-review are clean. |
 | `LBR-A3` bounded parallel live hydration | `accepted_launcher_isolation_correction` | Wrapper tests are isolated; atomic replacement, failure preservation, startup/steady-state process-group retirement, and cleanup are proven without changing exact `1|2|4|8` hydration semantics. |
@@ -1762,10 +1792,10 @@ but copy no status.
 | Capability B — evaluation and publication | `finally_accepted` | B1/B2/B3 and the required final read-only review remain accepted and unaffected by A3. |
 | Capability C — selected-row T/Q | `finally_accepted` | C1/C2 remain accepted and unaffected by the A3 hydration-topology revision. |
 | Capability D — live ingress | `finally_accepted` | D1/D2, one decoded-batch FIFO/owner handoff, exact connection semantics, final-byte gates, corrections, and final read-only review are clean and preserved by E1. |
-| Capability E — integration/removal/acceptance | `lbr_e3_correction_required_no_provider_observation` | E1 exclusive cutover remains accepted. E3 stopped before provider access on the reopened A3 launcher-test-isolation defect; no retry is authorized. E2 remains deferred/non-gating. |
+| Capability E — integration/removal/acceptance | `lbr_e3_minimum_connection_read_active` | E1 remains accepted and A3 is corrected. One exact 10-minute connection/read observation is active; E2 remains deferred/non-gating. |
 | E2 deterministic duration/manifest revision | `deferred_non_gating` | If reactivated: exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |
 | Deterministic capacity characterization | `not_established_deferred` | No timed E2 evidence exists. This optional status requires a newly authorized E2 activation and conforming run but does not gate E3. |
-| `LBR-E3` authorized observation | `correction_required_no_provider_access_no_retry` | The sole attempt stopped in the credential-free launcher build after two seconds. No provider observation occurred and another attempt requires new exact owner authorization. |
+| `LBR-E3` authorized observation | `minimum_connection_read_active_10m` | A new exact 10-minute attempt is authorized to test credential/provider connection, incoming data, hydration progress, and local surfaces; no retry or separate closing-bell run is authorized. |
 | Live stability confirmation | `not_confirmed_correction_required` | Required hydration/fence, sustained honest readiness, API/dashboard, accounting, and resource evidence is unavailable because the provider path never started. |
 | Final integrated program review | `clean_pass_correction_handoff` | After the initial documentation findings were corrected, focused re-review returned `CLEAN/PASS` with no P1/P2/P3 finding; production topology and claim limits remain intact. |
 | A3 launcher correction review | `clean_pass` | Final focused re-review found no P1/P2/P3 issue after atomic replacement, process-group containment, and isolated-test corrections. |
