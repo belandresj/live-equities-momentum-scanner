@@ -1,6 +1,6 @@
 # Live Equities Momentum Scanner
 
-Live Equities Momentum Scanner is an in-progress real-time U.S. equities
+Live Equities Momentum Scanner is a private/local real-time U.S. equities
 scanner for a discretionary momentum trader. It ranks qualified stocks
 by return from the adjusted previous regular-session close, presents
 aggregate-derived session context, and provides trade- and quote-derived
@@ -83,21 +83,21 @@ owner-approved. Current status and the sequential roadmap live in the
 [`replacement delivery program`](docs/live-backend-replacement/delivery-program.md)
 and [`specification map`](docs/specification-map.md).
 
-Capabilities A–D are implemented and accepted for their recorded semantics.
-Ordinary-live hydration accepts exactly `1|2|4|8` workers and defaults to 8.
-`LBR-E1` is accepted. The failed synthetic `LBR-E2` capacity composition is
-preserved as evidence but deferred and non-gating. `LBR-E3` market-hours
-validation is the next permitted slice, pending an exact owner authorization
-for credential access, date, environment, duration, and recovery boundary.
-Historical numbered components and stability corrections remain evidence, not
-requirements to preserve their private representations.
+The live-backend replacement is implemented and accepted through Capabilities
+A–E. Ordinary-live hydration accepts exactly `1|2|4|8` workers and defaults to
+8. `LBR-E1` completed the exclusive cutover, and the corrected `LBR-E3`
+observation established bounded private/local extended-hours live stability.
+The failed synthetic `LBR-E2` capacity composition is preserved as evidence
+but deferred and non-gating. Historical numbered components and stability
+corrections remain evidence, not requirements to preserve their private
+representations.
 
 The only supported operating path remains the ordinary fresh-start live
 scanner. Replay and checkpoint tooling are removed; restart uses fresh hydration.
-Deterministic fixtures remain proof tools, not product replay. The delivery
-program permits `LBR-E3` next but does not itself authorize credentials or a
-provider request; that authority must be supplied for the exact observation.
-No current document authorizes public deployment or a trading-edge claim.
+Deterministic fixtures remain proof tools, not product replay. Every future
+credentialed provider observation still requires separate exact owner
+authorization. No current document establishes deterministic 300-frames/s
+capacity, a provider SLA, public deployment, or a trading-edge claim.
 
 ## Private local dashboard
 

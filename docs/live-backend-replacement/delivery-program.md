@@ -4,16 +4,18 @@
 E2 to exactly one 10-minute deterministic acceptance run on 2026-08-23,
 inserted bounded parallel live hydration `LBR-A3` before D1, and accepted the
 narrow diagnostic-preservation correction between A3 and D1 on 2026-08-24;
-owner-revised on 2026-08-25 to defer E2 as non-gating and permit E3 next under
-exact provider authorization.
+owner-revised on 2026-08-25 to defer E2 as non-gating and completed through
+corrected E3 live stability confirmation and final integrated review on
+2026-08-25.
 
 **Parent:** [`../live-backend-replacement.md`](../live-backend-replacement.md).
 
 **Baseline:** `0d043c1 stabilize live evaluation and local continuity`.
 
-**Implementation branch/worktree:** `codex/live-backend-replacement` in the
-dedicated replacement worktree. `main`, `origin/main`, and unrelated work in
-the original checkout remain outside this program.
+**Implementation provenance:** developed and accepted on
+`codex/live-backend-replacement` in the dedicated replacement worktree. Local
+`main` integration is a closure action; pushing and unrelated work remain
+outside this program.
 
 ## 1. Outcome
 
@@ -1965,7 +1967,7 @@ but copy no status.
 | Item | State | Gate / next action |
 | --- | --- | --- |
 | Parent architecture | `approved_e3_live_stability_confirmed_e2_deferred` | Current architecture remains unchanged. The corrected 10-minute extended-hours observation sustained honest readiness with bounded queues/resources and no watermark-stale recurrence. |
-| Delivery program | `lbr_e3_live_stability_confirmed` | R1/R2 and the corrected live result are recorded; the final integrated read-only review returned clean. Commit only E3 evidence/authority files. E2 remains deferred/non-gating. |
+| Delivery program | `complete_live_stability_confirmed` | R1/R2, the corrected live result, and the clean final integrated review are committed. The replacement is merge-ready for its defined private/local scope. E2 remains deferred/non-gating. |
 | `LBR-P1` focused contracts and characterization | `accepted_frozen_e2_deferred` | Five-spec review/owner acceptance remains valid. The frozen E2 baseline/manifest is retained for optional future reactivation and does not gate E3; comparable baseline CPU/RSS remain explicitly unknown. |
 | Capability A — canonical state and hydration | `reaccepted_lbr_r2_incremental_maintenance` | The canonical tail/prefix remains sole truth; revision-matched bounded indexes update incrementally and the independent-map 5,554 × 961 unchanged-cycle measurement is below the hard maintenance boundary with zero allocation. |
 | `LBR-A3` bounded parallel live hydration | `accepted_launcher_isolation_correction` | Wrapper tests are isolated; atomic replacement, failure preservation, startup/steady-state process-group retirement, and cleanup are proven without changing exact `1|2|4|8` hydration semantics. |

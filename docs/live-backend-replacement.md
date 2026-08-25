@@ -3,8 +3,8 @@
 **Status:** Owner-approved replacement architecture, 2026-08-23; owner-revised
 E2 to exactly one 10-minute deterministic acceptance run on 2026-08-23 and
 restored bounded parallel live hydration on 2026-08-24; owner-revised on
-2026-08-25 to defer E2 as non-gating and permit E3 next under exact provider
-authorization.
+2026-08-25 to defer E2 as non-gating, then completed through corrected E3 live
+stability confirmation and final integrated review on 2026-08-25.
 
 **Baseline:** `0d043c1 stabilize live evaluation and local continuity` on
 `codex/live-backend-replacement`.

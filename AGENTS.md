@@ -31,21 +31,17 @@ corrections, and private/local baseline remain reusable evidence, not the
 active implementation plan. Replay is unverified and checkpoint persistence is
 disabled; neither is a replacement gate.
 
-The active goal is the private/local
-[`live backend replacement`](docs/live-backend-replacement/delivery-program.md):
-Capabilities A–D and `LBR-E1` are accepted on the exclusive replacement path.
-The invalid synthetic E2 execution is preserved, while E2 deterministic
-capacity characterization is deferred and non-gating. `LBR-E3` real-provider
-market-hours validation is the next permitted slice but remains inactive until
-an exact owner authorization names the date, Massive environment and credential
-source, duration, procedure, redaction, stop/shutdown behavior, and any
-permitted recovery action.
+The private/local
+[`live backend replacement`](docs/live-backend-replacement/delivery-program.md)
+is complete for its defined scope: Capabilities A–E, the exclusive E1 cutover,
+the corrected E3 provider observation, and the final integrated review are
+accepted. The invalid synthetic E2 execution is preserved, while E2
+deterministic capacity characterization remains deferred and non-gating.
 
-Keep one active write-capable slice and finally review each capability before
-starting the next. Public deployment, replay repair, and checkpoint
-compatibility remain outside current authority. Credentialed market-hours work
-is permitted next only after its separate exact authorization; a provider
-request always requires that authorization.
+Any new implementation scope must retain one active write-capable slice and
+the applicable final review. Public deployment, replay repair, and checkpoint
+compatibility remain outside current authority. Every future credentialed
+provider request requires a new exact owner authorization.
 
 ## Replacement fixed and revisable decisions
 
