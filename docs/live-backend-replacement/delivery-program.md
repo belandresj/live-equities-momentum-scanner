@@ -1657,6 +1657,31 @@ committed.
   conformance and E2/claim limits remain intact; and no P1/P2/P3 finding
   remains. The reviewer made no edits.
 
+#### `LBR-A3` launcher-isolation correction activation — 2026-08-25
+
+- **Correction authority and scope:** the owner directed correction of the
+  diagnosed launcher blocker at clean commit
+  `c017fcdff7f43c8a995dd67839ed7dc3822795c6`. The sole active write-capable
+  slice is the reopened A3 public-wrapper test-isolation and persistent
+  runtime-output hygiene boundary. It may change only
+  `scripts/run-private-scanner`, its focused launcher tests, active runbook
+  wording if required, and this ledger/evidence handoff.
+- **Required behavior and proof:** public-wrapper tests must execute against an
+  isolated repository-shaped temporary root and leave the real ignored
+  runtime directory untouched. The production wrapper must build to a unique
+  same-directory temporary destination and replace the final launcher only
+  after successful compilation. A stale non-object target must be replaced; a
+  failed or signaled build must preserve the prior target, remove its temporary
+  build destination, and remain joined. Focused proof is credential-free and
+  must not execute the real launcher/provider path.
+- **Preserved boundaries and live gate:** hydration worker counts and budgets,
+  state ownership, ingress queue, evaluation/publication, API/UI, provider,
+  credential, and market semantics remain unchanged. The failed E3 evidence
+  and no-retry result remain preserved. This correction does not itself grant
+  another credential lookup or provider request; a new live attempt still
+  requires an exact duration and explicit activation after deterministic
+  acceptance.
+
 ### Owner-approved E2 duration and manifest revision — 2026-08-23
 
 The owner revised E2 to exactly one 10-minute deterministic acceptance run. The
@@ -1678,10 +1703,10 @@ but copy no status.
 | Item | State | Gate / next action |
 | --- | --- | --- |
 | Parent architecture | `approved_e3_attempted_e2_deferred` | Current replacement architecture remains unchanged; the authorized E3 attempt stopped before provider access on a reopened A3 launcher-test-isolation defect. |
-| Delivery program | `lbr_e3_correction_required_a3_reopened` | E3 was attempted once, reached no provider path, and cannot be retried without new owner authorization. E2 remains deferred/non-gating. |
+| Delivery program | `lbr_a3_launcher_correction_active` | E3 reached no provider path. The reopened A3 wrapper-test-isolation/runtime-output correction is the sole active write-capable slice; E2 remains deferred/non-gating. |
 | `LBR-P1` focused contracts and characterization | `accepted_frozen_e2_deferred` | Five-spec review/owner acceptance remains valid. The frozen E2 baseline/manifest is retained for optional future reactivation and does not gate E3; comparable baseline CPU/RSS remain explicitly unknown. |
 | Capability A — canonical state and hydration | `reopened_lbr_a3_launcher_test_isolation` | A1/A2 and A3 hydration semantics remain accepted; only the A3 public-wrapper test-isolation/persistent-runtime hygiene claim is reopened. |
-| `LBR-A3` bounded parallel live hydration | `reopened_launcher_test_isolation` | Exact `1|2|4|8` hydration semantics and proofs remain accepted, but its wrapper test can leave a fake executable in the real ignored runtime path and block the supported launcher. |
+| `LBR-A3` bounded parallel live hydration | `launcher_isolation_correction_active` | Exact `1|2|4|8` hydration semantics remain accepted. Correct the wrapper-test leak and atomic replacement behavior without changing live semantics. |
 | Watermark-stall diagnostic preservation | `accepted_between_a3_d1` | Baseline commit `e88eef7` was semantically forward-ported with offline verification and clean final review; diagnostic-only, no A/B/C reopening or D1 activation. |
 | `LBR-B3` removal slice | `accepted` | Commit `f697288`; removal proof, resource evidence, focused corrections, and final focused re-review are clean. |
 | Capability B — evaluation and publication | `finally_accepted` | B1/B2/B3 and the required final read-only review remain accepted and unaffected by A3. |
