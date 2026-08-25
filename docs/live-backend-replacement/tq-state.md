@@ -160,27 +160,43 @@ delivery program before Capability C begins, but the accepted contract must
 always state finite count and byte limits and preserve the 30-second boundary.
 
 Pressure consumes only direct fixed-cardinality ingress evidence: waiting
-batch count/bytes and capacities, oldest waiting-batch age, aggregate watermark
-lag while T/Q work exists, new capacity loss, queue/transport/T/Q accounting
-loss, and retention-bound state. Active-frame work age, heap, goroutines,
-generic delivery latency, delivery-family attribution, checkpoint state, and
-missing/quiet samples are diagnostics only.
+batch count/bytes and capacities, oldest waiting-batch age, new capacity loss,
+queue/transport/T/Q accounting loss, and retention-bound state. Aggregate
+watermark lag, active-frame work age, heap, goroutines, generic delivery
+latency, delivery-family attribution, checkpoint state, and missing/quiet
+samples are diagnostics only. Watermark lag cannot by itself enter, prolong,
+or reset T/Q pressure because it does not identify T/Q as the cause.
 
 One engine-issued sample may be outstanding. Results are accepted in order
 within two seconds. Entry thresholds retain the approved direct-pressure
 policy: two consecutive one-second samples at at least 10% waiting slots or
 bytes, or oldest waiting age at least one second, enter `taq_degraded`; three
 consecutive samples at at least 25% or two seconds enter `aggregate_only`.
-Watermark lag greater than two seconds for two samples while T/Q work exists,
-or a new capacity/accounting/global-bound failure, enters `aggregate_only`.
+A new capacity/accounting/global-bound failure enters `aggregate_only`
+immediately.
 
 `taq_degraded` closes coverage and makes ingress skip remaining expensive T/Q
 normalization while continuing mixed-frame aggregate/control classification.
 `aggregate_only` also removes provider T/Q membership. Recovery requires five
 consecutive accepted one-second samples below 1% slots and bytes, oldest age
-strictly below 750 ms, aggregate lag at most one second, coherent accounting,
-and no new loss/bound. Exactly 750 ms is unhealthy. Every restoration starts a
-fresh generation. Pressure never changes aggregate ranking/readiness.
+strictly below 750 ms, coherent accounting, and no new loss/bound. Exactly
+750 ms is unhealthy. Every restoration starts a fresh generation. Pressure
+never changes aggregate ranking/readiness.
+
+An aggregate-only `watermark_stale` transition with no direct T/Q-pressure,
+loss, accounting, control, epoch, or state-bound evidence retains provider T/Q
+membership and continues normal classification and canonical ingestion. It
+immediately withholds the selected Tape and Spread projection with reason
+`aggregate_watermark_stale` but creates no unsubscribe, generation change,
+coverage gap, or cleanup liability. When aggregate readiness returns, one
+engine-owned presentation boundary starts a five-second continuous clean hold.
+Any renewed watermark staleness restarts that hold. After five complete seconds
+with current aggregate readiness and coherent direct-pressure evidence, Tape
+and Spread are released together from the continuously ingested canonical T/Q
+state. Tape uses only its post-boundary five-second window; Spread additionally
+requires an eligible post-boundary quote and otherwise remains honestly
+warming or stale. An actual transport/coverage gap still uses the ordinary
+coverage closure and fresh provider-confirmed generation rules.
 
 Independently, a decoded frame has a 500 ms monotonic classification budget.
 After it expires, ingress still classifies the rest of the frame in order but
@@ -215,6 +231,7 @@ does not suppress aggregate state.
 | --- | --- | --- | --- |
 | `LBR-C1` | `P-LBR-C1-TQ-STATE` | A deterministic selected-symbol trace covers the strict `B` boundary, independent trade/quote confirmation, Tape warm/current/covered-zero, Spread locked/one-sided/crossed/stale, exact duplicate, unequal repeat, lifecycle disclosure, out-of-order events at `T-30s` and one tick older, duplicate expiry at receipt+30s and one tick later, channel gap, rank removal, per-symbol/global count and byte hits. It observes exact fields, coverage, membership, counters, and aggregate publication equivalence. It detects a broad 16-minute fingerprint store or status-created coverage. It does not prove socket writes or pressure queue behavior. |
 | `LBR-C2` | `P-LBR-C2-TQ-MEMBERSHIP` | Compose fresh batched membership, rapid rank churn, unsubscribe-before-subscribe, write failure, generic/late statuses, post-write data confirmation, quiet unconfirmed channels, T/Q error, two pressure entry levels, early mixed-frame shedding, removal to zero, exact five-sample 749/750-ms recovery, gradual restoration, reconnect reset, and immediate trust publication. It asserts one in-flight write, bounded members, exact accounting, no T/Q-caused aggregate/watermark/readiness change, and no aggregate/control loss. It does not prove provider acceptance of a request or final ingress queue implementation. |
+| `LBR-R1` | `P-LBR-R1-TQ-WATERMARK-CONTINUITY` | Starting from 20 data-confirmed rows, cross ready to watermark-stale while queue, capacity, accounting, control, and epoch evidence remain healthy. Assert zero provider commands, unchanged membership/generations, continued T/Q accounting, immediate noncurrent projection, restart on a second stale crossing, and simultaneous release only after five complete ready seconds with post-boundary Tape and quote evidence. Contrasts actual queue pressure, loss, and accounting failure, which retain existing coverage closure/unsubscribe behavior. It does not prove provider capacity or repair aggregate maintenance latency. |
 
 `LBR-C1` replaces broad trade/string retention with the bounded contribution,
 30-second duplicate, and O(1) quote state. Acceptance makes old one-second Tape

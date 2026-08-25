@@ -103,6 +103,15 @@ Once an identity is strictly outside the correction horizon, its effect folds
 once into the prefix and its mutable record is discarded. No ordinary later
 input can reopen it.
 
+Routine maintenance uses one bounded, rebuildable, nonauthoritative expiry and
+tail-presence index. Ordinary in-order insertion, revision, withdrawal, and
+one-second expiry update that index incrementally; a correction may perform
+bounded symbol-local reordering. The hydration terminal may build it once from
+the bounded tail. A routine one-second cycle may visit newly expired identities
+but may not allocate a tail-sized work list, rescan all retained identities, or
+rebuild complete tail coverage for every symbol. The canonical tail map and
+sealed prefix remain the only aggregate truth.
+
 The compact coverage evidence retains whether folded presence has independent
 sealed-live support. Exact value comparison needed by a historical request may
 exist only as bounded reconciliation evidence owned by that exact active
@@ -246,6 +255,7 @@ bound hits without symbol-keyed logs or provider prose in retained state.
 | `LBR-A1` | `P-LBR-A1-CANONICAL` | A deterministic approved fixture corpus drives insert, equal duplicate, revision, withdrawal/conflict, ordinary out-of-order live input, REST/live delivery permutations, current-token historical fill both inside and far older than the 16-minute horizon, the exact live 16-minute/equality boundary, no-print, invalid, and unknown coverage through both the approved baseline oracle and replacement semantic projection. It requires historical/historical conflict to withdraw only the historical result, historical/live mismatch to retain independently trusted live state while localizing historical uncertainty, and equal marks, coverage classes, sufficient-field inputs, and accounting—not private struct equality. It asserts one mutable record per identity and bounded fold state. It detects a latest-price-only, delivery-order-dependent, or horizon-blind historical implementation. It does not prove full hydration, scale, or provider correctness. |
 | `LBR-A2` | `P-LBR-A2-HYDRATION` | A real engine plus bounded fake REST/fence producers composes value, exact empty, malformed row, failure, cancellation, superseded generation, epoch loss, post-live gap recovery, live-over-REST precedence, and a fence placed behind already-read live work. A long-stall trace accepts more than 16 minutes of post-watermark live rows, folds early identities, loses/replaces the epoch, plans exact `[T,R)` across sealed-live presence, reconciles equal/unequal REST rows without reopening live authority, restores current only through the fence evaluator, and then advances ordinarily. It observes exact work/row identities, coverage consequence, lifecycle/currentness, and no current publication before fence plus evaluation. It does not prove provider availability or connection retry execution. |
 | `LBR-A3` | `P-LBR-A3-PARALLEL-HYDRATION` | The ordinary scanner runs the same generation and live-tail composition with 1, 2, 4, and 8 bounded workers under deliberately unequal request latency. It proves the configured active-worker ceiling, out-of-order result/token correctness, exactly one terminal per request, finite plan/resident budgets, cancellation and joined shutdown, live aggregate progress without sustained queue growth, fence eligibility only after all work is terminal, and byte-for-byte canonical/ranking/T/Q/API equivalence with the accepted one-worker result. It detects a worker-owned state mutation, early fence, dropped/duplicated terminal, unbounded result backlog, or acquisition concurrency that stalls the live consumer. It does not establish provider speedup or authorize a live request. |
+| `LBR-R2` | `P-LBR-R2-INCREMENTAL-MAINTENANCE` | A mature 5,554-symbol deterministic state with the full 961-second correction tail compares incremental expiry against the canonical scan oracle across strict/equality horizon boundaries, sparse tails, revision, withdrawal, late correction, historical terminal construction, and clock progression. It requires identical prefix/tail/coverage/qualification/selection/accounting results, no population-sized allocation in an unchanged cycle, and bounded cycle latency below the parent 250 ms maximum on the current host. It detects stale derived coverage, skipped expiry, a second canonical truth, or an unchanged cycle that scans every retained identity. It does not establish E2 capacity or provider stability. |
 
 `LBR-A1` implements the compact prefix/tail, canonical merge, coverage, and
 affected-state mutation. Acceptance makes the old `symbolAggregateState`

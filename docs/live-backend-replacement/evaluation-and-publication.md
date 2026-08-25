@@ -114,6 +114,12 @@ a symbol is unselected. Therefore a symbol entering the table after more than
 330 seconds has the same aggregate field values and trust states it would have
 had if continuously displayed; only Tape and Spread may warm after selection.
 
+Full-population maintenance reads and updates fixed scalars plus identities
+newly crossing a bounded horizon. It may not rescan or allocate from every
+symbol's complete correction tail on each one-second cycle. A diagnostic
+watermark-stale transition does not authorize T/Q membership mutation; the T/Q
+contract owns its independent temporary presentation hold.
+
 ## 5. Accounting, failure, and trust
 
 Every cycle validates the product's primary population, qualification, and

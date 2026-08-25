@@ -1813,6 +1813,37 @@ committed.
   Focused re-review of that corrected handoff returned `CLEAN/PASS` with no
   finding. The reviewer made no edits.
 
+#### `LBR-R1/R2` live-stability correction activation — 2026-08-25
+
+The owner directed correction after reviewing the captured watermark-stale and
+serial T/Q restoration behavior. Higher-level `PG-TAQ-02` already requires
+direct shared-feed consumption evidence before T/Q degradation; therefore the
+lower-level aggregate-watermark-only unsubscribe trigger is removed rather
+than treated as a product rule.
+
+`LBR-R1` retains current-epoch T/Q provider membership and ingestion across an
+aggregate-only watermark-stale interval when queue, capacity, accounting,
+control, epoch, and state-bound evidence remain healthy. It withholds T/Q
+values immediately and releases the continuously ingested projection only
+after five complete ready seconds from an engine-owned recovery boundary. Real
+pressure/loss keeps the accepted closure and unsubscribe containment.
+
+`LBR-R2` corrects the observed full-population maintenance boundary. The live
+diagnostic attributes 730.050 ms of an active 1.106241-second cycle to
+maintenance. Code reconnaissance finds `compactSymbolLocked` allocating and
+scanning the complete correction tail for every symbol on routine cycles, then
+rebuilding tail coverage. At 5,554 symbols and up to 961 retained identities,
+that is an avoidable roughly 5.3-million-entry routine scan. The correction
+uses one bounded rebuildable expiry/presence index, updates it incrementally,
+and preserves the canonical tail/prefix as sole truth. Offline attribution and
+the mature deterministic proof must distinguish this work from remaining
+qualification/field maintenance before acceptance.
+
+Non-scope remains provider protocol changes, another state owner, concurrent
+T/Q commands, changed ranking/readiness meaning, E2 execution, replay or
+checkpoint work, public deployment, and trading-performance claims. No
+credential access or provider request occurs in either implementation slice.
+
 ### Owner-approved E2 duration and manifest revision — 2026-08-23
 
 The owner revised E2 to exactly one 10-minute deterministic acceptance run. The
@@ -1834,14 +1865,14 @@ but copy no status.
 | Item | State | Gate / next action |
 | --- | --- | --- |
 | Parent architecture | `approved_e3_minimum_read_passed_correction_required_e2_deferred` | Current architecture remains unchanged. Minimum live connection/read passed, but recurring watermark-stale readiness flapping reopens full-population maintenance/evaluation performance. |
-| Delivery program | `lbr_e3_correction_required_maintenance_attribution_next` | Preserve passed minimum live facts; no provider retry. Focused offline A1 versus B1/B2 maintenance attribution is next. E2 remains deferred/non-gating. |
+| Delivery program | `lbr_r1_tq_continuity_active` | Preserve passed minimum live facts. Implement R1 then R2 sequentially, review final bytes, and obtain exact-duration authorization before one provider validation. E2 remains deferred/non-gating. |
 | `LBR-P1` focused contracts and characterization | `accepted_frozen_e2_deferred` | Five-spec review/owner acceptance remains valid. The frozen E2 baseline/manifest is retained for optional future reactivation and does not gate E3; comparable baseline CPU/RSS remain explicitly unknown. |
-| Capability A — canonical state and hydration | `reopened_full_population_maintenance_attribution` | A2/A3 hydration and launcher semantics remain accepted. A1 compact-state maintenance is a candidate owner of the observed live-coverage cycle cost pending focused attribution. |
+| Capability A — canonical state and hydration | `reopened_lbr_r2_incremental_maintenance_pending` | A2/A3 hydration and launcher semantics remain accepted. R2 owns incremental tail expiry/presence after R1 acceptance. |
 | `LBR-A3` bounded parallel live hydration | `accepted_launcher_isolation_correction` | Wrapper tests are isolated; atomic replacement, failure preservation, startup/steady-state process-group retirement, and cleanup are proven without changing exact `1|2|4|8` hydration semantics. |
 | Watermark-stall diagnostic preservation | `accepted_between_a3_d1` | Baseline commit `e88eef7` was semantically forward-ported with offline verification and clean final review; diagnostic-only, no A/B/C reopening or D1 activation. |
 | `LBR-B3` removal slice | `accepted` | Commit `f697288`; removal proof, resource evidence, focused corrections, and final focused re-review are clean. |
-| Capability B — evaluation and publication | `reopened_full_population_maintenance_attribution` | Ranking/publication semantics remain accepted. B1/B2 qualification/field maintenance is a candidate owner of the observed live-coverage cycle cost pending focused attribution. |
-| Capability C — selected-row T/Q | `finally_accepted` | C1/C2 remain accepted and unaffected by the A3 hydration-topology revision. |
+| Capability B — evaluation and publication | `reopened_lbr_r2_maintenance_measurement_pending` | Ranking/publication semantics remain accepted. R2 must prove the remaining fixed-scalar maintenance plus incremental expiry meets the hard cycle boundary. |
+| Capability C — selected-row T/Q | `reopened_lbr_r1_watermark_continuity_active` | Preserve C1/C2 formula, membership, loss, and pressure evidence; remove watermark-only unsubscribe and add the five-second presentation hold. |
 | Capability D — live ingress | `finally_accepted` | D1/D2, one decoded-batch FIFO/owner handoff, exact connection semantics, final-byte gates, corrections, and final read-only review are clean and preserved by E1. |
 | Capability E — integration/removal/acceptance | `lbr_e3_minimum_read_passed_correction_required` | E1 and the corrected launcher remain accepted; minimum connection/read passed, but recurring watermark-stale readiness flapping blocks live stability and provider retry. |
 | E2 deterministic duration/manifest revision | `deferred_non_gating` | If reactivated: exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |
