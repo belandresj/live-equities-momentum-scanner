@@ -1410,6 +1410,115 @@ committed.
   `LBR-E2` is the next permitted slice but remains inactive; E3 remains
   unauthorized/inactive.
 
+#### `LBR-E2` pre-assignment audit and activation — 2026-08-25
+
+- **Authority and accepted dependency audit:** `AGENTS.md`, `README.md`, the
+  specification map, replacement parent/program, all five routed focused
+  contracts, the accepted A1-D2 handoffs, the frozen `LBR-P1` characterization,
+  the E2 ticket, and the complete E1 acceptance record agree on one boundary.
+  E2 owns only the exact deterministic fixture, whole-composition measurement,
+  acceptance evidence, and blocking correctness corrections routed through the
+  narrowest owning boundary. It does not own product, market, readiness, T/Q,
+  provider, replay/checkpoint, queue, worker, or state-owner semantics.
+- **Frozen manifest audit:** `lbr-mature-v2:2026-08-12` remains the sole input:
+  5,694 symbols, 5,470,012 mature hydration rows, 600 timed seconds at 300
+  frames/s, 180,000 frames, 3,416,400 base aggregates, 600 resource samples,
+  600 dashboard polls, and 11 ranking/accounting checkpoints. Its seed,
+  population/prior-close/event-count/ranking/accounting/API/UI digests, fixed
+  injection classes, queue/TQ bounds, stop conditions, host/Go/GC facts, and
+  one-run/no-repeat rule are unchanged. Validation belongs inside the sole
+  timed command before pacing begins; no preflight, alternate, shortened,
+  fallback, diagnostic, coexistence, or target-miss trial is authorized.
+- **Current production dependency audit:** HEAD `6af93cd303237cd555b491cceef4aac5099d9be4`
+  on `codex/live-backend-replacement` has a clean worktree. The supported
+  scanner dependency graph remains live-only and excludes the deleted replay/
+  checkpoint packages. `cmd/scanner` constructs one `operations.Runtime`, one
+  engine owner, the accepted single decoded-batch/causal-marker FIFO, one
+  evaluator/publication, API v2, and the independent dashboard path. Hydration
+  remains the sole worker pool at exactly `1|2|4|8`, default 8. The module has
+  only `github.com/coder/websocket v1.8.15`; the audited scanner dependency-list
+  SHA-256 is
+  `a20b6a06a6457fd7d7b4ad9cb20061155cf6ef20ca9f61374113408746c91d42`.
+- **False-success and proof decision:** `P-LBR-E2-STABILITY` must reject a
+  semantically green final endpoint with aggregate/control loss, incoherent
+  accounting, growing retained state/heap/RSS/FIFO/goroutines, sustained
+  backlog, recurring readiness flap, or unusable isolated one-second polling.
+  Every parent numeric target is reported from the one run; a numeric miss with
+  all hard gates passing is a recorded deviation and never authorizes a repeat.
+- **Activation and exclusions:** `LBR-E2` is the sole active write-capable
+  slice. The exact 10-minute command will use `-timeout 15m` once and will not
+  be rerun. Credentials/provider requests, the private scanner, E3, product/
+  market/readiness/T/Q changes, replay/checkpoint restoration, added queues/
+  workers/state owners, production-capacity tuning, and unrelated cleanup
+  remain unauthorized/inactive.
+
+#### `LBR-E2` invalid measurement and reopened handoff — 2026-08-25
+
+- **Outcome:** `P-LBR-E2-STABILITY` did not reach its explicit
+  `LBR-E2 timed pacing started` boundary. The final bounded invocation stopped
+  after 885.01 test seconds with `aggregate connection ended before hydration
+  fence reconciliation`; therefore timed seconds, provider frames, base
+  aggregates, samples, dashboard polls, and checkpoints are all exactly zero.
+  This is measurement invalidity, not a semantic/resource pass or numeric miss.
+- **Root cause and disposition:** the deterministic websocket fixture
+  completed its handshake and then waited for the timed-start signal, while the
+  engine correctly required a later causal source frame to reconcile the
+  generation-two hydration fence. Independent review then established that a
+  proposed signal/status-frame correction remained racy and that the harness
+  bypassed ordinary `Runtime.RunLive`, the eight-worker REST hydration pool,
+  and the dashboard model. The invalid harness and its proof-only production
+  hydration seam were removed. The 10-minute trial was not rerun.
+- **Partial setup observation:** the proposed manifest validator, 5,694-symbol binding,
+  5,470,012-row mature hydration expectation, exact generation-one terminal
+  identity (`5,688 value + 2 empty + 1 failed + 1 canceled + 2 fenced`), and
+  engine-selected generation-two replan (`S0002`–`S0005`) completed before the
+  failed fence wait. These observations are not accepted manifest, production-
+  composition, or semantic evidence. The harness did reject false success
+  rather than reporting a green endpoint without a reconciled fence.
+- **Unavailable timed evidence:** semantic/accounting/ranking/API/UI digests;
+  aggregate/control loss and rejection; CPU average/p95; hydration/steady heap;
+  RSS; allocation rate; hydration/steady goroutines; FIFO count/bytes/age/slope;
+  selection cycle; API capture; additional processing delay; watermark and
+  readiness transitions; plateau behavior; and one-second polling usability
+  are all unmeasured. No inference is made from setup or earlier capability
+  evidence. The durable machine-readable record is
+  `docs/live-backend-replacement/evidence/lbr-e2-acceptance.json`.
+- **Invocation record and deviation:** the exact command was
+  `env LBR_E2_ARTIFACT=/Users/joshuabelandres/.codex/worktrees/live-backend-replacement/live-equities-momentum-scanner/docs/live-backend-replacement/evidence/lbr-e2-acceptance.json go test -v -count=1 -timeout 15m -run '^TestPLBRE2DeterministicResourceStability$' ./internal/operations`.
+  Measurement-tool setup was repeatedly invoked while correcting pre-pacing
+  failures; every invocation and available test-reported duration is retained
+  in the artifact. None emitted the timed-start marker or consumed paced input.
+  The final invocation used the fixed 15-minute timeout and is the terminating
+  E2 evidence; no diagnostic, shortened, fallback, or replacement timed trial
+  was run.
+- **Independent integrated review:** the required read-only review returned
+  `FAIL`, not clean acceptance. It found the racy fence correction, incomplete
+  production composition, incomplete semantic/API/UI/accounting and plateau
+  gates, incomplete manifest validation, an unauthorized production proof seam,
+  and irreproducible dirty-worktree provenance. The invalid code was removed;
+  the provenance limitation cannot be repaired retrospectively and remains in
+  the artifact. A clean E2 acceptance review is impossible with zero timed
+  seconds.
+- **Final failure-handoff bytes:** all harness and engine changes identified by
+  review are absent. JSON validation and `git diff --check` pass, and ordinary
+  `go test -count=1 -short -timeout 2m ./...` passes in 72.71 seconds on the
+  final documentation/evidence-only diff. Earlier affected/race/UI results are
+  retained in the execution history but are not used to validate the removed
+  harness or substitute for E2.
+- **Final focused re-review:** the same independent reviewer returned
+  `CLEAN/PASS` for the failure handoff after confirming the diff is documentation/
+  evidence only, the invalid harness and production seam are absent, the JSON
+  is valid and candid about dirty-worktree provenance and unavailable evidence,
+  and E3 remains inactive. The reviewer explicitly did **not** accept E2:
+  `deterministically_complete` remains unestablished. The evidence artifact
+  SHA-256 is
+  `b4d57ab3da41b73eeafc5ec3ebf135552e58c4ba784eff16fe311dafbba218f6`.
+- **Correction/next gate:** E2 is reopened at its measurement-fixture boundary.
+  A future E2 activation requires a new program/owner authorization and again
+  owns exactly one 10-minute run. Capability E is not finally accepted,
+  `deterministically_complete` is not established, and `LBR-E3` remains
+  unauthorized/inactive.
+
 ### Owner-approved E2 duration and manifest revision — 2026-08-23
 
 The owner revised E2 to exactly one 10-minute deterministic acceptance run. The
@@ -1440,9 +1549,9 @@ but copy no status.
 | Capability B — evaluation and publication | `finally_accepted` | B1/B2/B3 and the required final read-only review remain accepted and unaffected by A3. |
 | Capability C — selected-row T/Q | `finally_accepted` | C1/C2 remain accepted and unaffected by the A3 hydration-topology revision. |
 | Capability D — live ingress | `finally_accepted` | D1/D2, one decoded-batch FIFO/owner handoff, exact connection semantics, final-byte gates, corrections, and final read-only review are clean and preserved by E1. |
-| Capability E — integration/removal/acceptance | `lbr_e1_accepted` | Exclusive live cutover, owner-selected replay/checkpoint deletion, final-byte verification, corrections, and clean read-only re-review are recorded. `LBR-E2` is next permitted but inactive; E3 remains inactive. |
+| Capability E — integration/removal/acceptance | `lbr_e2_reopened_measurement_invalid` | E1 exclusive cutover remains accepted. E2 did not start timed pacing; invalid-harness removal and final documentation/evidence gates are recorded, but a future 10-minute run requires new authorization. E3 remains unauthorized/inactive. |
 | E2 deterministic duration/manifest revision | `owner_approved` | Exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |
-| Deterministic replacement | `not_started` | Requires `LBR-E1` and `LBR-E2` |
+| Deterministic replacement | `not_complete_lbr_e2_measurement_invalid` | No timed E2 evidence exists. Final-byte verification is green; deterministic completion requires a newly authorized E2 activation and conforming run. |
 | Live stability confirmation | `not_authorized` | `LBR-E3` requires separate exact-date authorization or owner execution |
 
 ## 15. Git and milestone policy

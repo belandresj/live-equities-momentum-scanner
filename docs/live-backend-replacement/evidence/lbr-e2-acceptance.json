@@ -1,0 +1,91 @@
+{
+  "schema": "lbr-e2-acceptance-v1",
+  "manifest_identity": "lbr-mature-v2:2026-08-12",
+  "executed_base_commit": "6af93cd303237cd555b491cceef4aac5099d9be4",
+  "executed_worktree_dirty": true,
+  "executed_source_tree_checksum": null,
+  "executed_fixture_checksum": null,
+  "host": {
+    "go": "go1.26.5",
+    "os": "darwin",
+    "arch": "arm64",
+    "logical_cpus": 8,
+    "gogc": "default",
+    "gomemlimit": "default"
+  },
+  "outcome": "measurement_invalid_setup_timeout",
+  "hard_acceptance": false,
+  "timed_pacing_started": false,
+  "timed_seconds": 0,
+  "frames": 0,
+  "base_aggregates": 0,
+  "resource_samples": 0,
+  "dashboard_polls": 0,
+  "ranking_accounting_checkpoints": 0,
+  "command": "env LBR_E2_ARTIFACT=/Users/joshuabelandres/.codex/worktrees/live-backend-replacement/live-equities-momentum-scanner/docs/live-backend-replacement/evidence/lbr-e2-acceptance.json go test -v -count=1 -timeout 15m -run '^TestPLBRE2DeterministicResourceStability$' ./internal/operations",
+  "final_bounded_invocation_test_duration_seconds": 885.01,
+  "failure": "aggregate connection ended before hydration fence reconciliation",
+  "failure_boundary": "deterministic fixture did not emit a post-handshake causal source frame before waiting for the timed-start signal, so the generation-2 fence could not reconcile",
+  "final_byte_disposition": "the independently reviewed harness was removed because it bypassed Runtime.RunLive, the ordinary hydration pool, and the dashboard model; no timed trial was rerun",
+  "observed_partial_setup": {
+    "population": 5694,
+    "hydration_rows_expected": 5470012,
+    "generation_one_terminal_accounting": {
+      "planned": 5694,
+      "completed_value": 5688,
+      "completed_empty": 2,
+      "failed": 1,
+      "canceled": 1,
+      "fenced": 2
+    },
+    "generation_two_replanned_symbols": ["S0002", "S0003", "S0004", "S0005"]
+  },
+  "timed_results": {
+    "semantic_oracle": null,
+    "accounting_oracle": null,
+    "api_v2": null,
+    "dashboard_ui": null,
+    "aggregate_loss": null,
+    "control_loss": null,
+    "capacity_rejection": null,
+    "cpu_average_cores": null,
+    "cpu_p95_cores": null,
+    "heap_hydration_bytes": null,
+    "heap_steady_bytes": null,
+    "rss_bytes": null,
+    "allocation_rate_bytes_per_second": null,
+    "hydrating_goroutines": null,
+    "steady_goroutines": null,
+    "queue_frames_bytes_age_slope": null,
+    "selection_cycle_p99_max": null,
+    "api_capture_p99_max": null,
+    "additional_processing_delay_p99": null,
+    "watermark_readiness_transitions": null,
+    "polling_usability": null
+  },
+  "setup_correction_invocations": [
+    {"test_reported_seconds": 277, "failure": "scheduled recovery historical context"},
+    {"test_reported_seconds": 283, "failure": "ordinary loss terminal accounting mismatch"},
+    {"test_reported_seconds": 257, "failure": "synthetic ingress integrity input was structurally invalid"},
+    {"test_reported_seconds": 258, "failure": "engine clock regression after recovery"},
+    {"test_reported_seconds": 261, "failure": "hydration window ended one millisecond after engine clock"},
+    {"test_reported_seconds": 260, "failure": "recovery-plan lifecycle mismatch"},
+    {"test_reported_seconds": 259, "failure": "pre-current ingress-integrity state had no supported watermark"},
+    {"test_reported_seconds": 293, "failure": "generic replan selected all 5694 symbols instead of four unresolved symbols"},
+    {"test_reported_seconds": 276.46, "failure": "supersession proof returned pre-fence accounting"},
+    {"test_reported_seconds": 885.01, "failure": "aggregate connection ended before hydration fence reconciliation"}
+  ],
+  "deviations": [
+    "The required 600-second measurement did not start, so every timed numeric target and hard semantic/resource gate is unavailable rather than passed or missed.",
+    "Measurement-tool setup was invoked repeatedly while being repaired; none emitted the timed-start marker or consumed paced input. The final bounded invocation exhausted the fixed 15-minute envelope."
+  ],
+  "dangerous_counterexample": "The harness rejected false success: it did not report a green endpoint or resource plateau when the causal hydration fence never completed.",
+  "limitations": [
+    "No timed semantic, accounting, API, UI, loss, CPU, heap, RSS, allocation, goroutine, queue, latency, readiness, or polling evidence exists.",
+    "The executed harness was an uncommitted dirty-worktree fixture, so no reproducible source-tree or fixture checksum is available; this provenance defect is part of the invalid measurement outcome.",
+    "The removed harness did not execute Runtime.RunLive, the ordinary eight-worker REST hydration pool, or the dashboard model, and its manifest/oracle/plateau validation was incomplete.",
+    "Earlier setup durations were retained at the precision available in the captured execution record; the final two test durations retain the test runner's decimal precision.",
+    "The fixture is local and credential-free; no provider request, private scanner execution, replay/checkpoint work, public deployment evidence, provider SLA, or trading expectancy is present."
+  ],
+  "next_state": "lbr_e2_reopened_measurement_invalid; future E2 activation requires owner/program authorization and again owns exactly one 10-minute run; LBR-E3 remains unauthorized/inactive"
+}
