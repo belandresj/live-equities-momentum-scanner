@@ -1882,6 +1882,63 @@ ownership, guarded coverage, hydration compaction, and the narrowed evidence
 claims with no P1/P2/P3 finding. A newly bounded provider observation remains
 required.
 
+#### `LBR-E3` corrected 10-minute live-stability result — 2026-08-25
+
+The owner authorized one new 10-minute ordinary Massive production observation
+for trading date `2026-08-25`; no retry, induced recovery, pressure, or shedding
+was authorized or performed. The clean reviewed commit was
+`0b1afe3fb17bdaac57f890b4a5262a8fb9d08688`, the launcher used the macOS
+Keychain credential chain without exposing or persisting the credential, and
+the exact command retained eight hydration workers. The launcher ran from
+`21:46:19Z` through the authorized `21:56:19Z` deadline and shut down cleanly.
+
+Fresh hydration reconciled all 5,554 planned symbols as 5,504 value terminals
+plus 50 successful-empty/no-print terminals. All 6,592,756 rows reconciled as
+6,592,728 insertions plus 28 conflict/withdrawal classifications, with no
+rejected, fenced, or integrity rows. The exact live-tail fence completed on
+connection epoch 1. The first recorded ready capture at `21:48:24.690041Z`
+published `qualified_current`, 20 ranked rows, 663 passers, and committed time
+`21:48:19Z`.
+
+The retained 499 full one-second-target API/dashboard/resource captures span
+`21:47:52Z` through `21:56:18Z`: 31 honest `fence_pending` samples followed by
+468 ready samples. There was exactly one transition, from fence-pending to
+ready, with no ready-to-not-ready or watermark-stale recurrence. Committed time,
+sample identity, and publication identity never regressed; p95 watermark lag
+was 1 second and maximum lag was 2 seconds. API and dashboard returned HTTP 200
+on every retained poll. Browser inspection rendered `LIVE`, 20 rows, exact
+field-level T/Q states, and no console warning/error.
+
+Final T/Q accounting was 27,874 consumed = 27,869 applied + 5 ordinarily fenced
+during selected-rank churn. All 35 commands were written, none failed or fenced,
+pressure remained normal, and there was no shedding or integrity failure.
+Eighteen of 20 final selected symbols were provider-present; two remained
+honestly unknown. Nineteen Tape fields were current and one was
+channel-unconfirmed; seven Spread fields were current, 11 honestly stale, and
+two channel-unconfirmed. Aggregate ranking remained ready and independent.
+
+Queue current occupancy peaked at 22/4,096 and repeatedly drained; the lifetime
+high-water was 47 frames and 229,695 bytes. RSS ranged from 49 MiB to 987 MiB
+with a negative steady linear slope, heap-in-use cycled between 0.60 and 1.45
+GiB with a small 43.7 KiB/s fitted slope, goroutines returned to 13, and no
+unbounded or unsafe trend appeared. No new watermark-stale diagnostic was
+created. The bounded result is `live_stability_confirmed` for this corrected
+extended-hours observation.
+
+The evidence is not a closing-bell or regular-session intensity test. The
+one-second artifact starts 93 seconds after launcher start, so it does not claim
+600 polls. No natural stale interval, disconnect, recovery, pressure, or
+shedding occurred; deterministic R1 owns the unobserved five-second masking
+behavior. E2 remains deferred/non-gating, and no deterministic 300-frames/s,
+provider SLA, public deployment, replay/checkpoint, or trading-expectancy claim
+is made. The bounded evidence is recorded in
+`evidence/lbr-e3-stability-live-2026-08-25.json`, SHA-256
+`5c41cff8a69b962fcfd398b6cbf6c3f36336a6283487d76947e6225679062f50`.
+The required final integrated
+read-only review, including focused live-evidence inspection and retained
+one-owner/path/queue/publication conformance, returned `CLEAN/PASS` with no
+P1/P2/P3 finding.
+
 Non-scope remains provider protocol changes, another state owner, concurrent
 T/Q commands, changed ranking/readiness meaning, E2 execution, replay or
 checkpoint work, public deployment, and trading-performance claims. No
@@ -1907,8 +1964,8 @@ but copy no status.
 
 | Item | State | Gate / next action |
 | --- | --- | --- |
-| Parent architecture | `approved_e3_correction_implemented_live_revalidation_pending_e2_deferred` | Current architecture remains unchanged. R1/R2 correct the observed T/Q continuity and full-population maintenance boundaries; fresh live stability evidence remains required. |
-| Delivery program | `lbr_r1_r2_accepted_live_revalidation_pending` | Preserve passed minimum live facts. Commit the clean reviewed correction, then obtain exact-duration authorization before one provider validation. E2 remains deferred/non-gating. |
+| Parent architecture | `approved_e3_live_stability_confirmed_e2_deferred` | Current architecture remains unchanged. The corrected 10-minute extended-hours observation sustained honest readiness with bounded queues/resources and no watermark-stale recurrence. |
+| Delivery program | `lbr_e3_live_stability_confirmed` | R1/R2 and the corrected live result are recorded; the final integrated read-only review returned clean. Commit only E3 evidence/authority files. E2 remains deferred/non-gating. |
 | `LBR-P1` focused contracts and characterization | `accepted_frozen_e2_deferred` | Five-spec review/owner acceptance remains valid. The frozen E2 baseline/manifest is retained for optional future reactivation and does not gate E3; comparable baseline CPU/RSS remain explicitly unknown. |
 | Capability A — canonical state and hydration | `reaccepted_lbr_r2_incremental_maintenance` | The canonical tail/prefix remains sole truth; revision-matched bounded indexes update incrementally and the independent-map 5,554 × 961 unchanged-cycle measurement is below the hard maintenance boundary with zero allocation. |
 | `LBR-A3` bounded parallel live hydration | `accepted_launcher_isolation_correction` | Wrapper tests are isolated; atomic replacement, failure preservation, startup/steady-state process-group retirement, and cleanup are proven without changing exact `1|2|4|8` hydration semantics. |
@@ -1917,12 +1974,12 @@ but copy no status.
 | Capability B — evaluation and publication | `reaccepted_lbr_r2_maintenance_measurement` | Ranking/publication semantics remain unchanged; mature unchanged maintenance measured 4.979667 ms and zero allocated bytes against the 250 ms hard maximum. |
 | Capability C — selected-row T/Q | `reaccepted_lbr_r1_watermark_continuity` | Aggregate-watermark staleness masks one sealed API capture without provider membership churn; continuously ingested T/Q returns after the five-wall/five-watermark-second hold. |
 | Capability D — live ingress | `finally_accepted` | D1/D2, one decoded-batch FIFO/owner handoff, exact connection semantics, final-byte gates, corrections, and final read-only review are clean and preserved by E1. |
-| Capability E — integration/removal/acceptance | `lbr_e3_correction_implemented_live_revalidation_pending` | E1 and the corrected launcher remain accepted; the observed defect is corrected offline, but live stability is not confirmed until one newly authorized bounded provider observation passes. |
+| Capability E — integration/removal/acceptance | `lbr_e3_live_stability_confirmed_extended_hours` | E1, launcher, R1/R2 correction, fresh hydration/fence, sustained ready API/UI, selected T/Q, bounded resource/queue behavior, and clean shutdown passed one exact 10-minute provider observation. |
 | E2 deterministic duration/manifest revision | `deferred_non_gating` | If reactivated: exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |
 | Deterministic capacity characterization | `not_established_deferred` | No timed E2 evidence exists. This optional status requires a newly authorized E2 activation and conforming run but does not gate E3. |
-| `LBR-E3` authorized observation | `minimum_read_passed_correction_required_no_retry` | Credential/provider/hydration/fence/ranking/TQ/API/UI/shutdown passed; two recovered watermark-stale flaps require offline correction before any newly authorized provider attempt. |
-| Live stability confirmation | `not_confirmed_revalidation_pending` | The prior minimum path worked but flapped twice; deterministic correction evidence cannot replace a newly authorized ordinary-provider observation. |
-| Final integrated program review | `clean_pass_lbr_r1_r2_correction` | Final read-only review found no P1/P2/P3 issue after revision/count and bitmap-word guard corrections; live evidence remains the only open acceptance boundary. |
+| `LBR-E3` authorized observation | `completed_once_10m_no_retry` | Exact launcher interval 21:46:19Z–21:56:19Z; macOS Keychain source, 8 workers, ordinary provider path, no induced conditions, clean controlled shutdown. |
+| Live stability confirmation | `confirmed_extended_hours_bounded` | 468 consecutive ready samples after fence, no watermark-stale recurrence, 0–2 s lag, exact accounting, queue high 47/4096, usable API/UI, and bounded resources. Regular closing-bell intensity and naturally stale/recovery behavior remain unobserved. |
+| Final integrated program review | `clean_pass_lbr_e3_live_evidence` | The final evidence-focused read-only review found no P1/P2/P3 issue in classification, redaction, checksums, accounting, claim limits, or retained sole-owner/path/queue/publication conformance. |
 | A3 launcher correction review | `clean_pass` | Final focused re-review found no P1/P2/P3 issue after atomic replacement, process-group containment, and isolated-test corrections. |
 
 ## 15. Git and milestone policy
