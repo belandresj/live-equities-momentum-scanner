@@ -92,12 +92,19 @@ It invokes the independent dashboard with:
 The script resolves the repository from its own location, so its absolute path
 also works from another directory. It builds private runtime binaries under
 the ignored `var/run-private-scanner/bin` directory and then remains in the
-foreground supervising both processes.
+foreground supervising both processes. The bootstrap launcher is first
+compiled into a unique owner-only sibling directory and replaces the final
+executable only after a successful build. The build runs in a dedicated
+process group; interruption signals the group, applies a bounded forced group
+stop if needed, reaps the build leader, removes temporary output, and preserves
+the prior launcher. A stale non-object launcher can therefore be safely
+replaced by the next successful invocation.
 
 The launcher forwards scanner and dashboard stdout/stderr to the foreground
 terminal; it does not create or rotate a per-run stdout log. The binaries under
-`var/run-private-scanner/bin` are rebuilt in place on the next launch, so they
-are not run logs. On the first typed ingress incident, the scanner writes one
+`var/run-private-scanner/bin` are atomically replaced on the next successful
+launch, so they are not run logs. On the first typed ingress incident, the
+scanner writes one
 structured JSON diagnostic under `var/diagnostics` using a timestamped,
 create-without-overwrite filename. Separate incident files therefore remain
 available across runs. These diagnostics are failure evidence, not a copy of

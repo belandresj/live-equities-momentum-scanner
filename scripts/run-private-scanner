@@ -119,21 +119,47 @@ fi
 mkdir -p "$runtime_directory"
 
 build_pid=
+temporary_build_directory=
+temporary_launcher=
+cleanup_temporary_build() {
+    if [ -n "$temporary_launcher" ]; then
+        /bin/rm -f "$temporary_launcher"
+        temporary_launcher=
+    fi
+    if [ -n "$temporary_build_directory" ]; then
+        /bin/rmdir "$temporary_build_directory" 2>/dev/null || true
+        temporary_build_directory=
+    fi
+}
 forward_build_signal() {
     forwarded_signal=$1
     exit_status=$2
-    if [ -n "$build_pid" ]; then
-        kill -"$forwarded_signal" "$build_pid" 2>/dev/null || true
-        wait "$build_pid" 2>/dev/null || true
+    active_build_pid=$build_pid
+    if [ -z "$active_build_pid" ]; then
+        set +u
+        active_build_pid=$!
+        set -u
     fi
+    if [ -n "$active_build_pid" ]; then
+        /bin/kill -"$forwarded_signal" -"$active_build_pid" 2>/dev/null || true
+        /bin/sleep 0.1
+        /bin/kill -KILL -"$active_build_pid" 2>/dev/null || true
+        wait "$active_build_pid" 2>/dev/null || true
+    fi
+    cleanup_temporary_build
     trap - INT TERM
     exit "$exit_status"
 }
 trap 'forward_build_signal INT 130' INT
 trap 'forward_build_signal TERM 143' TERM
+trap cleanup_temporary_build EXIT
 
-(cd "$repository_root" && exec /usr/bin/env -u MASSIVE_API_KEY go build -trimpath -o "$runtime_directory/private-scanner-launcher" ./cmd/private-scanner-launcher) &
+temporary_build_directory=$(/usr/bin/mktemp -d "$runtime_directory/.private-scanner-launcher-build.XXXXXX")
+temporary_launcher="$temporary_build_directory/private-scanner-launcher"
+set -m
+(cd "$repository_root" && exec /usr/bin/env -u MASSIVE_API_KEY go build -trimpath -o "$temporary_launcher" ./cmd/private-scanner-launcher) &
 build_pid=$!
+set +m
 set +e
 wait "$build_pid"
 build_status=$?
@@ -143,6 +169,11 @@ trap - INT TERM
 if [ "$build_status" -ne 0 ]; then
     exit "$build_status"
 fi
+/bin/mv -f "$temporary_launcher" "$runtime_directory/private-scanner-launcher"
+temporary_launcher=
+/bin/rmdir "$temporary_build_directory"
+temporary_build_directory=
+trap - EXIT
 
 export PRIVATE_SCANNER_REPO_ROOT="$repository_root"
 exec "$runtime_directory/private-scanner-launcher" "$@"

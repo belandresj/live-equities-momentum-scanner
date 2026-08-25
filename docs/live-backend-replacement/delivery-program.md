@@ -1682,6 +1682,56 @@ committed.
   requires an exact duration and explicit activation after deterministic
   acceptance.
 
+#### `LBR-A3` launcher-isolation correction implementation — 2026-08-25
+
+- **Behavior corrected:** every public-wrapper test now copies the accepted
+  script into a repository-shaped `t.TempDir`, so fake Go output and runtime
+  directories cannot mutate the real worktree's ignored `var` tree. The
+  production wrapper creates one unique owner-only build directory beside the
+  final launcher, compiles to a previously nonexistent path, and atomically
+  moves the completed executable over the final path only after a successful
+  build. The build owns a dedicated process group. INT/TERM first signals that
+  group, then applies a bounded forced group stop before reaping its leader and
+  cleaning the temporary destination. During the launch-to-assignment window,
+  the trap falls back directly to the shell's latest-background PID, closing
+  the startup orphan race. Failure and signal cleanup preserve the prior
+  executable.
+- **Dangerous counterexamples and focused proof:** the default/every-supported-
+  worker wrapper proof begins with a stale non-object launcher and proves it is
+  replaced before the fake launcher receives exactly `8`, `1`, `2`, `4`, and
+  `8`. A new failed-build proof writes a partial invalid output, exits nonzero,
+  and proves the prior launcher bytes remain exact with no temporary build
+  directory. The bootstrap signal proof now runs isolated with a persistent
+  TERM-ignoring descendant and proves the group is retired, the leader is
+  reaped, the descendant cannot survive, and the temporary directory is
+  removed. A separate child-immediate-signal counterexample exercises startup
+  group identification before ordinary steady-state observation. Invalid/help
+  paths still return before any build or runtime-directory mutation.
+- **Verification and real blocker removal:** focused public-wrapper tests
+  passed five consecutive times; the complete launcher race
+  suite passed; shell syntax and focused vet passed. Repository-wide
+  `go test -count=1 -short -timeout 2m ./...` passed, including operations in
+  70.406 seconds and launcher tests in 4.938 seconds. Separately, the exact
+  credential-free production build stage compiled to a unique sibling
+  directory and atomically replaced the preserved 67-byte shell test double
+  (SHA-256
+  `25bc45c64cba421db7099bd63eb5f574cc77d6ac0dce58cd96d1566332888eae`)
+  with a 9,247,154-byte arm64 executable (SHA-256
+  `162f3e94092baf7a29a3639e95f90614f0f17884f427a136a719308e35c92e09`).
+  The real launcher was not executed: no credential lookup, provider request,
+  scanner, API, or dashboard process occurred.
+- **Preserved semantics and remaining gate:** no hydration, engine, ingress,
+  evaluation/publication, API/UI, provider, credential, or market semantic
+  changed. E2 remains deferred/non-gating and the failed E3 evidence remains
+  exact. The required `gpt-5.6-sol` medium read-only correction review first
+  found missing build-descendant ownership and then the launch-to-PID-
+  assignment signal race. Dedicated process-group retirement, the nounset-safe
+  `$!` startup fallback, and the two distinguishing descendant proofs corrected
+  those findings. Final focused re-review returned `CLEAN/PASS` with no
+  P1/P2/P3 finding; the reviewer made no edits. A live WebSocket attempt still
+  requires a new exact-duration owner authorization; this correction supplies
+  none.
+
 ### Owner-approved E2 duration and manifest revision — 2026-08-23
 
 The owner revised E2 to exactly one 10-minute deterministic acceptance run. The
@@ -1702,11 +1752,11 @@ but copy no status.
 
 | Item | State | Gate / next action |
 | --- | --- | --- |
-| Parent architecture | `approved_e3_attempted_e2_deferred` | Current replacement architecture remains unchanged; the authorized E3 attempt stopped before provider access on a reopened A3 launcher-test-isolation defect. |
-| Delivery program | `lbr_a3_launcher_correction_active` | E3 reached no provider path. The reopened A3 wrapper-test-isolation/runtime-output correction is the sole active write-capable slice; E2 remains deferred/non-gating. |
+| Parent architecture | `approved_e3_attempted_a3_corrected_e2_deferred` | Current replacement architecture remains unchanged; the E3 attempt reached no provider path, and its reopened A3 launcher-test-isolation defect is corrected and reviewed. |
+| Delivery program | `lbr_a3_launcher_correction_accepted_live_authority_required` | The A3 correction and focused review are clean. Another E3/live WebSocket attempt requires a new exact-duration authorization; E2 remains deferred/non-gating. |
 | `LBR-P1` focused contracts and characterization | `accepted_frozen_e2_deferred` | Five-spec review/owner acceptance remains valid. The frozen E2 baseline/manifest is retained for optional future reactivation and does not gate E3; comparable baseline CPU/RSS remain explicitly unknown. |
-| Capability A — canonical state and hydration | `reopened_lbr_a3_launcher_test_isolation` | A1/A2 and A3 hydration semantics remain accepted; only the A3 public-wrapper test-isolation/persistent-runtime hygiene claim is reopened. |
-| `LBR-A3` bounded parallel live hydration | `launcher_isolation_correction_active` | Exact `1|2|4|8` hydration semantics remain accepted. Correct the wrapper-test leak and atomic replacement behavior without changing live semantics. |
+| Capability A — canonical state and hydration | `finally_accepted_lbr_a3_launcher_correction` | A1/A2/A3 hydration semantics remain accepted; the isolated-wrapper/atomic-build correction and focused re-review are clean. |
+| `LBR-A3` bounded parallel live hydration | `accepted_launcher_isolation_correction` | Wrapper tests are isolated; atomic replacement, failure preservation, startup/steady-state process-group retirement, and cleanup are proven without changing exact `1|2|4|8` hydration semantics. |
 | Watermark-stall diagnostic preservation | `accepted_between_a3_d1` | Baseline commit `e88eef7` was semantically forward-ported with offline verification and clean final review; diagnostic-only, no A/B/C reopening or D1 activation. |
 | `LBR-B3` removal slice | `accepted` | Commit `f697288`; removal proof, resource evidence, focused corrections, and final focused re-review are clean. |
 | Capability B — evaluation and publication | `finally_accepted` | B1/B2/B3 and the required final read-only review remain accepted and unaffected by A3. |
@@ -1718,6 +1768,7 @@ but copy no status.
 | `LBR-E3` authorized observation | `correction_required_no_provider_access_no_retry` | The sole attempt stopped in the credential-free launcher build after two seconds. No provider observation occurred and another attempt requires new exact owner authorization. |
 | Live stability confirmation | `not_confirmed_correction_required` | Required hydration/fence, sustained honest readiness, API/dashboard, accounting, and resource evidence is unavailable because the provider path never started. |
 | Final integrated program review | `clean_pass_correction_handoff` | After the initial documentation findings were corrected, focused re-review returned `CLEAN/PASS` with no P1/P2/P3 finding; production topology and claim limits remain intact. |
+| A3 launcher correction review | `clean_pass` | Final focused re-review found no P1/P2/P3 issue after atomic replacement, process-group containment, and isolated-test corrections. |
 
 ## 15. Git and milestone policy
 

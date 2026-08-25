@@ -1009,12 +1009,41 @@ func TestCommandProcessForwardsTerminationAndReaps(t *testing.T) {
 	}
 }
 
-func TestPublicWrapperParsesHelpAndInvalidArgumentsBeforeBuild(t *testing.T) {
-	root, err := filepath.Abs(filepath.Join("..", ".."))
+func isolatedPublicWrapper(t *testing.T) (string, string) {
+	t.Helper()
+	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := filepath.Join(root, "scripts", "run-private-scanner")
+	source, err := os.ReadFile(filepath.Join(sourceRoot, "scripts", "run-private-scanner"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	scriptDirectory := filepath.Join(root, "scripts")
+	if err := os.MkdirAll(scriptDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(scriptDirectory, "run-private-scanner")
+	if err := os.WriteFile(script, source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return script, root
+}
+
+func assertNoTemporaryWrapperBuild(t *testing.T, root string) {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(root, "var", "run-private-scanner", "bin", ".private-scanner-launcher-build.*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary wrapper builds remain: %v", matches)
+	}
+}
+
+func TestPublicWrapperParsesHelpAndInvalidArgumentsBeforeBuild(t *testing.T) {
+	script, _ := isolatedPublicWrapper(t)
 	fakeDirectory := t.TempDir()
 	marker := filepath.Join(fakeDirectory, "go-invoked")
 	fakeGo := filepath.Join(fakeDirectory, "go")
@@ -1050,10 +1079,7 @@ func TestPublicWrapperParsesHelpAndInvalidArgumentsBeforeBuild(t *testing.T) {
 }
 
 func TestPLBRA3PublicWrapperDefaultsEightHydrationWorkers(t *testing.T) {
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
+	script, root := isolatedPublicWrapper(t)
 	fakeDirectory := t.TempDir()
 	launcherArguments := filepath.Join(fakeDirectory, "launcher-arguments")
 	fakeGo := filepath.Join(fakeDirectory, "go")
@@ -1069,7 +1095,15 @@ func TestPLBRA3PublicWrapperDefaultsEightHydrationWorkers(t *testing.T) {
 	if err := os.WriteFile(fakeGo, []byte(fakeSource), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(filepath.Join(root, "scripts", "run-private-scanner"))
+	runtimeDirectory := filepath.Join(root, "var", "run-private-scanner", "bin")
+	if err := os.MkdirAll(runtimeDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	launcherPath := filepath.Join(runtimeDirectory, "private-scanner-launcher")
+	if err := os.WriteFile(launcherPath, []byte("stale non-object launcher\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(script)
 	command.Dir = t.TempDir()
 	command.Env = append(removeEnvironment(removeEnvironment(os.Environ(), "PATH"), "MASSIVE_API_KEY"),
 		"PATH="+fakeDirectory+":"+os.Getenv("PATH"), "FAKE_LAUNCHER_ARGUMENTS="+launcherArguments)
@@ -1084,8 +1118,9 @@ func TestPLBRA3PublicWrapperDefaultsEightHydrationWorkers(t *testing.T) {
 	if got, want := strings.Fields(string(rawArguments)), []string{"--hydration-workers", "8"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("default launcher arguments=%q want=%q", got, want)
 	}
+	assertNoTemporaryWrapperBuild(t, root)
 	for _, workers := range []string{"1", "2", "4", "8"} {
-		command := exec.Command(filepath.Join(root, "scripts", "run-private-scanner"), "--hydration-workers", workers)
+		command := exec.Command(script, "--hydration-workers", workers)
 		command.Dir = t.TempDir()
 		command.Env = append(removeEnvironment(removeEnvironment(os.Environ(), "PATH"), "MASSIVE_API_KEY"),
 			"PATH="+fakeDirectory+":"+os.Getenv("PATH"), "FAKE_LAUNCHER_ARGUMENTS="+launcherArguments)
@@ -1099,35 +1134,127 @@ func TestPLBRA3PublicWrapperDefaultsEightHydrationWorkers(t *testing.T) {
 		if got, want := strings.Fields(string(rawArguments)), []string{"--hydration-workers", workers}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("workers=%s launcher arguments=%q want=%q", workers, got, want)
 		}
+		assertNoTemporaryWrapperBuild(t, root)
 	}
 }
 
-func TestPublicWrapperForwardsAndReapsSignalDuringBootstrapBuild(t *testing.T) {
-	root, err := filepath.Abs(filepath.Join("..", ".."))
+func TestPublicWrapperFailedBuildPreservesPriorLauncher(t *testing.T) {
+	script, root := isolatedPublicWrapper(t)
+	runtimeDirectory := filepath.Join(root, "var", "run-private-scanner", "bin")
+	if err := os.MkdirAll(runtimeDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	launcherPath := filepath.Join(runtimeDirectory, "private-scanner-launcher")
+	prior := []byte("prior launcher bytes\n")
+	if err := os.WriteFile(launcherPath, prior, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fakeDirectory := t.TempDir()
+	fakeGo := filepath.Join(fakeDirectory, "go")
+	fakeSource := "#!/bin/sh\n" +
+		"output=\n" +
+		"while [ \"$#\" -gt 0 ]; do\n" +
+		"  if [ \"$1\" = -o ]; then shift; output=$1; break; fi\n" +
+		"  shift\n" +
+		"done\n" +
+		"[ -n \"$output\" ] || exit 91\n" +
+		"/usr/bin/printf '%s\\n' 'partial invalid build' > \"$output\"\n" +
+		"exit 99\n"
+	if err := os.WriteFile(fakeGo, []byte(fakeSource), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(script)
+	command.Dir = t.TempDir()
+	command.Env = append(removeEnvironment(removeEnvironment(os.Environ(), "PATH"), "MASSIVE_API_KEY"), "PATH="+fakeDirectory+":"+os.Getenv("PATH"))
+	if output, err := command.CombinedOutput(); err == nil {
+		t.Fatalf("failed build unexpectedly succeeded: %q", output)
+	}
+	got, err := os.ReadFile(launcherPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !bytes.Equal(got, prior) {
+		t.Fatalf("prior launcher changed after failed build: got=%q want=%q", got, prior)
+	}
+	assertNoTemporaryWrapperBuild(t, root)
+}
+
+func TestPublicWrapperImmediateBuildSignalRetiresDescendant(t *testing.T) {
+	script, root := isolatedPublicWrapper(t)
+	fakeDirectory := t.TempDir()
+	descendantPIDFile := filepath.Join(fakeDirectory, "descendant-pid")
+	fakeGo := filepath.Join(fakeDirectory, "go")
+	fakeSource := "#!/bin/sh\n" +
+		"(trap '' INT TERM; while :; do /bin/sleep 30; done) &\n" +
+		"echo $! > \"$FAKE_GO_DESCENDANT_PID\"\n" +
+		"/bin/kill -TERM \"$PPID\"\n" +
+		"while :; do /bin/sleep 30; done\n"
+	if err := os.WriteFile(fakeGo, []byte(fakeSource), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(script)
+	command.Dir = t.TempDir()
+	command.Env = append(removeEnvironment(removeEnvironment(os.Environ(), "PATH"), "MASSIVE_API_KEY"),
+		"PATH="+fakeDirectory+":"+os.Getenv("PATH"), "FAKE_GO_DESCENDANT_PID="+descendantPIDFile)
+	if output, err := command.CombinedOutput(); err == nil {
+		t.Fatalf("immediately signaled wrapper unexpectedly succeeded: %q", output)
+	}
+	rawDescendantPID, err := os.ReadFile(descendantPIDFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descendantPID, err := strconv.Atoi(strings.TrimSpace(string(rawDescendantPID)))
+	if err != nil || descendantPID <= 0 {
+		t.Fatalf("invalid descendant pid %q: %v", rawDescendantPID, err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(descendantPID, syscall.SIGKILL) })
+	descendantDeadline := time.Now().Add(time.Second)
+	for syscall.Kill(descendantPID, syscall.Signal(0)) == nil && time.Now().Before(descendantDeadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if syscall.Kill(descendantPID, syscall.Signal(0)) == nil {
+		t.Fatalf("immediate-signal build descendant %d survived wrapper termination", descendantPID)
+	}
+	assertNoTemporaryWrapperBuild(t, root)
+}
+
+func TestPublicWrapperForwardsAndReapsSignalDuringBootstrapBuild(t *testing.T) {
+	script, root := isolatedPublicWrapper(t)
 	fakeDirectory := t.TempDir()
 	started := filepath.Join(fakeDirectory, "started")
 	terminated := filepath.Join(fakeDirectory, "terminated")
 	pidFile := filepath.Join(fakeDirectory, "pid")
+	descendantPIDFile := filepath.Join(fakeDirectory, "descendant-pid")
 	fakeGo := filepath.Join(fakeDirectory, "go")
 	fakeSource := "#!/bin/sh\n" +
 		"trap '/usr/bin/touch \"$FAKE_GO_TERMINATED\"; exit 0' INT TERM\n" +
 		"echo $$ > \"$FAKE_GO_PID\"\n" +
+		"(trap '' INT TERM; while :; do /bin/sleep 30; done) &\n" +
+		"echo $! > \"$FAKE_GO_DESCENDANT_PID\"\n" +
 		"/usr/bin/touch \"$FAKE_GO_STARTED\"\n" +
 		"while :; do /bin/sleep 1; done\n"
 	if err := os.WriteFile(fakeGo, []byte(fakeSource), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(filepath.Join(root, "scripts", "run-private-scanner"), "--trading-date", "2026-08-10")
+	command := exec.Command(script, "--trading-date", "2026-08-10")
 	command.Dir = t.TempDir()
 	command.Stdout, command.Stderr = io.Discard, io.Discard
 	command.Env = append(removeEnvironment(removeEnvironment(os.Environ(), "PATH"), "MASSIVE_API_KEY"),
-		"PATH="+fakeDirectory+":"+os.Getenv("PATH"), "FAKE_GO_STARTED="+started, "FAKE_GO_TERMINATED="+terminated, "FAKE_GO_PID="+pidFile)
+		"PATH="+fakeDirectory+":"+os.Getenv("PATH"), "FAKE_GO_STARTED="+started, "FAKE_GO_TERMINATED="+terminated,
+		"FAKE_GO_PID="+pidFile, "FAKE_GO_DESCENDANT_PID="+descendantPIDFile)
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		raw, err := os.ReadFile(descendantPIDFile)
+		if err != nil {
+			return
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+		if err == nil && pid > 0 {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
 	done := make(chan error, 1)
 	go func() { done <- command.Wait() }()
 	stopWrapper := func() bool {
@@ -1182,6 +1309,23 @@ func TestPublicWrapperForwardsAndReapsSignalDuringBootstrapBuild(t *testing.T) {
 	if _, err := os.Stat(terminated); err != nil {
 		t.Fatalf("bootstrap build did not receive forwarded SIGTERM: %v", err)
 	}
+	rawDescendantPID, err := os.ReadFile(descendantPIDFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descendantPID, err := strconv.Atoi(strings.TrimSpace(string(rawDescendantPID)))
+	if err != nil || descendantPID <= 0 {
+		t.Fatalf("invalid descendant pid %q: %v", rawDescendantPID, err)
+	}
+	descendantDeadline := time.Now().Add(time.Second)
+	for syscall.Kill(descendantPID, syscall.Signal(0)) == nil && time.Now().Before(descendantDeadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if syscall.Kill(descendantPID, syscall.Signal(0)) == nil {
+		_ = syscall.Kill(descendantPID, syscall.SIGKILL)
+		t.Fatalf("bootstrap build descendant %d survived wrapper termination", descendantPID)
+	}
+	assertNoTemporaryWrapperBuild(t, root)
 }
 
 func processNames(specs []processSpec) []string {
