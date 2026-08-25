@@ -1,0 +1,191 @@
+{
+  "schema": "lbr-e3-live-evidence-v1",
+  "slice": "LBR-E3",
+  "proof": "P-LBR-E3-LIVE",
+  "trading_date": "2026-08-25",
+  "classification": "correction_required",
+  "classification_reason": "The accepted private launcher failed during its credential-free build stage because the ignored output path already contained a shell-script test double. The real launcher, scanner, dashboard, credential acquisition, and provider paths never started. This is a launcher/test-isolation defect, not live-provider evidence.",
+  "authorization": {
+    "environment": "ordinary Massive production US-equities environment with the existing private account and entitlements",
+    "credential_chain": "already-exported MASSIVE_API_KEY, otherwise the existing runbook-defined macOS Keychain item",
+    "credential_source_selected": "runbook_keychain",
+    "credential_access_occurred": false,
+    "provider_request_occurred": false,
+    "authorized_duration_seconds": 1800,
+    "retry_authorized": false,
+    "induced_disconnect_recovery_pressure_or_shedding_authorized": false
+  },
+  "provenance": {
+    "branch": "codex/live-backend-replacement",
+    "owner_expected_head": "5a3aae437e2754918b3296a9fb25b14320c51484",
+    "activation_commit": "c6b5fbdaa1aac17bcadabf817154df000431fdfc",
+    "activation_commit_subject": "docs: activate LBR-E3 live observation",
+    "worktree_clean_before_credential_stage": true,
+    "go_version": "go1.26.5 darwin/arm64",
+    "host": "Apple M1, 8 GiB RAM, macOS 26.2 arm64",
+    "scanner_dependency_list_sha256": "7b703e2aef50b2b8b0c5742d2bb0f1c82887af312a9d7b61bfa95cfdad967fea",
+    "non_standard_module": "github.com/coder/websocket v1.8.15"
+  },
+  "schedule": {
+    "schema": "nyse-trading-days-v1",
+    "version": "nyse-2026-2027-reviewed-2026-07-29",
+    "artifact_sha256": "3fb957d2c41f53e64883699d6324f378fd896755fa299a4bd209d1e60d190784",
+    "trading_date": "2026-08-25",
+    "prior_session_date": "2026-08-24",
+    "session_start_new_york": "2026-08-25T04:00:00-04:00",
+    "session_end_new_york": "2026-08-25T20:00:00-04:00",
+    "regular_close_new_york": "2026-08-25T16:00:00-04:00"
+  },
+  "configuration": {
+    "command": "./scripts/run-private-scanner --trading-date 2026-08-25 --hydration-workers 8 --open",
+    "api_address": "127.0.0.1:8080",
+    "dashboard_address": "127.0.0.1:4173",
+    "allowed_origin": "http://127.0.0.1:4173",
+    "reference_directory": "var/reference",
+    "diagnostic_directory": "var/diagnostics",
+    "hydration_workers": 8,
+    "checkpoint_or_replay_accessed": false,
+    "production_code_or_configuration_changed_for_run": false
+  },
+  "executed_commands": {
+    "preflight": [
+      "git status --short --branch && git rev-parse HEAD && git branch --show-current",
+      "git diff --check && git status --porcelain=v1 && git ls-files -m -o --exclude-standard",
+      "go list -deps ./cmd/scanner | shasum -a 256",
+      "go list -m all",
+      "go test -count=1 -run '^TestPLBRE1Cutover$' -timeout 90s ./cmd/scanner",
+      "go test -count=1 -timeout 30s ./internal/session",
+      "jq '{schema_version,schedule_version,coverage_start,coverage_end,row:(.trading_days[]|select(.date==\"2026-08-25\")),previous:(.trading_days|map(.date)|map(select(. < \"2026-08-25\"))|last)}' internal/session/nyse_trading_days.json",
+      "shasum -a 256 internal/session/nyse_trading_days.json internal/session/nyse_schedule_provenance.json",
+      "lsof -nP -iTCP@127.0.0.1:8080 -sTCP:LISTEN",
+      "lsof -nP -iTCP@127.0.0.1:4173 -sTCP:LISTEN",
+      "df -h . && df -i .",
+      "vm_stat && sysctl -n vm.swapusage"
+    ],
+    "activation": [
+      "git add -- docs/live-backend-replacement/delivery-program.md",
+      "git commit -m 'docs: activate LBR-E3 live observation'",
+      "git status --short --branch && git rev-parse HEAD && git diff --check"
+    ],
+    "authorized_attempt": [
+      "set -eu; if [ \"${MASSIVE_API_KEY+x}\" = x ]; then credential_source=exported_environment; else credential_source=runbook_keychain; fi; start_epoch=$(date +%s); deadline_epoch=$((start_epoch + 1800)); printf 'LBR_E3_LAUNCH_START epoch=%s utc=%s local=%s credential_source=%s duration_seconds=1800\\n' \"$start_epoch\" \"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\" \"$(date '+%Y-%m-%dT%H:%M:%S%z')\" \"$credential_source\"; ./scripts/run-private-scanner --trading-date 2026-08-25 --hydration-workers 8 --open & launcher_pid=$!; stop_launcher() { kill -INT \"$launcher_pid\" 2>/dev/null || true; }; trap stop_launcher INT TERM; ( while kill -0 \"$launcher_pid\" 2>/dev/null; do current_epoch=$(date +%s); if [ \"$current_epoch\" -ge \"$deadline_epoch\" ]; then printf 'LBR_E3_DURATION_REACHED epoch=%s utc=%s\\n' \"$current_epoch\" \"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\"; kill -INT \"$launcher_pid\" 2>/dev/null || true; exit 0; fi; sleep 1; done ) & timer_pid=$!; set +e; wait \"$launcher_pid\"; launcher_status=$?; set -e; kill \"$timer_pid\" 2>/dev/null || true; wait \"$timer_pid\" 2>/dev/null || true; printf 'LBR_E3_LAUNCH_END epoch=%s utc=%s local=%s launcher_status=%s elapsed_seconds=%s\\n' \"$(date +%s)\" \"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\" \"$(date '+%Y-%m-%dT%H:%M:%S%z')\" \"$launcher_status\" \"$(( $(date +%s) - start_epoch ))\"; exit \"$launcher_status\""
+    ],
+    "post_stop": [
+      "stat -f 'mode=%Sp size=%z inode=%i modified=%Sm path=%N' var/run-private-scanner/bin var/run-private-scanner/bin/private-scanner-launcher var/run-private-scanner/bin/scanner var/run-private-scanner/bin/dashboard",
+      "file var/run-private-scanner/bin/private-scanner-launcher var/run-private-scanner/bin/scanner var/run-private-scanner/bin/dashboard",
+      "shasum -a 256 var/run-private-scanner/bin/private-scanner-launcher var/run-private-scanner/bin/scanner var/run-private-scanner/bin/dashboard",
+      "ps -A -o pid=,ppid=,etime=,comm= | rg 'private-scanner|/scanner$|/dashboard$' || true",
+      "lsof -nP -iTCP@127.0.0.1:8080 -sTCP:LISTEN",
+      "lsof -nP -iTCP@127.0.0.1:4173 -sTCP:LISTEN",
+      "find var/diagnostics -maxdepth 1 -type f -newermt '2026-08-25 11:48:50' -print",
+      "find var/reference -type f -newermt '2026-08-25 11:48:50' -print",
+      "git status --short --branch && git rev-parse HEAD && git diff --check",
+      "df -k . && vm_stat && sysctl -n vm.swapusage"
+    ],
+    "evidence_verification": [
+      "jq empty docs/live-backend-replacement/evidence/lbr-e3-live-2026-08-25.json",
+      "shasum -a 256 docs/live-backend-replacement/evidence/lbr-e3-live-2026-08-25.json",
+      "git diff --check",
+      "rg -n -i '(api[_ -]?key|authorization:|bearer |token=|wss://|https://api\\.)' docs/live-backend-replacement/evidence/lbr-e3-live-2026-08-25.json || true"
+    ]
+  },
+  "timeline": {
+    "launcher_wrapper_start_utc": "2026-08-25T18:48:58Z",
+    "launcher_wrapper_start_local": "2026-08-25T11:48:58-07:00",
+    "launcher_wrapper_start_epoch": 1787683738,
+    "launcher_wrapper_end_utc": "2026-08-25T18:49:00Z",
+    "launcher_wrapper_end_local": "2026-08-25T11:49:00-07:00",
+    "launcher_wrapper_end_epoch": 1787683740,
+    "elapsed_seconds": 2,
+    "launcher_exit_status": 1,
+    "mandatory_stop_reason": "credential-free launcher build failure before launcher exec",
+    "rest_hydration_started": false,
+    "websocket_started": false,
+    "hydration_fence_reached": false,
+    "first_ready_reached": false,
+    "sustained_ready_observation_seconds": 0,
+    "controlled_shutdown_required": false,
+    "post_stop_scanner_processes": 0,
+    "post_stop_dashboard_processes": 0
+  },
+  "bounded_terminal_evidence": {
+    "launcher_output": [
+      "LBR_E3_LAUNCH_START epoch=1787683738 utc=2026-08-25T18:48:58Z local=2026-08-25T11:48:58-0700 credential_source=runbook_keychain duration_seconds=1800",
+      "github.com/belandresj/live-equities-momentum-scanner/cmd/private-scanner-launcher: go build github.com/belandresj/live-equities-momentum-scanner/cmd/private-scanner-launcher: build output var/run-private-scanner/bin/private-scanner-launcher already exists and is not an object file",
+      "LBR_E3_LAUNCH_END epoch=1787683740 utc=2026-08-25T18:49:00Z local=2026-08-25T11:49:00-0700 launcher_status=1 elapsed_seconds=2"
+    ],
+    "failed_output_path_kind": "POSIX shell script test double",
+    "failed_output_path_mode": "0700",
+    "failed_output_path_size_bytes": 67,
+    "failed_output_path_modified_local": "2026-08-25T10:32:05-07:00",
+    "failed_output_path_sha256": "25bc45c64cba421db7099bd63eb5f574cc77d6ac0dce58cd96d1566332888eae",
+    "test_source": "internal/privatelauncher/launcher_test.go: TestPLBRA3PublicWrapperDefaultsEightHydrationWorkers writes its fake launcher to the repository runtime path",
+    "runbook_conflict": "The runbook states that ignored binaries are rebuilt in place on the next launch, but the accepted wrapper did not replace this non-object test double."
+  },
+  "live_observations": {
+    "reference_records": null,
+    "eligible_cs_adrc": null,
+    "invalid_or_missing_prior_closes": null,
+    "universe_identity": null,
+    "provider_authentication": "not attempted",
+    "websocket_commands_acknowledgements": "not observed",
+    "connection_epochs": 0,
+    "provider_status_classes": [],
+    "heartbeat": "not observed",
+    "aggregate_progression": "not observed",
+    "committed_time": "not observed",
+    "ranking": "not observed",
+    "selected_row_tq": "not observed",
+    "api_v2": "not started",
+    "dashboard": "not started",
+    "one_second_polling": "not started",
+    "aggregate_control_accounting": "not observed",
+    "queue_behavior": "not observed",
+    "recovery": "not observed and not induced",
+    "diagnostic_artifacts": []
+  },
+  "resource_series": [
+    {
+      "phase": "preflight",
+      "local_time": "2026-08-25T11:46:50-07:00",
+      "disk_available_bytes": 4489216000,
+      "disk_capacity_used_percent": 98,
+      "swap_total_mib": 5120,
+      "swap_used_mib": 4602,
+      "scanner_cpu_percent": null,
+      "scanner_rss_bytes": null,
+      "scanner_goroutines": null,
+      "queue_depth": null
+    },
+    {
+      "phase": "post_stop",
+      "local_time": "2026-08-25T11:50:12-07:00",
+      "disk_available_bytes": 4490526720,
+      "disk_capacity_used_percent": 98,
+      "swap_total_mib": 5120,
+      "swap_used_mib": 4522,
+      "scanner_cpu_percent": null,
+      "scanner_rss_bytes": null,
+      "scanner_goroutines": null,
+      "queue_depth": null
+    }
+  ],
+  "artifact_checksums": {
+    "existing_scanner_binary_sha256": "d5d5cc71f496be2813721028115b6e95517c81c32a57d368fc1877c93eb62d4a",
+    "existing_dashboard_binary_sha256": "81e2d3e277668ec6c45b0eebd25a7560394423f267350f9ed292ddcc060c4a6a",
+    "failed_launcher_output_sha256": "25bc45c64cba421db7099bd63eb5f574cc77d6ac0dce58cd96d1566332888eae",
+    "e2_preserved_artifact_sha256": "b4d57ab3da41b73eeafc5ec3ebf135552e58c4ba784eff16fe311dafbba218f6"
+  },
+  "lowest_owning_capability": {
+    "capability": "LBR-A3 bounded parallel live hydration",
+    "boundary": "public wrapper test isolation and persistent runtime-output hygiene",
+    "reason": "The A3 wrapper test writes a fake launcher into the real ignored runtime directory and leaves it there. The accepted daily wrapper then cannot satisfy its rebuild-in-place contract. E1 preserved launcher compatibility but did not originate the contaminating test.",
+    "reopened_claim": "The accepted public launcher can be invoked from an ordinarily used worktree after deterministic launcher verification and will rebuild its private runtime binaries in place."
+  },
+  "limitations": [
+    "No real-provider observation occurred, so this artifact establishes no hydration, fence, readiness, committed-time, ranking, T/Q, API/UI, accounting, queue, resource-plateau, heartbeat, or recovery fact.",
+    "The authorized 30-minute interval was not consumed as a provider run; the no-retry boundary nevertheless prohibits another attempt without new owner authorization.",
+    "E2 remains deferred and non-gating; deterministic 300-frames/s capacity remains unestablished.",
+    "No provider SLA, public deployment, replay/checkpoint support, or trading expectancy is claimed."
+  ]
+}
