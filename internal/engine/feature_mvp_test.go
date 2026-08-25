@@ -20,7 +20,7 @@ func TestPMVPVolumeProductionPath(t *testing.T) {
 	binding := hydrationPopulationBinding(t, []string{"AAA", "BBB"})
 	target := binding.SessionStart().Add(330 * time.Second)
 	now := target
-	e := aggregateEngine(t, binding, RunModeLive, &now)
+	e := aggregateEngine(t, binding, &now)
 	defer closeAndWait(t, e)
 	historical := historicalAggregate(binding, "AAA", target.Add(-3*time.Second), 1)
 	historical.Values.Open, historical.Values.High, historical.Values.Low, historical.Values.Close, historical.Values.VWAP = 12, 12, 12, 12, 12
@@ -302,7 +302,7 @@ func TestPMVPFloatFieldProvenanceAndAbsence(t *testing.T) {
 	if !aggregateRankingRowEqual(rowA, rowB) {
 		t.Fatal("equal Float percentages compared by pointer identity")
 	}
-	view := replayFloatFieldView(current)
+	view := floatFieldView(current)
 	*view.Percent = 99
 	if *current.fact.FreeFloatPercent != 25 {
 		t.Fatal("Float diagnostic view aliases immutable engine publication")

@@ -53,7 +53,7 @@ func deriveStatus(processLive bool, binding reference.Binding, config Config, no
 		result.Reason = ReasonSuppressed
 	case view.BindingIdentity != binding.Identity():
 		result.Reason = ReasonBindingMismatch
-	case view.RunMode != engine.RunModeLive:
+	case view.RunMode != "live":
 		result.Reason = ReasonNotLiveMode
 	case view.Lifecycle != "live" && view.Lifecycle != "hydrating":
 		result.Reason = ReasonLifecycle

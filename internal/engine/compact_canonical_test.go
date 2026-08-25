@@ -16,7 +16,7 @@ func TestPLBRA1Canonical(t *testing.T) {
 	t.Run("exact horizon out-of-order and foreign binding are contained", func(t *testing.T) {
 		window := start.Add(time.Minute)
 		now := window.Add(time.Second).Add(correctionHorizon)
-		e := aggregateEngine(t, binding, RunModeLive, &now)
+		e := aggregateEngine(t, binding, &now)
 		atBoundary := liveAggregate(binding, "AAA", window, 1, 2)
 		applyAggregate(t, e, atBoundary, DispositionAggregateInserted, ReasonNone)
 		atBoundaryRevision := changedClose(atBoundary, 10.2)
@@ -50,7 +50,7 @@ func TestPLBRA1Canonical(t *testing.T) {
 
 	t.Run("bounded tail prefix correction and immutable affected views", func(t *testing.T) {
 		now := start.Add(time.Second)
-		e := aggregateEngine(t, binding, RunModeLive, &now)
+		e := aggregateEngine(t, binding, &now)
 		const records = 1000
 		for second := 0; second < records; second++ {
 			window := start.Add(time.Duration(second) * time.Second)
@@ -109,7 +109,7 @@ func TestPLBRA1Canonical(t *testing.T) {
 
 	t.Run("old historical fill withdraws only its prefix effect and sealed live never reopens", func(t *testing.T) {
 		now := start.Add(30 * time.Minute)
-		e := aggregateEngine(t, binding, RunModeLive, &now)
+		e := aggregateEngine(t, binding, &now)
 		old := historicalAggregate(binding, "MISSING", start.Add(time.Minute), 1)
 		old.Values.Open, old.Values.High, old.Values.Low, old.Values.Close, old.Values.VWAP, old.Values.Volume = 9, 12, 8, 11, 10, 250
 		proof := proofFor(binding, old, start, start.Add(5*time.Minute))
@@ -154,7 +154,7 @@ func TestPLBRA1Canonical(t *testing.T) {
 		closeAndWait(t, e)
 
 		now = start.Add(30 * time.Minute)
-		latest := aggregateEngine(t, binding, RunModeLive, &now)
+		latest := aggregateEngine(t, binding, &now)
 		sole := historicalAggregate(binding, "BAD", start.Add(5*time.Minute), 1)
 		soleProof := proofFor(binding, sole, sole.WindowStart, sole.WindowStart.Add(5*time.Second))
 		applyHistorical(t, latest, sole, soleProof, DispositionAggregateInserted, ReasonNone)
@@ -174,7 +174,7 @@ func TestPLBRA1Canonical(t *testing.T) {
 
 	t.Run("sealed live keeps no comparison outside an active exact request", func(t *testing.T) {
 		now := start.Add(2 * time.Second)
-		e := aggregateEngine(t, binding, RunModeLive, &now)
+		e := aggregateEngine(t, binding, &now)
 		live := liveAggregate(binding, "AAA", start, 1, 1)
 		applyAggregate(t, e, live, DispositionAggregateInserted, ReasonNone)
 		laterLive := liveAggregate(binding, "AAA", start.Add(time.Second), 1, 2)
@@ -297,7 +297,7 @@ func TestPLBRA1Canonical(t *testing.T) {
 
 	t.Run("historical live precedence no-print invalid and unknown remain distinct", func(t *testing.T) {
 		now := start.Add(10 * time.Minute)
-		e := aggregateEngine(t, binding, RunModeLive, &now)
+		e := aggregateEngine(t, binding, &now)
 		window := now.Add(-time.Minute)
 		historical := historicalAggregate(binding, "BAD", window, 1)
 		proof := proofFor(binding, historical, window, window.Add(time.Second))

@@ -12,7 +12,7 @@ import (
 func TestIngressSuppressionReasonSurvivesTimerAndRejectedReconnect(t *testing.T) {
 	binding := testBinding(t)
 	now := binding.SessionStart().Add(10 * time.Second)
-	e := aggregateEngine(t, binding, RunModeLive, &now)
+	e := aggregateEngine(t, binding, &now)
 	defer closeAndWait(t, e)
 
 	admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionAttempt, 1, LivePosition{}, now, 1, ControlSucceeded))
@@ -61,7 +61,7 @@ func TestIngressSuppressionReasonSurvivesTimerAndRejectedReconnect(t *testing.T)
 func TestPTQRRecoverableIngressLossRoutesToExactGapRecovery(t *testing.T) {
 	binding := testBinding(t)
 	now := binding.SessionStart().Add(20 * time.Second)
-	e := aggregateEngine(t, binding, RunModeLive, &now)
+	e := aggregateEngine(t, binding, &now)
 	defer closeAndWait(t, e)
 	admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionAttempt, 1, LivePosition{}, now, 1, ControlSucceeded))
 	e.mu.Lock()

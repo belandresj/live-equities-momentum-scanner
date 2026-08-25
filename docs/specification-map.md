@@ -74,10 +74,10 @@ prior-close basis, unchanged qualification, exact qualified Day-% ranking/top
 20, revised displayed fields, one engine/state/watermark/evaluator, 04:00-20:00
 New York session, half-open windows, REST/live identity and precedence,
 no-print proof, lifecycle, failure domains, accounting, API/UI ownership, and
-independent availability. Existing checkpoint and replay architecture remains
-available for future work, but neither path is a current MVP operating or
-acceptance requirement. Focused contracts cite these meanings; they do not
-create a shared replacement layer.
+independent availability. Historical checkpoint and replay architecture remains
+semantic evidence only; its implementation has been removed from the supported
+scanner and is not a current operating or acceptance path. Focused contracts
+cite retained live meanings; they do not create a shared replacement layer.
 
 ## 2026-08-14 product feature-set revision
 
@@ -112,7 +112,7 @@ and review records.
 
 | Document | Status and role |
 | --- | --- |
-| [`live-backend-replacement/delivery-program.md`](live-backend-replacement/delivery-program.md) | Current owner-approved delivery authority, owner-revised 2026-08-24: A–C and `LBR-A3` accepted; the diagnostic-preservation correction is accepted between A3 and inactive D1; sole ledger, bounded execution, and hard integrated acceptance. |
+| [`live-backend-replacement/delivery-program.md`](live-backend-replacement/delivery-program.md) | Current owner-approved delivery authority, owner-revised 2026-08-24: Capabilities A–D and `LBR-E1` accepted; `LBR-E2` is next permitted but inactive; sole ledger, bounded execution, and hard integrated acceptance. |
 | [`live-feature-mvp-program.md`](live-feature-mvp-program.md) | Historical accepted 2026-08-14 feature/API/UI/stability delivery evidence; superseded as the active implementation program. |
 | [`live-evaluation-cycle-coalescing-correction.md`](live-evaluation-cycle-coalescing-correction.md) | Accepted historical scanner-stability evidence: one fence-owned evaluation opportunity, maintenance-only following timer, and coalesced missed ticks. Its old evaluator implementation is not replacement authority. |
 | [`tq-publication-coalescing-correction.md`](tq-publication-coalescing-correction.md) | Accepted historical scanner-stability evidence: synchronous canonical T/Q mutation with one-second combined publication and immediate trust transitions. Its old T/Q representation is not replacement authority. |
@@ -142,8 +142,10 @@ representations for its scope. Keep one write-capable slice and finally review
 each capability. `LBR-P1` and A1/A2/B/C evidence remain accepted. The
 2026-08-24 owner revision reopened Capability A only for bounded parallel live
 hydration; A3 is now accepted. The corrected watermark-stall diagnostic was
-then semantically forward-ported without reopening A/B/C. The next permitted
-slice is D1, which remains inactive pending its pre-assignment audit.
+then semantically forward-ported without reopening A/B/C. D1/D2 and their
+Capability D review are accepted. `LBR-E1` completed the exclusive live cutover
+and owner-selected replay/checkpoint deletion; `LBR-E2` is next permitted but
+inactive.
 
 The active capability order is:
 

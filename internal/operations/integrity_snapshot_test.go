@@ -27,8 +27,8 @@ func TestEvaluatorIntegrityInspectionIsDetached(t *testing.T) {
 
 func TestFloatPercentageInspectionIsDetached(t *testing.T) {
 	percent := 25.0
-	capture := SnapshotCapture{sealed: &sealedSnapshotCapture{view: SnapshotCaptureView{Engine: engine.SnapshotView{Publication: engine.ReplayPublicationView{
-		AggregateEvaluation: engine.ReplayEvaluationView{Rows: []engine.ReplayRankingRowView{{Symbol: "AAA", Float: engine.ReplayFloatFieldView{Percent: &percent}}}},
+	capture := SnapshotCapture{sealed: &sealedSnapshotCapture{view: SnapshotCaptureView{Engine: engine.SnapshotView{Publication: engine.PublicationView{
+		AggregateEvaluation: engine.EvaluationView{Rows: []engine.RankingRowView{{Symbol: "AAA", Float: engine.FloatFieldView{Percent: &percent}}}},
 	}}}}}
 	first, ok := InspectSnapshotCapture(capture)
 	if !ok || first.Engine.Publication.AggregateEvaluation.Rows[0].Float.Percent == nil {

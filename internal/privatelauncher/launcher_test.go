@@ -111,7 +111,7 @@ func newLauncherFixture(t *testing.T, at time.Time) *launcherFixture {
 			if root != "/repo" {
 				return launchPaths{}, fmt.Errorf("root=%s", root)
 			}
-			return launchPaths{reference: "/repo/var/reference", checkpoints: "/repo/var/checkpoints", runtimeDirectory: "/repo/var/run-private-scanner",
+			return launchPaths{reference: "/repo/var/reference", runtimeDirectory: "/repo/var/run-private-scanner",
 				scannerBinary: "/repo/var/run-private-scanner/bin/scanner", dashboardBinary: "/repo/var/run-private-scanner/bin/dashboard"}, nil
 		},
 		credential: func(_ context.Context, environment []string) (string, string, error) {
@@ -181,8 +181,8 @@ func TestDailyDefaultsDeriveNewYorkDateAndIsolateCredential(t *testing.T) {
 	if len(fixture.starts) != 2 || fixture.starts[0].name != "scanner" || fixture.starts[1].name != "dashboard" {
 		t.Fatalf("startup order=%v", processNames(fixture.starts))
 	}
-	wantScanner := []string{"--run-mode", "live", "--trading-date", "2026-08-10", "--hydration-workers", "8", "--reference-dir", "/repo/var/reference",
-		"--checkpoint-dir", "/repo/var/checkpoints", "--checkpoint-mode", "off", "--api-address", scannerAddress, "--allow-origin", dashboardOrigin}
+	wantScanner := []string{"--trading-date", "2026-08-10", "--hydration-workers", "8", "--reference-dir", "/repo/var/reference",
+		"--api-address", scannerAddress, "--allow-origin", dashboardOrigin}
 	wantDashboard := []string{"--address", dashboardAddress, "--api-origin", scannerOrigin, "--assets", "/repo/ui"}
 	if !reflect.DeepEqual(fixture.starts[0].arguments, wantScanner) || !reflect.DeepEqual(fixture.starts[1].arguments, wantDashboard) {
 		t.Fatalf("arguments scanner=%q dashboard=%q", fixture.starts[0].arguments, fixture.starts[1].arguments)

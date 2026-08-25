@@ -26,7 +26,7 @@ func newTQPublicationFixture(t *testing.T, symbols []string) tqPublicationFixtur
 	binding := hydrationPopulationBinding(t, symbols)
 	now := binding.SessionStart().Add(20 * time.Minute)
 	nowPointer := now
-	e := aggregateEngine(t, binding, RunModeLive, &nowPointer)
+	e := aggregateEngine(t, binding, &nowPointer)
 	t.Cleanup(func() { closeAndWait(t, e) })
 
 	e.mu.Lock()

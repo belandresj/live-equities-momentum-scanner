@@ -51,26 +51,10 @@ func (e *Engine) candidateTargetSupportedLocked(target time.Time) bool {
 		}
 	}
 
-	completeRunSupport := false
-	switch e.mode {
-	case RunModeLive:
-		applicableAcceptedAggregateEpoch := e.state.liveEpochActive && e.state.aggregateAcknowledged && e.state.liveEpoch != 0
-		consumedThroughIngressFence := e.state.hydration.fenceReconciled && e.state.hydration.fenceEpoch == e.state.liveEpoch &&
-			e.state.hydration.fenceThrough >= e.state.aggregateAckPosition.FrameSequence
-		noPriorUnresolvedGlobalTransportGap := !e.state.aggregateIntegrity
-		installedContributorPredicates := e.state.hydration.supportedThrough != nil && !e.state.hydration.supportedThrough.Before(target)
-		completeRunSupport = applicableAcceptedAggregateEpoch && consumedThroughIngressFence &&
-			noPriorUnresolvedGlobalTransportGap && installedContributorPredicates
-	case RunModeReplay:
-		replay := e.state.replay
-		validatedReplayArtifact := replay.validated && replay.complete && !replay.terminal
-		provedArtifactCoverageAndOrdering := replay.coveredThrough != nil && !replay.coveredThrough.Before(target) && replay.nextOrdinal > 0
-		completedLogicalDeliveryGroup := !replay.lastGroup.IsZero() && !replay.lastGroup.Before(target)
-		completeRunSupport = validatedReplayArtifact && provedArtifactCoverageAndOrdering && completedLogicalDeliveryGroup
-	default:
-		return false
-	}
-	return completeRunSupport
+	applicableAcceptedAggregateEpoch := e.state.liveEpochActive && e.state.aggregateAcknowledged && e.state.liveEpoch != 0
+	consumedThroughIngressFence := e.state.hydration.fenceReconciled && e.state.hydration.fenceEpoch == e.state.liveEpoch && e.state.hydration.fenceThrough >= e.state.aggregateAckPosition.FrameSequence
+	installedContributorPredicates := e.state.hydration.supportedThrough != nil && !e.state.hydration.supportedThrough.Before(target)
+	return applicableAcceptedAggregateEpoch && consumedThroughIngressFence && installedContributorPredicates
 }
 
 func (e *Engine) accountingCoherentLocked() bool {
@@ -83,10 +67,7 @@ func (e *Engine) accountingCoherentLocked() bool {
 		counters.admittedExternal == uint64(e.externalQueueOccupancyLocked())+counters.ownerInProgress+counters.completedExternal
 }
 
-func suppressionDispositionFor(mode RunMode, reason lifecycleReason) SuppressionDisposition {
-	if mode == RunModeReplay {
-		return SuppressionTerminalReplayFailure
-	}
+func suppressionDispositionFor(reason lifecycleReason) SuppressionDisposition {
 	switch reason {
 	case lifecycleReasonIngressIntegrity:
 		return SuppressionSameBindingRecoveryAllowed
@@ -104,14 +85,13 @@ func suppressionDispositionFor(mode RunMode, reason lifecycleReason) Suppression
 
 func suppressionRequiresTermination(disposition SuppressionDisposition) bool {
 	return disposition == SuppressionCleanReinitializationRequired ||
-		disposition == SuppressionRestartRequired ||
-		disposition == SuppressionTerminalReplayFailure
+		disposition == SuppressionRestartRequired
 }
 
 // enterSuppressionLocked is the sole point that binds a suppression cause to
 // its recovery requirement and containment boundary.
 func (e *Engine) enterSuppressionLocked(event lifecycleEvent, node *queueNode, reason lifecycleReason) SuppressionDisposition {
-	disposition := suppressionDispositionFor(e.mode, reason)
+	disposition := suppressionDispositionFor(reason)
 	if disposition == "" {
 		event = lifecycleEventAccountingIntegrity
 		reason = lifecycleReasonAccountingIntegrity
@@ -149,9 +129,6 @@ func (e *Engine) transitionLifecycleLocked(event lifecycleEvent, node *queueNode
 		if previous != lifecycleInitializing || e.state.binding == nil {
 			return false
 		}
-		if e.mode == RunModeReplay {
-			return true
-		}
 		switch {
 		case admissionTime.Before(e.state.binding.sessionStart):
 			next, reason = lifecycleAwaitingSession, lifecycleReasonBindingBeforeSession
@@ -164,9 +141,7 @@ func (e *Engine) transitionLifecycleLocked(event lifecycleEvent, node *queueNode
 		if e.state.binding == nil {
 			return false
 		}
-		replayEndGroup := e.mode == RunModeReplay && previous == lifecycleReplaying && node != nil &&
-			node.kind == inputReplayGroup && admissionTime.Equal(e.state.binding.sessionEnd)
-		if !admissionTime.Before(e.state.binding.sessionEnd) && !replayEndGroup {
+		if !admissionTime.Before(e.state.binding.sessionEnd) {
 			next, reason = lifecycleEnded, lifecycleReasonSessionEnd
 		} else {
 			switch previous {
@@ -178,7 +153,7 @@ func (e *Engine) transitionLifecycleLocked(event lifecycleEvent, node *queueNode
 						next, reason = lifecycleAwaitingAggregateAck, lifecycleReasonSessionStart
 					}
 				}
-			case lifecycleAwaitingAggregateAck, lifecycleHydrating, lifecycleLive, lifecycleRecovering, lifecycleReplaying:
+			case lifecycleAwaitingAggregateAck, lifecycleHydrating, lifecycleLive, lifecycleRecovering:
 				// A quiet timer is a legal self-transition and cannot fabricate
 				// the later evidence needed to leave any of these states.
 			case lifecycleSuppressed:
@@ -205,26 +180,6 @@ func (e *Engine) transitionLifecycleLocked(event lifecycleEvent, node *queueNode
 		next, reason = lifecycleSuppressed, lifecycleReasonAccountingIntegrity
 	case lifecycleEventClose:
 		next, reason = lifecycleEnded, lifecycleReasonClosed
-	case lifecycleEventReplayStart:
-		if e.mode != RunModeReplay || previous != lifecycleInitializing || !e.state.replay.validated {
-			return false
-		}
-		next, reason = lifecycleReplaying, lifecycleReasonReplayStart
-	case lifecycleEventReplayEnd:
-		if e.mode != RunModeReplay || previous != lifecycleReplaying || !e.state.replay.terminal {
-			return false
-		}
-		next, reason = lifecycleEnded, lifecycleReasonReplayEnd
-	case lifecycleEventReplayRequestedEnd:
-		if e.mode != RunModeReplay || previous != lifecycleReplaying || !e.state.replay.terminal {
-			return false
-		}
-		next, reason = lifecycleEnded, lifecycleReasonReplayRequestedEnd
-	case lifecycleEventReplayFailure:
-		if e.mode != RunModeReplay || previous == lifecycleEnded {
-			return false
-		}
-		next, reason = lifecycleSuppressed, lifecycleReasonReplayFailure
 	case lifecycleEventAggregateAck:
 		if !e.state.liveEpochActive {
 			return false
@@ -256,7 +211,7 @@ func (e *Engine) transitionLifecycleLocked(event lifecycleEvent, node *queueNode
 			return false
 		}
 	case lifecycleEventIngressIntegrity:
-		if previous == lifecycleInitializing || previous == lifecycleReplaying || previous == lifecycleEnded {
+		if previous == lifecycleInitializing || previous == lifecycleEnded {
 			return false
 		}
 		next = lifecycleSuppressed
@@ -264,12 +219,12 @@ func (e *Engine) transitionLifecycleLocked(event lifecycleEvent, node *queueNode
 			reason = lifecycleReasonIngressIntegrity
 		}
 	case lifecycleEventHydrationComplete:
-		if (previous != lifecycleHydrating && previous != lifecycleRecovering) || e.mode != RunModeLive {
+		if previous != lifecycleHydrating && previous != lifecycleRecovering {
 			return false
 		}
 		next, reason = lifecycleLive, lifecycleReasonHydrationComplete
 	case lifecycleEventScheduledRecovery:
-		if e.mode != RunModeLive || previous != lifecycleSuppressed || e.state.suppressionDisposition != SuppressionSameBindingRecoveryAllowed || e.state.liveEpochActive {
+		if previous != lifecycleSuppressed || e.state.suppressionDisposition != SuppressionSameBindingRecoveryAllowed || e.state.liveEpochActive {
 			return false
 		}
 		next, reason = lifecycleRecovering, lifecycleReasonScheduledRecovery

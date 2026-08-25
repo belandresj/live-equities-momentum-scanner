@@ -50,9 +50,8 @@ const (
 type HydrationPurpose string
 
 const (
-	HydrationFreshBootstrap    HydrationPurpose = "fresh_bootstrap"
-	HydrationCheckpointCatchup HydrationPurpose = "checkpoint_catchup"
-	HydrationGapRecovery       HydrationPurpose = "gap_recovery"
+	HydrationFreshBootstrap HydrationPurpose = "fresh_bootstrap"
+	HydrationGapRecovery    HydrationPurpose = "gap_recovery"
 )
 
 type HydrationPlanBudgets struct {
@@ -448,7 +447,6 @@ type hydrationState struct {
 	lastGeneration     uint64
 	lastRequestID      uint64
 	lastCommandToken   uint64
-	checkpointT0       *time.Time
 	supportedT         *time.Time
 	generation         hydrationGenerationState
 	revision           uint64
@@ -604,7 +602,7 @@ func freezeHydrationChunk(input HydrationChunkInput) frozenHydrationChunkInput {
 }
 
 func validHydrationPurpose(purpose HydrationPurpose) bool {
-	return purpose == HydrationFreshBootstrap || purpose == HydrationCheckpointCatchup || purpose == HydrationGapRecovery
+	return purpose == HydrationFreshBootstrap || purpose == HydrationGapRecovery
 }
 
 func validHydrationBudgets(b HydrationPlanBudgets) bool {
@@ -644,7 +642,7 @@ func (e *Engine) applyHydrationPlanLocked(node *queueNode) (DispositionCode, Dis
 	if input.SchemaVersion != HydrationPlanSchemaV1 {
 		return DispositionHydrationRejected, ReasonSchema, HydrationPlanResult{}
 	}
-	if e.mode != RunModeLive || e.state.binding == nil {
+	if e.state.binding == nil {
 		return DispositionHydrationRejected, ReasonLifecycle, HydrationPlanResult{}
 	}
 	if input.BindingIdentity != e.state.binding.identity {
@@ -769,11 +767,6 @@ func (e *Engine) hydrationStartLocked(purpose HydrationPurpose) (time.Time, bool
 	switch purpose {
 	case HydrationFreshBootstrap:
 		return e.state.binding.sessionStart, e.state.lifecycle == lifecycleHydrating
-	case HydrationCheckpointCatchup:
-		if e.state.lifecycle != lifecycleHydrating || e.state.hydration.checkpointT0 == nil {
-			return time.Time{}, false
-		}
-		return *e.state.hydration.checkpointT0, true
 	case HydrationGapRecovery:
 		if e.state.lifecycle != lifecycleRecovering || e.state.hydration.supportedT == nil {
 			return time.Time{}, false
@@ -1170,7 +1163,7 @@ func (e *Engine) applyAggregateIngressFenceLocked(node *queueNode) (DispositionC
 func (e *Engine) applyHydrationPolicyActionLocked(node *queueNode) (DispositionCode, DispositionReason) {
 	input := node.hydrationPolicy.HydrationPolicyActionInput
 	generation := &e.state.hydration.generation
-	if e.mode != RunModeLive || e.state.binding == nil || e.state.lifecycle != lifecycleRecovering || !generation.active || generation.policyDecided ||
+	if e.state.binding == nil || e.state.lifecycle != lifecycleRecovering || !generation.active || generation.policyDecided ||
 		input.bindingID != e.state.binding.identity || input.epoch != generation.epoch || input.generation != generation.generation {
 		return DispositionHydrationPolicyRejected, ReasonHistoricalContext
 	}

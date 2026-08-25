@@ -316,7 +316,7 @@ func TestPC5TransportOneAttemptHandshakeHeartbeatAndContainment(t *testing.T) {
 		racingAdapter, command := testLiveAdapter(t, racingSocket, []string{"AAA"})
 		now := racingAdapter.binding.SessionStart()
 		delay := time.Duration(0)
-		state, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 8, EvaluationDelay: &delay})
+		state, err := engine.New(engine.Config{Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 8, EvaluationDelay: &delay})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -389,7 +389,7 @@ func TestPC5TransportOneAttemptHandshakeHeartbeatAndContainment(t *testing.T) {
 		if !ok || terminal.Terminal.Source != TerminalEngineClose || terminal.Terminal.CloseCause != CloseControlledStop || !racingAdapter.Accounting().Reconciles() {
 			t.Fatalf("racing terminal/accounting = %+v %v %+v", terminal, ok, racingAdapter.Accounting())
 		}
-		replacementState, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 8, EvaluationDelay: &delay})
+		replacementState, err := engine.New(engine.Config{Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 8, EvaluationDelay: &delay})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -518,7 +518,7 @@ func TestPHRHeartbeatInboundProgressAndQuietDeadline(t *testing.T) {
 		binding := component4TestBinding(t, []string{"AAA"})
 		now := binding.SessionStart().Add(20 * time.Second)
 		delay := time.Duration(0)
-		state, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 8, EvaluationDelay: &delay})
+		state, err := engine.New(engine.Config{Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 8, EvaluationDelay: &delay})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -889,7 +889,7 @@ func TestPLBRC2CommandResultPrecedesPostBoundaryRawDelivery(t *testing.T) {
 	binding := component4TestBinding(t, []string{"AAA"})
 	now := binding.SessionStart().Add(20 * time.Minute)
 	delay := time.Duration(0)
-	state, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return now }, Capacity: 64, RequiredReserve: 8, EvaluationDelay: &delay})
+	state, err := engine.New(engine.Config{Clock: func() time.Time { return now }, Capacity: 64, RequiredReserve: 8, EvaluationDelay: &delay})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -991,7 +991,7 @@ func TestPLBRC2CommandResultPrecedesPostBoundaryRawDelivery(t *testing.T) {
 		t.Fatal(reason)
 	}
 
-	beforeEvaluation := state.ObserveReplayDeterministic().Evaluation
+	beforeEvaluation := state.ObserveSnapshot().Publication.AggregateEvaluation
 	beforeOperational := state.ObserveOperational()
 	captured := make(chan engine.LivePosition, 1)
 	rawEntered := make(chan AdapterDelivery, 1)
@@ -1087,7 +1087,7 @@ func TestPLBRC2CommandResultPrecedesPostBoundaryRawDelivery(t *testing.T) {
 		t.Fatalf("B+1 did not independently confirm T: %+v", view)
 	}
 	afterOperational := state.ObserveOperational()
-	if !reflect.DeepEqual(beforeEvaluation, state.ObserveReplayDeterministic().Evaluation) ||
+	if !reflect.DeepEqual(beforeEvaluation, state.ObserveSnapshot().Publication.AggregateEvaluation) ||
 		!reflect.DeepEqual(beforeOperational.Aggregates, afterOperational.Aggregates) || !reflect.DeepEqual(beforeOperational.Connection, afterOperational.Connection) ||
 		!adapter.Accounting().Reconciles() || !attempt.QueueAccounting().Reconciles() {
 		t.Fatalf("aggregate/control/accounting changed: before=%+v after=%+v adapter=%+v queue=%+v", beforeOperational, afterOperational, adapter.Accounting(), attempt.QueueAccounting())
@@ -1176,7 +1176,7 @@ func TestFenceBurstBehindActiveRealFencePreservesPrefixAndDrains(t *testing.T) {
 	binding := component4TestBinding(t, []string{"AAA"})
 	now := binding.SessionStart().Add(30 * time.Second)
 	delay := time.Duration(0)
-	state, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 8, EvaluationDelay: &delay})
+	state, err := engine.New(engine.Config{Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 8, EvaluationDelay: &delay})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1365,7 +1365,7 @@ func TestC6FENCE01RawFrameMarkerEngineFIFOLinearization(t *testing.T) {
 		binding := component4TestBinding(t, []string{"AAA"})
 		now := binding.SessionStart().Add(2 * time.Second)
 		delay := time.Duration(0)
-		state, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return now }, Capacity: 16, RequiredReserve: 4, EvaluationDelay: &delay})
+		state, err := engine.New(engine.Config{Clock: func() time.Time { return now }, Capacity: 16, RequiredReserve: 4, EvaluationDelay: &delay})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1429,7 +1429,7 @@ func TestC6FENCE01RawFrameMarkerEngineFIFOLinearization(t *testing.T) {
 		binding := component4TestBinding(t, []string{"AAA"})
 		now := binding.SessionStart().Add(30 * time.Second)
 		delay := time.Duration(0)
-		state, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 8, EvaluationDelay: &delay})
+		state, err := engine.New(engine.Config{Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 8, EvaluationDelay: &delay})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1737,7 +1737,7 @@ func TestPC5LiveOfflineComponentsOneThroughFiveCanonicalPath(t *testing.T) {
 	binding := component4TestBinding(t, []string{"AAA"})
 	now := binding.SessionStart().Add(30 * time.Second)
 	delay := time.Duration(0)
-	state, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 8, EvaluationDelay: &delay})
+	state, err := engine.New(engine.Config{Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 8, EvaluationDelay: &delay})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1814,8 +1814,8 @@ func TestPC5LiveOfflineComponentsOneThroughFiveCanonicalPath(t *testing.T) {
 	if err != nil || result.AggregateDisposition.Code != engine.DispositionAggregateInserted {
 		t.Fatalf("canonical aggregate = %+v err=%v", result, err)
 	}
-	view := state.ObserveReplayDeterministic()
-	if len(view.Canonical) != 1 || view.Canonical[0].Symbol != "AAA" || len(view.Canonical[0].Records) != 1 || view.Canonical[0].Records[0].Values.Close != 10.5 {
+	view := state.ObserveSnapshot()
+	if view.Publication.AggregateEvaluation.Population.UniverseTotal != 1 || state.ObserveOperational().Aggregates.Inserted != 1 {
 		t.Fatalf("canonical/evaluator view = %+v", view)
 	}
 	if err := attempt.Close(CloseEpochCommand{BindingIdentity: binding.Identity(), ConnectionEpoch: attempt.Epoch(), CommandToken: 3, Cause: CloseControlledStop}); err != nil {

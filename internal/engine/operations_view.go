@@ -7,7 +7,7 @@ import "time"
 type OperationalView struct {
 	PublicationID, LastEngineSequence uint64
 	BindingIdentity, TradingDate      string
-	RunMode                           RunMode
+	RunMode                           string
 	Lifecycle, LifecycleReason        string
 	Suppression                       SuppressionDisposition
 	Watermark                         *time.Time
@@ -21,7 +21,6 @@ type OperationalView struct {
 	Aggregates                        OperationalAggregates
 	Connection                        OperationalConnection
 	Hydration                         OperationalHydration
-	InstalledCheckpoint               bool
 	IntegrityFailure                  *EvaluatorIntegrityView
 }
 
@@ -105,8 +104,7 @@ func (e *Engine) ObserveOperational() OperationalView {
 			Accounting: state.hydration.generation.accounting, Rows: state.hydration.generation.rowAccounting, FenceReconciled: state.hydration.fenceReconciled,
 			FenceEpoch: state.hydration.fenceEpoch, FenceThrough: state.hydration.fenceThrough, FenceMarkerOrdinal: state.hydration.fenceMarkerOrdinal,
 			SupportedThrough: immutableTimePointer(state.hydration.supportedThrough), PolicyWaiting: state.hydration.policyWaiting},
-		InstalledCheckpoint: state.installedCheckpoint != nil,
-		IntegrityFailure:    cloneEvaluatorIntegrity(state.evaluatorIntegrity),
+		IntegrityFailure: cloneEvaluatorIntegrity(state.evaluatorIntegrity),
 	}
 }
 
@@ -132,7 +130,6 @@ func operationalViewFromPublication(p *privatePublication) OperationalView {
 			Accounting: p.hydrationAccounting, Rows: p.hydrationRows, FenceReconciled: p.hydrationFenceReconciled,
 			FenceEpoch: p.hydrationFenceEpoch, FenceThrough: p.hydrationFenceThrough, FenceMarkerOrdinal: p.hydrationFenceMarkerOrdinal,
 			SupportedThrough: immutableTimePointer(p.hydrationSupportedThrough), PolicyWaiting: p.hydrationPolicyWaiting},
-		InstalledCheckpoint: p.installedCheckpoint,
-		IntegrityFailure:    cloneEvaluatorIntegrity(p.evaluatorIntegrity),
+		IntegrityFailure: cloneEvaluatorIntegrity(p.evaluatorIntegrity),
 	}
 }

@@ -96,8 +96,8 @@ func TestSuperviseLiveContainsOutputAndMappingDiagnosticsWhileRuntimeAndAPIConti
 	now := binding.SessionStart()
 	proof, stopProof := context.WithTimeout(context.Background(), time.Second)
 	defer stopProof()
-	v1RCAcknowledgeAggregate(t, proof, runtime.Engine(), binding, 1, now)
-	v1RCCompleteHydration(t, proof, runtime.Engine(), binding, engine.HydrationFreshBootstrap, 1, now)
+	continuityAcknowledgeAggregate(t, proof, runtime.Engine(), binding, 1, now)
+	continuityCompleteHydration(t, proof, runtime.Engine(), binding, engine.HydrationFreshBootstrap, 1, now)
 	beforeCapture, err := runtime.CaptureSnapshot()
 	if err != nil {
 		shutdownContinuityRuntime(t, runtime)
@@ -158,10 +158,10 @@ func TestSuperviseLiveContainsOutputAndMappingDiagnosticsWhileRuntimeAndAPIConti
 		DeliveryTime: now.Add(time.Second), Live: engine.LivePosition{ConnectionEpoch: 1, FrameSequence: 2, ArrayIndex: 1}}
 	if admission, completion := runtime.Engine().AdmitAggregate(proof, input); admission != engine.AdmissionAdmitted {
 		t.Fatalf("aggregate after terminal output failure admission=%s", admission)
-	} else if result := v1RCAwait(t, proof, completion); result.Code != engine.DispositionAggregateInserted {
+	} else if result := continuityAwait(t, proof, completion); result.Code != engine.DispositionAggregateInserted {
 		t.Fatalf("aggregate after terminal output failure result=%+v", result)
 	}
-	if admission, completion := runtime.Engine().AdmitTimer(proof); admission != engine.AdmissionAdmitted || v1RCAwait(t, proof, completion).Code != engine.DispositionTimerApplied {
+	if admission, completion := runtime.Engine().AdmitTimer(proof); admission != engine.AdmissionAdmitted || continuityAwait(t, proof, completion).Code != engine.DispositionTimerApplied {
 		t.Fatalf("aggregate evaluation after terminal output failure admission=%s", admission)
 	}
 	server.mapping <- snapshotapi.MappingFailure{Invariant: "capture_coherence"}
@@ -498,3 +498,74 @@ func (timers *manualAPITimers) new(delay time.Duration) apiRestartTimer {
 }
 
 func (timers *manualAPITimers) fire(index int) { timers.timers[index].channel <- time.Now() }
+
+func continuityAcknowledgeAggregate(t *testing.T, ctx context.Context, owner *engine.Engine, binding reference.Binding, epoch uint64, at time.Time) {
+	t.Helper()
+	for _, input := range []engine.ConnectionControlInput{
+		{SchemaVersion: engine.ConnectionControlSchemaV1, BindingIdentity: binding.Identity(), Kind: engine.ConnectionAttempt, ConnectionEpoch: epoch, CommandToken: 1, ReceiptTime: at, Outcome: engine.ControlSucceeded},
+		{SchemaVersion: engine.ConnectionControlSchemaV1, BindingIdentity: binding.Identity(), Kind: engine.AggregateCommandWriteResult, ConnectionEpoch: epoch, CommandToken: 2, ReceiptTime: at, Outcome: engine.ControlSucceeded},
+		{SchemaVersion: engine.ConnectionControlSchemaV1, BindingIdentity: binding.Identity(), Kind: engine.AggregateSubscriptionResult, ConnectionEpoch: epoch, CommandToken: 2, Position: engine.LivePosition{ConnectionEpoch: epoch, FrameSequence: 1}, ReceiptTime: at, Outcome: engine.ControlSucceeded},
+	} {
+		admission, completion := owner.AdmitConnectionControl(ctx, input)
+		if admission != engine.AdmissionAdmitted || continuityAwait(t, ctx, completion).Code != engine.DispositionConnectionControlApplied {
+			t.Fatalf("connection control %s admission=%s", input.Kind, admission)
+		}
+	}
+}
+
+func continuityCompleteHydration(t *testing.T, ctx context.Context, owner *engine.Engine, binding reference.Binding, purpose engine.HydrationPurpose, epoch uint64, at time.Time) {
+	t.Helper()
+	budgets := engine.HydrationPlanBudgets{Workers: 1, RowsPerChunk: 1, MaximumResponseBytes: 1 << 20, MaximumNormalizedRecords: 57_600, MaximumResidentRecords: 57_600}
+	admission, completion := owner.AdmitHydrationPlan(ctx, engine.HydrationPlanInput{SchemaVersion: engine.HydrationPlanSchemaV1, BindingIdentity: binding.Identity(), Purpose: purpose, ConnectionEpoch: epoch, Budgets: budgets})
+	if admission != engine.AdmissionAdmitted {
+		t.Fatalf("hydration plan admission=%s", admission)
+	}
+	plan := continuityAwait(t, ctx, completion)
+	if plan.Code != engine.DispositionHydrationPlanApplied {
+		t.Fatalf("hydration plan=%+v", plan)
+	}
+	var fence engine.HydrationFenceCommand
+	if command, ok := plan.Plan.FenceCommand(); ok {
+		fence = command
+	}
+	for _, token := range plan.Plan.Requests() {
+		terminal, err := engine.NewHydrationTerminalInput(token, token.ResultID(), engine.HydrationCompletedEmpty, engine.HydrationReasonNone, 1, 1, 10, 0, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, terminalCompletion := owner.AdmitHydrationTerminal(ctx, terminal)
+		result := continuityAwait(t, ctx, terminalCompletion)
+		if result.Code != engine.DispositionHydrationTerminalApplied {
+			t.Fatalf("hydration terminal=%+v", result)
+		}
+		if result.FenceCommand.CommandToken() != 0 {
+			fence = result.FenceCommand
+		}
+	}
+	if fence.CommandToken() == 0 {
+		t.Fatal("hydration produced no fence")
+	}
+	fenceInput, err := engine.NewAggregateIngressFenceInput(fence, engine.AggregateIngressFenceComplete, 1, 1, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, fenceCompletion := owner.AdmitAggregateIngressFence(ctx, fenceInput)
+	if result := continuityAwait(t, ctx, fenceCompletion); result.Code != engine.DispositionAggregateIngressFenceApplied {
+		t.Fatalf("hydration fence=%+v", result)
+	}
+}
+
+func continuityAwait[T any](t *testing.T, ctx context.Context, completion <-chan T) T {
+	t.Helper()
+	select {
+	case <-ctx.Done():
+		t.Fatalf("integrated proof completion exceeded deadline: %v", ctx.Err())
+		var zero T
+		return zero
+	case result, ok := <-completion:
+		if !ok {
+			t.Fatal("integrated proof completion closed without a result")
+		}
+		return result
+	}
+}

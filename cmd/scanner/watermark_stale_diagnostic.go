@@ -24,7 +24,7 @@ type watermarkStaleStatusSample struct {
 	ProcessLive, BackendReady bool
 	Reason                    operations.ReadinessReason
 	Lifecycle                 string
-	RunMode                   engine.RunMode
+	RunMode                   string
 	SampledAt                 time.Time
 	WatermarkLag              time.Duration
 	CausalTarget              *time.Time
@@ -120,9 +120,9 @@ func (r *watermarkStaleDiagnosticRecorder) observeStatus(status operations.Statu
 		Status: status,
 		Metrics: operations.Metrics{Engine: engine.OperationalView{
 			// deriveStatus can return ready or watermark_stale only after its
-			// RunModeLive guard has passed. Retain that already-proved fact for
+			// "live" guard has passed. Retain that already-proved fact for
 			// the diagnostic trigger/document without a second engine read.
-			RunMode:   engine.RunModeLive,
+			RunMode:   "live",
 			Lifecycle: status.Lifecycle,
 		}},
 	}, evidence, directory, output, persist)
@@ -131,7 +131,7 @@ func (r *watermarkStaleDiagnosticRecorder) observeStatus(status operations.Statu
 func watermarkStaleStatusFromStatus(status operations.Status) watermarkStaleStatusSample {
 	return watermarkStaleStatusSample{
 		ProcessLive: status.ProcessLive, BackendReady: status.BackendReady,
-		Reason: status.Reason, Lifecycle: status.Lifecycle, RunMode: engine.RunModeLive,
+		Reason: status.Reason, Lifecycle: status.Lifecycle, RunMode: "live",
 		SampledAt: status.SampledAt, WatermarkLag: status.WatermarkLag, CausalTarget: cloneDiagnosticTime(status.CausalTarget),
 	}
 }
@@ -155,8 +155,8 @@ func watermarkStaleStatusFromSample(sample liveOperatorSample) watermarkStaleSta
 }
 
 func watermarkStaleTriggerMatches(previous, current watermarkStaleStatusSample) bool {
-	return previous.ProcessLive && previous.BackendReady && previous.RunMode == engine.RunModeLive && previous.Lifecycle == "live" &&
-		current.ProcessLive && !current.BackendReady && current.RunMode == engine.RunModeLive && current.Lifecycle == "live" &&
+	return previous.ProcessLive && previous.BackendReady && previous.RunMode == "live" && previous.Lifecycle == "live" &&
+		current.ProcessLive && !current.BackendReady && current.RunMode == "live" && current.Lifecycle == "live" &&
 		current.Reason == operations.ReasonWatermarkStale
 }
 

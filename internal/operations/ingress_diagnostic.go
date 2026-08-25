@@ -96,13 +96,13 @@ type IngressDiagnosticSample struct {
 type LastCoherentMarketProjection struct {
 	PublicationID, LastEngineSequence uint64
 	BindingIdentity, TradingDate      string
-	RunMode                           engine.RunMode
+	RunMode                           string
 	Lifecycle, LifecycleReason        string
 	Watermark                         *time.Time
 	GeneratedAt                       time.Time
 	CurrentMarketClaim                bool
 	RankingRows                       uint64
-	Evaluation                        engine.ReplayEvaluationView
+	Evaluation                        engine.EvaluationView
 }
 
 // IngressIncident is one fixed-cardinality, redacted, immutable diagnostic.
@@ -207,14 +207,14 @@ func (l *ingressIncidentLatch) get() *IngressIncident {
 	return &copyValue
 }
 
-func lastCoherentProjection(publication engine.ReplayPublicationView) (*LastCoherentMarketProjection, bool) {
+func lastCoherentProjection(publication engine.PublicationView) (*LastCoherentMarketProjection, bool) {
 	if publication.PublicationID == 0 || publication.Watermark == nil || publication.AggregateEvaluation.At.IsZero() || publication.Lifecycle == "suppressed" {
 		return nil, false
 	}
 	evaluation := publication.AggregateEvaluation
 	rankingRows := uint64(len(evaluation.Rows))
 	evaluation.Rows = nil
-	if !engine.ValidateReplayEvaluationAccounting(evaluation) {
+	if !engine.ValidateEvaluationAccounting(evaluation) {
 		return nil, true
 	}
 	return &LastCoherentMarketProjection{

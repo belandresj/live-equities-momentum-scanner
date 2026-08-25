@@ -75,7 +75,7 @@ func TestWatermarkStallActiveCycleDistinguishesOrderedWaitPhases(t *testing.T) {
 	base := time.Date(2026, 8, 24, 17, 21, 43, 0, time.UTC)
 	now := base
 	delay := time.Duration(0)
-	owner, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return now }, Capacity: 8, RequiredReserve: 1,
+	owner, err := engine.New(engine.Config{Clock: func() time.Time { return now }, Capacity: 8, RequiredReserve: 1,
 		EvaluationDelay: &delay, RecoveryBackoffInitial: time.Second, RecoveryBackoffMaximum: 2 * time.Second})
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +111,7 @@ func TestWatermarkStaleTransitionTimestampsActiveObservationAfterPreemption(t *t
 	base := time.Date(2026, 8, 24, 17, 21, 43, 0, time.UTC)
 	now := base
 	delay := time.Duration(0)
-	owner, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return now }, Capacity: 8, RequiredReserve: 1,
+	owner, err := engine.New(engine.Config{Clock: func() time.Time { return now }, Capacity: 8, RequiredReserve: 1,
 		EvaluationDelay: &delay, RecoveryBackoffInitial: time.Second, RecoveryBackoffMaximum: 2 * time.Second})
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +150,7 @@ func TestWatermarkStallCycleEvidenceDistinguishesFailurePlanes(t *testing.T) {
 	base := binding.SessionStart().Add(10 * time.Minute)
 	target := base.Add(-runtime.config.EvaluationDelay).Truncate(time.Second)
 	state := func(sequence, publication uint64, watermark time.Time, pressure engine.TQPressureMode, cause engine.TQPressureCause) engine.EvaluationCycleState {
-		return engine.EvaluationCycleState{PublicationID: publication, LastEngineSequence: sequence, RunMode: engine.RunModeLive, Lifecycle: "live", Watermark: watermark, WatermarkPresent: !watermark.IsZero(), GeneratedAt: base, TQPressure: pressure, TQPressureCause: cause}
+		return engine.EvaluationCycleState{PublicationID: publication, LastEngineSequence: sequence, RunMode: "live", Lifecycle: "live", Watermark: watermark, WatermarkPresent: !watermark.IsZero(), GeneratedAt: base, TQPressure: pressure, TQPressureCause: cause}
 	}
 	metrics := func(oldest, delay time.Duration) Metrics {
 		return Metrics{SampledAt: base, QueueCurrentFrames: 2, QueueHighFrames: 8, QueueCurrentBytes: 2048, QueueHighBytes: 8192,

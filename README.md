@@ -83,15 +83,14 @@ owner-approved. Current status and the sequential roadmap live in the
 [`replacement delivery program`](docs/live-backend-replacement/delivery-program.md)
 and [`specification map`](docs/specification-map.md).
 
-Capabilities A–C and the inserted `LBR-A3` bounded parallel hydration slice are
-implemented and accepted for their recorded semantics. Ordinary-live hydration
-accepts exactly `1|2|4|8` workers and defaults to 8. D1 is next but remains
-inactive until its fresh pre-assignment audit.
+Capabilities A–D are implemented and accepted for their recorded semantics.
+Ordinary-live hydration accepts exactly `1|2|4|8` workers and defaults to 8.
+`LBR-E1` is accepted; `LBR-E2` is the next permitted but inactive slice.
 Historical numbered components and stability corrections remain evidence, not
 requirements to preserve their private representations.
 
 The only supported operating path remains the ordinary fresh-start live
-scanner. Replay capability is unknown and checkpoint persistence is disabled.
+scanner. Replay and checkpoint tooling are removed; restart uses fresh hydration.
 Deterministic fixtures remain proof tools, not product replay. No current
 document authorizes credentials, provider requests, public deployment, or a
 trading-edge claim.
@@ -112,7 +111,7 @@ ordinary scanner for the current or next exchange-declared trading session.
 Starting at approximately 03:55 remains the shortest path. It builds and
 supervises the existing scanner and dashboard and reports authoritative
 liveness and readiness without moving market-state ownership into the launcher. For the current MVP,
-checkpoint mode stays off and restart uses fresh hydration. Hydration defaults
+restart uses fresh hydration. Hydration defaults
 to eight workers; `--hydration-workers` accepts exactly `1`, `2`, `4`, or `8`.
 The manual commands below remain useful for development and
 independent-process inspection.
@@ -130,22 +129,6 @@ Open `http://127.0.0.1:4173` in Chrome. The UI polls `GET /api/v2/snapshot`
 once per second with one request in flight. Restarting the dashboard does not stop
 or relink the scanner. This is a private/local configuration; it does not add
 public binding, authentication, TLS, hosting, or credentialed live validation.
-
-### Retained replay tooling
-
-The cache-only aggregate replay path has a separately authorized local
-verification for the retained 2026-08-07 artifact. It fast-forwards to the
-CLI-declared observation start, then automatically continues at 1x through the
-same API and dashboard; there is no replay-specific frontend control. Exact
-commands and measured startup behavior are recorded in
-[`docs/replay-warmup-acceleration.md`](docs/replay-warmup-acceleration.md).
-The accelerated warm-up passes its local bound, but total preparation still
-exceeds the focused correction's target because the accepted trust path scans
-the complete artifact twice; the focused correction therefore remains short of
-full acceptance.
-
-Replay remains separate from and non-gating for the live feature-set MVP, and
-it does not reconstruct T/Q or prove live receipt chronology.
 
 ## Predecessor evidence
 

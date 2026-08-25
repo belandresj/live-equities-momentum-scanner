@@ -96,7 +96,7 @@ func generatedLBRB3MatureEngine(t *testing.T) (*Engine, time.Time, int) {
 			binding.symbols[i].aggregates, rows = state, rows+count
 		}
 	}
-	e := &Engine{mode: RunModeLive, state: &engineState{binding: binding, lifecycle: lifecycleLive, committedT: immutableTime(target), latestTarget: immutableTime(target), clockMonotonic: true}}
+	e := &Engine{state: &engineState{binding: binding, lifecycle: lifecycleLive, committedT: immutableTime(target), latestTarget: immutableTime(target), clockMonotonic: true}}
 	e.state.aggregateEvaluator.coverage = map[int]aggregateCoverageConsequence{0: coverageNoPrintThroughT, 1: coverageNoPrintThroughT}
 	return e, target, rows
 }

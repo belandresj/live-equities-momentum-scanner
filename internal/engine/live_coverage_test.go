@@ -195,7 +195,7 @@ func TestSlice1LiveCoverageFenceRetainsInvalidMarkEvidence(t *testing.T) {
 			if admission != AdmissionAdmitted || awaitTimerDisposition(t, initialTimer).Code != DispositionTimerApplied {
 				t.Fatal("initial T0 timer was not applied")
 			}
-			initial := e.ObserveReplayDeterministic()
+			initial := e.ObserveSnapshot()
 			if initial.Publication.Watermark == nil || *initial.Publication.Watermark != t0 {
 				t.Fatalf("initial watermark=%+v", initial.Publication)
 			}
@@ -247,9 +247,9 @@ func TestSlice1LiveCoverageFenceRetainsInvalidMarkEvidence(t *testing.T) {
 			if admission != AdmissionAdmitted || awaitTimerDisposition(t, timer).Code != DispositionTimerApplied {
 				t.Fatal("post-fence timer was not applied")
 			}
-			final := e.ObserveReplayDeterministic()
+			final := e.ObserveSnapshot()
 			operational := e.ObserveOperational()
-			evaluation := final.Evaluation
+			evaluation := final.Publication.AggregateEvaluation
 			if final.Publication.Watermark == nil || *final.Publication.Watermark != now || final.Publication.LastDisposition != DispositionLiveCoverageFenceApplied ||
 				final.Publication.Suppression != "" || final.Publication.Lifecycle != "live" {
 				t.Fatalf("incoherent post-fence publication=%+v", final.Publication)
@@ -273,9 +273,9 @@ func TestSlice1LiveCoverageFenceRetainsInvalidMarkEvidence(t *testing.T) {
 				t.Fatalf("timer lost invalid evidence=%+v present=%t", retainedAfterTimer, retainedAfterTimerOK)
 			}
 			if tc.olderMark {
-				canonical := slice1EngineCanonicalSymbol(t, final, "AAA")
-				if canonical.LatestWindowStart != olderWindow || evaluation.Population.TrustedRankableMark != 0 {
-					t.Fatalf("older mark crossed newer invalid identity: canonical=%+v evaluation=%+v", canonical, evaluation)
+				state := aggregateState(t, e, "AAA")
+				if state.latest == nil || state.latest.record.windowStart != olderWindow || evaluation.Population.TrustedRankableMark != 0 {
+					t.Fatalf("older mark crossed newer invalid identity: state=%+v evaluation=%+v", state, evaluation)
 				}
 			}
 		})
@@ -345,7 +345,7 @@ func TestSlice1LiveCoverageHalfOpenBoundaryMatrix(t *testing.T) {
 					t.Fatal("T1 timer was not applied")
 				}
 
-				view := e.ObserveReplayDeterministic()
+				view := e.ObserveSnapshot()
 				operational := e.ObserveOperational()
 				if view.Publication.Watermark == nil || *view.Publication.Watermark != t1 || view.Publication.Suppression != "" ||
 					view.Publication.LastDisposition != DispositionLiveCoverageFenceApplied || operational.Suppression != "" {
@@ -368,7 +368,7 @@ func TestSlice1LiveCoverageHalfOpenBoundaryMatrix(t *testing.T) {
 					if !exactAtT1 {
 						t.Fatal("right-open endpoint incorrectly made [T0,T1) non-exact")
 					}
-					assertSlice1EndpointEvaluation(t, view.Evaluation, olderMark)
+					assertSlice1EndpointEvaluation(t, view.Publication.AggregateEvaluation, olderMark)
 					if olderMark && hasConsequence {
 						t.Fatalf("older accepted mark retained coverage consequence=%+v", consequence)
 					}
@@ -382,11 +382,11 @@ func TestSlice1LiveCoverageHalfOpenBoundaryMatrix(t *testing.T) {
 					if admission, timer := e.AdmitTimer(context.Background()); admission != AdmissionAdmitted || awaitTimerDisposition(t, timer).Code != DispositionTimerApplied {
 						t.Fatal("post-T1 timer was not applied")
 					}
-					next := e.ObserveReplayDeterministic()
+					next := e.ObserveSnapshot()
 					if next.Publication.Watermark == nil || *next.Publication.Watermark != nextTarget || next.Publication.Suppression != "" {
 						t.Fatalf("post-T1 publication=%+v", next.Publication)
 					}
-					assertSlice1ApplicableInvalidEvaluation(t, next.Evaluation)
+					assertSlice1ApplicableInvalidEvaluation(t, next.Publication.AggregateEvaluation)
 					e.mu.Lock()
 					nextAbsent := state.provenAbsent != nil && state.provenAbsent.has(sessionSlot(e.state.binding, invalidWindow))
 					nextExact := exactAggregateCoverage(state, e.state.binding, t1, nextTarget)
@@ -401,11 +401,11 @@ func TestSlice1LiveCoverageHalfOpenBoundaryMatrix(t *testing.T) {
 				if exactAtT1 || !hasConsequence || consequence != coverageUnknownPostBootstrap {
 					t.Fatalf("applicable invalid coverage exact=%t consequence=%+v present=%t", exactAtT1, consequence, hasConsequence)
 				}
-				assertSlice1ApplicableInvalidEvaluation(t, view.Evaluation)
+				assertSlice1ApplicableInvalidEvaluation(t, view.Publication.AggregateEvaluation)
 				if olderMark {
-					canonical := slice1EngineCanonicalSymbol(t, view, "AAA")
-					if canonical.LatestWindowStart != olderWindow {
-						t.Fatalf("older canonical mark was not preserved: %+v", canonical)
+					state := aggregateState(t, e, "AAA")
+					if state.latest == nil || state.latest.record.windowStart != olderWindow {
+						t.Fatalf("older canonical mark was not preserved: %+v", state)
 					}
 				}
 			})
@@ -471,11 +471,11 @@ func TestSlice1LateInvalidIdentityImmediatelyRevokesAbsence(t *testing.T) {
 	if admission, timer := e.AdmitTimer(context.Background()); admission != AdmissionAdmitted || awaitTimerDisposition(t, timer).Code != DispositionTimerApplied {
 		t.Fatal("late-invalid timer was not applied")
 	}
-	view := e.ObserveReplayDeterministic()
+	view := e.ObserveSnapshot()
 	if view.Publication.Watermark == nil || *view.Publication.Watermark != t1 || view.Publication.Suppression != "" {
 		t.Fatalf("late-invalid publication=%+v", view.Publication)
 	}
-	assertSlice1ApplicableInvalidEvaluation(t, view.Evaluation)
+	assertSlice1ApplicableInvalidEvaluation(t, view.Publication.AggregateEvaluation)
 }
 
 func applySlice1CoverageFence(t *testing.T, e *Engine, throughFrame, marker uint64, capturedAt time.Time) {
@@ -497,18 +497,18 @@ func applySlice1CoverageFence(t *testing.T, e *Engine, throughFrame, marker uint
 	}
 }
 
-func assertSlice1EndpointEvaluation(t *testing.T, evaluation ReplayEvaluationView, olderMark bool) {
+func assertSlice1EndpointEvaluation(t *testing.T, evaluation EvaluationView, olderMark bool) {
 	t.Helper()
 	p := evaluation.Population
 	if p.UniverseTotal != 3 || p.ValidPriorClose != 1 || p.InvalidOrMissingPriorClose != 2 || p.UnknownDueFailureOrFence != 0 ||
-		p.CoveredPopulation != 3 || p.UnresolvedPopulation != 0 || evaluation.Uncertainty != (ReplayUncertaintyView{}) || evaluation.Mode != "qualified_current" {
+		p.CoveredPopulation != 3 || p.UnresolvedPopulation != 0 || evaluation.Uncertainty != (UncertaintyView{}) || evaluation.Mode != "qualified_current" {
 		t.Fatalf("endpoint evaluation=%+v", evaluation)
 	}
 	if olderMark {
 		if p.TrustedRankableMark != 1 || p.NoPrintThroughT != 0 || evaluation.Qualification.NotYetPassed != 1 {
 			t.Fatalf("endpoint older-mark accounting=%+v", evaluation)
 		}
-	} else if p.TrustedRankableMark != 0 || p.NoPrintThroughT != 1 || evaluation.Qualification != (ReplayQualificationAccountingView{}) {
+	} else if p.TrustedRankableMark != 0 || p.NoPrintThroughT != 1 || evaluation.Qualification != (QualificationAccountingView{}) {
 		t.Fatalf("endpoint no-mark accounting=%+v", evaluation)
 	}
 	if p.ValidPriorClose != p.TrustedRankableMark+p.TrustedBelowPriceMark+p.NoPrintThroughT+p.InvalidMark+p.UnknownDueFailureOrFence {
@@ -516,27 +516,16 @@ func assertSlice1EndpointEvaluation(t *testing.T, evaluation ReplayEvaluationVie
 	}
 }
 
-func assertSlice1ApplicableInvalidEvaluation(t *testing.T, evaluation ReplayEvaluationView) {
+func assertSlice1ApplicableInvalidEvaluation(t *testing.T, evaluation EvaluationView) {
 	t.Helper()
 	p := evaluation.Population
 	if p.UniverseTotal != 3 || p.ValidPriorClose != 1 || p.InvalidOrMissingPriorClose != 2 || p.TrustedRankableMark != 0 ||
 		p.NoPrintThroughT != 0 || p.InvalidMark != 0 || p.UnknownDueFailureOrFence != 1 || p.CoveredPopulation != 2 || p.UnresolvedPopulation != 1 ||
 		evaluation.Uncertainty.BootstrapOrigin != 0 || evaluation.Uncertainty.PostBootstrapGap != 1 || evaluation.Uncertainty.LocalInvalid != 0 ||
-		evaluation.Qualification != (ReplayQualificationAccountingView{}) || evaluation.Mode != "unavailable" || len(evaluation.Rows) != 0 {
+		evaluation.Qualification != (QualificationAccountingView{}) || evaluation.Mode != "unavailable" || len(evaluation.Rows) != 0 {
 		t.Fatalf("applicable-invalid evaluation=%+v", evaluation)
 	}
 	if p.ValidPriorClose != p.TrustedRankableMark+p.TrustedBelowPriceMark+p.NoPrintThroughT+p.InvalidMark+p.UnknownDueFailureOrFence {
 		t.Fatalf("applicable-invalid population does not reconcile: %+v", p)
 	}
-}
-
-func slice1EngineCanonicalSymbol(t *testing.T, view ReplayDeterministicView, symbol string) ReplayCanonicalSymbol {
-	t.Helper()
-	for _, candidate := range view.Canonical {
-		if candidate.Symbol == symbol {
-			return candidate
-		}
-	}
-	t.Fatalf("canonical symbol %s missing", symbol)
-	return ReplayCanonicalSymbol{}
 }

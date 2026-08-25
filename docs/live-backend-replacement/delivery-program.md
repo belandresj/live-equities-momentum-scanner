@@ -1294,6 +1294,122 @@ committed.
   `LBR-E1` is the next permitted slice but remains inactive pending its own
   fresh pre-assignment audit.
 
+#### `LBR-E1` pre-assignment audit and activation — 2026-08-24
+
+- **Authority, dependency, and owner-decision audit:** `AGENTS.md`, `README.md`,
+  the specification map, replacement parent/program, all five routed focused
+  contracts, the accepted A1-D2 handoffs and proofs, the frozen baseline, the
+  E1 ticket, and the complete integration/removal contract agree on one
+  boundary. E1 may change only production wiring, delete superseded source and
+  lower-authority proofs/routes, and preserve the accepted A/B/C/A3/D1/D2 plus
+  API-v2/UI/launcher behavior. The owner selected the recommended disposition:
+  delete `cmd/aggregate-replay`, `internal/replay*`,
+  `internal/replayartifact*`, `internal/replaymode`, `internal/checkpoint`, and
+  every live engine/runtime/operations/API/test dependency. Replay/checkpoint
+  is not repaired, retained as unsupported tooling, or made an acceptance gate.
+- **Production-constructor and dependency audit:** at activation,
+  `go list -deps ./cmd/scanner` still reaches all five replay/checkpoint package
+  families. `cmd/scanner/main.go` still selects live versus replay, accepts
+  replay/checkpoint flags, calls a checkpoint-aware runtime composer, and
+  imports replay packages. `operations.NewWithCheckpoint`,
+  `LiveComponents.Store`, checkpoint result work/metrics, engine replay mode,
+  checkpoint admissions/state/cadence, checkpoint hydration purpose, snapshot
+  replay mapping, and checkpoint-derived API mapping therefore survive in the
+  ordinary live dependency graph. E1 must remove those branches and imports,
+  not merely make them unreachable. API v2 retains one fixed honest
+  disabled/not-installed checkpoint object sourced from live configuration,
+  with no engine checkpoint read; its optional live replay object remains
+  absent.
+- **Accepted replacement topology audit:** the ordinary path constructs one
+  `operations.Runtime`, which constructs one engine owner; one
+  `massive.LiveAdapter` owns the accepted 4,096-entry/64-MiB decoded-batch and
+  causal-marker FIFO; the unbuffered complete-batch rendezvous reaches the sole
+  engine loop without the general engine FIFO; B1/B2/C1/C2 provide the sole
+  evaluation, immutable publication, and selected-row T/Q path. The file
+  `internal/massive/live_queue.go` now implements the accepted D2 decoded ring
+  despite its historical name and must remain. The supported hydration surface
+  is exactly `1|2|4|8`, default 8, through wrapper, launcher, scanner,
+  operations validation, and the bounded Massive worker pool; those workers
+  produce immutable facts and are not competing state owners.
+- **Removal and compatibility audit:** remove replay/checkpoint command,
+  package, engine state/lifecycle/admission, operations composition/metrics,
+  Massive checkpoint-catchup, scanner/launcher flag, snapshot replay branch,
+  private-structure proof, fixture/golden, and active README/runbook routing.
+  Preserve historical specifications/correction records as evidence, with the
+  specification map continuing to label replay/checkpoint contracts historical.
+  Preserve the one-load immutable capture, API-v2 live schema/semantics,
+  dashboard polling/rendering, launcher supervision, hydration/fence,
+  readiness/recovery, diagnostics, heartbeat/retry, command ordering,
+  terminals, and operator output.
+- **False-success and proof decision:** the smallest false success is a green
+  live composition while an error/config/build path still selects old state,
+  a shadow replay/checkpoint mutation or metric remains in the engine, a second
+  queue/owner/publication is constructible, deleted tooling imports the live
+  core, an old product field reaches state/API, or a fixed checkpoint-off API
+  value is synthesized from live checkpoint state. `P-LBR-E1-CUTOVER` must
+  combine build/dependency/source exclusion with the real production
+  composition trace and forced sentinel counterexamples. Because this is a
+  cross-cutting owner/concurrency/removal boundary, E1 requires the program's
+  final read-only review and a clean focused re-review after any correction.
+- **Activation and exclusions:** `LBR-E1` is the sole active write-capable
+  slice. E2 and its 10-minute manifest, E3, credentials/provider requests, the
+  private scanner, product/market/readiness/T/Q semantic changes, added
+  queues/owners/handoffs, replay/checkpoint redesign, and unrelated cleanup
+  remain inactive.
+
+#### `LBR-E1` acceptance — 2026-08-24
+
+- **Coherent behavior and ownership now available:** `cmd/scanner` is live-only
+  and constructs exactly one `operations.Runtime`/engine state owner, one
+  Massive decoded-batch FIFO and causal-fence handoff, and one accepted
+  evaluator/immutable-publication/API-v2/dashboard/launcher path. Hydration is
+  the only parallel worker pool and remains bounded to `1|2|4|8`, default 8.
+  The API-v2 checkpoint object is an honest fixed disabled/not-installed
+  representation with no engine checkpoint owner or read.
+- **Deletion and interface result:** the owner-selected deletion removed
+  `cmd/aggregate-replay`, `internal/checkpoint`, `internal/replay`,
+  `internal/replayartifact` (including playback), `internal/replaymode`, and
+  their scanner, engine, operations, Massive, API, active-document, fixture,
+  golden, and test dependencies. Engine run-mode selection, replay views and
+  schema fields, checkpoint state/cadence/admission, offline acquisition and
+  replay benchmarks, compatibility flags, and private deterministic-canonical
+  proof surfaces are absent. Shared live REST acquisition now has a live-only
+  home; the accepted D2 decoded ring remains the sole ingress queue.
+- **Primary proof and dangerous counterexamples:** `P-LBR-E1-CUTOVER` combines
+  production build/dependency/source exclusion with a real `Runtime.RunLive`
+  composition trace over deterministic fake WebSocket/REST transports. It
+  proves hydration, live-over-REST precedence, startup and ordinary causal
+  fences, one current publication, watermark/population/qualification/T/Q and
+  accounting results, cancellation and joined shutdown. Constructor/source
+  sentinels reject fallback modes, competing owners, shadow mutation,
+  additional queues/workers, removed product/schema fields, checkpoint-derived
+  API state, deleted-tool imports, and duplicate scalar flags while retaining
+  repeatable `allow-origin`.
+- **Final-byte verification:** `go test -count=1 -run
+  '^TestPLBRE1Cutover$' -timeout 90s ./cmd/scanner` passed (package 1.038s,
+  wall 3.24s). API/UI/launcher regressions passed: focused Go packages (wall
+  2.89s) and 48/48 Node UI tests (195.332ms test time, wall 0.46s). Affected
+  short tests passed (wall 70.91s); affected race tests passed (wall 76.04s);
+  focused vet passed (wall 0.77s); `git diff --check` passed (wall 0.14s); and
+  `go test -count=1 -short -timeout 2m ./...` passed (wall 70.55s). Production
+  commands built (wall 1.22s); scanner dependency and production-source
+  exclusion inspections passed (wall 0.07s and 0.01s).
+- **Independent review and correction:** the required read-only
+  `gpt-5.6-sol` medium review first found that the proof used only constructor
+  smoke coverage, retained replay-named schema/private views and engine mode,
+  and had lost duplicate scalar-flag rejection. After correction, focused
+  re-review found that the trace still assembled private pieces rather than
+  calling `RunLive`, plus one tautological assertion. The final trace uses the
+  real production path and independent expected values; the same reviewer
+  returned `CLEAN/PASS` with no P1/P2/P3 findings. The reviewer made no edits.
+- **Limitations and next gate:** the composition proof uses deterministic fake
+  transports and does not establish provider conformance, sustained resource
+  plateaus, market-hours continuity, or trading expectancy. The API failure
+  cases are separate focused subtraces rather than socket-composition failures.
+  No credentials/provider request/private scanner or E2 manifest was used.
+  `LBR-E2` is the next permitted slice but remains inactive; E3 remains
+  unauthorized/inactive.
+
 ### Owner-approved E2 duration and manifest revision — 2026-08-23
 
 The owner revised E2 to exactly one 10-minute deterministic acceptance run. The
@@ -1323,8 +1439,8 @@ but copy no status.
 | `LBR-B3` removal slice | `accepted` | Commit `f697288`; removal proof, resource evidence, focused corrections, and final focused re-review are clean. |
 | Capability B — evaluation and publication | `finally_accepted` | B1/B2/B3 and the required final read-only review remain accepted and unaffected by A3. |
 | Capability C — selected-row T/Q | `finally_accepted` | C1/C2 remain accepted and unaffected by the A3 hydration-topology revision. |
-| Capability D — live ingress | `finally_accepted` | D1/D2, one decoded-batch FIFO/owner handoff, exact connection semantics, final-byte gates, corrections, and final read-only review are clean. `LBR-E1` is next but inactive pending its fresh audit. |
-| Capability E — integration/removal/acceptance | `not_started` | Requires Capabilities A-D accepted |
+| Capability D — live ingress | `finally_accepted` | D1/D2, one decoded-batch FIFO/owner handoff, exact connection semantics, final-byte gates, corrections, and final read-only review are clean and preserved by E1. |
+| Capability E — integration/removal/acceptance | `lbr_e1_accepted` | Exclusive live cutover, owner-selected replay/checkpoint deletion, final-byte verification, corrections, and clean read-only re-review are recorded. `LBR-E2` is next permitted but inactive; E3 remains inactive. |
 | E2 deterministic duration/manifest revision | `owner_approved` | Exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |
 | Deterministic replacement | `not_started` | Requires `LBR-E1` and `LBR-E2` |
 | Live stability confirmation | `not_authorized` | `LBR-E3` requires separate exact-date authorization or owner execution |

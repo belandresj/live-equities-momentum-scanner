@@ -147,8 +147,8 @@ func printHelp(writer io.Writer) {
 }
 
 type launchPaths struct {
-	reference, checkpoints, runtimeDirectory string
-	scannerBinary, dashboardBinary           string
+	reference, runtimeDirectory    string
+	scannerBinary, dashboardBinary string
 }
 
 type processSpec struct {
@@ -355,12 +355,9 @@ func run(ctx context.Context, repoRoot string, arguments []string, stdout, stder
 	defer zeroString(&credential)
 	fmt.Fprintf(stdout, "Credential loaded from %s; it will be passed only in the scanner child environment.\n", source)
 	scannerArguments := []string{
-		"--run-mode", "live",
 		"--trading-date", tradingDate,
 		"--hydration-workers", fmt.Sprint(parsed.hydrationWorkers),
 		"--reference-dir", paths.reference,
-		"--checkpoint-dir", paths.checkpoints,
-		"--checkpoint-mode", "off",
 		"--api-address", scannerAddress,
 		"--allow-origin", dashboardOrigin,
 	}
@@ -409,7 +406,7 @@ func resolveLaunchSession(schedule *session.Schedule, now time.Time, explicit st
 			return session.Facts{}, fmt.Errorf("unsupported trading date %s", explicit)
 		}
 		if !now.Before(facts.SessionEnd) {
-			return session.Facts{}, fmt.Errorf("the explicit %s scanner session ended at 20:00 America/New_York; historical and replay workflows are separate", explicit)
+			return session.Facts{}, fmt.Errorf("the explicit %s scanner session ended at 20:00 America/New_York; the supported scanner is live-only", explicit)
 		}
 		return facts, nil
 	}
@@ -825,10 +822,9 @@ func productionPreflight(ctx context.Context, repoRoot string, _ io.Writer, stde
 	}
 	paths := launchPaths{
 		reference:        filepath.Join(root, "var", "reference"),
-		checkpoints:      filepath.Join(root, "var", "checkpoints"),
 		runtimeDirectory: filepath.Join(root, "var", "run-private-scanner"),
 	}
-	for _, directory := range []string{paths.reference, paths.checkpoints, paths.runtimeDirectory, filepath.Join(paths.runtimeDirectory, "bin")} {
+	for _, directory := range []string{paths.reference, paths.runtimeDirectory, filepath.Join(paths.runtimeDirectory, "bin")} {
 		if err := ensureWritableDirectory(directory); err != nil {
 			return launchPaths{}, err
 		}

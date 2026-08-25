@@ -273,17 +273,12 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 	if e.state.binding == nil || e.state.globalFailure {
 		return true
 	}
-	if e.hiddenReplayWarmupLocked(node) || e.deferReplayAggregateProjectionLocked(node) {
-		return true
-	}
-	changed := (node.kind == inputTimer || node.kind == inputReplayGroup) && code == DispositionTimerApplied
+	changed := node.kind == inputTimer && code == DispositionTimerApplied
 	changed = changed || (node.kind == inputAggregateIngressFence && code == DispositionAggregateIngressFenceApplied)
 	changed = changed || (node.kind == inputLiveCoverageFence && code == DispositionLiveCoverageFenceApplied)
-	changed = changed || (e.mode == RunModeLive && node.kind == inputAggregate && candidate != nil &&
+	changed = changed || (node.kind == inputAggregate && candidate != nil &&
 		(code == DispositionAggregateInserted || code == DispositionAggregateRevised || code == DispositionAggregateWithdrawn ||
 			(code == DispositionAggregateRejected && reason == ReasonStructural)))
-	changed = changed || (e.mode == RunModeReplay && node.kind == inputAggregate && (code == DispositionAggregateInserted || code == DispositionAggregateRevised ||
-		code == DispositionAggregateWithdrawn || (code == DispositionAggregateRejected && reason == ReasonStructural)))
 	if !changed {
 		return true
 	}
@@ -291,18 +286,12 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 	if candidate != nil {
 		staged = *candidate
 	} else {
-		if e.mode == RunModeLive {
-			return true
-		}
-		if e.state.committedT == nil {
-			return true
-		}
-		staged = e.stageAggregateEvaluationLocked(*e.state.committedT)
+		return true
 	}
 	expected := time.Time{}
-	if e.mode == RunModeLive && candidate != nil && (node.kind == inputTimer || node.kind == inputAggregateIngressFence || node.kind == inputLiveCoverageFence) {
+	if candidate != nil && (node.kind == inputTimer || node.kind == inputAggregateIngressFence || node.kind == inputLiveCoverageFence) {
 		expected = staged.at
-	} else if (node.kind == inputTimer || node.kind == inputReplayGroup || node.kind == inputAggregateIngressFence) && e.state.latestTarget != nil {
+	} else if (node.kind == inputTimer || node.kind == inputAggregateIngressFence) && e.state.latestTarget != nil {
 		expected = *e.state.latestTarget
 	} else if e.state.committedT != nil {
 		expected = *e.state.committedT
@@ -319,7 +308,7 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 		e.latchEvaluatorIntegrityLocked(node, staged, expected, validation)
 		return false
 	}
-	if e.mode == RunModeLive && len(staged.updates) != len(e.state.binding.symbols) {
+	if len(staged.updates) != len(e.state.binding.symbols) {
 		e.latchEvaluatorIntegrityLocked(node, staged, expected, invalidEvaluation(EvaluatorSupportContradiction, "updates", "", "live_candidate_missing_owner_updates"))
 		return false
 	}
@@ -336,7 +325,7 @@ func (e *Engine) runAggregateEvaluatorLocked(node *queueNode, code DispositionCo
 	if node.kind == inputAggregateIngressFence {
 		e.state.fenceTiming.EvaluationApply = e.state.evaluationTiming.Apply
 	}
-	consumePending := e.mode == RunModeLive && e.state.aggregateProjectionPending
+	consumePending := e.state.aggregateProjectionPending
 	evaluationChanged := !aggregateEvaluationEqual(e.state.aggregateEvaluator.current, staged)
 	if evaluationChanged {
 		e.state.aggregateEvaluator.current = cloneAggregateEvaluation(staged)
@@ -520,7 +509,7 @@ func recordPopulationTransition(diagnostic *populationTransitionDiagnostic, deci
 }
 
 func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggregateEvaluationResult {
-	result := aggregateEvaluationResult{at: at, mode: rankingUnavailable, reason: rankingReasonNoCommittedWatermark, tqIntentAvailable: e.mode != RunModeReplay}
+	result := aggregateEvaluationResult{at: at, mode: rankingUnavailable, reason: rankingReasonNoCommittedWatermark, tqIntentAvailable: true}
 	if e.state.binding == nil || at.IsZero() {
 		return result
 	}
@@ -560,8 +549,8 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 		hasMark := false
 		if state != nil {
 			mark, hasMark = e.latestSelectionMarkLocked(state, at)
-			if e.mode == RunModeLive && (hasMark != selectionView.MarkAvailable ||
-				(hasMark && (!mark.windowStart.Equal(selectionView.TrustedMarkAt) || mark.values != selectionView.TrustedMark))) {
+			if hasMark != selectionView.MarkAvailable ||
+				(hasMark && (!mark.windowStart.Equal(selectionView.TrustedMarkAt) || mark.values != selectionView.TrustedMark)) {
 				result.invalidSupport = true
 				if result.invalidSupportSymbol == "" {
 					result.invalidSupportSymbol = symbol.symbol
@@ -570,19 +559,6 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 			}
 		}
 		coverage, hasCoverageConsequence := e.state.aggregateEvaluator.coverage[index]
-		// A complete fresh replay proves every symbol's presence or absence
-		// through its covered logical boundary. Delivery may already contain a
-		// mark newer than committed T, so the mutable latest-delivery consequence
-		// cannot decide population coverage at T. Derive the point-in-time
-		// consequence from the validated prefix and the mark eligible at T.
-		if e.mode == RunModeReplay && e.state.replay.validated && e.state.replay.complete && e.state.installedCheckpoint == nil &&
-			e.state.replay.coveredThrough != nil && !e.state.replay.coveredThrough.Before(at) {
-			if hasMark {
-				coverage, hasCoverageConsequence = aggregateCoverageConsequence{}, false
-			} else {
-				coverage, hasCoverageConsequence = coverageNoPrintThroughT, true
-			}
-		}
 		invalid, hasInvalidEvidence := e.invalidMarkBeforeLocked(index, at)
 		invalidApplicableAtT := hasInvalidEvidence && invalid.windowStart.Before(at)
 		var invalidEvidence *invalidMarkEvidence
@@ -736,14 +712,14 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 	}
 	result.population.coveredPopulation = result.population.universeTotal - result.population.unknownDueFailureOrFence
 	result.population.unresolvedPopulation = result.population.unknownDueFailureOrFence
-	currentLifecycle := e.state.lifecycle == lifecycleLive || e.state.lifecycle == lifecycleHydrating || e.state.lifecycle == lifecycleReplaying
+	currentLifecycle := e.state.lifecycle == lifecycleLive || e.state.lifecycle == lifecycleHydrating
 	switch {
 	case !currentLifecycle:
 		result.mode, result.reason = rankingUnavailable, rankingReasonNoCommittedWatermark
 	case result.population.unknownDueFailureOrFence == 0 && qualificationComplete:
 		result.mode, result.reason = rankingQualifiedCurrent, ""
-		result.rows = sortedRankingRows(*qualified, e.mode != RunModeReplay)
-	case e.mode == RunModeLive && e.state.lifecycle == lifecycleHydrating && result.knownRankableCount > 0 && allUnresolvedBootstrap:
+		result.rows = sortedRankingRows(*qualified, true)
+	case e.state.lifecycle == lifecycleHydrating && result.knownRankableCount > 0 && allUnresolvedBootstrap:
 		result.mode = rankingDegradedBootstrap
 		if result.population.unknownDueFailureOrFence != 0 {
 			result.reason = rankingReasonIncompletePopulation
@@ -751,7 +727,7 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 			result.reason = rankingReasonQualificationPending
 		}
 		result.rows = sortedRankingRows(*degraded, false)
-	case e.mode == RunModeLive && result.knownRankableCount > 0:
+	case result.knownRankableCount > 0:
 		result.mode = rankingDegradedCurrent
 		if result.population.unknownDueFailureOrFence != 0 {
 			result.reason = rankingReasonIncompletePopulation
@@ -759,21 +735,12 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 			result.reason = rankingReasonQualificationPending
 		}
 		result.rows = sortedRankingRows(*degraded, false)
-	case e.mode == RunModeReplay && result.knownRankableCount > 0:
-		result.mode = rankingUnavailable
-		if result.population.unknownDueFailureOrFence != 0 {
-			result.reason = rankingReasonIncompletePopulation
-		} else {
-			result.reason = rankingReasonNoTrustedMarks
-		}
 	default:
 		result.mode, result.reason = rankingUnavailable, rankingReasonNoTrustedMarks
 	}
-	if e.mode == RunModeLive {
-		result.selectedEnrichmentBound = true
-		if len(result.rows) > 0 {
-			e.enrichSelectedRowsLocked(&result, at)
-		}
+	result.selectedEnrichmentBound = true
+	if len(result.rows) > 0 {
+		e.enrichSelectedRowsLocked(&result, at)
 	}
 	return result
 }

@@ -4,7 +4,6 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/belandresj/live-equities-momentum-scanner/internal/checkpoint"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/engine"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/massive"
 )
@@ -18,8 +17,6 @@ type Metrics struct {
 	Adapter                     massive.AdapterAccounting
 	LiveQueue                   massive.LiveQueueAccounting
 	TQNormalization             massive.TQNormalizationAccounting
-	Checkpoint                  checkpoint.WriterAccounting
-	CheckpointEngine            engine.CheckpointOperations
 	QueueCurrentFrames          uint64
 	QueueHighFrames             uint64
 	QueueCurrentBytes           int
@@ -64,10 +61,9 @@ const (
 	DeliveryLatencyTQ             DeliveryLatencyFamily = "tq"
 	DeliveryLatencyControl        DeliveryLatencyFamily = "control"
 	DeliveryLatencyHydrationFence DeliveryLatencyFamily = "hydration_fence"
-	DeliveryLatencyCheckpoint     DeliveryLatencyFamily = "checkpoint"
 	DeliveryLatencyTimer          DeliveryLatencyFamily = "timer"
 	DeliveryLatencyUnknown        DeliveryLatencyFamily = "unknown"
-	deliveryLatencyFamilyCount                          = 7
+	deliveryLatencyFamilyCount                          = 6
 )
 
 // DeliveryLatencyAttribution is fixed-cardinality cumulative accounting plus
@@ -76,14 +72,14 @@ const (
 // locked record; window occupancy is independent of the cumulative counts.
 type DeliveryLatencyAttribution struct {
 	Aggregate, TQ, Control, HydrationFence uint64
-	Checkpoint, Timer, Unknown             uint64
+	Timer, Unknown                         uint64
 	MaximumDuration                        time.Duration
 	MaximumFamily                          DeliveryLatencyFamily
 	WindowNonempty                         bool
 }
 
 func (a DeliveryLatencyAttribution) Total() uint64 {
-	return a.Aggregate + a.TQ + a.Control + a.HydrationFence + a.Checkpoint + a.Timer + a.Unknown
+	return a.Aggregate + a.TQ + a.Control + a.HydrationFence + a.Timer + a.Unknown
 }
 
 func (a DeliveryLatencyAttribution) Reconciles(deliveries uint64) bool {
@@ -106,8 +102,6 @@ func (a DeliveryLatencyAttribution) count(family DeliveryLatencyFamily) uint64 {
 		return a.Control
 	case DeliveryLatencyHydrationFence:
 		return a.HydrationFence
-	case DeliveryLatencyCheckpoint:
-		return a.Checkpoint
 	case DeliveryLatencyTimer:
 		return a.Timer
 	case DeliveryLatencyUnknown:
@@ -192,12 +186,10 @@ func deliveryLatencyFamilyIndex(family DeliveryLatencyFamily) int {
 		return 2
 	case DeliveryLatencyHydrationFence:
 		return 3
-	case DeliveryLatencyCheckpoint:
-		return 4
 	case DeliveryLatencyTimer:
-		return 5
+		return 4
 	case DeliveryLatencyUnknown:
-		return 6
+		return 5
 	default:
 		return -1
 	}
@@ -216,7 +208,7 @@ func deliveryLatencyAttribution(counts [deliveryLatencyFamilyCount]uint64, maxim
 	}
 	return DeliveryLatencyAttribution{
 		Aggregate: counts[0], TQ: counts[1], Control: counts[2], HydrationFence: counts[3],
-		Checkpoint: counts[4], Timer: counts[5], Unknown: counts[6], MaximumDuration: maximum, MaximumFamily: family,
+		Timer: counts[4], Unknown: counts[5], MaximumDuration: maximum, MaximumFamily: family,
 		WindowNonempty: windowNonempty,
 	}
 }
@@ -263,10 +255,6 @@ func (r *Runtime) metricsFromPublication(sampledAt time.Time, processLive bool, 
 	result.QueueCurrentFrames, result.QueueHighFrames = currentFrames, r.queueHighFrames
 	result.QueueCurrentBytes, result.QueueHighBytes = result.LiveQueue.QueuedBytes, r.queueHighBytes
 	r.metricsMu.Unlock()
-	if r.writer != nil {
-		result.Checkpoint = r.writer.Accounting()
-	}
-	result.CheckpointEngine = r.engine.CheckpointOperations()
 	r.deliveryWindowMu.Lock()
 	result.Deliveries = r.deliveryCount.Load()
 	if result.Deliveries != 0 {
@@ -288,8 +276,7 @@ func (r *Runtime) metricsFromPublication(sampledAt time.Time, processLive bool, 
 		result.LastGCPauseNS = memory.PauseNs[(memory.NumGC-1)%uint32(len(memory.PauseNs))]
 	}
 	result.Goroutines = runtime.NumGoroutine()
-	result.AccountingValid = operationalAccountingValid(result.Engine) && result.LiveQueue.Reconciles() && result.Adapter.Reconciles() && result.TQNormalization.Reconciles() && result.CheckpointEngine.Reconciles() &&
-		(r.writer == nil || result.Checkpoint.Reconciles()) && result.DeliveryLatencyAttribution.Reconciles(result.Deliveries)
+	result.AccountingValid = operationalAccountingValid(result.Engine) && result.LiveQueue.Reconciles() && result.Adapter.Reconciles() && result.TQNormalization.Reconciles() && result.DeliveryLatencyAttribution.Reconciles(result.Deliveries)
 	return result
 }
 
@@ -309,7 +296,7 @@ func (r *Runtime) cachedMetrics() Metrics {
 	// Pressure sampling can reset the one-second delivery window between two
 	// diagnostics collections. Overlay these atomic/window facts so the
 	// existing pressure boundary remains exact without reacquiring the queue,
-	// adapter, writer, checkpoint-engine, or runtime memory sampling locks.
+	// adapter or runtime memory sampling locks.
 	r.deliveryWindowMu.Lock()
 	result.Deliveries = r.deliveryCount.Load()
 	if result.Deliveries != 0 {
@@ -342,8 +329,7 @@ func (r *Runtime) metricsFromDiagnostics(sampledAt time.Time, processLive bool, 
 	result.AccountingValid = sample != nil && sample.metrics.AccountingValid &&
 		diagnosticSampleFresh(sample.collectedAt, sampledAt, r.config.SampleCadence) &&
 		operationalAccountingValid(view.Operational) && result.LiveQueue.Reconciles() && result.Adapter.Reconciles() &&
-		result.TQNormalization.Reconciles() && result.CheckpointEngine.Reconciles() &&
-		(r.writer == nil || result.Checkpoint.Reconciles()) && result.DeliveryLatencyAttribution.Reconciles(result.Deliveries)
+		result.TQNormalization.Reconciles() && result.DeliveryLatencyAttribution.Reconciles(result.Deliveries)
 	return result
 }
 

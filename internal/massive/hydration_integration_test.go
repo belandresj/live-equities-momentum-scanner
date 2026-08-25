@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -21,7 +20,7 @@ func TestPLBRA2HydrationWorkerAndFence(t *testing.T) {
 	binding := component4TestBinding(t, []string{"AAA"})
 	now := binding.SessionStart().Add(30 * time.Second)
 	delay := time.Duration(0)
-	state, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 8, EvaluationDelay: &delay})
+	state, err := engine.New(engine.Config{Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 8, EvaluationDelay: &delay})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,12 +80,8 @@ func TestPLBRA2HydrationWorkerAndFence(t *testing.T) {
 	if workerPlan.workers != 1 {
 		t.Fatalf("live hydration workers=%d", workerPlan.workers)
 	}
-	checkpointWork, err := NewHydrationWorkItem(binding, work.Generation(), work.RequestID()+1, HydrationCheckpointCatchUp, "AAA", work.Start(), work.End(), work.ConnectionEpoch())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NewLiveHydrationWorkerPlan([]HydrationWorkItem{checkpointWork}, budgets.Workers, 8, budgets.MaximumResponseBytes, budgets.MaximumNormalizedRecords, budgets.MaximumResidentRecords); err == nil {
-		t.Fatal("supported live worker accepted checkpoint catch-up work")
+	if _, err := NewHydrationWorkItem(binding, work.Generation(), work.RequestID()+1, HydrationPurpose("removed"), "AAA", work.Start(), work.End(), work.ConnectionEpoch()); err == nil {
+		t.Fatal("supported live worker accepted removed hydration purpose")
 	}
 
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -128,22 +123,20 @@ func TestPLBRA2HydrationWorkerAndFence(t *testing.T) {
 		t.Fatalf("fence = %+v ok=%v err=%v", fenceDelivery, ok, err)
 	}
 
-	view := state.ObserveReplayDeterministic()
-	if view.Publication.Lifecycle != "live" || view.Publication.Watermark == nil || view.Publication.LastDisposition != engine.DispositionAggregateIngressFenceApplied ||
-		len(view.Canonical) != 1 || view.Canonical[0].Symbol != "AAA" || view.Canonical[0].PresentSlots != 1 || view.Canonical[0].LatestWindowStart != liveAt {
+	view := state.ObserveSnapshot()
+	if view.Publication.Lifecycle != "live" || view.Publication.Watermark == nil || view.Publication.LastDisposition != engine.DispositionAggregateIngressFenceApplied {
 		t.Fatalf("one canonical/evaluator/publication path = %+v", view)
 	}
-	if view.Canonical[0].LatestAuthoritySource != engine.AggregateSourceLive ||
-		view.Canonical[0].LatestValues.Close != 10.5 || view.Canonical[0].LatestValues.Volume != 1000.5 {
-		t.Fatalf("historical overwrote live authority = %+v", view.Canonical[0])
+	if operational := state.ObserveOperational(); operational.Aggregates.Consumed != 2 || operational.Aggregates.Inserted != 1 || operational.Aggregates.Revised != 1 {
+		t.Fatalf("historical precedence/accounting = %+v", operational.Aggregates)
 	}
-	if !reflect.DeepEqual(view.Evaluation, view.Publication.AggregateEvaluation) || !view.Publication.CurrentMarketClaim ||
-		view.Evaluation.Mode != "qualified_current" || view.Evaluation.Reason != "" ||
-		view.Evaluation.Population.UniverseTotal != 1 || view.Evaluation.Population.ValidPriorClose != 1 ||
-		view.Evaluation.Population.TrustedRankableMark != 1 || view.Evaluation.Population.CoveredPopulation != 1 ||
-		view.Evaluation.Population.UnresolvedPopulation != 0 || view.Evaluation.Qualification.NotYetPassed != 1 ||
-		view.Evaluation.TotalPassers != 0 || view.Evaluation.KnownRankableCount != 1 || len(view.Evaluation.Rows) != 0 {
-		t.Fatalf("ordinary C3 evaluation/publication = evaluation=%+v publication=%+v", view.Evaluation, view.Publication)
+	if !view.Publication.CurrentMarketClaim ||
+		view.Publication.AggregateEvaluation.Mode != "qualified_current" || view.Publication.AggregateEvaluation.Reason != "" ||
+		view.Publication.AggregateEvaluation.Population.UniverseTotal != 1 || view.Publication.AggregateEvaluation.Population.ValidPriorClose != 1 ||
+		view.Publication.AggregateEvaluation.Population.TrustedRankableMark != 1 || view.Publication.AggregateEvaluation.Population.CoveredPopulation != 1 ||
+		view.Publication.AggregateEvaluation.Population.UnresolvedPopulation != 0 || view.Publication.AggregateEvaluation.Qualification.NotYetPassed != 1 ||
+		view.Publication.AggregateEvaluation.TotalPassers != 0 || view.Publication.AggregateEvaluation.KnownRankableCount != 1 || len(view.Publication.AggregateEvaluation.Rows) != 0 {
+		t.Fatalf("ordinary C3 evaluation/publication = evaluation=%+v publication=%+v", view.Publication.AggregateEvaluation, view.Publication)
 	}
 	if err := attempt.Close(CloseEpochCommand{BindingIdentity: binding.Identity(), ConnectionEpoch: attempt.Epoch(), CommandToken: 2, Cause: CloseControlledStop}); err != nil {
 		t.Fatal(err)

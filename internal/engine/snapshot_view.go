@@ -4,7 +4,7 @@ package engine
 // engine publication. Publication, operational, and T/Q fields are derived
 // from the same atomic cell; consumers must not join later Observe calls.
 type SnapshotView struct {
-	Publication ReplayPublicationView
+	Publication PublicationView
 	Operational OperationalView
 	TQ          TQView
 }
@@ -15,7 +15,7 @@ func (e *Engine) ObserveSnapshot() SnapshotView {
 		return SnapshotView{}
 	}
 	return SnapshotView{
-		Publication: replayPublicationView(publication),
+		Publication: livePublicationView(publication),
 		Operational: operationalViewFromPublication(publication),
 		TQ:          cloneTQView(publication.tq),
 	}

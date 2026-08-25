@@ -23,7 +23,7 @@ func TestPC5ENGINEConnectionControlLifecycle(t *testing.T) {
 
 	t.Run("ordered current ack opens only the post-ack aggregate path", func(t *testing.T) {
 		now := start.Add(10 * time.Second)
-		e := aggregateEngine(t, binding, RunModeLive, &now)
+		e := aggregateEngine(t, binding, &now)
 		defer closeAndWait(t, e)
 
 		position := func(frame uint64, index uint32) LivePosition {
@@ -85,7 +85,7 @@ func TestPC5ENGINEConnectionControlLifecycle(t *testing.T) {
 
 	t.Run("intent or acknowledgement without successful write cannot hand off", func(t *testing.T) {
 		now := start.Add(10 * time.Second)
-		e := aggregateEngine(t, binding, RunModeLive, &now)
+		e := aggregateEngine(t, binding, &now)
 		defer closeAndWait(t, e)
 		admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionAttempt, 1, LivePosition{}, now, 1, ControlSucceeded))
 		ack := controlFact(binding.Identity(), AggregateSubscriptionResult, 1, LivePosition{ConnectionEpoch: 1, FrameSequence: 1}, now, 2, ControlSucceeded)
@@ -99,7 +99,7 @@ func TestPC5ENGINEConnectionControlLifecycle(t *testing.T) {
 
 	t.Run("rejected and fenced positions do not mutate accepted causal authority", func(t *testing.T) {
 		now := start.Add(10 * time.Second)
-		e := aggregateEngine(t, binding, RunModeLive, &now)
+		e := aggregateEngine(t, binding, &now)
 		defer closeAndWait(t, e)
 		admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionAttempt, 1, LivePosition{}, now, 1, ControlSucceeded))
 		wrongBinding := controlFact("session-binding-v1:wrong", AuthenticationResult, 1, LivePosition{ConnectionEpoch: 1, FrameSequence: 10}, now, 1, ControlSucceeded)
@@ -122,7 +122,7 @@ func TestPC5ENGINEConnectionControlLifecycle(t *testing.T) {
 
 	t.Run("second active epoch and stale old ack are contained", func(t *testing.T) {
 		now := start.Add(10 * time.Second)
-		e := aggregateEngine(t, binding, RunModeLive, &now)
+		e := aggregateEngine(t, binding, &now)
 		defer closeAndWait(t, e)
 		admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionAttempt, 1, LivePosition{}, now, 1, ControlSucceeded))
 		if got := admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionAttempt, 2, LivePosition{}, now, 2, ControlSucceeded)); got.Code != DispositionConnectionControlRejected || got.Reason != ReasonLifecycle {
@@ -152,7 +152,7 @@ func TestPC5ENGINEConnectionControlLifecycle(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
 				now := start.Add(10 * time.Second)
-				e := aggregateEngine(t, binding, RunModeLive, &now)
+				e := aggregateEngine(t, binding, &now)
 				defer closeAndWait(t, e)
 				admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionAttempt, 1, LivePosition{}, now, 1, ControlSucceeded))
 				e.mu.Lock()
@@ -181,7 +181,7 @@ func TestPC5ENGINEConnectionControlLifecycle(t *testing.T) {
 	t.Run("pre-session ack survives to S unless its epoch is lost", func(t *testing.T) {
 		for _, lose := range []bool{false, true} {
 			now := start.Add(-10 * time.Second)
-			e := aggregateEngine(t, binding, RunModeLive, &now)
+			e := aggregateEngine(t, binding, &now)
 			admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionAttempt, 1, LivePosition{}, now, 1, ControlSucceeded))
 			admitConnectionControl(t, e, controlFact(binding.Identity(), AggregateCommandWriteResult, 1, LivePosition{}, now, 2, ControlSucceeded))
 			admitConnectionControl(t, e, controlFact(binding.Identity(), AggregateSubscriptionResult, 1, LivePosition{ConnectionEpoch: 1, FrameSequence: 1}, now, 2, ControlSucceeded))
@@ -206,7 +206,7 @@ func TestPC5ENGINEConnectionControlLifecycle(t *testing.T) {
 
 	t.Run("TQ-only failure is deferred and ingress ambiguity suppresses atomically", func(t *testing.T) {
 		now := start.Add(10 * time.Second)
-		e := aggregateEngine(t, binding, RunModeLive, &now)
+		e := aggregateEngine(t, binding, &now)
 		defer closeAndWait(t, e)
 		admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionAttempt, 1, LivePosition{}, now, 1, ControlSucceeded))
 		tq := controlFact(binding.Identity(), TradeQuoteSubscriptionResult, 1, LivePosition{ConnectionEpoch: 1, FrameSequence: 1}, now, 9, ControlFailed)
@@ -229,7 +229,7 @@ func TestPC5ENGINEConnectionControlLifecycle(t *testing.T) {
 func TestC8RecoveryExhaustionRequiresEngineOwnedAttemptHistory(t *testing.T) {
 	binding := testBinding(t)
 	now := binding.SessionStart().Add(10 * time.Second)
-	e := aggregateEngine(t, binding, RunModeLive, &now)
+	e := aggregateEngine(t, binding, &now)
 	defer closeAndWait(t, e)
 	foreign := binding.Identity()
 	if foreign[len(foreign)-1] == '0' {
@@ -270,7 +270,7 @@ func TestC8RecoveryExhaustionRequiresEngineOwnedAttemptHistory(t *testing.T) {
 func TestPHRRetryEnginePacesEveryAttemptAndPreservesFacts(t *testing.T) {
 	binding := testBinding(t)
 	now := binding.SessionStart().Add(20 * time.Second)
-	e := aggregateEngine(t, binding, RunModeLive, &now)
+	e := aggregateEngine(t, binding, &now)
 	defer closeAndWait(t, e)
 
 	admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionAttempt, 1, LivePosition{}, now, 1, ControlSucceeded))

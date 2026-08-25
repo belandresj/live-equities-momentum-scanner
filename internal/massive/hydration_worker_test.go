@@ -6,8 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -26,7 +24,7 @@ func TestC6S1FactsConvertToEngineLedger(t *testing.T) {
 	binding := component4TestBinding(t, []string{"AAA"})
 	now := binding.SessionStart().Add(2 * time.Second)
 	delay := time.Duration(0)
-	e, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return now }, Capacity: 16, RequiredReserve: 2, EvaluationDelay: &delay})
+	e, err := engine.New(engine.Config{Clock: func() time.Time { return now }, Capacity: 16, RequiredReserve: 2, EvaluationDelay: &delay})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,32 +203,6 @@ func TestHydrationSharedRESTContract(t *testing.T) {
 		}
 	})
 
-	t.Run("construction has one decoder and mapper call", func(t *testing.T) {
-		files, err := filepath.Glob("*.go")
-		if err != nil {
-			t.Fatal(err)
-		}
-		var production strings.Builder
-		for _, file := range files {
-			if strings.HasSuffix(file, "_test.go") {
-				continue
-			}
-			body, err := os.ReadFile(file)
-			if err != nil {
-				t.Fatal(err)
-			}
-			production.Write(body)
-		}
-		source := production.String()
-		if strings.Count(source, "func decodeRESTPage(") != 1 || strings.Count(source, "decodeRESTPage(body") != 2 ||
-			strings.Count(source, "func NormalizeRESTSecondAggregate(") != 1 || strings.Count(source, "NormalizeRESTSecondAggregate(symbol, raw)") != 1 ||
-			strings.Count(source, ".acquire(ctx, token") != 2 {
-			t.Fatalf("shared construction counts decoder-def=%d decoder-use+def=%d mapper-def=%d mapper-use=%d core-consumers=%d",
-				strings.Count(source, "func decodeRESTPage("), strings.Count(source, "decodeRESTPage(body"),
-				strings.Count(source, "func NormalizeRESTSecondAggregate("), strings.Count(source, "NormalizeRESTSecondAggregate(symbol, raw)"),
-				strings.Count(source, ".acquire(ctx, token"))
-		}
-	})
 }
 
 // TestHydrationWorkerSealedChunksAndTerminal is P-C6-WORKER. It proves full

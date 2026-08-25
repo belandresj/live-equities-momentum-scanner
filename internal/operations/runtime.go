@@ -7,7 +7,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/belandresj/live-equities-momentum-scanner/internal/checkpoint"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/engine"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/massive"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/reference"
@@ -46,8 +45,6 @@ type Runtime struct {
 	processLive                atomic.Bool
 	joined                     atomic.Bool
 	retirementFailed           atomic.Bool
-	writer                     *checkpoint.Writer
-	checkpointResultDone       chan struct{}
 	metricsMu                  sync.Mutex
 	liveMu                     sync.Mutex
 	shutdownMu                 sync.Mutex
@@ -114,23 +111,15 @@ type liveCoverageCycleResult struct {
 }
 
 func New(ctx context.Context, binding reference.Binding, config Config, clock func() time.Time) (*Runtime, error) {
-	return NewWithCheckpoint(ctx, binding, config, clock, nil)
-}
-
-func NewWithCheckpoint(ctx context.Context, binding reference.Binding, config Config, clock func() time.Time, writer *checkpoint.Writer) (*Runtime, error) {
 	if ctx == nil || binding.Identity() == "" || !config.valid() || clock == nil {
 		return nil, errors.New("invalid scanner runtime configuration")
 	}
-	var submitter checkpoint.Submitter
-	if writer != nil {
-		submitter = writer
-	}
-	owner, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: clock, Capacity: config.EngineCapacity, RequiredReserve: config.RequiredReserve, EvaluationDelay: &config.EvaluationDelay,
-		CheckpointSubmitter: submitter, FloatLookup: config.FloatLookup, RecoveryBackoffInitial: config.RecoveryBackoffInitial, RecoveryBackoffMaximum: config.RecoveryBackoffMax})
+	owner, err := engine.New(engine.Config{Clock: clock, Capacity: config.EngineCapacity, RequiredReserve: config.RequiredReserve, EvaluationDelay: &config.EvaluationDelay,
+		FloatLookup: config.FloatLookup, RecoveryBackoffInitial: config.RecoveryBackoffInitial, RecoveryBackoffMaximum: config.RecoveryBackoffMax})
 	if err != nil {
 		return nil, err
 	}
-	runtime := &Runtime{engine: owner, binding: binding, config: config, clock: clock, writer: writer, pressureSampler: defaultTQPressureSample, deliveryOneSecondMaxFamily: DeliveryLatencyUnknown}
+	runtime := &Runtime{engine: owner, binding: binding, config: config, clock: clock, pressureSampler: defaultTQPressureSample, deliveryOneSecondMaxFamily: DeliveryLatencyUnknown}
 	admission, completion := owner.AdmitBinding(ctx, engine.BindingInstall{SchemaVersion: engine.BindingInstallSchemaV1, BindingIdentity: binding.Identity(), Binding: binding})
 	if admission != engine.AdmissionAdmitted || completion == nil {
 		owner.Close()
@@ -155,10 +144,6 @@ func NewWithCheckpoint(ctx context.Context, binding reference.Binding, config Co
 	// process/queue/memory values while the sampler is still warming up.
 	runtime.storeDiagnosticsSample(runtime.Metrics())
 	runtime.metricsSnapshot = runtime.cachedMetrics
-	if writer != nil {
-		runtime.checkpointResultDone = make(chan struct{})
-		go runtime.runCheckpointResults()
-	}
 	timerCtx, cancelTimer := context.WithCancel(context.Background())
 	runtime.timerCancel, runtime.timerDone = cancelTimer, make(chan struct{})
 	go runtime.runTimer(timerCtx)
@@ -166,23 +151,6 @@ func NewWithCheckpoint(ctx context.Context, binding reference.Binding, config Co
 	runtime.ingressSamplerCancel, runtime.ingressSamplerDone = cancelIngressSampler, make(chan struct{})
 	go runtime.runIngressDiagnosticSampler(ingressSamplerCtx)
 	return runtime, nil
-}
-
-func (r *Runtime) runCheckpointResults() {
-	defer close(r.checkpointResultDone)
-	for {
-		result, err := r.writer.NextResult(context.Background())
-		if err != nil {
-			return
-		}
-		started := time.Now()
-		admission, completion := r.engine.AdmitCheckpointTerminal(context.Background(), result)
-		if admission != engine.AdmissionAdmitted || completion == nil {
-			continue
-		}
-		<-completion
-		r.recordDeliveryLatency(time.Since(started), DeliveryLatencyCheckpoint)
-	}
 }
 
 func (r *Runtime) runTimer(ctx context.Context) {
@@ -312,7 +280,7 @@ func (r *Runtime) recordEngineDispositionIncident(code engine.DispositionCode, r
 func engineTerminalDisposition(code engine.DispositionCode) bool {
 	switch code {
 	case engine.DispositionClockRegression, engine.DispositionAggregateIntegrity, engine.DispositionPublicationIntegrity,
-		engine.DispositionAccountingIntegrity, engine.DispositionReplayFailed, engine.DispositionIngressIntegrity,
+		engine.DispositionAccountingIntegrity, engine.DispositionIngressIntegrity,
 		engine.DispositionHydrationIntegrity, engine.DispositionRecoveryExhausted, engine.DispositionSequenceExhausted:
 		return true
 	default:
@@ -416,8 +384,8 @@ func (r *Runtime) syncTQPressure(ctx context.Context) {
 	}
 }
 
-func (r *Runtime) recordRuntimeAccountingIncident(reason string, metrics Metrics, priorPublications ...engine.ReplayPublicationView) {
-	priorPublication := engine.ReplayPublicationView{}
+func (r *Runtime) recordRuntimeAccountingIncident(reason string, metrics Metrics, priorPublications ...engine.PublicationView) {
+	priorPublication := engine.PublicationView{}
 	if len(priorPublications) > 0 {
 		priorPublication = priorPublications[0]
 	}
@@ -697,17 +665,6 @@ func (r *Runtime) Shutdown(ctx context.Context) error {
 		case <-r.timerDone:
 		case <-deadline.Done():
 			return errors.New("scanner timer shutdown deadline exceeded")
-		}
-	}
-	if r.writer != nil {
-		r.writer.Close()
-		if err := r.writer.Wait(deadline); err != nil {
-			return errors.New("checkpoint writer shutdown deadline exceeded")
-		}
-		select {
-		case <-r.checkpointResultDone:
-		case <-deadline.Done():
-			return errors.New("checkpoint result join deadline exceeded")
 		}
 	}
 	r.engine.Close()

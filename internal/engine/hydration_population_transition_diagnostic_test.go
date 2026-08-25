@@ -17,9 +17,9 @@ type d3PopulationTransitionTrace struct {
 	conflictAtOldIdentity bool
 	latestMarkWindow      time.Time
 	latestMarkAuthority   AggregateSource
-	features              ReplayFeatureView
-	qualification         ReplayQualificationView
-	evaluation            ReplayEvaluationView
+	features              priceRangeFeatureResult
+	qualification         qualificationResult
+	evaluation            EvaluationView
 }
 
 // TestD3OneSymbolHydrationConflictPopulationTransition is
@@ -59,8 +59,8 @@ func TestD3OneSymbolHydrationConflictPopulationTransition(t *testing.T) {
 		candidatePopulation.CoveredPopulation != 1 || candidatePopulation.UnresolvedPopulation != 0 || candidate.latestMarkAuthority != AggregateSourceLive {
 		t.Fatalf("candidate did not trust the later independently authoritative live mark: %+v evaluation=%+v", candidatePopulation, candidate.evaluation)
 	}
-	if control.evaluation.PopulationTransition != (ReplayPopulationTransitionDiagnosticView{}) ||
-		candidate.evaluation.PopulationTransition != (ReplayPopulationTransitionDiagnosticView{}) {
+	if control.evaluation.PopulationTransition != (PopulationTransitionDiagnosticView{}) ||
+		candidate.evaluation.PopulationTransition != (PopulationTransitionDiagnosticView{}) {
 		t.Fatalf("diagnostic-only discrepancy entered the bootstrap-repair path: control=%+v candidate=%+v", control.evaluation.PopulationTransition, candidate.evaluation.PopulationTransition)
 	}
 	if candidate.features != control.features || candidate.qualification != control.qualification ||
@@ -144,16 +144,15 @@ func TestResolvedRESTLiveDiscrepancyPreservesQualificationAndFeatures(t *testing
 		t.Fatalf("evaluation timer admission=%s", admission)
 	}
 
-	view := e.ObserveReplayDeterministic()
-	canonical := view.Canonical[0]
-	if len(canonical.Records) == 0 || canonical.LatestAuthoritySource != AggregateSourceLive ||
-		canonical.Qualification.Status != "provisional" || view.Evaluation.Qualification.Provisional != 1 ||
-		view.Evaluation.Mode != "qualified_current" || view.Evaluation.TotalPassers != 1 || len(view.Evaluation.Rows) != 1 {
-		t.Fatalf("resolved discrepancy did not preserve qualification/ranking: canonical=%+v evaluation=%+v", canonical, view.Evaluation)
+	view := e.ObserveSnapshot()
+	state := aggregateState(t, e, "AAA")
+	if state.latest == nil || state.latest.record.authority.source != AggregateSourceLive || state.qualification == nil ||
+		state.qualification.result.status != qualificationProvisional || view.Publication.AggregateEvaluation.Qualification.Provisional != 1 ||
+		view.Publication.AggregateEvaluation.Mode != "qualified_current" || view.Publication.AggregateEvaluation.TotalPassers != 1 || len(view.Publication.AggregateEvaluation.Rows) != 1 {
+		t.Fatalf("resolved discrepancy did not preserve qualification/ranking: state=%+v evaluation=%+v", state, view.Publication.AggregateEvaluation)
 	}
 	// B2 does not evaluate removed HOD/rolling/legacy Activity fields for the
 	// full population; current-product selected fields have their own proof.
-	state := aggregateState(t, e, "AAA")
 	if state.historicalConflict != nil && state.historicalConflict.has(sessionSlot(e.state.binding, start)) ||
 		!exactAggregateCoverage(state, e.state.binding, start, now) {
 		t.Fatalf("resolved discrepancy did not retain exact session coverage: state=%+v", state)
@@ -322,19 +321,30 @@ func runD3OneSymbolPopulationTransition(t *testing.T, unequalOverlap bool) d3Pop
 	state := e.state.binding.symbols[index].aggregates
 	conflictAtOldIdentity := state.historicalConflict != nil && state.historicalConflict.has(sessionSlot(e.state.binding, start))
 	latest, latestSet := latestMarkBeforeCompact(state, now)
+	latestAuthority := AggregateSource("")
+	if latestSet {
+		latestAuthority = latest.authority.source
+	}
+	features := unavailablePriceRangeResult(time.Time{})
+	if state.priceRange != nil {
+		features = state.priceRange.result
+	}
+	qualification := qualificationResult{}
+	if state.qualification != nil {
+		qualification = state.qualification.result
+	}
 	e.mu.Unlock()
 	latestWindow := time.Time{}
 	if latestSet {
 		latestWindow = latest.windowStart
 	}
 
-	view := e.ObserveReplayDeterministic()
-	canonical := view.Canonical[0]
+	view := e.ObserveSnapshot()
 	return d3PopulationTransitionTrace{
 		rowAccounting: chunkDisposition.Rows, requestCoverage: requestCoverage,
 		bootstrapCoverage: bootstrapCoverage, bootstrapCoverageSet: bootstrapCoverageSet,
 		laterLiveDisposition: laterDisposition, ordinaryCoverage: ordinaryCoverage, ordinaryCoverageSet: ordinaryCoverageSet,
-		conflictAtOldIdentity: conflictAtOldIdentity, latestMarkWindow: latestWindow, latestMarkAuthority: canonical.LatestAuthoritySource,
-		features: canonical.Features, qualification: canonical.Qualification, evaluation: view.Evaluation,
+		conflictAtOldIdentity: conflictAtOldIdentity, latestMarkWindow: latestWindow, latestMarkAuthority: latestAuthority,
+		features: features, qualification: qualification, evaluation: view.Publication.AggregateEvaluation,
 	}
 }

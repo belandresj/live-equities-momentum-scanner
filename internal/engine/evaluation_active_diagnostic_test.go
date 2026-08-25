@@ -36,7 +36,7 @@ func TestActiveAggregateEvaluationDiagnosticTracksStageApplyPublication(t *testi
 func TestActiveAggregateEvaluationDiagnosticCoversProductionMaintenanceScan(t *testing.T) {
 	binding := hydrationPopulationBinding(t, []string{"AAA", "BBB"})
 	now := binding.SessionStart().Add(10 * time.Minute)
-	e := aggregateEngine(t, binding, RunModeLive, &now)
+	e := aggregateEngine(t, binding, &now)
 	defer closeAndWait(t, e)
 	e.mu.Lock()
 	e.state.lifecycle = lifecycleLive
@@ -73,7 +73,7 @@ func TestActiveAggregateEvaluationDiagnosticCoversProductionTrustCorrection(t *t
 	binding := hydrationPopulationBinding(t, []string{"AAA"})
 	target := binding.SessionStart().Add(60 * time.Second)
 	now := target
-	e := aggregateEngine(t, binding, RunModeLive, &now)
+	e := aggregateEngine(t, binding, &now)
 	defer closeAndWait(t, e)
 
 	e.mu.Lock()
@@ -135,7 +135,7 @@ func TestActiveAggregateEvaluationDiagnosticCoversProductionSelectedTrustClosure
 	binding := hydrationPopulationBinding(t, []string{"AAA"})
 	target := binding.SessionStart().Add(330 * time.Second)
 	now := target
-	e := aggregateEngine(t, binding, RunModeLive, &now)
+	e := aggregateEngine(t, binding, &now)
 	defer closeAndWait(t, e)
 
 	historical := historicalAggregate(binding, "AAA", target.Add(-3*time.Second), 1)

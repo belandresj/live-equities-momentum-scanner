@@ -21,10 +21,10 @@ func TestWatermarkStaleRecorderExactTransitionPersistsOneBoundedIncident(t *test
 	evidence := watermarkTestEvidence(evidenceBase, 5)
 	var output bytes.Buffer
 	recorder := &watermarkStaleDiagnosticRecorder{}
-	if err := recorder.observe(watermarkTestSample(base, true, operations.ReasonNone, "live", engine.RunModeLive), func() operations.WatermarkStallEvidence { return evidence }, directory, &output, persistWatermarkStaleDiagnostic); err != nil {
+	if err := recorder.observe(watermarkTestSample(base, true, operations.ReasonNone, "live", "live"), func() operations.WatermarkStallEvidence { return evidence }, directory, &output, persistWatermarkStaleDiagnostic); err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.observe(watermarkTestSample(base.Add(time.Second), false, operations.ReasonWatermarkStale, "live", engine.RunModeLive), func() operations.WatermarkStallEvidence { return evidence }, directory, &output, persistWatermarkStaleDiagnostic); err != nil {
+	if err := recorder.observe(watermarkTestSample(base.Add(time.Second), false, operations.ReasonWatermarkStale, "live", "live"), func() operations.WatermarkStallEvidence { return evidence }, directory, &output, persistWatermarkStaleDiagnostic); err != nil {
 		t.Fatal(err)
 	}
 	if recorder.attempts != 1 || !recorder.latched || !recorder.persisted || !strings.Contains(output.String(), "Watermark-stale diagnostic persisted") {
@@ -51,7 +51,7 @@ func TestWatermarkStaleRecorderExactTransitionPersistsOneBoundedIncident(t *test
 		t.Fatalf("JSON=%s err=%v", data, err)
 	}
 	if document.Schema != watermarkStaleDiagnosticSchema || document.RingCapacity != operations.WatermarkStallRingCapacity || document.RecordCount != 5 || len(document.Cycles) != 5 ||
-		document.Trigger.PreviousBackendReady != true || document.Trigger.CurrentBackendReady || document.Trigger.CurrentReason != string(operations.ReasonWatermarkStale) || document.Trigger.RunMode != string(engine.RunModeLive) || document.Trigger.Lifecycle != "live" {
+		document.Trigger.PreviousBackendReady != true || document.Trigger.CurrentBackendReady || document.Trigger.CurrentReason != string(operations.ReasonWatermarkStale) || document.Trigger.RunMode != string("live") || document.Trigger.Lifecycle != "live" {
 		t.Fatalf("document=%+v", document)
 	}
 	if !document.Cycles[0].CycleStartedAt.Equal(evidenceBase) || !document.Cycles[4].CycleStartedAt.Equal(base) ||
@@ -87,8 +87,8 @@ func TestWatermarkStaleTransitionPersistsCrossingTimeActiveCycle(t *testing.T) {
 	base := time.Date(2026, 8, 24, 17, 21, 43, 0, time.UTC)
 	target := base.Add(-4 * time.Second)
 	transition := operations.WatermarkStaleTransition{
-		Previous:       watermarkTestSample(base, true, operations.ReasonNone, "live", engine.RunModeLive).Status,
-		Current:        watermarkTestSample(base.Add(2*time.Second), false, operations.ReasonWatermarkStale, "live", engine.RunModeLive).Status,
+		Previous:       watermarkTestSample(base, true, operations.ReasonNone, "live", "live").Status,
+		Current:        watermarkTestSample(base.Add(2*time.Second), false, operations.ReasonWatermarkStale, "live", "live").Status,
 		ActiveObserved: true,
 		Active: operations.WatermarkStallActiveCycleEvidence{
 			Sequence: 7, StartedAt: base, PhaseStartedAt: base.Add(100 * time.Millisecond), ObservedAt: base.Add(2 * time.Second),
@@ -123,9 +123,9 @@ func TestWatermarkStaleSharedTransitionLatchCatchesPhaseOffsetTransientMissedByO
 	staleStart, staleEnd := base.Add(1250*time.Millisecond), base.Add(1300*time.Millisecond)
 	statusAt := func(at time.Time) operations.Status {
 		if !at.Before(staleStart) && at.Before(staleEnd) {
-			return watermarkTestSample(at, false, operations.ReasonWatermarkStale, "live", engine.RunModeLive).Status
+			return watermarkTestSample(at, false, operations.ReasonWatermarkStale, "live", "live").Status
 		}
-		return watermarkTestSample(at, true, operations.ReasonNone, "live", engine.RunModeLive).Status
+		return watermarkTestSample(at, true, operations.ReasonNone, "live", "live").Status
 	}
 
 	// The scanner's former one-second phase samples at 0s, 1s, and 2s and
@@ -177,11 +177,11 @@ func TestWatermarkStaleRecorderOneProcessBoundAcrossRepeatedStaleAndRecovery(t *
 			t.Fatal(err)
 		}
 	}
-	observe(watermarkTestSample(base, true, operations.ReasonNone, "live", engine.RunModeLive))
-	observe(watermarkTestSample(base.Add(time.Second), false, operations.ReasonWatermarkStale, "live", engine.RunModeLive))
-	observe(watermarkTestSample(base.Add(2*time.Second), false, operations.ReasonWatermarkStale, "live", engine.RunModeLive))
-	observe(watermarkTestSample(base.Add(3*time.Second), true, operations.ReasonNone, "live", engine.RunModeLive))
-	observe(watermarkTestSample(base.Add(4*time.Second), false, operations.ReasonWatermarkStale, "live", engine.RunModeLive))
+	observe(watermarkTestSample(base, true, operations.ReasonNone, "live", "live"))
+	observe(watermarkTestSample(base.Add(time.Second), false, operations.ReasonWatermarkStale, "live", "live"))
+	observe(watermarkTestSample(base.Add(2*time.Second), false, operations.ReasonWatermarkStale, "live", "live"))
+	observe(watermarkTestSample(base.Add(3*time.Second), true, operations.ReasonNone, "live", "live"))
+	observe(watermarkTestSample(base.Add(4*time.Second), false, operations.ReasonWatermarkStale, "live", "live"))
 	if attempts != 1 || recorder.attempts != 1 {
 		t.Fatalf("one-process incident bound attempts=%d recorder=%+v", attempts, recorder)
 	}
@@ -189,18 +189,18 @@ func TestWatermarkStaleRecorderOneProcessBoundAcrossRepeatedStaleAndRecovery(t *
 
 func TestWatermarkStaleRecorderExcludesNonOrdinaryOrNonWatermarkStates(t *testing.T) {
 	base := time.Date(2026, 8, 20, 16, 0, 0, 0, time.UTC)
-	current := watermarkTestSample(base, true, operations.ReasonNone, "live", engine.RunModeLive)
+	current := watermarkTestSample(base, true, operations.ReasonNone, "live", "live")
 	cases := []struct {
 		name      string
 		candidate liveOperatorSample
 	}{
-		{"startup", watermarkTestSample(base.Add(time.Second), false, operations.ReasonWatermarkStale, "initializing", engine.RunModeLive)},
-		{"hydration", watermarkTestSample(base.Add(time.Second), false, operations.ReasonWatermarkStale, "hydrating", engine.RunModeLive)},
-		{"recovery", watermarkTestSample(base.Add(time.Second), false, operations.ReasonLifecycle, "recovering", engine.RunModeLive)},
-		{"replay", watermarkTestSample(base.Add(time.Second), false, operations.ReasonWatermarkStale, "live", engine.RunModeReplay)},
-		{"shutdown", watermarkTestSampleWithProcess(base.Add(time.Second), false, operations.ReasonWatermarkStale, "live", engine.RunModeLive, false)},
-		{"tq-only", watermarkTestSample(base.Add(time.Second), false, operations.ReasonRankingNoncurrent, "live", engine.RunModeLive)},
-		{"accounting", watermarkTestSample(base.Add(time.Second), false, operations.ReasonAccounting, "live", engine.RunModeLive)},
+		{"startup", watermarkTestSample(base.Add(time.Second), false, operations.ReasonWatermarkStale, "initializing", "live")},
+		{"hydration", watermarkTestSample(base.Add(time.Second), false, operations.ReasonWatermarkStale, "hydrating", "live")},
+		{"recovery", watermarkTestSample(base.Add(time.Second), false, operations.ReasonLifecycle, "recovering", "live")},
+		{"non-live", watermarkTestSample(base.Add(time.Second), false, operations.ReasonWatermarkStale, "live", string("removed"))},
+		{"shutdown", watermarkTestSampleWithProcess(base.Add(time.Second), false, operations.ReasonWatermarkStale, "live", "live", false)},
+		{"tq-only", watermarkTestSample(base.Add(time.Second), false, operations.ReasonRankingNoncurrent, "live", "live")},
+		{"accounting", watermarkTestSample(base.Add(time.Second), false, operations.ReasonAccounting, "live", "live")},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -234,9 +234,9 @@ func TestWatermarkStalePersistenceFailureIsNonfatalAndLatched(t *testing.T) {
 			t.Fatalf("persistence error reached scanner control path: %v", err)
 		}
 	}
-	observe(watermarkTestSample(base, true, operations.ReasonNone, "live", engine.RunModeLive))
-	observe(watermarkTestSample(base.Add(time.Second), false, operations.ReasonWatermarkStale, "live", engine.RunModeLive))
-	observe(watermarkTestSample(base.Add(2*time.Second), false, operations.ReasonWatermarkStale, "live", engine.RunModeLive))
+	observe(watermarkTestSample(base, true, operations.ReasonNone, "live", "live"))
+	observe(watermarkTestSample(base.Add(time.Second), false, operations.ReasonWatermarkStale, "live", "live"))
+	observe(watermarkTestSample(base.Add(2*time.Second), false, operations.ReasonWatermarkStale, "live", "live"))
 	if attempts != 1 || recorder.attempts != 1 || recorder.persisted || !recorder.latched || !strings.Contains(output.String(), "persistence failed") {
 		t.Fatalf("failure was not bounded/nonfatal recorder=%+v attempts=%d output=%q", recorder, attempts, output.String())
 	}
@@ -246,8 +246,8 @@ func TestWatermarkStalePersistenceIsProtectedAndCreateWithoutOverwrite(t *testin
 	directory := filepath.Join(t.TempDir(), "diagnostics")
 	base := time.Date(2026, 8, 20, 16, 0, 0, 123, time.UTC)
 	document := newWatermarkStaleDiagnosticDocument(
-		watermarkStaleStatusSample{BackendReady: true, ProcessLive: true, Lifecycle: "live", RunMode: engine.RunModeLive, SampledAt: base},
-		watermarkStaleStatusSample{ProcessLive: true, Lifecycle: "live", RunMode: engine.RunModeLive, Reason: operations.ReasonWatermarkStale, SampledAt: base.Add(time.Second)},
+		watermarkStaleStatusSample{BackendReady: true, ProcessLive: true, Lifecycle: "live", RunMode: "live", SampledAt: base},
+		watermarkStaleStatusSample{ProcessLive: true, Lifecycle: "live", RunMode: "live", Reason: operations.ReasonWatermarkStale, SampledAt: base.Add(time.Second)},
 		watermarkTestEvidence(base, 1),
 	)
 	path, err := persistWatermarkStaleDiagnostic(directory, &document)
@@ -272,11 +272,11 @@ func TestWatermarkStalePersistenceIsProtectedAndCreateWithoutOverwrite(t *testin
 	}
 }
 
-func watermarkTestSample(at time.Time, ready bool, reason operations.ReadinessReason, lifecycle string, runMode engine.RunMode) liveOperatorSample {
+func watermarkTestSample(at time.Time, ready bool, reason operations.ReadinessReason, lifecycle string, runMode string) liveOperatorSample {
 	return watermarkTestSampleWithProcess(at, ready, reason, lifecycle, runMode, true)
 }
 
-func watermarkTestSampleWithProcess(at time.Time, ready bool, reason operations.ReadinessReason, lifecycle string, runMode engine.RunMode, processLive bool) liveOperatorSample {
+func watermarkTestSampleWithProcess(at time.Time, ready bool, reason operations.ReadinessReason, lifecycle string, runMode string, processLive bool) liveOperatorSample {
 	target := at.Add(-4 * time.Second)
 	return liveOperatorSample{
 		Status:  operations.Status{ProcessLive: processLive, BackendReady: ready, RankingCurrent: ready, Reason: reason, Lifecycle: lifecycle, SampledAt: at, WatermarkLag: 3 * time.Second, CausalTarget: &target},

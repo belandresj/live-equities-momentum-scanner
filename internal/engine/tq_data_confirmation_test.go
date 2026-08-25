@@ -13,7 +13,7 @@ func TestTQDataConfirmationSeparatesWriteFromCoverage(t *testing.T) {
 	binding := testBinding(t)
 	now := binding.SessionStart().Add(20 * time.Minute)
 	delay := time.Duration(0)
-	e, err := New(Config{Mode: RunModeLive, Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 4, EvaluationDelay: &delay})
+	e, err := New(Config{Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 4, EvaluationDelay: &delay})
 	if err != nil {
 		t.Fatal(err)
 	}

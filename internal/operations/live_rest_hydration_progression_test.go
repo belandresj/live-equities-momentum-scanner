@@ -57,8 +57,7 @@ type liveRESTProgressionResult struct {
 	err                                                             error
 	completionOutOfOrder                                            bool
 	publicationProblem                                              string
-	canonical                                                       []engine.ReplayCanonicalSymbol
-	evaluation                                                      engine.ReplayEvaluationView
+	evaluation                                                      engine.EvaluationView
 	tq                                                              engine.TQView
 	workerAccounting                                                massive.HydrationWorkerAccounting
 	terminalOrder                                                   []uint64
@@ -97,79 +96,16 @@ func TestPLBRA3ParallelHydration(t *testing.T) {
 			}
 			if baseline == nil {
 				baseline = &result
-			} else if canonicalEqual, evaluationEqual, tqEqual := equalLBRCanonicalMarket(result.canonical, baseline.canonical), equalLBREvaluation(result.evaluation, baseline.evaluation), equalLBRTQProduct(result.tq, baseline.tq); !canonicalEqual || !evaluationEqual || !tqEqual {
-				detail := ""
-				if !canonicalEqual {
-					detail = lbrCanonicalDifference(result.canonical, baseline.canonical)
-				}
-				t.Fatalf("workers=%d changed projection relative to one worker: canonical=%t ranking=%t TQ=%t detail=%s", workers, canonicalEqual, evaluationEqual, tqEqual, detail)
+			} else if evaluationEqual, tqEqual := equalLBREvaluation(result.evaluation, baseline.evaluation), equalLBRTQProduct(result.tq, baseline.tq); !evaluationEqual || !tqEqual {
+				t.Fatalf("workers=%d changed public projection relative to one worker: ranking=%t TQ=%t", workers, evaluationEqual, tqEqual)
 			}
 		})
 	}
 }
 
-func equalLBRCanonicalMarket(left, right []engine.ReplayCanonicalSymbol) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		l, r := left[index], right[index]
-		if l.Symbol != r.Symbol || l.PriorStatus != r.PriorStatus || l.PriorClose != r.PriorClose || l.LatestWindowStart != r.LatestWindowStart ||
-			l.LatestValues != r.LatestValues || l.LatestAuthoritySource != r.LatestAuthoritySource || l.CommittedWindowStart != r.CommittedWindowStart ||
-			l.PresentSlots != r.PresentSlots || l.ProvenAbsentSlots != r.ProvenAbsentSlots || !reflect.DeepEqual(l.PresentBitmap, r.PresentBitmap) ||
-			!reflect.DeepEqual(l.ProvenAbsentBitmap, r.ProvenAbsentBitmap) || !reflect.DeepEqual(l.HistoricalConflict, r.HistoricalConflict) ||
-			l.TailCoverage != r.TailCoverage || len(l.Records) != len(r.Records) {
-			return false
-		}
-		for recordIndex := range l.Records {
-			lr, rr := l.Records[recordIndex], r.Records[recordIndex]
-			if lr.WindowStart != rr.WindowStart || lr.WindowEnd != rr.WindowEnd || lr.Values != rr.Values || lr.AuthoritySource != rr.AuthoritySource {
-				return false
-			}
-		}
-		l.Features.At, r.Features.At = time.Time{}, time.Time{}
-		l.Qualification.At, r.Qualification.At = time.Time{}, time.Time{}
-		if l.Features != r.Features || l.Qualification != r.Qualification {
-			return false
-		}
-	}
-	return true
-}
-
-func lbrCanonicalDifference(left, right []engine.ReplayCanonicalSymbol) string {
-	if len(left) != len(right) {
-		return fmt.Sprintf("length=%d/%d", len(left), len(right))
-	}
-	for index := range left {
-		l, r := left[index], right[index]
-		switch {
-		case l.LatestWindowStart != r.LatestWindowStart || l.LatestValues != r.LatestValues || l.LatestAuthoritySource != r.LatestAuthoritySource:
-			return fmt.Sprintf("symbol=%s latest=%v/%v authority=%s/%s", l.Symbol, l.LatestWindowStart, r.LatestWindowStart, l.LatestAuthoritySource, r.LatestAuthoritySource)
-		case l.CommittedWindowStart != r.CommittedWindowStart || l.PresentSlots != r.PresentSlots || l.ProvenAbsentSlots != r.ProvenAbsentSlots:
-			return fmt.Sprintf("symbol=%s committed=%v/%v present=%d/%d absent=%d/%d", l.Symbol, l.CommittedWindowStart, r.CommittedWindowStart, l.PresentSlots, r.PresentSlots, l.ProvenAbsentSlots, r.ProvenAbsentSlots)
-		case !reflect.DeepEqual(l.PresentBitmap, r.PresentBitmap) || !reflect.DeepEqual(l.ProvenAbsentBitmap, r.ProvenAbsentBitmap) || !reflect.DeepEqual(l.HistoricalConflict, r.HistoricalConflict):
-			return fmt.Sprintf("symbol=%s coverage bitmap/conflict", l.Symbol)
-		case l.TailCoverage != r.TailCoverage || len(l.Records) != len(r.Records):
-			return fmt.Sprintf("symbol=%s tail=%+v/%+v records=%d/%d", l.Symbol, l.TailCoverage, r.TailCoverage, len(l.Records), len(r.Records))
-		}
-		for recordIndex := range l.Records {
-			lr, rr := l.Records[recordIndex], r.Records[recordIndex]
-			if lr.WindowStart != rr.WindowStart || lr.WindowEnd != rr.WindowEnd || lr.Values != rr.Values || lr.AuthoritySource != rr.AuthoritySource {
-				return fmt.Sprintf("symbol=%s record=%d", l.Symbol, recordIndex)
-			}
-		}
-		l.Features.At, r.Features.At = time.Time{}, time.Time{}
-		l.Qualification.At, r.Qualification.At = time.Time{}, time.Time{}
-		if l.Features != r.Features || l.Qualification != r.Qualification {
-			return fmt.Sprintf("symbol=%s features=%+v/%+v qualification=%+v/%+v", l.Symbol, l.Features, r.Features, l.Qualification, r.Qualification)
-		}
-	}
-	return "unreported"
-}
-
-func equalLBREvaluation(left, right engine.ReplayEvaluationView) bool {
+func equalLBREvaluation(left, right engine.EvaluationView) bool {
 	left.At, right.At = time.Time{}, time.Time{}
-	left.PopulationTransition, right.PopulationTransition = engine.ReplayPopulationTransitionDiagnosticView{}, engine.ReplayPopulationTransitionDiagnosticView{}
+	left.PopulationTransition, right.PopulationTransition = engine.PopulationTransitionDiagnosticView{}, engine.PopulationTransitionDiagnosticView{}
 	return reflect.DeepEqual(left, right)
 }
 
@@ -755,9 +691,8 @@ func runLiveRESTProgression(t *testing.T, binding reference.Binding, fixture liv
 	timedSnapshot := run.Engine().ObserveSnapshot()
 	timedEngine := timedSnapshot.Operational
 	timedStatus := run.Status()
-	timedReplay := run.Engine().ObserveReplayDeterministic()
-	result.canonical = timedReplay.Canonical
-	result.evaluation = timedReplay.Evaluation
+	timedReplay := run.Engine().ObserveSnapshot()
+	result.evaluation = timedReplay.Publication.AggregateEvaluation
 	result.tq = timedSnapshot.TQ
 	result.elapsed = time.Since(plannedStart)
 	result.framesSent = live.sent.Load()
@@ -789,16 +724,19 @@ func runLiveRESTProgression(t *testing.T, binding reference.Binding, fixture liv
 	result.publicationSequence = timedEngine.LastEngineSequence
 	result.lifecycleReady = timedStatus.BackendReady && timedStatus.RankingCurrent && timedEngine.Lifecycle == "live" && timedEngine.Suppression == ""
 	publication := timedSnapshot.Publication
+	evaluation := publication.AggregateEvaluation
 	result.publicationCoherent = publication.PublicationID == timedEngine.PublicationID && publication.LastEngineSequence <= timedEngine.LastEngineSequence &&
 		publication.Lifecycle == timedEngine.Lifecycle && publication.CurrentMarketClaim && publication.Watermark != nil && timedEngine.Watermark != nil &&
-		*publication.Watermark == *timedEngine.Watermark && reflect.DeepEqual(timedReplay.Evaluation, timedReplay.Publication.AggregateEvaluation) &&
-		publication.AggregateEvaluation.Population.UniverseTotal == uint64(population) && publication.AggregateEvaluation.Population.ValidPriorClose == uint64(population) &&
-		publication.AggregateEvaluation.Population.CoveredPopulation == uint64(population) && publication.AggregateEvaluation.Population.UnresolvedPopulation == 0
+		*publication.Watermark == *timedEngine.Watermark && publication.Lifecycle == "live" &&
+		evaluation.Mode == "qualified_current" && evaluation.Reason == "" && evaluation.Population.UniverseTotal == uint64(population) &&
+		evaluation.Population.ValidPriorClose == uint64(population) && evaluation.Population.CoveredPopulation == uint64(population) &&
+		evaluation.Population.UnresolvedPopulation == 0 && evaluation.TotalPassers == 0 && len(evaluation.Rows) == 0 &&
+		timedSnapshot.TQ.PublicationID == publication.PublicationID && len(timedSnapshot.TQ.Desired) == 0 && len(timedSnapshot.TQ.Rows) == 0
 	if !result.publicationCoherent {
-		result.publicationProblem = fmt.Sprintf("snapshot_pub=%d/%d engine_pub=%d/%d lifecycle=%s/%s current=%t watermark=%v/%v eval_equal=%t population=%+v",
+		result.publicationProblem = fmt.Sprintf("snapshot_pub=%d/%d engine_pub=%d/%d lifecycle=%s/%s current=%t watermark=%v/%v population=%+v",
 			publication.PublicationID, publication.LastEngineSequence, timedEngine.PublicationID, timedEngine.LastEngineSequence,
 			publication.Lifecycle, timedEngine.Lifecycle, publication.CurrentMarketClaim,
-			publication.Watermark, timedEngine.Watermark, reflect.DeepEqual(timedReplay.Evaluation, timedReplay.Publication.AggregateEvaluation), publication.AggregateEvaluation.Population)
+			publication.Watermark, timedEngine.Watermark, publication.AggregateEvaluation.Population)
 	}
 	if maximum := run.deliveryMaxNanos.Load(); maximum > deliveryMaxBaseline {
 		result.maximumDeliveryDelay = time.Duration(maximum)

@@ -25,9 +25,8 @@ const (
 type HydrationPurpose string
 
 const (
-	HydrationFreshStart        HydrationPurpose = "fresh_start"
-	HydrationCheckpointCatchUp HydrationPurpose = "checkpoint_catch_up"
-	HydrationGapRecovery       HydrationPurpose = "gap_recovery"
+	HydrationFreshStart  HydrationPurpose = "fresh_start"
+	HydrationGapRecovery HydrationPurpose = "gap_recovery"
 )
 
 // HydrationWorkItem is one immutable, exact-identity REST request. Its private
@@ -58,7 +57,7 @@ func NewHydrationWorkItem(binding reference.Binding, generation, requestID uint6
 }
 
 func validHydrationPurpose(purpose HydrationPurpose) bool {
-	return purpose == HydrationFreshStart || purpose == HydrationCheckpointCatchUp || purpose == HydrationGapRecovery
+	return purpose == HydrationFreshStart || purpose == HydrationGapRecovery
 }
 
 func (w HydrationWorkItem) BindingIdentity() string   { return w.bindingID }
@@ -83,7 +82,7 @@ type HydrationWorkerPlan struct {
 }
 
 func NewHydrationWorkerPlan(items []HydrationWorkItem, workers, rowsPerChunk int, maximumResponseBytes, maximumNormalizedRecords, maximumResidentRecords int64) (HydrationWorkerPlan, error) {
-	if len(items) == 0 || len(items) > HydrationMaximumWorkItems || workers < 1 || workers > OfflineWorkerLimit ||
+	if len(items) == 0 || len(items) > HydrationMaximumWorkItems || workers < 1 || workers > liveWorkerLimit ||
 		rowsPerChunk < 1 || rowsPerChunk > HydrationMaximumRows || maximumResponseBytes <= 0 ||
 		maximumNormalizedRecords <= 0 || maximumResidentRecords <= 0 {
 		return HydrationWorkerPlan{}, errors.New("invalid Massive hydration worker plan")

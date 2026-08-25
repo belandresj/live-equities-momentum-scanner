@@ -20,7 +20,7 @@ func TestENGINPUT01ClosedCommonCrossFamilyValidation(t *testing.T) {
 	binding := testBinding(t)
 	start := binding.SessionStart()
 	now := start.Add(time.Minute)
-	e := testEngine(t, RunModeLive, now, 8, 2)
+	e := testEngine(t, now, 8, 2)
 
 	initial := e.observePublication()
 	if initial.kind != publicationInitial || initial.bindingIdentity != "" || initial.watermark != nil || initial.publicationID != 0 {
@@ -99,7 +99,7 @@ func TestENGPUBLISH01AtomicImmutablePublicationClock(t *testing.T) {
 	binding := testBinding(t)
 	start := binding.SessionStart()
 	clock := &controlledClock{now: start.Add(time.Minute)}
-	e := newS3Engine(t, RunModeLive, clock.read, 8, 2, 0)
+	e := newS3Engine(t, clock.read, 8, 2, 0)
 
 	if initial := e.observePublication(); initial.kind != publicationInitial || initial.publicationID != 0 || initial.currentMarketClaim {
 		t.Fatalf("initial = %+v", initial)
@@ -134,7 +134,7 @@ func TestENGPUBLISH01AtomicImmutablePublicationClock(t *testing.T) {
 			}
 			return start.Add(time.Minute)
 		}
-		staged := newS3Engine(t, RunModeLive, blockingClock, 3, 1, 0)
+		staged := newS3Engine(t, blockingClock, 3, 1, 0)
 		result, completion := staged.AdmitBinding(context.Background(), validBindingInput(binding))
 		if result != AdmissionAdmitted {
 			t.Fatalf("staged admission = %s", result)
@@ -211,7 +211,7 @@ func TestENGPUBLISH01AtomicImmutablePublicationClock(t *testing.T) {
 	t.Run("builder and semantic validation fail closed", func(t *testing.T) {
 		for _, fault := range []publicationFault{publicationFaultBuild, publicationFaultValidation} {
 			clock := &controlledClock{now: start.Add(time.Minute)}
-			failed := newS3Engine(t, RunModeLive, clock.read, 4, 1, 0)
+			failed := newS3Engine(t, clock.read, 4, 1, 0)
 			failed.publicationFault = fault
 			result, completion := failed.AdmitBinding(context.Background(), validBindingInput(binding))
 			if result != AdmissionAdmitted {
@@ -235,7 +235,7 @@ func TestENGPUBLISH01AtomicImmutablePublicationClock(t *testing.T) {
 
 	t.Run("publication ID exhaustion does not wrap", func(t *testing.T) {
 		clock := &controlledClock{now: start.Add(time.Minute)}
-		exhausted := newS3Engine(t, RunModeLive, clock.read, 4, 1, 0)
+		exhausted := newS3Engine(t, clock.read, 4, 1, 0)
 		awaitDisposition(t, admitValidBinding(t, exhausted, binding))
 		exhausted.mu.Lock()
 		exhausted.lastPubID = math.MaxUint64
@@ -257,7 +257,7 @@ func TestENGPUBLISH01AtomicImmutablePublicationClock(t *testing.T) {
 
 	t.Run("publication clock does not retroactively invalidate linked admissions", func(t *testing.T) {
 		clock := &controlledClock{now: start.Add(time.Minute)}
-		backlog := newS3Engine(t, RunModeLive, clock.read, 5, 1, 0)
+		backlog := newS3Engine(t, clock.read, 5, 1, 0)
 		awaitDisposition(t, admitValidBinding(t, backlog, binding))
 		entered, release := make(chan struct{}), make(chan struct{})
 		var once sync.Once
@@ -284,7 +284,7 @@ func TestENGPUBLISH01AtomicImmutablePublicationClock(t *testing.T) {
 
 	t.Run("publication-time clock regression fails closed", func(t *testing.T) {
 		clock := &controlledClock{now: start.Add(time.Minute)}
-		regressed := newS3Engine(t, RunModeLive, clock.read, 4, 1, 0)
+		regressed := newS3Engine(t, clock.read, 4, 1, 0)
 		awaitDisposition(t, admitValidBinding(t, regressed, binding))
 		entered, release := make(chan struct{}), make(chan struct{})
 		var once sync.Once
@@ -408,7 +408,7 @@ func TestENGFAIL01CrossPathContainmentTerminalDrain(t *testing.T) {
 
 	t.Run("publication failure drains captured FIFO and removes stale success", func(t *testing.T) {
 		clock := &controlledClock{now: start.Add(time.Minute)}
-		e := newS3Engine(t, RunModeLive, clock.read, 4, 1, 0)
+		e := newS3Engine(t, clock.read, 4, 1, 0)
 		awaitDisposition(t, admitValidBinding(t, e, binding))
 		if e.observePublication().kind != publicationNormal {
 			t.Fatal("binding did not establish prior successful publication")
@@ -441,7 +441,7 @@ func TestENGFAIL01CrossPathContainmentTerminalDrain(t *testing.T) {
 	})
 
 	t.Run("local rejection preserves canonical state", func(t *testing.T) {
-		e := testEngine(t, RunModeLive, start.Add(time.Minute), 5, 1)
+		e := testEngine(t, start.Add(time.Minute), 5, 1)
 		awaitDisposition(t, admitValidBinding(t, e, binding))
 		valid := liveAggregate(binding, "AAA", start, 1, 1)
 		applyAggregate(t, e, valid, DispositionAggregateInserted, ReasonNone)
@@ -458,7 +458,7 @@ func TestENGFAIL01CrossPathContainmentTerminalDrain(t *testing.T) {
 
 	t.Run("canonical contradiction closes admission and drains the captured FIFO", func(t *testing.T) {
 		clock := &controlledClock{now: start.Add(time.Minute)}
-		e := newS3Engine(t, RunModeLive, clock.read, 5, 1, 0)
+		e := newS3Engine(t, clock.read, 5, 1, 0)
 		awaitDisposition(t, admitValidBinding(t, e, binding))
 		base := liveAggregate(binding, "AAA", start, 1, 1)
 		applyAggregate(t, e, base, DispositionAggregateInserted, ReasonNone)
@@ -494,7 +494,7 @@ func TestENGFAIL01CrossPathContainmentTerminalDrain(t *testing.T) {
 
 	t.Run("clock and canonical integrity install unavailable sentinel without restoration", func(t *testing.T) {
 		clock := &controlledClock{now: start.Add(time.Minute)}
-		e := newS3Engine(t, RunModeLive, clock.read, 5, 1, 0)
+		e := newS3Engine(t, clock.read, 5, 1, 0)
 		awaitDisposition(t, admitValidBinding(t, e, binding))
 		clock.set(start)
 		_, regressed := e.AdmitTimer(context.Background())
@@ -512,7 +512,7 @@ func TestENGFAIL01CrossPathContainmentTerminalDrain(t *testing.T) {
 	})
 
 	t.Run("accounting contradiction fails closed without counter repair", func(t *testing.T) {
-		e := testEngine(t, RunModeLive, start.Add(time.Minute), 4, 1)
+		e := testEngine(t, start.Add(time.Minute), 4, 1)
 		awaitDisposition(t, admitValidBinding(t, e, binding))
 		e.mu.Lock()
 		e.transitions.rejected++ // model detectable same-package memory corruption
@@ -535,7 +535,7 @@ func TestENGFAIL01CrossPathContainmentTerminalDrain(t *testing.T) {
 	})
 
 	t.Run("internal close uses common accounting containment", func(t *testing.T) {
-		e := testEngine(t, RunModeLive, start.Add(time.Minute), 4, 1)
+		e := testEngine(t, start.Add(time.Minute), 4, 1)
 		awaitDisposition(t, admitValidBinding(t, e, binding))
 		e.mu.Lock()
 		e.transitions.rejected++
@@ -554,7 +554,7 @@ func TestENGFAIL01CrossPathContainmentTerminalDrain(t *testing.T) {
 
 	t.Run("internal publication clock regression uses clock containment", func(t *testing.T) {
 		clock := &controlledClock{now: start.Add(time.Minute)}
-		e := newS3Engine(t, RunModeLive, clock.read, 4, 1, 0)
+		e := newS3Engine(t, clock.read, 4, 1, 0)
 		awaitDisposition(t, admitValidBinding(t, e, binding))
 		clock.set(start)
 		e.Close()
@@ -572,7 +572,7 @@ func TestENGOBS01CompletedAccountingCardinality(t *testing.T) {
 	start := binding.SessionStart()
 
 	t.Run("dequeue is not completion", func(t *testing.T) {
-		paused := testEngine(t, RunModeLive, start.Add(time.Minute), 3, 1)
+		paused := testEngine(t, start.Add(time.Minute), 3, 1)
 		entered, release := make(chan struct{}), make(chan struct{})
 		paused.beforeConsume = func(*queueNode) { close(entered); <-release }
 		_, completion := paused.AdmitBinding(context.Background(), validBindingInput(binding))
@@ -593,7 +593,7 @@ func TestENGOBS01CompletedAccountingCardinality(t *testing.T) {
 		closeAndWait(t, paused)
 	})
 
-	e := testEngine(t, RunModeLive, start.Add(time.Minute), 6, 2)
+	e := testEngine(t, start.Add(time.Minute), 6, 2)
 	awaitDisposition(t, admitValidBinding(t, e, binding))
 	base := liveAggregate(binding, "AAA", start, 1, 1)
 	applyAggregate(t, e, base, DispositionAggregateInserted, ReasonNone)

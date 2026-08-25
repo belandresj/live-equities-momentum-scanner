@@ -99,8 +99,6 @@ func aggregateEvaluationSource(node *queueNode) AggregateEvaluationSource {
 		return AggregateEvaluationLiveCoverageFence
 	case inputAggregateIngressFence:
 		return AggregateEvaluationIngressFence
-	case inputReplayGroup:
-		return AggregateEvaluationReplay
 	default:
 		return AggregateEvaluationTimer
 	}

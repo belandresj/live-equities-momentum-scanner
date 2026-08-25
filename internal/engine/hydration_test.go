@@ -78,7 +78,6 @@ func TestC6PLAN01DeterministicModeIntervalPopulation(t *testing.T) {
 		lifecycle lifecycle
 		setStart  func(*Engine, time.Time)
 	}{
-		{"checkpoint T0=R", HydrationCheckpointCatchup, lifecycleHydrating, func(e *Engine, at time.Time) { e.state.hydration.checkpointT0 = &at }},
 		{"gap starts at exact supported T", HydrationGapRecovery, lifecycleRecovering, func(e *Engine, at time.Time) { e.state.hydration.supportedT = &at }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -94,9 +93,6 @@ func TestC6PLAN01DeterministicModeIntervalPopulation(t *testing.T) {
 			got := admitHydrationPlan(t, e, tc.purpose, 1, generousHydrationBudgets())
 			if got.Code != DispositionHydrationPlanApplied || got.Plan.Start() != intervalStart || got.Plan.End() != start.Add(10*time.Second) {
 				t.Fatalf("mode plan = %+v [%s,%s)", got, got.Plan.Start(), got.Plan.End())
-			}
-			if tc.purpose == HydrationCheckpointCatchup && (!got.Plan.Empty() || len(got.Plan.Requests()) != 0) {
-				t.Fatalf("T0=R was not empty: %+v", got.Plan)
 			}
 			closeAndWait(t, e)
 		})
@@ -370,26 +366,6 @@ func TestC6NOPRINT01CoverageCompositionMatrix(t *testing.T) {
 			closeAndWait(t, e)
 		})
 	}
-
-	t.Run("checkpoint without exact prefix remains unknown", func(t *testing.T) {
-		now := start.Add(2 * time.Second)
-		e := acknowledgedHydrationEngine(t, binding, &now, now, lifecycleHydrating)
-		e.mu.Lock()
-		checkpoint := start.Add(time.Second)
-		e.state.hydration.checkpointT0 = &checkpoint
-		e.mu.Unlock()
-		plan := admitHydrationPlan(t, e, HydrationCheckpointCatchup, 1, generousHydrationBudgets())
-		token := plan.Plan.Requests()[0]
-		term, _ := NewHydrationTerminalInput(token, token.ResultID(), HydrationCompletedEmpty, HydrationReasonNone, 1, 1, 10, 0, 0, 0)
-		terminalResult := admitHydrationTerminal(t, e, term)
-		now = start.Add(3 * time.Second)
-		fact, _ := NewAggregateIngressFenceInput(terminalResult.FenceCommand, AggregateIngressFenceComplete, 1, 1, now)
-		_, completion := e.AdmitAggregateIngressFence(context.Background(), fact)
-		if got := awaitHydrationDisposition(t, completion); got.Code != DispositionAggregateIngressFenceApplied || e.state.aggregateEvaluator.coverage[0] != coverageUnknownFailureOrFence {
-			t.Fatalf("partial checkpoint falsely became no-print: %+v coverage=%+v", got, e.state.aggregateEvaluator.coverage[0])
-		}
-		closeAndWait(t, e)
-	})
 
 	t.Run("first live print clears no-print through ordinary aggregate path", func(t *testing.T) {
 		now := start.Add(2 * time.Second)
@@ -1036,7 +1012,7 @@ func TestC6MERGE01ProductionHistoricalDispositionMatrix(t *testing.T) {
 
 	t.Run("unequal historical arrivals withdraw instead of choosing an arrival-order winner", func(t *testing.T) {
 		now := start.Add(3 * time.Second)
-		e := aggregateEngine(t, binding, RunModeLive, &now)
+		e := aggregateEngine(t, binding, &now)
 		first := historicalAggregate(binding, "AAA", start, 1)
 		first.Values.Close, first.Values.Low = 10, 10
 		applyHistorical(t, e, first, proofFor(binding, first, start, start.Add(3*time.Second)), DispositionAggregateInserted, ReasonNone)
@@ -1067,11 +1043,10 @@ func TestC6MERGE01ProductionHistoricalDispositionMatrix(t *testing.T) {
 		if admission != AdmissionAdmitted || completion == nil || awaitHydrationDisposition(t, completion).Code != DispositionAggregateIngressFenceApplied {
 			t.Fatalf("historical ambiguity fence admission=%s", admission)
 		}
-		canonical := e.ObserveReplayDeterministic().Canonical[0]
 		state := aggregateState(t, e, "AAA")
 		if state.historicalConflict == nil || !state.historicalConflict.has(sessionSlot(e.state.binding, start)) ||
-			exactAggregateCoverage(state, e.state.binding, start, now) || canonical.Qualification.Status != "unresolved" {
-			t.Fatalf("historical/historical ambiguity did not remain fail-closed: canonical=%+v state=%+v", canonical, state)
+			exactAggregateCoverage(state, e.state.binding, start, now) || state.qualification == nil || state.qualification.result.status != qualificationUnresolved {
+			t.Fatalf("historical/historical ambiguity did not remain fail-closed: state=%+v", state)
 		}
 		closeAndWait(t, e)
 	})
@@ -1100,7 +1075,7 @@ func TestC6MERGE01ProductionHistoricalDispositionMatrix(t *testing.T) {
 
 func acknowledgedHydrationEngine(t *testing.T, binding reference.Binding, now *time.Time, ackAt time.Time, target lifecycle) *Engine {
 	t.Helper()
-	e := aggregateEngine(t, binding, RunModeLive, now)
+	e := aggregateEngine(t, binding, now)
 	admitConnectionControl(t, e, controlFact(binding.Identity(), ConnectionAttempt, 1, LivePosition{}, ackAt, 1, ControlSucceeded))
 	admitConnectionControl(t, e, controlFact(binding.Identity(), AggregateCommandWriteResult, 1, LivePosition{}, ackAt, 2, ControlSucceeded))
 	admitConnectionControl(t, e, controlFact(binding.Identity(), AggregateSubscriptionResult, 1, LivePosition{ConnectionEpoch: 1, FrameSequence: 1}, ackAt, 2, ControlSucceeded))

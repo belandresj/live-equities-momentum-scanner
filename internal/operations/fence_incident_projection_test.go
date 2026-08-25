@@ -13,20 +13,20 @@ import (
 func TestFenceIncidentProjectionRetainsAccountingWithoutSymbols(t *testing.T) {
 	evaluation := validProjectedEvaluation()
 	watermark := evaluation.At
-	publication := engine.ReplayPublicationView{
-		PublicationID: 9, LastEngineSequence: 81, BindingIdentity: "binding", TradingDate: "2026-08-12", RunMode: engine.RunModeLive,
+	publication := engine.PublicationView{
+		PublicationID: 9, LastEngineSequence: 81, BindingIdentity: "binding", TradingDate: "2026-08-12", RunMode: "live",
 		Lifecycle: "live", Watermark: &watermark, GeneratedAt: watermark, CurrentMarketClaim: true, AggregateEvaluation: evaluation,
 	}
 	projection, invalid := lastCoherentProjection(publication)
 	if invalid || projection == nil || projection.PublicationID != 9 || projection.RankingRows != 1 || len(projection.Evaluation.Rows) != 0 ||
-		projection.Evaluation.PopulationTransition.TrustedByLaterLiveMark != 1 || !engine.ValidateReplayEvaluationAccounting(projection.Evaluation) {
+		projection.Evaluation.PopulationTransition.TrustedByLaterLiveMark != 1 || !engine.ValidateEvaluationAccounting(projection.Evaluation) {
 		t.Fatalf("projection=%+v invalid=%t", projection, invalid)
 	}
 	encoded, err := json.Marshal(IngressIncident{LastCoherentProjection: projection})
 	if err != nil || strings.Contains(string(encoded), "AAA") {
 		t.Fatalf("bounded projection json=%s err=%v", encoded, err)
 	}
-	if absent, absentInvalid := lastCoherentProjection(engine.ReplayPublicationView{}); absent != nil || absentInvalid {
+	if absent, absentInvalid := lastCoherentProjection(engine.PublicationView{}); absent != nil || absentInvalid {
 		t.Fatalf("pre-publication control=%+v invalid=%t", absent, absentInvalid)
 	}
 
@@ -67,16 +67,16 @@ func TestEngineTerminalIncidentRetainsPriorCoherentProjection(t *testing.T) {
 	}
 }
 
-func validProjectedEvaluation() engine.ReplayEvaluationView {
-	feature := engine.ReplayFeatureAccountingView{}
+func validProjectedEvaluation() engine.EvaluationView {
+	feature := engine.FeatureAccountingView{}
 	feature.Statuses[0], feature.Reasons[0], feature.Pairs[0][0] = 1, 1, 1
-	return engine.ReplayEvaluationView{
+	return engine.EvaluationView{
 		At: time.Date(2026, 8, 12, 18, 44, 48, 0, time.UTC), Mode: "qualified_current",
-		Population:           engine.ReplayPopulationView{UniverseTotal: 1, ValidPriorClose: 1, TrustedRankableMark: 1, CoveredPopulation: 1},
-		Qualification:        engine.ReplayQualificationAccountingView{NotYetPassed: 1},
-		Features:             engine.ReplayAllFeatureAccountingView{DayPercent: feature, SessionVolume: feature, FromOpenPercent: feature, DayRange: feature, Activity30s: feature, Move30s: feature},
-		Floats:               engine.ReplayFloatAccountingView{Unavailable: 1},
-		PopulationTransition: engine.ReplayPopulationTransitionDiagnosticView{BootstrapUnknown: 1, TrustedByLaterLiveMark: 1},
-		KnownRankableCount:   1, Rows: []engine.ReplayRankingRowView{{Rank: 1, Symbol: "AAA"}},
+		Population:           engine.PopulationView{UniverseTotal: 1, ValidPriorClose: 1, TrustedRankableMark: 1, CoveredPopulation: 1},
+		Qualification:        engine.QualificationAccountingView{NotYetPassed: 1},
+		Features:             engine.AllFeatureAccountingView{DayPercent: feature, SessionVolume: feature, FromOpenPercent: feature, DayRange: feature, Activity30s: feature, Move30s: feature},
+		Floats:               engine.FloatAccountingView{Unavailable: 1},
+		PopulationTransition: engine.PopulationTransitionDiagnosticView{BootstrapUnknown: 1, TrustedByLaterLiveMark: 1},
+		KnownRankableCount:   1, Rows: []engine.RankingRowView{{Rank: 1, Symbol: "AAA"}},
 	}
 }

@@ -180,7 +180,7 @@ func (e *Engine) decideConnectionControlLocked(node *queueNode, input Connection
 	if input.SchemaVersion != ConnectionControlSchemaV1 {
 		return DispositionUnsupportedSchema, ReasonSchema
 	}
-	if e.mode != RunModeLive || e.state.binding == nil {
+	if e.state.binding == nil {
 		return DispositionIllegalLifecycle, ReasonLifecycle
 	}
 	if input.BindingIdentity != e.state.binding.identity {
@@ -313,7 +313,7 @@ func (e *Engine) applyRecoveryExhaustionLocked(node *queueNode) (DispositionCode
 	terminalEvidence := ((control.latestKind == ConnectionLost || control.latestKind == IngressIntegrityFailure) &&
 		(control.latestOutcome == ControlFailed || control.latestOutcome == ControlAmbiguous)) ||
 		suppressedIngress
-	if e.mode != RunModeLive || e.state.binding == nil || input.BindingIdentity != e.state.binding.identity ||
+	if e.state.binding == nil || input.BindingIdentity != e.state.binding.identity ||
 		!validLifecycle || e.state.liveEpochActive || e.state.hydration.generation.active ||
 		!terminalEvidence ||
 		control.recoveryAttempts == 0 || input.Attempts != control.recoveryAttempts {
@@ -330,7 +330,7 @@ func (e *Engine) applyRecoveryExhaustionLocked(node *queueNode) (DispositionCode
 // is sufficient to name the unsupported suffix. It never fabricates a safe
 // boundary during bootstrap or after contradictory canonical evidence.
 func (e *Engine) routeRecoverableAggregateLossLocked(node *queueNode) bool {
-	if e.mode != RunModeLive || e.state.lifecycle != lifecycleLive || e.state.committedT == nil || e.state.aggregateIntegrity {
+	if e.state.lifecycle != lifecycleLive || e.state.committedT == nil || e.state.aggregateIntegrity {
 		return false
 	}
 	e.state.hydration.supportedT = immutableTime(*e.state.committedT)

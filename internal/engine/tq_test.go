@@ -15,7 +15,7 @@ func TestPTQRProviderErrorClosesOnlyTQ(t *testing.T) {
 	binding := testBinding(t)
 	now := binding.SessionStart().Add(20 * time.Minute)
 	delay := time.Duration(0)
-	e, err := New(Config{Mode: RunModeLive, Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 4, EvaluationDelay: &delay})
+	e, err := New(Config{Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 4, EvaluationDelay: &delay})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,15 +37,15 @@ func TestPTQRProviderErrorClosesOnlyTQ(t *testing.T) {
 	e.mu.Unlock()
 	applyTQTimer(t, e)
 	_ = issueTQForTest(t, e)
-	before := e.ObserveReplayDeterministic()
+	before := e.ObserveSnapshot()
 	input := TQControlErrorInput{SchemaVersion: TQSchemaV1, BindingIdentity: binding.Identity(), ConnectionEpoch: 1,
 		Position: LivePosition{ConnectionEpoch: 1, FrameSequence: 10}, ReceiptTime: now}
 	admission, completion := e.AdmitTQControlError(context.Background(), input)
 	if admission != AdmissionAdmitted || completion == nil || (<-completion).Code != DispositionTQRejected {
 		t.Fatalf("control-error admission = %s", admission)
 	}
-	after := e.ObserveReplayDeterministic()
-	if !reflect.DeepEqual(before.Canonical, after.Canonical) || !reflect.DeepEqual(before.Evaluation, after.Evaluation) ||
+	after := e.ObserveSnapshot()
+	if !reflect.DeepEqual(before.Publication.AggregateEvaluation, after.Publication.AggregateEvaluation) ||
 		before.Publication.Watermark == nil || after.Publication.Watermark == nil || *before.Publication.Watermark != *after.Publication.Watermark ||
 		after.Publication.Lifecycle != "live" || !after.Publication.CurrentMarketClaim {
 		t.Fatalf("T/Q control error changed aggregate state: before=%+v after=%+v", before, after)
@@ -104,7 +104,7 @@ func TestPC9TAQ(t *testing.T) {
 	binding := testBinding(t)
 	now := binding.SessionStart().Add(20 * time.Minute)
 	delay := time.Duration(0)
-	e, err := New(Config{Mode: RunModeLive, Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 4, EvaluationDelay: &delay})
+	e, err := New(Config{Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 4, EvaluationDelay: &delay})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -508,7 +508,7 @@ func TestPC9TAQAggregateOnlyRetiresPendingAdditions(t *testing.T) {
 		binding := testBinding(t)
 		now := binding.SessionStart().Add(20 * time.Minute)
 		delay := time.Duration(0)
-		e, err := New(Config{Mode: RunModeLive, Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 4, EvaluationDelay: &delay})
+		e, err := New(Config{Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 4, EvaluationDelay: &delay})
 		if err != nil {
 			t.Fatal(err)
 		}

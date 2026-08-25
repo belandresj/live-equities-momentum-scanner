@@ -18,7 +18,7 @@ func TestLiveAggregateEvaluationCoalescing(t *testing.T) {
 		start := binding.SessionStart()
 		t0, t1 := start.Add(2*time.Second), start.Add(3*time.Second)
 		now := t0
-		e := aggregateEngine(t, binding, RunModeLive, &now)
+		e := aggregateEngine(t, binding, &now)
 		defer closeAndWait(t, e)
 
 		e.mu.Lock()
@@ -314,7 +314,7 @@ func TestLiveAggregateEvaluationCoalescing(t *testing.T) {
 		binding := hydrationPopulationBinding(t, []string{"AAA"})
 		target := binding.SessionEnd()
 		now := target.Add(-time.Second)
-		e := aggregateEngine(t, binding, RunModeLive, &now)
+		e := aggregateEngine(t, binding, &now)
 		defer closeAndWait(t, e)
 
 		e.mu.Lock()
@@ -353,7 +353,7 @@ func TestLiveAggregateEvaluationCoalescing(t *testing.T) {
 		binding := hydrationPopulationBinding(t, []string{"AAA"})
 		target := binding.SessionEnd()
 		now := target.Add(-time.Second)
-		e := aggregateEngine(t, binding, RunModeLive, &now)
+		e := aggregateEngine(t, binding, &now)
 		defer closeAndWait(t, e)
 		e.mu.Lock()
 		e.state.lifecycle = lifecycleLive
@@ -383,7 +383,6 @@ func TestLiveAggregateEvaluationCoalescing(t *testing.T) {
 	t.Run("invalid candidate retains pending work", func(t *testing.T) {
 		at := time.Date(2026, 8, 6, 15, 0, 0, 0, time.UTC)
 		e := evaluatorProofEngine(at, []evaluatorSymbol{{"AAA", reference.PriorCloseValid, 10, 12, qualificationFinalized}})
-		e.mode = RunModeLive
 		e.state.aggregateProjectionPending = true
 		candidate := e.stageAggregateEvaluationAtLocked(at, at)
 		candidate.population.universeTotal++
@@ -418,7 +417,7 @@ func TestEvaluationCoalescingSemanticDifferential(t *testing.T) {
 	start := binding.SessionStart()
 	target := start.Add(20 * time.Minute)
 	now := target.Add(time.Nanosecond)
-	e := aggregateEngine(t, binding, RunModeLive, &now)
+	e := aggregateEngine(t, binding, &now)
 	defer closeAndWait(t, e)
 	historical := historicalAggregate(binding, "BBB", start.Add(time.Minute), 1)
 	proof := proofFor(binding, historical, start, target)

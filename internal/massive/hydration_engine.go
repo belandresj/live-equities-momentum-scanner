@@ -161,8 +161,6 @@ func massiveHydrationPurpose(purpose engine.HydrationPurpose) (HydrationPurpose,
 	switch purpose {
 	case engine.HydrationFreshBootstrap:
 		return HydrationFreshStart, true
-	case engine.HydrationCheckpointCatchup:
-		return HydrationCheckpointCatchUp, true
 	case engine.HydrationGapRecovery:
 		return HydrationGapRecovery, true
 	default:

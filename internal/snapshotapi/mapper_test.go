@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/belandresj/live-equities-momentum-scanner/internal/checkpoint"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/engine"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/massive"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/operations"
@@ -35,7 +34,7 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 		t.Fatal(err)
 	}
 	hash := sha256.Sum256(body)
-	const goldenSHA256 = "5a819616fd9a5018dcad2ef057e70f0105b3ccd50a4363923dcd1bb54e301c49"
+	const goldenSHA256 = "fbe012ae7763f19a9719b772128016cd15d2255c1a0e809f87cfd250b0de56a3"
 	if got := hex.EncodeToString(hash[:]); got != goldenSHA256 {
 		t.Fatalf("snapshot golden SHA-256 = %s", got)
 	}
@@ -138,12 +137,6 @@ func TestPC10SchemaGoldenIdentityAndSemanticMutations(t *testing.T) {
 		{"TQ facts", func(v *operations.SnapshotCaptureView) { v.Engine.TQ.Accounting.Rejected++ }},
 		{"TQ family facts", func(v *operations.SnapshotCaptureView) { v.Engine.TQ.Accounting.AppliedTrades = 2 }},
 		{"TQ commands", func(v *operations.SnapshotCaptureView) { v.Engine.TQ.Commands.Failed++ }},
-		{"checkpoint", func(v *operations.SnapshotCaptureView) { v.Metrics.CheckpointEngine.Failed++ }},
-		{"checkpoint projection gauge", func(v *operations.SnapshotCaptureView) {
-			v.Metrics.CheckpointEngine.Eligible = 3
-			v.Metrics.CheckpointEngine.ProjectionStarted = 3
-			v.Metrics.CheckpointEngine.ProjectionInProgress = 2
-		}},
 	} {
 		t.Run(mutation.name, func(t *testing.T) {
 			changed := schemaCapture()
@@ -231,10 +224,10 @@ func TestPC10SchemaPercentagePointBoundariesMapToRatios(t *testing.T) {
 	capture := schemaCapture()
 	row := &capture.Engine.Publication.AggregateEvaluation.Rows[0]
 	row.DayPercent = 250
-	row.FromOpenPercent = engine.ReplayFieldView{Status: "current", Value: -100}
-	row.DayRange = engine.ReplayFieldView{Status: "current", Value: 100}
-	row.Activity30s = engine.ReplayFieldView{Status: "current", Value: 100}
-	row.Move30s = engine.ReplayFieldView{Status: "current", Value: -25}
+	row.FromOpenPercent = engine.FieldView{Status: "current", Value: -100}
+	row.DayRange = engine.FieldView{Status: "current", Value: 100}
+	row.Activity30s = engine.FieldView{Status: "current", Value: 100}
+	row.Move30s = engine.FieldView{Status: "current", Value: -25}
 
 	snapshot, err := mapCaptureView(capture)
 	if err != nil {
@@ -252,13 +245,13 @@ func TestPMVPAPISchemaAvailabilityProvenanceOrderingAndBounds(t *testing.T) {
 		capture := schemaCapture()
 		row := &capture.Engine.Publication.AggregateEvaluation.Rows[0]
 		percent := 25.0
-		row.Float = engine.ReplayFloatFieldView{Status: "stale", Reason: "cached_fallback", Value: 8_500_000, Percent: &percent,
+		row.Float = engine.FloatFieldView{Status: "stale", Reason: "cached_fallback", Value: 8_500_000, Percent: &percent,
 			Provider: "massive-stocks-float-experimental", EffectiveDate: "2026-08-01", RetrievedAt: capture.SampledAt.Add(-time.Hour), Provenance: "cache"}
-		row.SessionVolume = engine.ReplayFieldView{Status: "unavailable", Reason: "history_incomplete"}
-		row.FromOpenPercent = engine.ReplayFieldView{Status: "unavailable", Reason: "before_first_print"}
-		row.DayRange = engine.ReplayFieldView{Status: "invalid", Reason: "historical_conflict"}
-		row.Activity30s = engine.ReplayFieldView{Status: "current", Value: 0}
-		row.Move30s = engine.ReplayFieldView{Status: "unavailable", Reason: "no_aggregate_in_target"}
+		row.SessionVolume = engine.FieldView{Status: "unavailable", Reason: "history_incomplete"}
+		row.FromOpenPercent = engine.FieldView{Status: "unavailable", Reason: "before_first_print"}
+		row.DayRange = engine.FieldView{Status: "invalid", Reason: "historical_conflict"}
+		row.Activity30s = engine.FieldView{Status: "current", Value: 0}
+		row.Move30s = engine.FieldView{Status: "unavailable", Reason: "no_aggregate_in_target"}
 		capture.Engine.TQ.Rows[0].Tape.Status, capture.Engine.TQ.Rows[0].Tape.Reason = engine.TQWarming, "five_second_warming"
 		capture.Engine.TQ.Rows[0].Spread.Status = engine.TQStale
 		capture.Engine.TQ.Rows[0].Spread.Reason = "stale_quote"
@@ -283,7 +276,7 @@ func TestPMVPAPISchemaAvailabilityProvenanceOrderingAndBounds(t *testing.T) {
 	t.Run("order and top twenty", func(t *testing.T) {
 		capture := schemaCapture()
 		base := capture.Engine.Publication.AggregateEvaluation.Rows[0]
-		rows := make([]engine.ReplayRankingRowView, 20)
+		rows := make([]engine.RankingRowView, 20)
 		for index := range rows {
 			rows[index] = base
 			rows[index].Rank = uint32(index + 1)
@@ -292,9 +285,9 @@ func TestPMVPAPISchemaAvailabilityProvenanceOrderingAndBounds(t *testing.T) {
 			rows[index].TQIntentEligible = index == 0
 		}
 		capture.Engine.Publication.AggregateEvaluation.Rows = rows
-		capture.Engine.Publication.AggregateEvaluation.Population = engine.ReplayPopulationView{UniverseTotal: 20, ValidPriorClose: 20, TrustedRankableMark: 20, CoveredPopulation: 20}
-		capture.Engine.Publication.AggregateEvaluation.Qualification = engine.ReplayQualificationAccountingView{Provisional: 20}
-		capture.Engine.Publication.AggregateEvaluation.PopulationTransition = engine.ReplayPopulationTransitionDiagnosticView{}
+		capture.Engine.Publication.AggregateEvaluation.Population = engine.PopulationView{UniverseTotal: 20, ValidPriorClose: 20, TrustedRankableMark: 20, CoveredPopulation: 20}
+		capture.Engine.Publication.AggregateEvaluation.Qualification = engine.QualificationAccountingView{Provisional: 20}
+		capture.Engine.Publication.AggregateEvaluation.PopulationTransition = engine.PopulationTransitionDiagnosticView{}
 		capture.Engine.Publication.AggregateEvaluation.TotalPassers = 20
 		capture.Engine.Publication.AggregateEvaluation.KnownRankableCount = 20
 		snapshot, err := mapCaptureView(capture)
@@ -470,15 +463,10 @@ func TestPC10SchemaPublicationStateCorpus(t *testing.T) {
 		wantRows int
 	}{
 		{"qualified current", func(*operations.SnapshotCaptureView) {}, "qualified_current", 1},
-		{"checkpoint projection in progress", func(v *operations.SnapshotCaptureView) {
-			v.Metrics.CheckpointEngine.Eligible++
-			v.Metrics.CheckpointEngine.ProjectionStarted++
-			v.Metrics.CheckpointEngine.ProjectionInProgress = 1
-		}, "qualified_current", 1},
 		{"exact empty", func(v *operations.SnapshotCaptureView) {
 			v.Engine.Publication.AggregateEvaluation.Rows = nil
 			v.Engine.Publication.AggregateEvaluation.TotalPassers = 0
-			v.Engine.Publication.AggregateEvaluation.Qualification = engine.ReplayQualificationAccountingView{NotYetPassed: 1}
+			v.Engine.Publication.AggregateEvaluation.Qualification = engine.QualificationAccountingView{NotYetPassed: 1}
 			v.Engine.TQ.Desired, v.Engine.TQ.Rows = nil, nil
 		}, "qualified_current", 0},
 		{"degraded", func(v *operations.SnapshotCaptureView) {
@@ -491,8 +479,8 @@ func TestPC10SchemaPublicationStateCorpus(t *testing.T) {
 			v.Engine.Publication.AggregateEvaluation.Mode = "degraded_current"
 			v.Engine.Publication.AggregateEvaluation.Reason = "qualification_incomplete"
 			v.Engine.Publication.AggregateEvaluation.TotalPassers = 0
-			v.Engine.Publication.AggregateEvaluation.Qualification = engine.ReplayQualificationAccountingView{Unresolved: 1}
-			v.Engine.Publication.AggregateEvaluation.Uncertainty = engine.ReplayUncertaintyView{LocalInvalid: 1}
+			v.Engine.Publication.AggregateEvaluation.Qualification = engine.QualificationAccountingView{Unresolved: 1}
+			v.Engine.Publication.AggregateEvaluation.Uncertainty = engine.UncertaintyView{LocalInvalid: 1}
 			v.Engine.Publication.AggregateEvaluation.Rows[0].TQIntentEligible = false
 			v.Engine.TQ.Desired, v.Engine.TQ.Rows = nil, nil
 			v.Engine.TQ.Accounting.KnownPresent = 0
@@ -548,9 +536,6 @@ func TestPC10SchemaPublicationStateCorpus(t *testing.T) {
 			}
 			if snapshot.Ranking.Mode != test.wantMode || len(snapshot.Rows) != test.wantRows {
 				t.Fatalf("mode/rows = %q/%d", snapshot.Ranking.Mode, len(snapshot.Rows))
-			}
-			if test.name == "checkpoint projection in progress" && snapshot.Checkpoint.ProjectionInProgress != "1" {
-				t.Fatalf("active checkpoint projection=%+v", snapshot.Checkpoint)
 			}
 		})
 	}
@@ -694,37 +679,35 @@ func schemaCapture() operations.SnapshotCaptureView {
 	at := time.Date(2026, 8, 8, 16, 0, 0, 0, time.UTC)
 	target := at.Add(-4 * time.Second)
 	supported := target
-	population := engine.ReplayPopulationView{UniverseTotal: 2, ValidPriorClose: 2, TrustedRankableMark: 1, NoPrintThroughT: 1, CoveredPopulation: 2}
-	evaluation := engine.ReplayEvaluationView{At: target, Mode: "qualified_current", Population: population,
-		Qualification: engine.ReplayQualificationAccountingView{Provisional: 1}, TotalPassers: 1, KnownRankableCount: 1, TQIntentAvailable: true,
-		PopulationTransition: engine.ReplayPopulationTransitionDiagnosticView{BootstrapUnknown: 1, TrustedByLaterLiveMark: 1},
-		Rows: []engine.ReplayRankingRowView{{Rank: 1, Symbol: "AAA", Last: 10, DayPercent: .25, MarkAge: 250 * time.Millisecond,
-			Float:           engine.ReplayFloatFieldView{Status: "current", Value: 12_000_000, Provider: "massive-stocks-float-experimental", EffectiveDate: "2026-08-07", RetrievedAt: at, Provenance: "fresh"},
-			SessionVolume:   engine.ReplayFieldView{Status: "current", Value: 0},
-			FromOpenPercent: engine.ReplayFieldView{Status: "current", Value: 0}, DayRange: engine.ReplayFieldView{Status: "current", Value: .5},
-			Activity30s: engine.ReplayFieldView{Status: "current", Value: 1.25}, Move30s: engine.ReplayFieldView{Status: "current", Value: 0}, TQIntentEligible: true}}}
+	population := engine.PopulationView{UniverseTotal: 2, ValidPriorClose: 2, TrustedRankableMark: 1, NoPrintThroughT: 1, CoveredPopulation: 2}
+	evaluation := engine.EvaluationView{At: target, Mode: "qualified_current", Population: population,
+		Qualification: engine.QualificationAccountingView{Provisional: 1}, TotalPassers: 1, KnownRankableCount: 1, TQIntentAvailable: true,
+		PopulationTransition: engine.PopulationTransitionDiagnosticView{BootstrapUnknown: 1, TrustedByLaterLiveMark: 1},
+		Rows: []engine.RankingRowView{{Rank: 1, Symbol: "AAA", Last: 10, DayPercent: .25, MarkAge: 250 * time.Millisecond,
+			Float:           engine.FloatFieldView{Status: "current", Value: 12_000_000, Provider: "massive-stocks-float-experimental", EffectiveDate: "2026-08-07", RetrievedAt: at, Provenance: "fresh"},
+			SessionVolume:   engine.FieldView{Status: "current", Value: 0},
+			FromOpenPercent: engine.FieldView{Status: "current", Value: 0}, DayRange: engine.FieldView{Status: "current", Value: .5},
+			Activity30s: engine.FieldView{Status: "current", Value: 1.25}, Move30s: engine.FieldView{Status: "current", Value: 0}, TQIntentEligible: true}}}
 	operational := engine.OperationalView{PublicationID: 9007199254741001, LastEngineSequence: 9007199254741003, BindingIdentity: "binding", TradingDate: "2026-08-08",
-		RunMode: engine.RunModeLive, Lifecycle: "live", Watermark: &target, GeneratedAt: at, RankingMode: "qualified_current", CurrentMarketClaim: true,
+		RunMode: "live", Lifecycle: "live", Watermark: &target, GeneratedAt: at, RankingMode: "qualified_current", CurrentMarketClaim: true,
 		Connection: engine.OperationalConnection{Epoch: 4, AckFrame: 20, AckPosition: engine.LivePosition{ConnectionEpoch: 4, FrameSequence: 20, ArrayIndex: 7}, RecoveryAttempts: 2, Active: true, Acknowledged: true},
 		Hydration: engine.OperationalHydration{Purpose: engine.HydrationFreshBootstrap, Generation: 1, Start: at.Add(-time.Minute), End: at.Add(-30 * time.Second),
 			Accounting: engine.HydrationAccounting{Planned: 2, CompletedValue: 1, CompletedEmpty: 1}, Rows: engine.HydrationRowAccounting{Consumed: 2, Inserted: 1, Duplicate: 1},
-			FenceReconciled: true, FenceEpoch: 4, FenceThrough: 20, FenceMarkerOrdinal: 9, SupportedThrough: &supported}, InstalledCheckpoint: true}
+			FenceReconciled: true, FenceEpoch: 4, FenceThrough: 20, FenceMarkerOrdinal: 9, SupportedThrough: &supported}}
 	tq := engine.TQView{PublicationID: operational.PublicationID, Desired: []string{"AAA"}, Rows: []engine.TQSymbolView{{Symbol: "AAA", Desired: true, ProviderPresent: true, TradeCoverage: true, QuoteCoverage: true,
 		Tape:   engine.TapeRateView{Status: engine.TQCurrent, Reason: "qualifying_original_prints", TimestampBasis: "none"},
 		Spread: engine.SpreadView{Status: engine.TQCurrent, QuoteAge: time.Second, Quality: "reviewed_ordinary"}}}, Pressure: engine.TQPressureNormal,
 		PressureSample: engine.TQPressureSampleView{Observed: true, WaitingFrames: 2, FrameCapacity: 512, WaitingBytes: 100, ByteCapacity: 64 << 20,
 			OldestWaitingFrameAge: 500 * time.Millisecond, RecoveryHealthy: true}, RecoveryRequiredSamples: 5,
 		Accounting: engine.TQAccountingView{Consumed: 2, Applied: 1, Duplicate: 1, KnownPresent: 1}, Commands: engine.TQCommandAccountingView{Issued: 1, Written: 1}}
-	publication := engine.ReplayPublicationView{SchemaVersion: "engine-private-publication-v1", PublicationID: operational.PublicationID, BindingIdentity: operational.BindingIdentity,
-		TradingDate: operational.TradingDate, RunMode: engine.RunModeLive, Lifecycle: "live", LastEngineSequence: operational.LastEngineSequence,
+	publication := engine.PublicationView{SchemaVersion: "engine-private-publication-v1", PublicationID: operational.PublicationID, BindingIdentity: operational.BindingIdentity,
+		TradingDate: operational.TradingDate, RunMode: "live", Lifecycle: "live", LastEngineSequence: operational.LastEngineSequence,
 		Watermark: &target, GeneratedAt: at, CurrentMarketClaim: true, AggregateEvaluation: evaluation}
 	metrics := operations.Metrics{SampledAt: at, Engine: operational, LiveQueue: massive.LiveQueueAccounting{CapacityFrames: 512, CapacityBytes: 64 << 20},
-		Checkpoint:         checkpoint.WriterAccounting{Submitted: 1, Completed: 1},
-		CheckpointEngine:   engine.CheckpointOperations{Eligible: 1, ProjectionStarted: 1, Projected: 1, Submitted: 1, Completed: 1},
 		QueueCurrentFrames: 2, QueueHighFrames: 3, QueueCurrentBytes: 100, QueueHighBytes: 200,
 		Deliveries: 10, ConsumerDeferred: 1, MeanProcessingDelay: 2 * time.Millisecond, MaxProcessingDelay: 3 * time.Millisecond,
 		MaxProcessingDelayOneSecond: time.Millisecond,
-		DeliveryLatencyAttribution: operations.DeliveryLatencyAttribution{Aggregate: 3, TQ: 2, Control: 1, HydrationFence: 1, Checkpoint: 1, Timer: 1, Unknown: 1,
+		DeliveryLatencyAttribution: operations.DeliveryLatencyAttribution{Aggregate: 4, TQ: 2, Control: 1, HydrationFence: 1, Timer: 1, Unknown: 1,
 			MaximumDuration: time.Millisecond, MaximumFamily: operations.DeliveryLatencyAggregate, WindowNonempty: true},
 		HeapAllocBytes: 1 << 20, HeapInUseBytes: 2 << 20, Goroutines: 8, AccountingValid: true}
 	status := operations.Status{ProcessLive: true, BackendReady: true, RankingCurrent: true, Lifecycle: "live", RankingMode: "qualified_current", SampledAt: at,

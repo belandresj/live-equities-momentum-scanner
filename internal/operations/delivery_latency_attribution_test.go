@@ -23,9 +23,8 @@ func TestPC8DeliveryLatencyAttribution(t *testing.T) {
 		{2 * time.Millisecond, DeliveryLatencyTQ},
 		{3 * time.Millisecond, DeliveryLatencyControl},
 		{4 * time.Millisecond, DeliveryLatencyHydrationFence},
-		{5 * time.Millisecond, DeliveryLatencyCheckpoint},
-		{6 * time.Millisecond, DeliveryLatencyTimer},
-		{7 * time.Millisecond, DeliveryLatencyUnknown},
+		{5 * time.Millisecond, DeliveryLatencyTimer},
+		{6 * time.Millisecond, DeliveryLatencyUnknown},
 	}
 	for _, observation := range observations {
 		run.recordDeliveryLatency(observation.delay, observation.family)
@@ -37,10 +36,10 @@ func TestPC8DeliveryLatencyAttribution(t *testing.T) {
 	run.deliveryWindowMu.Unlock()
 	if attribution.Total() != deliveries || deliveries != uint64(len(observations)) ||
 		attribution.Aggregate != 1 || attribution.TQ != 1 || attribution.Control != 1 || attribution.HydrationFence != 1 ||
-		attribution.Checkpoint != 1 || attribution.Timer != 1 || attribution.Unknown != 1 {
+		attribution.Timer != 1 || attribution.Unknown != 1 {
 		t.Fatalf("fixed attribution accounting = deliveries=%d attribution=%+v", deliveries, attribution)
 	}
-	if attribution.MaximumDuration != 7*time.Millisecond || attribution.MaximumFamily != DeliveryLatencyUnknown {
+	if attribution.MaximumDuration != 6*time.Millisecond || attribution.MaximumFamily != DeliveryLatencyUnknown {
 		t.Fatalf("maximum pair did not come from the winning delivery: %+v", attribution)
 	}
 
@@ -48,7 +47,7 @@ func TestPC8DeliveryLatencyAttribution(t *testing.T) {
 	// arrival order. Every selected pair still corresponds to an observed
 	// delivery with that exact duration.
 	tied := &Runtime{deliveryOneSecondMaxFamily: DeliveryLatencyUnknown}
-	for _, family := range []DeliveryLatencyFamily{DeliveryLatencyUnknown, DeliveryLatencyTimer, DeliveryLatencyCheckpoint, DeliveryLatencyHydrationFence, DeliveryLatencyControl, DeliveryLatencyTQ, DeliveryLatencyAggregate} {
+	for _, family := range []DeliveryLatencyFamily{DeliveryLatencyUnknown, DeliveryLatencyTimer, DeliveryLatencyHydrationFence, DeliveryLatencyControl, DeliveryLatencyTQ, DeliveryLatencyAggregate} {
 		tied.recordDeliveryLatency(9*time.Millisecond, family)
 	}
 	if tied.deliveryOneSecondMaxNanos != uint64(9*time.Millisecond) || tied.deliveryOneSecondMaxFamily != DeliveryLatencyAggregate {
@@ -88,7 +87,7 @@ func TestPC8DeliveryLatencyAttribution(t *testing.T) {
 	}
 	beforeEngine, beforeStatus := live.Engine().ObserveSnapshot(), live.Status()
 	beforePressure := defaultTQPressureSample(Metrics{Deliveries: 1, MaxProcessingDelayOneSecond: 999 * time.Millisecond, DeliveryLatencyAttribution: DeliveryLatencyAttribution{Aggregate: 1, MaximumDuration: 999 * time.Millisecond, MaximumFamily: DeliveryLatencyAggregate, WindowNonempty: true}})
-	live.recordDeliveryLatency(3*time.Second, DeliveryLatencyCheckpoint)
+	live.recordDeliveryLatency(3*time.Second, DeliveryLatencyUnknown)
 	afterEngine, afterStatus := live.Engine().ObserveSnapshot(), live.Status()
 	afterPressure := defaultTQPressureSample(Metrics{Deliveries: 1, MaxProcessingDelayOneSecond: 999 * time.Millisecond, DeliveryLatencyAttribution: DeliveryLatencyAttribution{Unknown: 1, MaximumDuration: 999 * time.Millisecond, MaximumFamily: DeliveryLatencyUnknown, WindowNonempty: true}})
 	if !reflect.DeepEqual(beforeEngine, afterEngine) || !reflect.DeepEqual(beforeStatus, afterStatus) {

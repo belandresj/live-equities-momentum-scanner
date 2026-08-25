@@ -18,7 +18,7 @@ func TestPLBRA2Hydration(t *testing.T) {
 	t.Run("schedule binding live mode and one-worker legality", func(t *testing.T) {
 		now := start.Add(-time.Second)
 		before := acknowledgedHydrationEngine(t, binding, &now, now, lifecycleAwaitingSession)
-		if view := before.ObserveOperational(); view.RunMode != RunModeLive || view.Lifecycle != string(lifecycleAwaitingSession) || view.Hydration.Active || view.CurrentMarketClaim {
+		if view := before.ObserveOperational(); view.RunMode != "live" || view.Lifecycle != string(lifecycleAwaitingSession) || view.Hydration.Active || view.CurrentMarketClaim {
 			t.Fatalf("pre-session state = %+v", view)
 		}
 		plan := admitHydrationPlan(t, before, HydrationFreshBootstrap, 1, generousHydrationBudgets())
@@ -33,14 +33,14 @@ func TestPLBRA2Hydration(t *testing.T) {
 		closeAndWait(t, before)
 
 		now = start
-		awaiting := aggregateEngine(t, binding, RunModeLive, &now)
+		awaiting := aggregateEngine(t, binding, &now)
 		if awaiting.state.lifecycle != lifecycleAwaitingAggregateAck || awaiting.state.hydration.generation.active || awaiting.ObserveOperational().CurrentMarketClaim {
 			t.Fatalf("in-session initialization = %+v", awaiting.ObserveOperational())
 		}
 		closeAndWait(t, awaiting)
 
 		now = end
-		ended := aggregateEngine(t, binding, RunModeLive, &now)
+		ended := aggregateEngine(t, binding, &now)
 		if ended.state.lifecycle != lifecycleEnded || ended.state.hydration.generation.active || ended.ObserveOperational().CurrentMarketClaim {
 			t.Fatalf("at-E initialization = %+v", ended.ObserveOperational())
 		}
@@ -49,7 +49,7 @@ func TestPLBRA2Hydration(t *testing.T) {
 			t.Fatalf("ended engine admitted hydration = %s", result)
 		}
 
-		invalid := testEngine(t, RunModeLive, start, 4, 1)
+		invalid := testEngine(t, start, 4, 1)
 		result, completion := invalid.AdmitBinding(context.Background(), BindingInstall{SchemaVersion: BindingInstallSchemaV1, BindingIdentity: binding.Identity(), Binding: reference.Binding{}})
 		if result != AdmissionAdmitted || awaitDisposition(t, completion).Code != DispositionBindingInvalid || invalid.state.binding != nil ||
 			invalid.state.hydration.generation.active || invalid.ObserveOperational().CurrentMarketClaim {
@@ -58,7 +58,7 @@ func TestPLBRA2Hydration(t *testing.T) {
 		closeAndWait(t, invalid)
 
 		now = start.Add(2 * time.Second)
-		exhausted := aggregateEngine(t, binding, RunModeLive, &now)
+		exhausted := aggregateEngine(t, binding, &now)
 		admitConnectionControl(t, exhausted, controlFact(binding.Identity(), ConnectionAttempt, 1, LivePosition{}, now, 1, ControlSucceeded))
 		admitConnectionControl(t, exhausted, controlFact(binding.Identity(), ConnectionLost, 1, LivePosition{ConnectionEpoch: 1, FrameSequence: 1}, now, 0, ControlFailed))
 		exhaustion := RecoveryExhaustionInput{SchemaVersion: RecoveryExhaustionSchemaV1, BindingIdentity: binding.Identity(), Attempts: 1}

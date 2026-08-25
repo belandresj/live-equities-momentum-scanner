@@ -137,7 +137,7 @@ func TestC3QUAL02CorrectionAndStrictFinalizationTrace(t *testing.T) {
 
 	t.Run("multiproof correction revokes only affected proofs", func(t *testing.T) {
 		now := proofEnd.Add(time.Second)
-		e := aggregateEngine(t, binding, RunModeLive, &now)
+		e := aggregateEngine(t, binding, &now)
 		for second := 0; second < 60; second++ {
 			input := qualificationInput(binding, start.Add(time.Duration(second)*time.Second), uint64(second+1), 500)
 			applyAggregate(t, e, input, DispositionAggregateInserted, ReasonNone)
@@ -169,7 +169,7 @@ func TestC3QUAL02CorrectionAndStrictFinalizationTrace(t *testing.T) {
 
 	t.Run("equality mutable strict old permanent and quiet", func(t *testing.T) {
 		now := proofEnd.Add(time.Second)
-		e := aggregateEngine(t, binding, RunModeLive, &now)
+		e := aggregateEngine(t, binding, &now)
 		for second := 0; second < 60; second++ {
 			volume := 497.5 // 19.9 transactions: prior proof ends fail exact A5.
 			if second == 59 {
@@ -408,7 +408,7 @@ func installedBindingForQualification(t *testing.T, binding interface{ Identity(
 		t.Fatal("test binding identity changed")
 	}
 	now := concrete.SessionStart()
-	e := aggregateEngine(t, concrete, RunModeLive, &now)
+	e := aggregateEngine(t, concrete, &now)
 	result := e.state.binding
 	closeAndWait(t, e)
 	return result

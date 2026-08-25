@@ -157,7 +157,7 @@ func validTQPressureSample(v TQPressureSample) bool {
 }
 
 func (e *Engine) advanceTQPressureTimerLocked(now time.Time) {
-	if e.mode != RunModeLive || e.state.binding == nil || !e.state.liveEpochActive || e.state.lifecycle == lifecycleEnded {
+	if e.state.binding == nil || !e.state.liveEpochActive || e.state.lifecycle == lifecycleEnded {
 		return
 	}
 	p := &e.state.tq.pressure

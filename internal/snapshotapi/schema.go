@@ -14,46 +14,6 @@ type Snapshot struct {
 	TQ            TQ          `json:"tq"`
 	Checkpoint    Checkpoint  `json:"checkpoint"`
 	Operations    Operations  `json:"operations"`
-	Replay        *Replay     `json:"replay,omitempty"`
-}
-
-type Replay struct {
-	Phase            string       `json:"phase"`
-	ArtifactID       string       `json:"artifact_id"`
-	ArtifactEnd      string       `json:"artifact_end"`
-	ObservationStart string       `json:"observation_start"`
-	ObservationEnd   string       `json:"observation_end"`
-	LogicalTime      string       `json:"logical_time"`
-	Completion       string       `json:"completion"`
-	ScheduleLagMS    *uint64      `json:"schedule_lag_ms"`
-	Source           ReplaySource `json:"source"`
-	Window           ReplayWindow `json:"window"`
-}
-
-type ReplaySource struct {
-	ArtifactRecords                     string `json:"artifact_records"`
-	CompletedRecordDispositions         string `json:"completed_record_dispositions"`
-	IntentionallyUnappliedSuffixRecords string `json:"intentionally_unapplied_suffix_records"`
-	UnreadRecords                       string `json:"unread_records"`
-	PlannedGroups                       string `json:"planned_groups"`
-	CompletedGroups                     string `json:"completed_groups"`
-	ActiveGroup                         string `json:"active_group"`
-	RemainingGroups                     string `json:"remaining_groups"`
-	CompletedRuns                       string `json:"completed_runs"`
-	FailedRuns                          string `json:"failed_runs"`
-	CanceledRuns                        string `json:"canceled_runs"`
-}
-
-type ReplayWindow struct {
-	WarmupGroupsPlanned            string `json:"warmup_groups_planned"`
-	WarmupGroupsCompleted          string `json:"warmup_groups_completed"`
-	WarmupGroupActive              string `json:"warmup_group_active"`
-	WarmupGroupsRemaining          string `json:"warmup_groups_remaining"`
-	ObservationSecondsPlanned      string `json:"observation_seconds_planned"`
-	ObservationSecondsCompleted    string `json:"observation_seconds_completed"`
-	ObservationSecondActive        string `json:"observation_second_active"`
-	ObservationSecondsRemaining    string `json:"observation_seconds_remaining"`
-	ObservationBoundariesPublished string `json:"observation_boundaries_published"`
 }
 
 type Sample struct {

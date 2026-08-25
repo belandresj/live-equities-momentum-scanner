@@ -7,26 +7,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/url"
-	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/belandresj/live-equities-momentum-scanner/internal/reference"
 )
 
 const (
-	OfflineRequestDeadline = 15 * time.Second
-	OfflinePageLimit       = 2
-	OfflineAttemptLimit    = 3
-	OfflinePageByteLimit   = int64(16 << 20)
-	OfflineResultLimit     = 50_000
-	OfflineWorkerLimit     = 8
+	liveRequestDeadline = 15 * time.Second
+	livePageLimit       = 2
+	liveAttemptLimit    = 3
+	livePageByteLimit   = int64(16 << 20)
+	liveResultLimit     = 50_000
+	liveWorkerLimit     = 8
 )
 
 type DownloadReason string
@@ -65,56 +60,11 @@ type SymbolOutcome struct {
 	Bytes    int64
 }
 
-type DownloadAccounting struct {
-	PlannedSymbols  int64
-	CompleteSymbols int64
-	FailedSymbols   int64
-	CanceledSymbols int64
-	NonemptySymbols int64
-	EmptySymbols    int64
-	Records         int64
-	Pages           int64
-	Attempts        int64
-	Bytes           int64
-}
-
-type DownloadPlan struct {
-	Binding                  reference.Binding
-	Start, End               time.Time
-	Workers                  int
-	MaximumNormalizedRecords int64
-	MaximumResponseBytes     int64
-}
-
-// DownloadResult is sealed by Downloader. Complete is true only when every
-// symbol from the immutable binding completed the exact interval successfully.
-type DownloadResult struct {
-	bindingID  string
-	start      time.Time
-	end        time.Time
-	outcomes   []SymbolOutcome
-	records    []RESTSecondAggregate
-	accounting DownloadAccounting
-	complete   bool
-}
-
-func (r DownloadResult) Complete() bool                 { return r.complete }
-func (r DownloadResult) BindingIdentity() string        { return r.bindingID }
-func (r DownloadResult) Start() time.Time               { return r.start }
-func (r DownloadResult) End() time.Time                 { return r.end }
-func (r DownloadResult) Outcomes() []SymbolOutcome      { return slices.Clone(r.outcomes) }
-func (r DownloadResult) Records() []RESTSecondAggregate { return slices.Clone(r.records) }
-func (r DownloadResult) Accounting() DownloadAccounting { return r.accounting }
-
 type CredentialSource func() (string, error)
 
-type OfflineDownloader struct {
-	acquisition *aggregateRESTClient
-}
-
 // aggregateRESTClient is the one Massive second-aggregate request, envelope,
-// pagination, and normalization path shared by offline compilation and
-// production hydration. It owns only bounded request-local state.
+// pagination, and normalization path used by production hydration. It owns
+// only bounded request-local state.
 type aggregateRESTClient struct {
 	base       *url.URL
 	credential CredentialSource
@@ -123,142 +73,16 @@ type aggregateRESTClient struct {
 	now        func() time.Time
 }
 
-func NewOfflineDownloader(baseURL string, credential CredentialSource, client *http.Client) (*OfflineDownloader, error) {
-	acquisition, err := newAggregateRESTClient(baseURL, credential, client)
-	if err != nil {
-		return nil, err
-	}
-	return &OfflineDownloader{acquisition: acquisition}, nil
-}
-
 func newAggregateRESTClient(baseURL string, credential CredentialSource, client *http.Client) (*aggregateRESTClient, error) {
 	base, err := url.Parse(baseURL)
 	if err != nil || base.Scheme != "https" || base.Host == "" || (base.Path != "" && base.Path != "/") ||
 		base.User != nil || base.RawQuery != "" || base.Fragment != "" || credential == nil || client == nil {
-		return nil, errors.New("invalid offline Massive downloader configuration")
+		return nil, errors.New("invalid live Massive hydration configuration")
 	}
 	base.Path = ""
 	return &aggregateRESTClient{
 		base: base, credential: credential, client: client, sleep: sleepWithContext, now: time.Now,
 	}, nil
-}
-
-func (d *OfflineDownloader) Download(ctx context.Context, plan DownloadPlan) DownloadResult {
-	symbols := plan.Binding.UniverseSymbols()
-	result := DownloadResult{bindingID: plan.Binding.Identity(), start: plan.Start, end: plan.End}
-	if !validDownloadPlan(plan, symbols) {
-		return failedPlanResult(result, symbols)
-	}
-	result.outcomes = make([]SymbolOutcome, len(symbols))
-	perSymbolRecords := make([][]RESTSecondAggregate, len(symbols))
-	result.accounting.PlannedSymbols = int64(len(symbols))
-	if ctx == nil || ctx.Err() != nil {
-		for index, symbol := range symbols {
-			result.outcomes[index] = SymbolOutcome{Symbol: symbol, State: SymbolCanceled, Reason: DownloadReasonCanceled}
-		}
-		result.accounting.CanceledSymbols = int64(len(symbols))
-		return result
-	}
-	token, err := d.acquisition.credential()
-	if err != nil || token == "" || strings.ContainsAny(token, "\r\n") {
-		for index, symbol := range symbols {
-			result.outcomes[index] = SymbolOutcome{Symbol: symbol, State: SymbolFailed, Reason: DownloadReasonRequestConstruction}
-		}
-		result.accounting.FailedSymbols = int64(len(symbols))
-		return result
-	}
-
-	workers := min(plan.Workers, len(symbols))
-	jobs := make(chan int)
-	wireBytes := responseBudget{maximum: plan.MaximumResponseBytes}
-	var normalizedRecords atomic.Int64
-	var group sync.WaitGroup
-	group.Add(workers)
-	for range workers {
-		go func() {
-			defer group.Done()
-			for index := range jobs {
-				if ctx.Err() != nil {
-					result.outcomes[index] = SymbolOutcome{Symbol: symbols[index], State: SymbolCanceled, Reason: DownloadReasonCanceled}
-					continue
-				}
-				values, outcome := d.acquisition.acquire(ctx, token, symbols[index], aggregateRESTRequest{
-					start: plan.Start, end: plan.End, maximumNormalizedRecords: plan.MaximumNormalizedRecords,
-				}, &wireBytes, &normalizedRecords, nil)
-				result.outcomes[index], perSymbolRecords[index] = outcome, values
-			}
-		}()
-	}
-	for index := 0; index < len(symbols); index++ {
-		if ctx.Err() != nil {
-			for remaining := index; remaining < len(symbols); remaining++ {
-				result.outcomes[remaining] = SymbolOutcome{Symbol: symbols[remaining], State: SymbolCanceled, Reason: DownloadReasonCanceled}
-			}
-			break
-		}
-		select {
-		case jobs <- index:
-		case <-ctx.Done():
-			for remaining := index; remaining < len(symbols); remaining++ {
-				result.outcomes[remaining] = SymbolOutcome{Symbol: symbols[remaining], State: SymbolCanceled, Reason: DownloadReasonCanceled}
-			}
-			index = len(symbols)
-		}
-	}
-	close(jobs)
-	group.Wait()
-
-	for index, outcome := range result.outcomes {
-		result.accounting.Pages += outcome.Pages
-		result.accounting.Attempts += outcome.Attempts
-		result.accounting.Bytes += outcome.Bytes
-		switch outcome.State {
-		case SymbolComplete:
-			result.accounting.CompleteSymbols++
-			if outcome.Records == 0 {
-				result.accounting.EmptySymbols++
-			} else {
-				result.accounting.NonemptySymbols++
-			}
-		case SymbolCanceled:
-			result.accounting.CanceledSymbols++
-		default:
-			result.accounting.FailedSymbols++
-		}
-		if outcome.State == SymbolComplete {
-			result.records = append(result.records, perSymbolRecords[index]...)
-		}
-	}
-	result.accounting.Records = int64(len(result.records))
-	result.complete = result.accounting.CompleteSymbols == result.accounting.PlannedSymbols &&
-		result.accounting.FailedSymbols == 0 && result.accounting.CanceledSymbols == 0 &&
-		result.accounting.CompleteSymbols == result.accounting.NonemptySymbols+result.accounting.EmptySymbols &&
-		result.accounting.Records <= plan.MaximumNormalizedRecords
-	return result
-}
-
-func validDownloadPlan(plan DownloadPlan, symbols []string) bool {
-	if plan.Binding.Identity() == "" || len(symbols) == 0 || plan.Workers < 1 || plan.Workers > OfflineWorkerLimit ||
-		plan.MaximumNormalizedRecords <= 0 || plan.MaximumResponseBytes <= 0 ||
-		plan.Start != plan.Start.UTC() || plan.End != plan.End.UTC() || plan.Start.Nanosecond() != 0 || plan.End.Nanosecond() != 0 ||
-		plan.Start.Before(plan.Binding.SessionStart()) || !plan.Start.Before(plan.End) || plan.End.After(plan.Binding.SessionEnd()) {
-		return false
-	}
-	seconds := int64(plan.End.Sub(plan.Start) / time.Second)
-	if seconds <= 0 || seconds > 16*60*60 || int64(len(symbols)) > math.MaxInt64/seconds {
-		return false
-	}
-	return int64(len(symbols))*seconds <= plan.MaximumNormalizedRecords
-}
-
-func failedPlanResult(result DownloadResult, symbols []string) DownloadResult {
-	result.outcomes = make([]SymbolOutcome, len(symbols))
-	result.accounting.PlannedSymbols = int64(len(symbols))
-	result.accounting.FailedSymbols = int64(len(symbols))
-	for index, symbol := range symbols {
-		result.outcomes[index] = SymbolOutcome{Symbol: symbol, State: SymbolFailed, Reason: DownloadReasonPlanBudget}
-	}
-	return result
 }
 
 type aggregateRESTRequest struct {
@@ -272,7 +96,7 @@ func (d *aggregateRESTClient) acquire(ctx context.Context, token, symbol string,
 	current := *d.base
 	current.Path = endpointPath
 	setFixedAggregateQuery(&current)
-	seenPages := make(map[string]struct{}, OfflinePageLimit)
+	seenPages := make(map[string]struct{}, livePageLimit)
 	seenIdentities := make(map[int64]struct{})
 	values := make([]RESTSecondAggregate, 0)
 	keepResident := false
@@ -281,7 +105,7 @@ func (d *aggregateRESTClient) acquire(ctx context.Context, token, symbol string,
 			resident.release(int64(len(values)))
 		}
 	}()
-	for pageNumber := 0; pageNumber < OfflinePageLimit; pageNumber++ {
+	for pageNumber := 0; pageNumber < livePageLimit; pageNumber++ {
 		pageKey := current.String()
 		if _, duplicate := seenPages[pageKey]; duplicate {
 			outcome.Reason = DownloadReasonRedirectContinuation
@@ -332,7 +156,7 @@ func (d *aggregateRESTClient) acquire(ctx context.Context, token, symbol string,
 			keepResident = true
 			return values, outcome
 		}
-		if pageNumber+1 >= OfflinePageLimit {
+		if pageNumber+1 >= livePageLimit {
 			outcome.Reason = DownloadReasonRedirectContinuation
 			return nil, outcome
 		}
@@ -355,7 +179,7 @@ type restPage struct {
 func (d *aggregateRESTClient) fetchPage(ctx context.Context, token string, pageURL *url.URL, symbol string, budget *responseBudget) (restPage, int64, int, DownloadReason) {
 	var bytesRead int64
 	var retryDelay time.Duration
-	for attempt := 1; attempt <= OfflineAttemptLimit; attempt++ {
+	for attempt := 1; attempt <= liveAttemptLimit; attempt++ {
 		if attempt > 1 {
 			if retryDelay == 0 {
 				retryDelay = 25 * time.Millisecond * time.Duration(1<<(attempt-2))
@@ -365,7 +189,7 @@ func (d *aggregateRESTClient) fetchPage(ctx context.Context, token string, pageU
 			}
 			retryDelay = 0
 		}
-		attemptContext, cancel := context.WithTimeout(ctx, OfflineRequestDeadline)
+		attemptContext, cancel := context.WithTimeout(ctx, liveRequestDeadline)
 		request, err := http.NewRequestWithContext(attemptContext, http.MethodGet, pageURL.String(), nil)
 		if err != nil {
 			cancel()
@@ -381,7 +205,7 @@ func (d *aggregateRESTClient) fetchPage(ctx context.Context, token string, pageU
 			if ctx.Err() != nil {
 				return restPage{}, bytesRead, attempt, DownloadReasonCanceled
 			}
-			if attempt == OfflineAttemptLimit {
+			if attempt == liveAttemptLimit {
 				return restPage{}, bytesRead, attempt, DownloadReasonTransportDeadline
 			}
 			continue
@@ -396,11 +220,11 @@ func (d *aggregateRESTClient) fetchPage(ctx context.Context, token string, pageU
 		cancel()
 		amount := int64(len(body))
 		bytesRead += amount
-		if errors.Is(readErr, errResponseBudget) || amount > OfflinePageByteLimit {
+		if errors.Is(readErr, errResponseBudget) || amount > livePageByteLimit {
 			return restPage{}, bytesRead, attempt, DownloadReasonResponseSizeSyntax
 		}
 		if readErr != nil {
-			if attempt == OfflineAttemptLimit {
+			if attempt == liveAttemptLimit {
 				return restPage{}, bytesRead, attempt, DownloadReasonTransportDeadline
 			}
 			continue
@@ -413,7 +237,7 @@ func (d *aggregateRESTClient) fetchPage(ctx context.Context, token string, pageU
 			if !retryable {
 				return restPage{}, bytesRead, attempt, DownloadReasonEnvelopeIdentityStatus
 			}
-			if attempt == OfflineAttemptLimit {
+			if attempt == liveAttemptLimit {
 				return restPage{}, bytesRead, attempt, DownloadReasonHTTPRetryExhausted
 			}
 			if response.StatusCode == http.StatusTooManyRequests {
@@ -427,7 +251,7 @@ func (d *aggregateRESTClient) fetchPage(ctx context.Context, token string, pageU
 		}
 		return page, bytesRead, attempt, DownloadReasonNone
 	}
-	return restPage{}, bytesRead, OfflineAttemptLimit, DownloadReasonHTTPRetryExhausted
+	return restPage{}, bytesRead, liveAttemptLimit, DownloadReasonHTTPRetryExhausted
 }
 
 func (d *aggregateRESTClient) validateContinuation(raw, endpointPath string) (*url.URL, DownloadReason) {
@@ -445,11 +269,11 @@ func setFixedAggregateQuery(value *url.URL) {
 	query.Del("apikey")
 	query.Set("adjusted", "false")
 	query.Set("sort", "asc")
-	query.Set("limit", strconv.Itoa(OfflineResultLimit))
+	query.Set("limit", strconv.Itoa(liveResultLimit))
 	value.RawQuery = query.Encode()
 }
 
-var errResponseBudget = errors.New("offline response byte budget exceeded")
+var errResponseBudget = errors.New("live hydration response byte budget exceeded")
 
 type responseBudget struct {
 	mu                 sync.Mutex
@@ -463,7 +287,7 @@ func (b *responseBudget) read(source io.Reader) ([]byte, error) {
 	if source == nil || b.maximum <= 0 {
 		return nil, errResponseBudget
 	}
-	return io.ReadAll(&responseBudgetReader{source: source, budget: b, pageRemaining: OfflinePageByteLimit})
+	return io.ReadAll(&responseBudgetReader{source: source, budget: b, pageRemaining: livePageByteLimit})
 }
 
 type responseBudgetReader struct {
@@ -593,7 +417,7 @@ func decodeRESTPage(body []byte, symbol string) (restPage, DownloadReason) {
 	}
 	page := restPage{results: []json.RawMessage{}}
 	if len(members["results"]) == 1 && !bytes.Equal(bytes.TrimSpace(members["results"][0]), []byte("null")) {
-		if err := json.Unmarshal(members["results"][0], &page.results); err != nil || len(page.results) > OfflineResultLimit {
+		if err := json.Unmarshal(members["results"][0], &page.results); err != nil || len(page.results) > liveResultLimit {
 			return restPage{}, DownloadReasonResponseSizeSyntax
 		}
 	}
@@ -685,7 +509,7 @@ func retryAfter(value string, now func() time.Time) time.Duration {
 	}
 	if seconds, err := strconv.Atoi(value); err == nil {
 		delay := time.Duration(seconds) * time.Second
-		if delay >= 0 && delay <= OfflineRequestDeadline {
+		if delay >= 0 && delay <= liveRequestDeadline {
 			return delay
 		}
 		return 0
@@ -695,7 +519,7 @@ func retryAfter(value string, now func() time.Time) time.Duration {
 		return 0
 	}
 	delay := when.Sub(now())
-	if delay >= 0 && delay <= OfflineRequestDeadline {
+	if delay >= 0 && delay <= liveRequestDeadline {
 		return delay
 	}
 	return 0

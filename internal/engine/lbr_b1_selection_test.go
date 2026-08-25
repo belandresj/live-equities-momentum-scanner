@@ -18,7 +18,7 @@ func TestPLBRB1Selection(t *testing.T) {
 		start := binding.SessionStart()
 		proofEnd := start.Add(60 * time.Second)
 		seed := func(now *time.Time) *Engine {
-			e := aggregateEngine(t, binding, RunModeLive, now)
+			e := aggregateEngine(t, binding, now)
 			for second := 0; second < 60; second++ {
 				volume := 497.5
 				if second == 59 {
@@ -119,7 +119,7 @@ func TestPLBRB1Selection(t *testing.T) {
 			e.mu.Unlock()
 		}
 
-		live := aggregateEngine(t, binding, RunModeLive, &now)
+		live := aggregateEngine(t, binding, &now)
 		live.mu.Lock()
 		live.state.lifecycle, live.state.liveEpoch, live.state.liveEpochActive = lifecycleLive, 1, true
 		live.state.aggregateAcknowledged = true
@@ -159,7 +159,7 @@ func TestPLBRB1Selection(t *testing.T) {
 		}
 		closeAndWait(t, live)
 
-		historical := aggregateEngine(t, binding, RunModeLive, &now)
+		historical := aggregateEngine(t, binding, &now)
 		inputs := []AggregateInput{values(target.Add(-3*time.Second), 10), values(target.Add(-2*time.Second), 11), values(target.Add(-time.Second), 12), values(target, 80), values(target.Add(time.Second), 90)}
 		for ordinal := 0; ordinal < 3; ordinal++ {
 			input := inputs[ordinal]
@@ -225,7 +225,7 @@ func TestPLBRB1Selection(t *testing.T) {
 		binding := testBinding(t)
 		at := binding.SessionStart().Add(2 * time.Second)
 		now := at
-		e := aggregateEngine(t, binding, RunModeLive, &now)
+		e := aggregateEngine(t, binding, &now)
 		defer closeAndWait(t, e)
 		e.mu.Lock()
 		e.state.lifecycle = lifecycleLive
@@ -264,7 +264,7 @@ func TestPLBRB1Selection(t *testing.T) {
 	t.Run("engine-owned timer and control sequences never reuse", func(t *testing.T) {
 		binding := testBinding(t)
 		at := binding.SessionStart().Add(10 * time.Second)
-		e := aggregateEngine(t, binding, RunModeLive, &at)
+		e := aggregateEngine(t, binding, &at)
 		defer closeAndWait(t, e)
 		attempt := controlFact(binding.Identity(), ConnectionAttempt, 1, LivePosition{}, at, 1, ControlSucceeded)
 		attemptAdmission, firstControl := e.AdmitConnectionControl(context.Background(), attempt)

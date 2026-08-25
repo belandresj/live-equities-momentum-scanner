@@ -138,10 +138,10 @@ func TestLiveOperatorRendersPopulationTransitionDiagnostic(t *testing.T) {
 	renderer := newOperatorRenderer(&stdout, &stderr)
 	sample := liveOperatorSample{
 		Status: operations.Status{Lifecycle: "live", Reason: operations.ReasonRankingNoncurrent, RankingMode: "degraded_bootstrap", SampledAt: time.Now().UTC()},
-		Evaluation: engine.ReplayEvaluationView{
-			Population:  engine.ReplayPopulationView{UnresolvedPopulation: 4},
-			Uncertainty: engine.ReplayUncertaintyView{LocalInvalid: 1},
-			PopulationTransition: engine.ReplayPopulationTransitionDiagnosticView{BootstrapUnknown: 5, TrustedByLaterLiveMark: 2, NoLaterEligibleMark: 1,
+		Evaluation: engine.EvaluationView{
+			Population:  engine.PopulationView{UnresolvedPopulation: 4},
+			Uncertainty: engine.UncertaintyView{LocalInvalid: 1},
+			PopulationTransition: engine.PopulationTransitionDiagnosticView{BootstrapUnknown: 5, TrustedByLaterLiveMark: 2, NoLaterEligibleMark: 1,
 				LatestMarkNotLiveAuthority: 1, IncompletePostMarkCoverage: 1},
 		},
 	}
@@ -159,10 +159,10 @@ func TestLiveOperatorRendersPopulationTransitionDiagnosticOnSuppression(t *testi
 	renderer := newOperatorRenderer(&stdout, &stderr)
 	sample := liveOperatorSample{
 		Status: operations.Status{Lifecycle: "suppressed", Reason: operations.ReasonSuppressed, RankingMode: "suppressed", SampledAt: time.Now().UTC()},
-		Evaluation: engine.ReplayEvaluationView{
-			Population:           engine.ReplayPopulationView{UnresolvedPopulation: 1},
-			Uncertainty:          engine.ReplayUncertaintyView{LocalInvalid: 1},
-			PopulationTransition: engine.ReplayPopulationTransitionDiagnosticView{BootstrapUnknown: 1, NoLaterEligibleMark: 1},
+		Evaluation: engine.EvaluationView{
+			Population:           engine.PopulationView{UnresolvedPopulation: 1},
+			Uncertainty:          engine.UncertaintyView{LocalInvalid: 1},
+			PopulationTransition: engine.PopulationTransitionDiagnosticView{BootstrapUnknown: 1, NoLaterEligibleMark: 1},
 		},
 	}
 	sample.Metrics.Engine.LifecycleReason = "ingress_integrity"

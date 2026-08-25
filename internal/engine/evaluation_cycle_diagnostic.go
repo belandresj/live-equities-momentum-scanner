@@ -8,7 +8,7 @@ import "time"
 // cloning the full T/Q view.
 type EvaluationCycleState struct {
 	PublicationID, LastEngineSequence uint64
-	RunMode                           RunMode
+	RunMode                           string
 	Lifecycle                         string
 	Watermark                         time.Time
 	WatermarkPresent                  bool

@@ -24,7 +24,6 @@ type SnapshotCaptureView struct {
 	Metrics         Metrics
 	IngressIncident *IngressIncident
 	RecoveryAttempt *RecoveryAttemptOutcome
-	Replay          *ReplayCaptureView
 }
 
 type sealedSnapshotCapture struct{ view SnapshotCaptureView }
@@ -75,7 +74,7 @@ func (r *Runtime) nextCaptureSequence() (uint64, error) {
 
 func cloneSnapshotCaptureView(value SnapshotCaptureView) SnapshotCaptureView {
 	result := value
-	result.Engine.Publication.AggregateEvaluation = cloneReplayEvaluation(value.Engine.Publication.AggregateEvaluation)
+	result.Engine.Publication.AggregateEvaluation = cloneEvaluation(value.Engine.Publication.AggregateEvaluation)
 	result.Engine.Publication.Watermark = cloneTime(value.Engine.Publication.Watermark)
 	result.Engine.Operational.Watermark = cloneTime(value.Engine.Operational.Watermark)
 	result.Engine.Operational.Hydration.SupportedThrough = cloneTime(value.Engine.Operational.Hydration.SupportedThrough)
@@ -103,10 +102,6 @@ func cloneSnapshotCaptureView(value SnapshotCaptureView) SnapshotCaptureView {
 		copyValue := *value.RecoveryAttempt
 		result.RecoveryAttempt = &copyValue
 	}
-	if value.Replay != nil {
-		copyValue := ReplayCaptureView(cloneReplayCaptureContext(ReplayCaptureContext(*value.Replay)))
-		result.Replay = &copyValue
-	}
 	return result
 }
 
@@ -118,9 +113,9 @@ func cloneIntegrityFailure(value *engine.EvaluatorIntegrityView) *engine.Evaluat
 	return &copyValue
 }
 
-func cloneReplayEvaluation(value engine.ReplayEvaluationView) engine.ReplayEvaluationView {
+func cloneEvaluation(value engine.EvaluationView) engine.EvaluationView {
 	result := value
-	result.Rows = append([]engine.ReplayRankingRowView(nil), value.Rows...)
+	result.Rows = append([]engine.RankingRowView(nil), value.Rows...)
 	for i := range result.Rows {
 		if result.Rows[i].Float.Percent != nil {
 			percent := *result.Rows[i].Float.Percent

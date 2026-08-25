@@ -25,7 +25,7 @@ session, while an explicit missed `--trading-date` exits with an error.
 - macOS with the repository's Go 1.26 toolchain available as `go`;
 - an exact-date reference cache under `var/reference`, or ordinary provider
   access capable of resolving it during scanner startup;
-- writable `var/reference` and `var/checkpoints` directories;
+- a writable `var/reference` directory;
 - loopback ports `127.0.0.1:8080` and `127.0.0.1:4173` available; and
 - a Massive credential supplied through one of the mechanisms below.
 
@@ -53,7 +53,7 @@ The public command shape is:
 `--open` asks macOS to open the dashboard once its listener is healthy; during
 standby the scanner listener is intentionally absent. A browser-open failure is
 nonfatal. `--trading-date` is for an exact date correction; it does not
-authorize historical replay through the live provider path. The launcher and
+authorize a historical provider request. The launcher and
 scanner use the same validated exchange schedule. Automatic selection skips
 weekends and holidays; an explicit weekend, holiday, unsupported, or ended date
 is rejected. Hydration defaults to eight workers; `--hydration-workers`
@@ -64,19 +64,16 @@ change the universe, interval, merge rules, ranking, readiness, or T/Q path.
 The launcher invokes the scanner with these exact settings:
 
 ```text
---run-mode live
 --trading-date <current America/New_York date or explicit override>
 --hydration-workers 8
 --reference-dir <repo>/var/reference
---checkpoint-dir <repo>/var/checkpoints
---checkpoint-mode off
 --diagnostic-dir <repo>/var/diagnostics (scanner default)
 --api-address 127.0.0.1:8080
 --allow-origin http://127.0.0.1:4173
 ```
 
 For the 2026-08-12 owner-run retry, the scanner's internal bounded delivery
-settings are 32,768 raw-frame slots, 128 MiB total queued payload, 8 MiB per
+settings are 4,096 decoded-batch slots, 64 MiB total queued payload, 8 MiB per
 frame, a 4-GiB cumulative (not resident) hydration-transfer allowance, at most
 57,600 resident normalized records per configured hydration worker, and five
 finite connection/recovery attempts. These settings add containment headroom
@@ -188,7 +185,7 @@ There is no promised late-start completion time; a late start must process all
 elapsed aggregate history. At or after 20:00, and on weekends or exchange
 holidays, an invocation without `--trading-date` selects the next declared
 trading session and enters standby. An explicit unsupported or already-ended
-trading date still fails; historical/replay operation remains a separate mode.
+trading date still fails; the supported scanner remains live-only.
 
 ## Proven capacity boundary
 
@@ -220,7 +217,7 @@ a complete sustained late-start run.
 The preserved sustained full 2x trial is an honest failure: 56,757 frames were
 read, 56,756 admitted, 56,244 dispositioned, and 512 fenced; one capacity
 rejection occurred after 7,078,180 hydration rows. Sustained full 2x is
-unsupported. Do not infer that every checkpoint-less post-04:00 cold start will
+unsupported. Do not infer that every post-04:00 cold start will
 finish within a fixed time, and do not repeatedly rerun the known-failing trial.
 
 These deterministic results prove the stated local fixture/rate boundary. They
@@ -238,7 +235,7 @@ above and never signals a healthy scanner. A shutdown during dashboard backoff
 cancels that wait and still follows scanner-then-dashboard cleanup. It never
 kills a process merely because a required port is occupied.
 
-The current private path does not write or restore checkpoints. On failure:
+The current private path always restarts through fresh hydration. On failure:
 
 1. preserve terminal output and any `var/diagnostics` incident file;
 2. do not repeatedly restart the same failing state;

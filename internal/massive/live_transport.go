@@ -217,7 +217,7 @@ type EngineDeliveryResult struct {
 	// identifies the first invalid transition without inferring adapter cause.
 	PriorEngine           engine.OperationalView
 	PriorEngineApplicable bool
-	PriorPublication      engine.ReplayPublicationView
+	PriorPublication      engine.PublicationView
 }
 
 type ActiveDeliveryDiagnostic struct {

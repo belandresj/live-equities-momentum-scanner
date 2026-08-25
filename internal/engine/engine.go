@@ -10,20 +10,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/belandresj/live-equities-momentum-scanner/internal/checkpoint"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/reference"
-	"github.com/belandresj/live-equities-momentum-scanner/internal/replayartifact/playback"
 )
 
 var diagnosticMonotonicClock = time.Now
-
-// RunMode fixes the evidence model for an engine's lifetime.
-type RunMode string
-
-const (
-	RunModeLive   RunMode = "live"
-	RunModeReplay RunMode = "replay"
-)
 
 // Clock supplies engine time. It is sampled by the engine, never by callers.
 type Clock func() time.Time
@@ -31,12 +21,10 @@ type Clock func() time.Time
 // Config contains the S1 construction parameters. Capacity and RequiredReserve
 // intentionally have no production defaults.
 type Config struct {
-	Mode                   RunMode
 	Clock                  Clock
 	Capacity               int
 	RequiredReserve        int
 	EvaluationDelay        *time.Duration
-	CheckpointSubmitter    checkpoint.Submitter
 	FloatLookup            reference.FloatLookup
 	RecoveryBackoffInitial time.Duration
 	RecoveryBackoffMaximum time.Duration
@@ -77,10 +65,6 @@ const (
 	DispositionUnsupportedSchema         DispositionCode = "rejected_unsupported_schema"
 	DispositionIllegalLifecycle          DispositionCode = "rejected_illegal_lifecycle"
 	DispositionTerminal                  DispositionCode = "rejected_terminal"
-	DispositionReplayStarted             DispositionCode = "replay_started"
-	DispositionReplayEnded               DispositionCode = "replay_ended"
-	DispositionReplayRequestedEnd        DispositionCode = "replay_requested_end"
-	DispositionReplayFailed              DispositionCode = "replay_failed"
 	DispositionConnectionControlApplied  DispositionCode = "connection_control_applied"
 	DispositionConnectionControlDeferred DispositionCode = "connection_control_consumer_deferred"
 	DispositionConnectionControlRejected DispositionCode = "connection_control_rejected"
@@ -131,7 +115,6 @@ const (
 	AggregateEvaluationLiveCoverageFence AggregateEvaluationSource = "live_coverage_fence"
 	AggregateEvaluationTimer             AggregateEvaluationSource = "timer"
 	AggregateEvaluationIngressFence      AggregateEvaluationSource = "aggregate_ingress_fence"
-	AggregateEvaluationReplay            AggregateEvaluationSource = "replay"
 	AggregateEvaluationTrustCorrection   AggregateEvaluationSource = "trust_correction"
 )
 
@@ -141,7 +124,6 @@ type AggregateEvaluationStartsView struct {
 	LiveCoverageFence     uint64
 	Timer                 uint64
 	AggregateIngressFence uint64
-	Replay                uint64
 	TrustCorrection       uint64
 }
 
@@ -192,7 +174,6 @@ const (
 	lifecycleHydrating            lifecycle = "hydrating"
 	lifecycleLive                 lifecycle = "live"
 	lifecycleRecovering           lifecycle = "recovering"
-	lifecycleReplaying            lifecycle = "replaying"
 	lifecycleEnded                lifecycle = "ended"
 	lifecycleSuppressed           lifecycle = "suppressed"
 )
@@ -212,10 +193,6 @@ const (
 	lifecycleReasonPublicationIntegrity lifecycleReason = "publication_integrity"
 	lifecycleReasonAccountingIntegrity  lifecycleReason = "accounting_integrity"
 	lifecycleReasonClosed               lifecycleReason = "closed"
-	lifecycleReasonReplayStart          lifecycleReason = "replay_start"
-	lifecycleReasonReplayEnd            lifecycleReason = "replay_end"
-	lifecycleReasonReplayRequestedEnd   lifecycleReason = "replay_requested_end"
-	lifecycleReasonReplayFailure        lifecycleReason = "replay_failure"
 	lifecycleReasonAggregateAck         lifecycleReason = "aggregate_acknowledged"
 	lifecycleReasonAggregateAckAtStart  lifecycleReason = "aggregate_acknowledged_at_session_start"
 	lifecycleReasonAggregateEpochLost   lifecycleReason = "aggregate_epoch_lost"
@@ -234,7 +211,6 @@ const (
 	SuppressionSameBindingRecoveryAllowed    SuppressionDisposition = "same_binding_recovery_allowed"
 	SuppressionCleanReinitializationRequired SuppressionDisposition = "clean_reinitialization_required"
 	SuppressionRestartRequired               SuppressionDisposition = "restart_required"
-	SuppressionTerminalReplayFailure         SuppressionDisposition = "terminal_replay_failure"
 )
 
 type lifecycleEvent uint8
@@ -249,10 +225,6 @@ const (
 	lifecycleEventPublicationIntegrity
 	lifecycleEventAccountingIntegrity
 	lifecycleEventClose
-	lifecycleEventReplayStart
-	lifecycleEventReplayEnd
-	lifecycleEventReplayRequestedEnd
-	lifecycleEventReplayFailure
 	lifecycleEventAggregateAck
 	lifecycleEventAggregateLoss
 	lifecycleEventIngressIntegrity
@@ -281,11 +253,6 @@ const (
 	inputTimer
 	inputIllegal
 	inputUnsupportedSchema
-	inputReplayStart
-	inputReplayGroup
-	inputReplayEnd
-	inputReplayRequestedEnd
-	inputReplayFailure
 	inputConnectionControl
 	inputHydrationPlan
 	inputHydrationChunk
@@ -293,9 +260,6 @@ const (
 	inputHydrationCancelProof
 	inputAggregateIngressFence
 	inputHydrationPolicyAction
-	inputCheckpointProjection
-	inputCheckpointInstall
-	inputCheckpointTerminal
 	inputLiveCoverageFence
 	inputRecoveryExhaustion
 	inputScheduledRecovery
@@ -307,7 +271,6 @@ const (
 	inputTQPressureResult
 	inputTQPressureTick
 	inputOperationalIngressIntegrity
-	inputCheckpointProjectionContinue
 )
 
 func inputKindName(kind inputKind) string {
@@ -322,8 +285,6 @@ func inputKindName(kind inputKind) string {
 		return "hydration_chunk"
 	case inputHydrationTerminal:
 		return "hydration_terminal"
-	case inputReplayGroup:
-		return "replay_group"
 	default:
 		return "other"
 	}
@@ -344,11 +305,6 @@ type queueNode struct {
 	aggregateCompletion    chan AggregateDisposition
 	timerCompletion        chan TimerDisposition
 	timerPolicy            timerEvaluationPolicy
-	replayStart            playback.StartEvidence
-	replayGroup            playback.GroupEvidence
-	replayEnd              playback.EndEvidence
-	replayRequestedEnd     playback.RequestedEndEvidence
-	replayFailure          ReplayFailureInput
 	connectionControl      frozenConnectionControlInput
 	controlCompletion      chan ConnectionControlDisposition
 	hydrationPlan          frozenHydrationPlanInput
@@ -358,10 +314,6 @@ type queueNode struct {
 	aggregateIngressFence  frozenAggregateIngressFenceInput
 	hydrationPolicy        frozenHydrationPolicyActionInput
 	hydrationCompletion    chan HydrationDisposition
-	checkpointCandidate    checkpoint.Candidate
-	checkpointProjection   chan CheckpointProjectionResult
-	checkpointInstall      chan CheckpointInstallResult
-	checkpointTerminal     checkpoint.TerminalResult
 	liveCoverageFence      frozenLiveCoverageFenceInput
 	liveCoverageCompletion chan LiveCoverageFenceDisposition
 	signalLiveCoverage     bool
@@ -388,7 +340,6 @@ type engineState struct {
 	greatestIngressPosition     LivePosition
 	connectionControl           connectionControlState
 	connectionAccounting        connectionControlAccounting
-	replayArtifact              string
 	aggregateIntegrity          bool
 	globalFailure               bool
 	exposedRevision             uint64
@@ -403,22 +354,9 @@ type engineState struct {
 	latestTarget                *time.Time
 	latestTransition            *transitionRecord
 	suppressionDisposition      SuppressionDisposition
-	replay                      replayState
 	hydration                   hydrationState
 	scheduledRecovery           scheduledRecoveryState
 	liveCoverage                liveCoverageState
-	checkpointSequence          uint64
-	installedCheckpoint         *InstalledCheckpointFact
-	checkpointLastSubmitted     *time.Time
-	checkpointLastAttempted     *time.Time
-	checkpointRequestSequence   uint64
-	checkpointOutstanding       map[uint64]checkpointRequestIdentity
-	checkpointOperations        CheckpointOperations
-	checkpointProjectionActive  bool
-	checkpointProjectionDirty   bool
-	checkpointProjectionT0      time.Time
-	checkpointProjectionQueued  bool
-	checkpointProjection        *checkpointProjectionWork
 	tq                          tqState
 	evaluationTiming            EvaluationTimingView
 	trustCorrectionRevision     uint64
@@ -453,13 +391,13 @@ func (e *Engine) ObserveFenceTiming() FenceTimingView {
 	return e.state.fenceTiming
 }
 
-func (e *Engine) ObserveLastCoherentPublication() ReplayPublicationView {
+func (e *Engine) ObserveLastCoherentPublication() PublicationView {
 	if e == nil {
-		return ReplayPublicationView{}
+		return PublicationView{}
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return replayPublicationView(e.state.lastCoherentPublication)
+	return livePublicationView(e.state.lastCoherentPublication)
 }
 
 type admissionCounters struct {
@@ -508,7 +446,6 @@ func (c publicationCounters) reconciles(completedTransitions uint64) bool {
 // publication owner. Its mutable graph never crosses the immutable read cell.
 type Engine struct {
 	mu       sync.Mutex
-	mode     RunMode
 	clock    Clock
 	capacity int
 	reserve  int
@@ -537,11 +474,6 @@ type Engine struct {
 	activeAggregateEvaluation atomic.Pointer[ActiveAggregateEvaluationView]
 	sentinels                 [8]*privatePublication
 	lastPubID                 uint64
-	// replayFastForwardThrough is immutable replay execution policy installed
-	// before ReplayStart. Groups before it still mutate the sole canonical
-	// state, but defer full-population projection/publication to the boundary.
-	replayFastForwardThrough time.Time
-
 	// Test-only fault/pause points are package-private and have no production
 	// constructor or exported mutation path.
 	buildCandidate                       func(frozenBinding) (*installedBinding, error)
@@ -551,7 +483,6 @@ type Engine struct {
 	publicationFault                     publicationFault
 	evaluationFault                      bool
 	evaluationTimingClock                func() time.Time
-	checkpointSubmitter                  checkpoint.Submitter
 	tqLimits                             tqRetentionLimits
 	tqPressurePolicy                     tqPressurePolicy
 	recoveryPolicy                       recoveryPolicy
@@ -590,23 +521,22 @@ func (e *Engine) evaluationTimingElapsed(start time.Time) time.Duration {
 
 // New constructs an unbound engine shell and starts its sole consumer.
 func New(config Config) (*Engine, error) {
-	if (config.Mode != RunModeLive && config.Mode != RunModeReplay) || config.Clock == nil || config.EvaluationDelay == nil || *config.EvaluationDelay < 0 ||
+	if config.Clock == nil || config.EvaluationDelay == nil || *config.EvaluationDelay < 0 ||
 		config.Capacity <= 1 || config.RequiredReserve < 1 || config.RequiredReserve >= config.Capacity {
-		return nil, errors.New("engine requires live/replay mode, a clock, explicit nonnegative evaluation delay, and finite 1 <= R < C")
+		return nil, errors.New("engine requires live mode, a clock, explicit nonnegative evaluation delay, and finite 1 <= R < C")
 	}
 	recoveryPolicy := newRecoveryPolicy(config.RecoveryBackoffInitial, config.RecoveryBackoffMaximum)
 	if !recoveryPolicy.valid() {
 		return nil, errors.New("engine requires a finite recovery backoff")
 	}
 	e := &Engine{
-		mode: config.Mode, clock: config.Clock, capacity: config.Capacity, reserve: config.RequiredReserve, delay: *config.EvaluationDelay,
+		clock: config.Clock, capacity: config.Capacity, reserve: config.RequiredReserve, delay: *config.EvaluationDelay,
 		queue: make([]*queueNode, 0, config.Capacity), changed: make(chan struct{}), done: make(chan struct{}), liveHandoff: make(chan liveHandoffRequest),
 		nextSequence: 1, state: &engineState{lifecycle: lifecycleInitializing, clockMonotonic: true},
-		checkpointSubmitter: config.CheckpointSubmitter,
-		tqLimits:            defaultTQRetentionLimits(),
-		tqPressurePolicy:    defaultTQPressurePolicy(),
-		recoveryPolicy:      recoveryPolicy,
-		floatLookup:         config.FloatLookup,
+		tqLimits:         defaultTQRetentionLimits(),
+		tqPressurePolicy: defaultTQPressurePolicy(),
+		recoveryPolicy:   recoveryPolicy,
+		floatLookup:      config.FloatLookup,
 	}
 	e.buildCandidate = buildInstalledBinding
 	e.installInitialPublication()
@@ -757,13 +687,9 @@ func (e *Engine) admitNode(ctx context.Context, node *queueNode, optional bool) 
 				node.controlCompletion = make(chan ConnectionControlDisposition, 1)
 			} else if hydrationInputKind(node.kind) {
 				node.hydrationCompletion = make(chan HydrationDisposition, 1)
-			} else if node.kind == inputCheckpointProjection {
-				node.checkpointProjection = make(chan CheckpointProjectionResult, 1)
-			} else if node.kind == inputCheckpointInstall {
-				node.checkpointInstall = make(chan CheckpointInstallResult, 1)
 			} else if node.kind == inputLiveCoverageFence {
 				node.liveCoverageCompletion = make(chan LiveCoverageFenceDisposition, 1)
-			} else if node.kind == inputTimer || node.kind == inputReplayGroup {
+			} else if node.kind == inputTimer {
 				if e.state.binding != nil {
 					node.bindingID = e.state.binding.identity
 				}
@@ -824,9 +750,6 @@ func (e *Engine) Close() {
 	e.mu.Lock()
 	if !e.sealed {
 		e.sealed = true
-		if e.state.checkpointProjectionActive {
-			e.rejectCheckpointProjectionLocked(e.state.checkpointProjection, "shutdown")
-		}
 		e.broadcastLocked()
 	}
 	e.mu.Unlock()
@@ -880,15 +803,6 @@ func (e *Engine) consume() {
 		copy(e.queue, e.queue[1:])
 		e.queue[len(e.queue)-1] = nil
 		e.queue = e.queue[:len(e.queue)-1]
-		if node.kind == inputCheckpointProjectionContinue {
-			e.internalQueued--
-			e.state.checkpointProjectionQueued = false
-			e.continueCheckpointProjectionLocked()
-			e.enqueueCheckpointProjectionLocked()
-			e.broadcastLocked()
-			e.mu.Unlock()
-			continue
-		}
 		node.engineSequence = e.nextSequence
 		e.nextSequence++
 		e.counters.ownerInProgress++
@@ -914,19 +828,13 @@ func (e *Engine) consume() {
 				FenceCommand: disposition.hydrationFenceCommand,
 			}
 			close(node.hydrationCompletion)
-		} else if node.kind == inputCheckpointProjection {
-			node.checkpointProjection <- finalizeCheckpointProjection(disposition.checkpointProjection, disposition)
-			close(node.checkpointProjection)
-		} else if node.kind == inputCheckpointInstall {
-			node.checkpointInstall <- finalizeCheckpointInstall(disposition.checkpointInstall, disposition)
-			close(node.checkpointInstall)
 		} else if node.kind == inputLiveCoverageFence {
 			result := LiveCoverageFenceDisposition{EngineSequence: disposition.EngineSequence, Code: disposition.Code, Reason: disposition.Reason, SuppressionDisposition: disposition.SuppressionDisposition,
 				EvaluationTiming: e.ObserveEvaluationTiming()}
 			node.liveCoverageCompletion <- result
 			close(node.liveCoverageCompletion)
 			e.finishLiveCoverageCommand(node, result)
-		} else if node.kind == inputTimer || node.kind == inputReplayGroup {
+		} else if node.kind == inputTimer {
 			node.timerCompletion <- TimerDisposition{EngineSequence: disposition.EngineSequence, SystemSequence: node.systemSequence, AdmissionTime: node.admissionTime, Code: disposition.Code, Reason: disposition.Reason, SuppressionDisposition: disposition.SuppressionDisposition}
 			close(node.timerCompletion)
 		} else {
@@ -936,12 +844,12 @@ func (e *Engine) consume() {
 	}
 }
 
-// systemPositionedInput is deliberately closed. Timer/replay-group facts and
+// systemPositionedInput is deliberately closed. Timer facts and
 // engine controls share one positive run-local sequence; no caller supplies or
 // reuses it. A connection control retains its independent provider LivePosition
 // and the engine-assigned system sequence never impersonates that position.
 func systemPositionedInput(kind inputKind) bool {
-	return kind == inputTimer || kind == inputReplayGroup || kind == inputControl || kind == inputStop || kind == inputConnectionControl
+	return kind == inputTimer || kind == inputControl || kind == inputStop || kind == inputConnectionControl
 }
 
 type transitionDisposition struct {
@@ -953,8 +861,6 @@ type transitionDisposition struct {
 	hydrationRows          HydrationRowAccounting
 	hydrationAccounting    HydrationAccounting
 	hydrationFenceCommand  HydrationFenceCommand
-	checkpointProjection   CheckpointProjectionResult
-	checkpointInstall      CheckpointInstallResult
 }
 
 func (e *Engine) transition(node *queueNode) transitionDisposition {
@@ -965,13 +871,10 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 	var stagedHydrationRows HydrationRowAccounting
 	var stagedHydrationAccounting HydrationAccounting
 	var stagedHydrationFenceCommand HydrationFenceCommand
-	var stagedCheckpointProjection CheckpointProjectionResult
-	var stagedCheckpointInstall CheckpointInstallResult
 	e.mu.Lock()
 	before := e.publicationFingerprintLocked()
 	if e.state.lifecycle == lifecycleEnded {
 		disposition := transitionDisposition{EngineSequence: node.engineSequence, Code: DispositionTerminal, Reason: ReasonTerminal}
-		setCheckpointTerminalResult(node, &disposition, CheckpointReasonProjectionIneligible)
 		return e.finishTransitionLocked(node, disposition, before, false)
 	}
 	if e.state.globalFailure {
@@ -984,14 +887,12 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 			return e.finishTransitionLocked(node, disposition, before, false)
 		}
 		disposition := transitionDisposition{EngineSequence: node.engineSequence, Code: DispositionTerminal, Reason: ReasonTerminal, SuppressionDisposition: e.state.suppressionDisposition}
-		setCheckpointTerminalResult(node, &disposition, CheckpointReasonProjectionIneligible)
 		return e.finishTransitionLocked(node, disposition, before, false)
 	}
 	if node.clockRegression {
 		e.state.clockMonotonic = false
 		dispositionValue := e.enterSuppressionLocked(lifecycleEventClockRegression, node, lifecycleReasonClockRegression)
 		disposition := transitionDisposition{EngineSequence: node.engineSequence, Code: DispositionClockRegression, Reason: ReasonClockRegression, SuppressionDisposition: dispositionValue}
-		setCheckpointTerminalResult(node, &disposition, CheckpointReasonProjectionInvariant)
 		return e.finishTransitionLocked(node, disposition, before, true)
 	}
 	e.mu.Unlock()
@@ -1040,19 +941,13 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 			(e.state.greatestIngressPosition.ConnectionEpoch == 0 || compareLive(node.aggregate.Live, e.state.greatestIngressPosition) > 0) {
 			e.state.greatestIngressPosition = node.aggregate.Live
 		}
-		if e.mode == RunModeLive && (code == DispositionAggregateInserted || code == DispositionAggregateRevised || code == DispositionAggregateWithdrawn) {
+		if (code == DispositionAggregateInserted || code == DispositionAggregateRevised || code == DispositionAggregateWithdrawn) {
 			// Canonical mutation and aggregate accounting remain synchronous, but
 			// the immutable market projection is coalesced at the next accepted
 			// timer or aggregate-ingress fence.
 			e.state.aggregateProjectionPending = true
-		} else if (code == DispositionAggregateInserted || code == DispositionAggregateRevised || code == DispositionAggregateWithdrawn) &&
-			!e.deferReplayAggregateProjectionLocked(node) {
+		} else if code == DispositionAggregateInserted || code == DispositionAggregateRevised || code == DispositionAggregateWithdrawn {
 			e.state.exposedRevision++
-		}
-		if e.mode == RunModeReplay && (code == DispositionAggregateInserted || code == DispositionAggregateRevised || code == DispositionAggregateWithdrawn) {
-			if index, ok := e.state.binding.index[node.aggregate.Symbol]; ok && e.state.replay.aggregateTouched != nil {
-				e.state.replay.aggregateTouched[index] = struct{}{}
-			}
 		}
 		if node.aggregate.Source == AggregateSourceLive && (code == DispositionAggregateInserted || code == DispositionAggregateRevised) {
 			if index, ok := e.state.binding.index[node.aggregate.Symbol]; ok && e.state.aggregateEvaluator.coverage[index] == coverageNoPrintThroughT {
@@ -1110,7 +1005,7 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		e.mu.Unlock()
 	} else if node.kind == inputOperationalIngressIntegrity {
 		e.mu.Lock()
-		if e.mode != RunModeLive || e.state.binding == nil || !e.state.liveEpochActive {
+		if e.state.binding == nil || !e.state.liveEpochActive {
 			code, reason = DispositionTQFenced, ReasonHistoricalContext
 		} else {
 			if e.state.hydration.generation.active && !e.cancelHydrationGenerationLocked(true) {
@@ -1210,70 +1105,10 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 		e.mu.Lock()
 		code, reason = e.applyLiveCoverageFenceLocked(node)
 		e.mu.Unlock()
-	} else if node.kind == inputReplayStart {
-		e.mu.Lock()
-		code, reason = e.applyReplayStartLocked(node)
-		e.mu.Unlock()
-	} else if node.kind == inputReplayGroup {
-		e.mu.Lock()
-		code, reason = e.applyReplayGroupLocked(node)
-		e.mu.Unlock()
-	} else if node.kind == inputReplayEnd {
-		e.mu.Lock()
-		code, reason = e.applyReplayEndLocked(node)
-		e.mu.Unlock()
-	} else if node.kind == inputReplayRequestedEnd {
-		e.mu.Lock()
-		code, reason = e.applyReplayRequestedEndLocked(node)
-		e.mu.Unlock()
-	} else if node.kind == inputReplayFailure {
-		e.mu.Lock()
-		code, reason = e.applyReplayFailureLocked(node)
-		e.mu.Unlock()
-	} else if node.kind == inputCheckpointProjection {
-		e.mu.Lock()
-		stagedCheckpointProjection = e.projectCheckpointLocked(node.admissionTime)
-		if stagedCheckpointProjection.Disposition == CheckpointProjected {
-			code, reason = DispositionCheckpointProjected, ReasonNone
-		} else {
-			code, reason = DispositionCheckpointRejected, ReasonStructural
-		}
-		e.mu.Unlock()
-	} else if node.kind == inputCheckpointInstall {
-		e.mu.Lock()
-		stagedCheckpointInstall = e.installCheckpointLocked(node.checkpointCandidate)
-		switch stagedCheckpointInstall.Disposition {
-		case CheckpointInstalled:
-			code, reason = DispositionCheckpointInstalled, ReasonNone
-		case CheckpointIncompatible:
-			code, reason = DispositionCheckpointIncompatible, ReasonBinding
-		default:
-			code, reason = DispositionCheckpointInvalid, ReasonStructural
-		}
-		e.mu.Unlock()
-	} else if node.kind == inputCheckpointTerminal {
-		e.mu.Lock()
-		code, reason = e.applyCheckpointTerminalLocked(node.checkpointTerminal)
-		e.mu.Unlock()
 	} else if node.kind == inputIllegal {
 		code, reason = DispositionIllegalLifecycle, ReasonLifecycle
 	} else if node.kind == inputUnsupportedSchema {
 		code, reason = DispositionUnsupportedSchema, ReasonSchema
-	}
-	if code == DispositionReplayFailed {
-		e.mu.Lock()
-		if !e.state.globalFailure {
-			e.state.replay.terminal = true
-			if e.state.replay.failureReason == "" {
-				e.state.replay.failureReason = ReplayFailureEngine
-				e.state.replay.failureLogical = e.state.replay.lastGroup
-				if e.state.replay.nextOrdinal > 0 {
-					e.state.replay.failureOrdinal = e.state.replay.nextOrdinal - 1
-				}
-			}
-			e.enterSuppressionLocked(lifecycleEventReplayFailure, node, lifecycleReasonReplayFailure)
-		}
-		e.mu.Unlock()
 	}
 	// Future approved contributors may be inserted only here as explicit,
 	// statically named synchronous calls in fixed source order. Each call must
@@ -1305,18 +1140,11 @@ func (e *Engine) transition(node *queueNode) transitionDisposition {
 	disposition := transitionDisposition{EngineSequence: node.engineSequence, Code: code, Reason: reason,
 		hydrationPlan: stagedHydrationPlan, hydrationRows: stagedHydrationRows, hydrationAccounting: stagedHydrationAccounting,
 		hydrationFenceCommand: stagedHydrationFenceCommand}
-	disposition.checkpointProjection = stagedCheckpointProjection
-	disposition.checkpointInstall = stagedCheckpointInstall
-	if e.state.lifecycle == lifecycleSuppressed && (code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed || code == DispositionIngressIntegrity || code == DispositionHydrationIntegrity || code == DispositionRecoveryExhausted) {
+	if e.state.lifecycle == lifecycleSuppressed && (code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionIngressIntegrity || code == DispositionHydrationIntegrity || code == DispositionRecoveryExhausted) {
 		disposition.SuppressionDisposition = e.state.suppressionDisposition
 	}
-	forceUnavailable := e.state.lifecycle == lifecycleSuppressed && (code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionReplayFailed || code == DispositionIngressIntegrity || code == DispositionHydrationIntegrity || code == DispositionRecoveryExhausted)
+	forceUnavailable := e.state.lifecycle == lifecycleSuppressed && (code == DispositionAggregateIntegrity || code == DispositionAccountingIntegrity || code == DispositionIngressIntegrity || code == DispositionHydrationIntegrity || code == DispositionRecoveryExhausted)
 	final := e.finishTransitionLocked(node, disposition, before, forceUnavailable)
-	if final.SuppressionDisposition == "" && final.Code != DispositionPublicationIntegrity && final.Code != DispositionAccountingIntegrity && final.Code != DispositionClockRegression {
-		e.mu.Lock()
-		e.maybeSubmitCheckpointLocked(node.admissionTime)
-		e.mu.Unlock()
-	}
 	return final
 }
 
@@ -1346,9 +1174,6 @@ func (e *Engine) broadcastLocked() {
 	e.changed = make(chan struct{})
 }
 
-// externalQueueOccupancyLocked excludes the single engine-owned checkpoint
-// continuation from ingress accounting. The continuation still occupies and
-// orders within the physical FIFO, but it is not an admitted external fact.
 func (e *Engine) externalQueueOccupancyLocked() int {
-	return len(e.queue) - e.internalQueued
+	return len(e.queue)
 }

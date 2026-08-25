@@ -110,7 +110,7 @@ func (e *Engine) IssueScheduledRecoveryCommand() (ScheduledRecoveryCommand, erro
 	state := &e.state.scheduledRecovery
 	recoverableSuppression := e.state.lifecycle == lifecycleSuppressed && e.state.suppressionDisposition == SuppressionSameBindingRecoveryAllowed
 	orderedRetry := (e.state.lifecycle == lifecycleAwaitingSession || e.state.lifecycle == lifecycleAwaitingAggregateAck || e.state.lifecycle == lifecycleRecovering) && !e.state.liveEpochActive
-	if e.mode != RunModeLive || (!recoverableSuppression && !orderedRetry) ||
+	if (!recoverableSuppression && !orderedRetry) ||
 		state.pending == nil || state.dispatched || !validScheduledRecoveryCommand(*state.pending) {
 		return ScheduledRecoveryCommand{}, errors.New("scheduled recovery command is not issuable")
 	}
@@ -138,7 +138,7 @@ func (e *Engine) applyScheduledRecoveryLocked(node *queueNode) (DispositionCode,
 	state := &e.state.scheduledRecovery
 	recoverableSuppression := e.state.lifecycle == lifecycleSuppressed && e.state.suppressionDisposition == SuppressionSameBindingRecoveryAllowed
 	orderedRetry := (e.state.lifecycle == lifecycleAwaitingSession || e.state.lifecycle == lifecycleAwaitingAggregateAck || e.state.lifecycle == lifecycleRecovering) && !e.state.liveEpochActive
-	if e.mode != RunModeLive || e.state.binding == nil || (!recoverableSuppression && !orderedRetry) || state.pending == nil || !state.dispatched ||
+	if e.state.binding == nil || (!recoverableSuppression && !orderedRetry) || state.pending == nil || !state.dispatched ||
 		command != *state.pending || command.bindingIdentity != e.state.binding.identity || command.failedEpoch != e.state.liveEpoch {
 		state.fenced++
 		return DispositionConnectionControlFenced, ReasonHistoricalContext

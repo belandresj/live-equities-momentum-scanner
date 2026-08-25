@@ -54,7 +54,7 @@ type privatePublication struct {
 	publicationID                                                           uint64
 	bindingIdentity                                                         string
 	tradingDate                                                             string
-	mode                                                                    RunMode
+	mode                                                                    string
 	lifecycle                                                               lifecycle
 	lifecycleReason                                                         lifecycleReason
 	suppressionDisposition                                                  SuppressionDisposition
@@ -96,7 +96,6 @@ type privatePublication struct {
 	hydrationPolicyAction                                                   HydrationPolicyAction
 	hydrationPolicyToken                                                    uint64
 	hydrationPolicyWaiting                                                  bool
-	installedCheckpoint                                                     bool
 	evaluatorIntegrity                                                      *EvaluatorIntegrityView
 	tq                                                                      TQView
 }
@@ -108,7 +107,7 @@ type publicationView privatePublication
 func (e *Engine) installInitialPublication() {
 	initial := &privatePublication{
 		kind: publicationInitial, schemaVersion: privatePublicationSchemaV1,
-		mode: e.mode, lifecycle: lifecycleInitializing, clockMonotonic: true,
+		mode: "live", lifecycle: lifecycleInitializing, clockMonotonic: true,
 	}
 	for _, reason := range []lifecycleReason{
 		lifecycleReasonSequenceExhaustion,
@@ -116,12 +115,11 @@ func (e *Engine) installInitialPublication() {
 		lifecycleReasonCanonicalIntegrity,
 		lifecycleReasonPublicationIntegrity,
 		lifecycleReasonAccountingIntegrity,
-		lifecycleReasonReplayFailure,
 		lifecycleReasonIngressIntegrity,
 		lifecycleReasonRecoveryExhausted,
 	} {
 		index, _ := sentinelIndex(reason)
-		e.sentinels[index] = newUnavailableSentinel(e.mode, reason)
+		e.sentinels[index] = newUnavailableSentinel(reason)
 	}
 	e.storePublication(initial)
 }
@@ -138,8 +136,6 @@ func sentinelIndex(reason lifecycleReason) (int, bool) {
 		return 3, true
 	case lifecycleReasonAccountingIntegrity:
 		return 4, true
-	case lifecycleReasonReplayFailure:
-		return 5, true
 	case lifecycleReasonIngressIntegrity:
 		return 6, true
 	case lifecycleReasonRecoveryExhausted:
@@ -149,11 +145,11 @@ func sentinelIndex(reason lifecycleReason) (int, bool) {
 	}
 }
 
-func newUnavailableSentinel(mode RunMode, reason lifecycleReason) *privatePublication {
+func newUnavailableSentinel(reason lifecycleReason) *privatePublication {
 	result := &privatePublication{
 		kind: publicationUnavailableSentinel, schemaVersion: privatePublicationSchemaV1,
-		mode: mode, lifecycle: lifecycleSuppressed, lifecycleReason: reason,
-		suppressionDisposition: suppressionDispositionFor(mode, reason), clockMonotonic: true,
+		mode: "live", lifecycle: lifecycleSuppressed, lifecycleReason: reason,
+		suppressionDisposition: suppressionDispositionFor(reason), clockMonotonic: true,
 		aggregateEvaluation: aggregateEvaluationResult{mode: rankingSuppressed, reason: rankingReasonGlobalSuppression},
 	}
 	switch reason {
@@ -169,8 +165,6 @@ func newUnavailableSentinel(mode RunMode, reason lifecycleReason) *privatePublic
 		result.lastDisposition, result.dispositionReason = DispositionPublicationIntegrity, ReasonPublication
 	case lifecycleReasonAccountingIntegrity:
 		result.lastDisposition, result.dispositionReason = DispositionAccountingIntegrity, ReasonAccounting
-	case lifecycleReasonReplayFailure:
-		result.lastDisposition, result.dispositionReason = DispositionReplayFailed, ReasonReplayEvidence
 	case lifecycleReasonIngressIntegrity:
 		result.lastDisposition, result.dispositionReason = DispositionIngressIntegrity, ReasonIngressIntegrity
 	case lifecycleReasonRecoveryExhausted:
@@ -388,9 +382,9 @@ func classifyCompletedTransition(counters *transitionCounters, code DispositionC
 	switch code {
 	case DispositionAggregateInserted, DispositionAggregateRevised, DispositionAggregateWithdrawn:
 		counters.appliedMarket++
-	case DispositionBindingInstalled, DispositionControlApplied, DispositionTimerApplied, DispositionReplayStarted, DispositionReplayEnded, DispositionReplayRequestedEnd,
+	case DispositionBindingInstalled, DispositionControlApplied, DispositionTimerApplied,
 		DispositionConnectionControlApplied, DispositionConnectionControlDeferred, DispositionHydrationPlanApplied, DispositionHydrationChunkApplied,
-		DispositionAggregateIngressFenceApplied, DispositionCheckpointProjected, DispositionCheckpointInstalled, DispositionCheckpointTerminalApplied:
+		DispositionAggregateIngressFenceApplied:
 		counters.appliedNonmarket++
 	case DispositionLiveCoverageFenceApplied:
 		counters.appliedNonmarket++
@@ -400,11 +394,11 @@ func classifyCompletedTransition(counters *transitionCounters, code DispositionC
 		counters.appliedNonmarket++
 	case DispositionAggregateExactDuplicate:
 		counters.exactDuplicate++
-	case DispositionAggregateFenced, DispositionConnectionControlFenced, DispositionHydrationFenced, DispositionAggregateIngressFenceFenced, DispositionCheckpointTerminalFenced, DispositionLiveCoverageFenceFenced:
+	case DispositionAggregateFenced, DispositionConnectionControlFenced, DispositionHydrationFenced, DispositionAggregateIngressFenceFenced, DispositionLiveCoverageFenceFenced:
 		counters.fenced++
 	case DispositionHydrationTerminalApplied:
 		counters.terminalWorkFact++
-	case DispositionClockRegression, DispositionAggregateIntegrity, DispositionPublicationIntegrity, DispositionAccountingIntegrity, DispositionReplayFailed, DispositionIngressIntegrity, DispositionHydrationIntegrity, DispositionRecoveryExhausted:
+	case DispositionClockRegression, DispositionAggregateIntegrity, DispositionPublicationIntegrity, DispositionAccountingIntegrity, DispositionIngressIntegrity, DispositionHydrationIntegrity, DispositionRecoveryExhausted:
 		counters.integrityFailure++
 	default:
 		counters.rejected++
@@ -441,7 +435,7 @@ func (e *Engine) buildPublicationLocked(id, sequence uint64, disposition transit
 	}
 	candidate := &privatePublication{
 		kind: publicationNormal, schemaVersion: privatePublicationSchemaV1, publicationID: id,
-		mode: e.mode, lifecycle: e.state.lifecycle, lastDisposition: disposition.Code,
+		mode: "live", lifecycle: e.state.lifecycle, lastDisposition: disposition.Code,
 		dispositionReason: disposition.Reason, lastEngineSequence: sequence,
 		watermark: immutableTimePointer(e.state.committedT), generatedAt: generatedAt,
 		queueCapacity: e.capacity, requiredReserve: e.reserve, queueOccupancy: e.externalQueueOccupancyLocked(),
@@ -468,7 +462,6 @@ func (e *Engine) buildPublicationLocked(id, sequence uint64, disposition transit
 		hydrationPolicyAction:       e.state.hydration.policyAction,
 		hydrationPolicyToken:        e.state.hydration.lastPolicyToken,
 		hydrationPolicyWaiting:      e.state.hydration.policyWaiting,
-		installedCheckpoint:         e.state.installedCheckpoint != nil,
 		evaluatorIntegrity:          cloneEvaluatorIntegrity(e.state.evaluatorIntegrity),
 		tq:                          cloneTQView(e.tqViewLocked()),
 	}
@@ -531,7 +524,7 @@ func validatePublication(candidate *privatePublication) error {
 	classifiedAdmissions := candidate.admission.admittedExternal + candidate.admission.notAdmittedInvalid + candidate.admission.notAdmittedCanceled +
 		candidate.admission.notAdmittedClosed + candidate.admission.pressureShedOptional + candidate.admission.sequenceBudgetExhausted
 	if candidate.kind != publicationNormal || candidate.schemaVersion != privatePublicationSchemaV1 ||
-		candidate.publicationID == 0 || (candidate.mode != RunModeLive && candidate.mode != RunModeReplay) ||
+		candidate.publicationID == 0 || candidate.mode != "live" ||
 		candidate.generatedAt.IsZero() || candidate.generatedAt != candidate.generatedAt.UTC() ||
 		candidate.queueCapacity <= 1 || candidate.requiredReserve < 1 || candidate.requiredReserve >= candidate.queueCapacity ||
 		candidate.queueOccupancy < 0 || candidate.queueOccupancy > candidate.queueCapacity ||

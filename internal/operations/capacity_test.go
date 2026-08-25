@@ -138,12 +138,11 @@ func TestC8LOAD01CurrentHostMixedLoad(t *testing.T) {
 		tqCodes[engine.DispositionTQFenced] != tqFacts {
 		t.Fatalf("aggregate/TQ oracle aggregate=%v tq=%v", codes, tqCodes)
 	}
-	view := run.Engine().ObserveReplayDeterministic()
-	if len(view.Canonical) != population || len(view.Canonical[0].Records) != 1 || view.Canonical[0].LatestValues.Close != capacityCorrectionClose(corrections-1) ||
-		view.Evaluation.Population.UniverseTotal != population || view.Evaluation.Population.TrustedRankableMark != initialRecords ||
-		view.Evaluation.Population.NoPrintThroughT != population-initialRecords || view.Evaluation.KnownRankableCount != initialRecords ||
-		view.Evaluation.TotalPassers != 0 || len(view.Evaluation.Rows) != 0 {
-		t.Fatalf("ranking/canonical oracle population=%d first=%+v evaluation=%+v", len(view.Canonical), view.Canonical[0], view.Evaluation)
+	view := run.Engine().ObserveSnapshot()
+	if view.Publication.AggregateEvaluation.Population.UniverseTotal != population || view.Publication.AggregateEvaluation.Population.TrustedRankableMark != initialRecords ||
+		view.Publication.AggregateEvaluation.Population.NoPrintThroughT != population-initialRecords || view.Publication.AggregateEvaluation.KnownRankableCount != initialRecords ||
+		view.Publication.AggregateEvaluation.TotalPassers != 0 || len(view.Publication.AggregateEvaluation.Rows) != 0 {
+		t.Fatalf("ranking/publication oracle evaluation=%+v", view.Publication.AggregateEvaluation)
 	}
 	status := run.Status()
 	metrics := run.Metrics()

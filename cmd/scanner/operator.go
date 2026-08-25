@@ -15,7 +15,7 @@ type liveOperatorSample struct {
 	Metrics         operations.Metrics
 	IngressIncident *operations.IngressIncident
 	RecoveryAttempt *operations.RecoveryAttemptOutcome
-	Evaluation      engine.ReplayEvaluationView
+	Evaluation      engine.EvaluationView
 	Ranked          int
 }
 
@@ -257,7 +257,7 @@ func ingressRate(value float64) string {
 	return fmt.Sprintf("%.1f/s", value)
 }
 
-func renderPopulationTransitionDiagnostic(output io.Writer, evaluation engine.ReplayEvaluationView) error {
+func renderPopulationTransitionDiagnostic(output io.Writer, evaluation engine.EvaluationView) error {
 	d, p := evaluation.PopulationTransition, evaluation.Population
 	if d.BootstrapUnknown == 0 && p.UnresolvedPopulation == 0 {
 		return nil

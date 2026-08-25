@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/belandresj/live-equities-momentum-scanner/internal/checkpoint"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/engine"
 	"github.com/belandresj/live-equities-momentum-scanner/internal/massive"
 )
@@ -15,14 +14,13 @@ import (
 type LiveComponents struct {
 	Adapter                                                                *massive.LiveAdapter
 	Hydrator                                                               *massive.HydrationWorker
-	Store                                                                  *checkpoint.Store
 	Workers, RowsPerChunk                                                  int
 	MaximumResponseBytes, MaximumNormalizedRecords, MaximumResidentRecords int64
 	Durations                                                              massive.OperationalDurations
 }
 
 func (c LiveComponents) valid() bool {
-	return c.Adapter != nil && c.Hydrator != nil && c.Store == nil && validLiveHydrationWorkers(c.Workers) && c.RowsPerChunk > 0 &&
+	return c.Adapter != nil && c.Hydrator != nil && validLiveHydrationWorkers(c.Workers) && c.RowsPerChunk > 0 &&
 		c.MaximumResidentRecords == int64(c.Workers)*massive.HydrationMaximumRows &&
 		c.MaximumResponseBytes > 0 && c.MaximumNormalizedRecords > 0 && c.MaximumResidentRecords > 0
 }
@@ -60,9 +58,6 @@ func (r *Runtime) RunLive(ctx context.Context, components LiveComponents) error 
 }
 
 func (r *Runtime) runLive(ctx context.Context, components LiveComponents) error {
-	if components.Store != nil {
-		r.installCheckpoint(ctx, components.Store)
-	}
 	var lastErr error
 	for attemptOrdinal := uint64(1); ; attemptOrdinal++ {
 		if r.retirementFailed.Load() {
@@ -251,8 +246,6 @@ func hydrationPurpose(view engine.OperationalView) (engine.HydrationPurpose, err
 	switch {
 	case view.Lifecycle == "recovering":
 		return engine.HydrationGapRecovery, nil
-	case view.InstalledCheckpoint:
-		return engine.HydrationCheckpointCatchup, nil
 	case view.Lifecycle == "hydrating":
 		return engine.HydrationFreshBootstrap, nil
 	default:
@@ -408,28 +401,6 @@ func recoveryAttemptClassification(terminal massive.TerminalResult) (string, str
 	default:
 		return string(terminal.Source), reason
 	}
-}
-
-func (r *Runtime) installCheckpoint(ctx context.Context, store *checkpoint.Store) bool {
-	for _, authority := range []checkpoint.CandidateAuthority{checkpoint.CandidateLatest, checkpoint.CandidatePrevious} {
-		loaded := store.LoadCandidate(ctx, authority)
-		if !loaded.Candidate.Integrity {
-			continue
-		}
-		admission, completion := r.engine.AdmitCheckpointInstall(ctx, loaded.Candidate)
-		if admission != engine.AdmissionAdmitted || completion == nil {
-			continue
-		}
-		select {
-		case <-ctx.Done():
-			return false
-		case result := <-completion:
-			if result.Disposition == engine.CheckpointInstalled {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func (r *Runtime) openAttempt(lifetime, operation context.Context, components LiveComponents, token uint64) (*massive.LiveAttempt, error) {

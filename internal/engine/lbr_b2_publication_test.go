@@ -17,7 +17,7 @@ func TestPLBRB2SelectedEnrichmentAndPublication(t *testing.T) {
 	publicBinding := hydrationPopulationBinding(t, []string{"AAA", "BBB"})
 	candidate := publicBinding.SessionStart().Add(330 * time.Second)
 	now := candidate
-	e := aggregateEngine(t, publicBinding, RunModeLive, &now)
+	e := aggregateEngine(t, publicBinding, &now)
 	defer closeAndWait(t, e)
 	binding := e.state.binding
 	selected := buildB2FutureFoldedState(binding, candidate)
@@ -90,7 +90,7 @@ func TestPLBRB2QualificationTrustClosure(t *testing.T) {
 	binding := hydrationPopulationBinding(t, []string{"AAA"})
 	candidate := binding.SessionStart().Add(60 * time.Second)
 	now := candidate
-	e := aggregateEngine(t, binding, RunModeLive, &now)
+	e := aggregateEngine(t, binding, &now)
 	defer closeAndWait(t, e)
 
 	e.mu.Lock()
@@ -147,7 +147,7 @@ func TestPLBRB2FutureStructuralBoundaryActivation(t *testing.T) {
 	binding := hydrationPopulationBinding(t, []string{"AAA"})
 	t0 := binding.SessionStart().Add(60 * time.Second)
 	now := t0.Add(2 * time.Second)
-	e := aggregateEngine(t, binding, RunModeLive, &now)
+	e := aggregateEngine(t, binding, &now)
 	defer closeAndWait(t, e)
 	e.mu.Lock()
 	installEvaluatorMarkOnSymbol(&e.state.binding.symbols[0], t0, 12, qualificationFinalized)

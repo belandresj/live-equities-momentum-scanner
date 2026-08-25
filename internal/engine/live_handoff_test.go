@@ -13,7 +13,7 @@ import (
 func TestPLBRD2HandoffUnbufferedBatchBypassesGeneralFIFO(t *testing.T) {
 	binding := testBinding(t)
 	now := binding.SessionStart().Add(10 * time.Second)
-	e := aggregateEngine(t, binding, RunModeLive, &now)
+	e := aggregateEngine(t, binding, &now)
 	defer closeAndWait(t, e)
 
 	first, err := NewLiveAggregate(liveAggregate(binding, "AAA", binding.SessionStart(), 1, 1))

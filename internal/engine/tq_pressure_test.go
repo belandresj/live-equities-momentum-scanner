@@ -433,7 +433,7 @@ func pressureProofEngine(t *testing.T) (*Engine, reference.Binding, *atomic.Int6
 	clockNanos := &atomic.Int64{}
 	clockNanos.Store(start.UnixNano())
 	delay := time.Duration(0)
-	e, err := New(Config{Mode: RunModeLive, Clock: func() time.Time { return time.Unix(0, clockNanos.Load()).UTC() }, Capacity: 64, RequiredReserve: 4, EvaluationDelay: &delay})
+	e, err := New(Config{Clock: func() time.Time { return time.Unix(0, clockNanos.Load()).UTC() }, Capacity: 64, RequiredReserve: 4, EvaluationDelay: &delay})
 	if err != nil {
 		t.Fatal(err)
 	}

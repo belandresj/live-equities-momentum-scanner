@@ -294,7 +294,7 @@ func (r *Runtime) recordWatermarkStallCycle(startedAt, completedAt time.Time, cy
 	if r == nil {
 		return
 	}
-	if before.RunMode != engine.RunModeLive || before.Lifecycle != "live" || after.RunMode != engine.RunModeLive || after.Lifecycle != "live" {
+	if before.RunMode != "live" || before.Lifecycle != "live" || after.RunMode != "live" || after.Lifecycle != "live" {
 		return
 	}
 	causalBefore, hasCausalBefore := watermarkDiagnosticTarget(r.binding, r.config, startedAt)

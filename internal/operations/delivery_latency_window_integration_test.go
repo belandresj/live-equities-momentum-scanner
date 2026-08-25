@@ -40,13 +40,13 @@ func TestDeliveryLatencyEmptyWindowMapsAfterPressureReset(t *testing.T) {
 		t.Fatalf("reset changed cumulative family accounting: before=%+v after=%+v", before, empty)
 	}
 
-	operations.RecordDeliveryLatencyForTest(run, 11*time.Millisecond, operations.DeliveryLatencyCheckpoint)
+	operations.RecordDeliveryLatencyForTest(run, 11*time.Millisecond, operations.DeliveryLatencyTimer)
 	after := captureAndMapDeliveryLatency(t, run)
-	if !after.WindowNonempty || after.MaximumDuration != 11*time.Millisecond || after.MaximumFamily != operations.DeliveryLatencyCheckpoint {
+	if !after.WindowNonempty || after.MaximumDuration != 11*time.Millisecond || after.MaximumFamily != operations.DeliveryLatencyTimer {
 		t.Fatalf("next delivery did not establish its atomic maximum pair: %+v", after)
 	}
-	if after.Total() != beforeDeliveries+1 || after.Aggregate != before.Aggregate || after.Checkpoint != before.Checkpoint+1 || after.Unknown != 0 {
-		t.Fatalf("cumulative seven-family identity changed: before=%+v after=%+v", before, after)
+	if after.Total() != beforeDeliveries+1 || after.Aggregate != before.Aggregate || after.Timer != before.Timer+1 || after.Unknown != 0 {
+		t.Fatalf("cumulative six-family identity changed: before=%+v after=%+v", before, after)
 	}
 }
 

@@ -21,7 +21,6 @@ type AggregateSource string
 const (
 	AggregateSourceLive       AggregateSource = "live"
 	AggregateSourceHistorical AggregateSource = "historical"
-	AggregateSourceReplay     AggregateSource = "replay"
 )
 
 type ATSProvenance string
@@ -44,11 +43,6 @@ type LivePosition struct {
 	ArrayIndex      uint32
 }
 
-type ReplayPosition struct {
-	ArtifactID    string
-	RecordOrdinal uint64
-}
-
 type HistoricalPosition struct {
 	Generation    uint64
 	RequestToken  string
@@ -65,7 +59,6 @@ type AggregateInput struct {
 	Values                         AggregateValues
 	DeliveryTime                   time.Time
 	Live                           LivePosition
-	Replay                         ReplayPosition
 	Historical                     HistoricalPosition
 }
 
@@ -92,7 +85,6 @@ const (
 	ReasonSourcePosition               DispositionReason = "source_position"
 	ReasonLifecycle                    DispositionReason = "lifecycle"
 	ReasonStaleLiveEpoch               DispositionReason = "stale_live_epoch"
-	ReasonReplayArtifact               DispositionReason = "replay_artifact"
 	ReasonHistoricalContext            DispositionReason = "historical_context"
 	ReasonFutureEventTime              DispositionReason = "future_event_time"
 	ReasonTooLate                      DispositionReason = "too_late"
@@ -105,14 +97,12 @@ const (
 	ReasonAccounting                   DispositionReason = "accounting"
 	ReasonPressure                     DispositionReason = "pressure"
 	ReasonTerminal                     DispositionReason = "terminal"
-	ReasonReplayEvidence               DispositionReason = "replay_evidence"
 )
 
 type frozenAggregateInput struct {
 	AggregateInput
 	historicalProof *frozenHistoricalProofContext
 	s2Proof         bool
-	replayProof     bool
 	c6Historical    bool
 }
 
@@ -122,7 +112,7 @@ func freezeAggregateInput(input AggregateInput) frozenAggregateInput {
 
 func boundedAggregateInput(input AggregateInput) bool {
 	return len(input.SchemaVersion) <= 64 && len(input.BindingIdentity) <= maximumContextBytes && len(input.Symbol) <= maximumSymbolBytes &&
-		len(input.Source) <= 32 && len(input.Values.ATSProvenance) <= 64 && len(input.Replay.ArtifactID) <= maximumContextBytes &&
+		len(input.Source) <= 32 && len(input.Values.ATSProvenance) <= 64 &&
 		len(input.Historical.RequestToken) <= maximumContextBytes
 }
 
@@ -136,7 +126,6 @@ type aggregateEvidence struct {
 	restored     bool
 	deliveryTime time.Time
 	live         LivePosition
-	replay       ReplayPosition
 	historical   HistoricalPosition
 }
 
@@ -209,7 +198,7 @@ type symbolAggregateState struct {
 	tailCoverageBuilt  bool
 	tailCoverageUsable bool
 	// evaluationTailPresence exists only on a transition-local shallow copy.
-	// It is built once from canonical tail and is never applied or checkpointed.
+	// It is built once from canonical tail and is never applied to canonical state.
 	evaluationTailPresence *evaluationTailWindow
 }
 
@@ -312,15 +301,6 @@ func (e *Engine) applyAggregateLocked(input frozenAggregateInput, now time.Time)
 	e.state.aggregates.consumed++
 	code, reason := e.decideAggregateLocked(input, now)
 	e.updateInvalidMarkEvidenceLocked(input, now, code, reason)
-	// Exact duplicates and fenced/rejected facts that cannot update invalid-mark
-	// evidence do not change the semantic as-of-T0 image. Actual canonical
-	// mutations and structural invalid-mark evidence invalidate a detached
-	// projection that has already copied an earlier symbol slice.
-	if e.state.checkpointProjectionActive && input.WindowStart.Before(e.state.checkpointProjectionT0) &&
-		(code == DispositionAggregateInserted || code == DispositionAggregateRevised || code == DispositionAggregateWithdrawn ||
-			code == DispositionAggregateRejected && reason == ReasonStructural) {
-		e.state.checkpointProjectionDirty = true
-	}
 	switch code {
 	case DispositionAggregateInserted:
 		e.state.aggregates.inserted++
@@ -336,9 +316,6 @@ func (e *Engine) applyAggregateLocked(input frozenAggregateInput, now time.Time)
 		e.state.aggregates.fenced++
 	case DispositionAggregateIntegrity:
 		e.state.aggregates.integrity++
-	}
-	if input.replayProof && replayAggregateDispositionAccepted(e.state.replay.complete, code) {
-		e.state.replay.nextOrdinal++
 	}
 	return code, reason
 }
@@ -449,20 +426,12 @@ func (e *Engine) decideAggregateLocked(input frozenAggregateInput, now time.Time
 	if e.state.aggregateIntegrity {
 		return DispositionAggregateIntegrity, ReasonRepeatedPositionUnequal
 	}
-	if !input.s2Proof && !input.replayProof && input.Source == AggregateSourceLive && e.state.liveEpoch != 0 &&
+	if !input.s2Proof && input.Source == AggregateSourceLive && e.state.liveEpoch != 0 &&
 		(!e.state.liveEpochActive || input.Live.ConnectionEpoch != e.state.liveEpoch) {
 		return DispositionAggregateFenced, ReasonStaleLiveEpoch
 	}
 	if !e.validAggregateLifecycleLocked(input) {
 		return DispositionAggregateRejected, ReasonLifecycle
-	}
-	if input.Source == AggregateSourceReplay && input.replayProof {
-		state := e.state.replay
-		if !state.validated || state.terminal || input.BindingIdentity != state.bindingID || input.Replay.ArtifactID != state.artifactID ||
-			input.Replay.RecordOrdinal != state.nextOrdinal || input.DeliveryTime != now || input.DeliveryTime.Before(state.nextGroup) || input.DeliveryTime.After(state.requestedEnd) ||
-			(state.complete && (input.WindowEnd != input.DeliveryTime || input.WindowStart != input.DeliveryTime.Add(-time.Second))) {
-			return DispositionAggregateRejected, ReasonReplayEvidence
-		}
 	}
 	if input.SchemaVersion != AggregateSchemaV1 {
 		return DispositionAggregateRejected, ReasonSchema
@@ -470,8 +439,7 @@ func (e *Engine) decideAggregateLocked(input frozenAggregateInput, now time.Time
 	if input.BindingIdentity != binding.identity {
 		return DispositionAggregateFenced, ReasonBinding
 	}
-	if (e.mode == RunModeLive && input.Source != AggregateSourceLive && input.Source != AggregateSourceHistorical) ||
-		(e.mode == RunModeReplay && input.Source != AggregateSourceReplay) {
+	if input.Source != AggregateSourceLive && input.Source != AggregateSourceHistorical {
 		return DispositionAggregateRejected, ReasonRunSource
 	}
 	index, ok := binding.index[input.Symbol]
@@ -553,9 +521,6 @@ func (e *Engine) decideAggregateLocked(input frozenAggregateInput, now time.Time
 				state.latest.record = *existing
 			}
 		}
-		if input.Source == AggregateSourceReplay {
-			e.state.replayArtifact = input.Replay.ArtifactID
-		}
 		return DispositionAggregateExactDuplicate, ReasonNone
 	}
 
@@ -570,17 +535,6 @@ func (e *Engine) decideAggregateLocked(input frozenAggregateInput, now time.Time
 				return e.installAggregateLocked(symbol, input, now, true)
 			}
 			comparison := compareLive(input.Live, existing.authority.live)
-			if comparison < 0 {
-				return DispositionAggregateRejected, ReasonNonprecedent
-			}
-			if comparison == 0 {
-				return e.integrityWithdrawLocked(symbol, existing), ReasonRepeatedPositionUnequal
-			}
-		case AggregateSourceReplay:
-			if existing.authority.restored {
-				return e.installAggregateLocked(symbol, input, now, true)
-			}
-			comparison := compareReplay(input.Replay, existing.authority.replay)
 			if comparison < 0 {
 				return DispositionAggregateRejected, ReasonNonprecedent
 			}
@@ -603,27 +557,19 @@ func (e *Engine) decideAggregateLocked(input frozenAggregateInput, now time.Time
 
 func (e *Engine) validAggregateLifecycleLocked(input frozenAggregateInput) bool {
 	if input.c6Historical {
-		return e.mode == RunModeLive && (e.state.lifecycle == lifecycleHydrating || e.state.lifecycle == lifecycleRecovering)
+		return (e.state.lifecycle == lifecycleHydrating || e.state.lifecycle == lifecycleRecovering)
 	}
-	if input.s2Proof || input.replayProof {
-		return (e.mode == RunModeLive && e.state.lifecycle == lifecycleAwaitingAggregateAck) ||
-			(e.mode == RunModeReplay && ((input.s2Proof && e.state.lifecycle == lifecycleInitializing) || (input.replayProof && e.state.lifecycle == lifecycleReplaying)))
+	if input.s2Proof {
+		return e.state.lifecycle == lifecycleAwaitingAggregateAck
 	}
-	return e.mode == RunModeLive && input.Source == AggregateSourceLive && e.state.liveEpochActive && e.state.aggregateAcknowledged &&
+	return input.Source == AggregateSourceLive && e.state.liveEpochActive && e.state.aggregateAcknowledged &&
 		(e.state.lifecycle == lifecycleHydrating || e.state.lifecycle == lifecycleLive || e.state.lifecycle == lifecycleRecovering)
-}
-
-func replayAggregateDispositionAccepted(complete bool, code DispositionCode) bool {
-	if complete {
-		return code == DispositionAggregateInserted
-	}
-	return code == DispositionAggregateInserted || code == DispositionAggregateRevised || code == DispositionAggregateExactDuplicate
 }
 
 func (e *Engine) validateSourceContextLocked(input frozenAggregateInput) (DispositionReason, bool) {
 	switch input.Source {
 	case AggregateSourceLive:
-		if input.Live.ConnectionEpoch == 0 || input.Live.FrameSequence == 0 || input.Replay != (ReplayPosition{}) || input.Historical != (HistoricalPosition{}) {
+		if input.Live.ConnectionEpoch == 0 || input.Live.FrameSequence == 0 || input.Historical != (HistoricalPosition{}) {
 			return ReasonSourcePosition, false
 		}
 		if e.state.liveEpoch != 0 && input.Live.ConnectionEpoch < e.state.liveEpoch {
@@ -635,16 +581,9 @@ func (e *Engine) validateSourceContextLocked(input frozenAggregateInput) (Dispos
 		if !input.s2Proof && (!e.state.aggregateAcknowledged || compareLive(input.Live, e.state.aggregateAckPosition) <= 0) {
 			return ReasonAggregateBeforeAck, false
 		}
-	case AggregateSourceReplay:
-		if input.Replay.ArtifactID == "" || input.Replay.RecordOrdinal == 0 || input.Live != (LivePosition{}) || input.Historical != (HistoricalPosition{}) {
-			return ReasonSourcePosition, false
-		}
-		if e.state.replayArtifact != "" && input.Replay.ArtifactID != e.state.replayArtifact {
-			return ReasonReplayArtifact, true
-		}
 	case AggregateSourceHistorical:
 		proof := input.historicalProof
-		if proof == nil || !proof.resultValid || input.Historical.Generation == 0 || input.Historical.RequestToken == "" || input.Historical.RecordOrdinal == 0 || input.Live != (LivePosition{}) || input.Replay != (ReplayPosition{}) {
+		if proof == nil || !proof.resultValid || input.Historical.Generation == 0 || input.Historical.RequestToken == "" || input.Historical.RecordOrdinal == 0 || input.Live != (LivePosition{}) {
 			return ReasonHistoricalContext, true
 		}
 		if proof.bindingID != input.BindingIdentity || proof.generation != input.Historical.Generation || proof.token != input.Historical.RequestToken || proof.symbol != input.Symbol ||
@@ -699,21 +638,8 @@ func compareLive(a, b LivePosition) int {
 	return 0
 }
 
-func compareReplay(a, b ReplayPosition) int {
-	if a.ArtifactID != b.ArtifactID {
-		return -1
-	}
-	if a.RecordOrdinal < b.RecordOrdinal {
-		return -1
-	}
-	if a.RecordOrdinal > b.RecordOrdinal {
-		return 1
-	}
-	return 0
-}
-
 func evidence(input frozenAggregateInput) aggregateEvidence {
-	return aggregateEvidence{source: input.Source, deliveryTime: input.DeliveryTime, live: input.Live, replay: input.Replay, historical: input.Historical}
+	return aggregateEvidence{source: input.Source, deliveryTime: input.DeliveryTime, live: input.Live, historical: input.Historical}
 }
 
 func advanceLiveAuthority(record *canonicalAggregate, input frozenAggregateInput) {
@@ -747,9 +673,6 @@ func (e *Engine) installAggregateLocked(symbol *coreSymbol, input frozenAggregat
 		if state.historicalConflict != nil {
 			state.historicalConflict.clear(sessionSlot(e.state.binding, input.WindowStart))
 		}
-	}
-	if input.Source == AggregateSourceReplay {
-		e.state.replayArtifact = input.Replay.ArtifactID
 	}
 	foldedDirect := input.Source == AggregateSourceHistorical && now.Sub(input.WindowEnd) > correctionHorizon
 	if foldedDirect {
@@ -1084,7 +1007,7 @@ func buildEvaluationTailPresence(state *symbolAggregateState, binding *installed
 		index := slot/64 - result.baseWord
 		if slot < firstSlot || slot > latestSlot || index < 0 || index >= len(result.words) {
 			// A valid but wider restored/test tail uses the allocation-free sparse
-			// query rather than weakening coverage or rejecting the checkpoint.
+			// query rather than weakening coverage.
 			return false
 		}
 		result.words[index] |= uint64(1) << uint(slot%64)

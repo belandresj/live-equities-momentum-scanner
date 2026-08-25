@@ -189,7 +189,7 @@ func TestPLBRD2HandshakeAmbiguityPreservesIngressFirstCause(t *testing.T) {
 			binding := adapter.binding
 			now := binding.SessionStart()
 			delay := time.Duration(0)
-			state, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 8, EvaluationDelay: &delay})
+			state, err := engine.New(engine.Config{Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 8, EvaluationDelay: &delay})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -242,7 +242,7 @@ func TestPLBRD2DialCancellationFirstCause(t *testing.T) {
 		binding := adapter.binding
 		now := binding.SessionStart()
 		delay := time.Duration(0)
-		state, err := engine.New(engine.Config{Mode: engine.RunModeLive, Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 8, EvaluationDelay: &delay})
+		state, err := engine.New(engine.Config{Clock: func() time.Time { return now }, Capacity: 32, RequiredReserve: 8, EvaluationDelay: &delay})
 		if err != nil {
 			t.Fatal(err)
 		}

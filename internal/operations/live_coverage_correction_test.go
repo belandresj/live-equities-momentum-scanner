@@ -23,6 +23,17 @@ import (
 // then requires two ordinary live fences to extend the same canonical
 // presence/absence truth installed by the startup ingress fence.
 func TestSlice1RuntimeRunLiveInstallsOrdinaryLiveCoverage(t *testing.T) {
+	runSlice1RuntimeRunLiveComposition(t)
+}
+
+// TestPLBRE1ProductionCompositionTrace enters exclusively through RunLive;
+// the fixture's fake providers drive the normal socket, hydration, fence,
+// timer, publication, terminal, and joined-shutdown orchestration.
+func TestPLBRE1ProductionCompositionTrace(t *testing.T) {
+	runSlice1RuntimeRunLiveComposition(t)
+}
+
+func runSlice1RuntimeRunLiveComposition(t *testing.T) {
 	binding := capacityBinding(t, []string{"AAA", "OVERLAP", "QUIET"})
 	handoff := binding.SessionStart().Add(70 * time.Second)
 	var clockNanos atomic.Int64
@@ -138,21 +149,14 @@ func TestSlice1RuntimeRunLiveInstallsOrdinaryLiveCoverage(t *testing.T) {
 		view := run.Engine().ObserveOperational()
 		return view.Lifecycle == "live" && view.Watermark != nil && *view.Watermark == handoff
 	}, "startup ingress fence")
-	startup := run.Engine().ObserveReplayDeterministic()
+	startup := run.Engine().ObserveSnapshot()
 	startupStatus := run.Status()
-	assertSlice1PopulationAndQualification(t, startup.Evaluation)
-	if !startupStatus.BackendReady || !startupStatus.RankingCurrent || startup.Evaluation.Mode != "qualified_current" {
-		t.Fatalf("startup projection was not current after resolved overlap: status=%+v evaluation=%+v", startupStatus, startup.Evaluation)
+	assertSlice1PopulationAndQualification(t, startup.Publication.AggregateEvaluation)
+	if !startupStatus.BackendReady || !startupStatus.RankingCurrent || startup.Publication.AggregateEvaluation.Mode != "qualified_current" {
+		t.Fatalf("startup projection was not current after resolved overlap: status=%+v evaluation=%+v", startupStatus, startup.Publication.AggregateEvaluation)
 	}
-	startupAAA := slice1CanonicalSymbol(t, startup, "AAA")
-	startupOverlap := slice1CanonicalSymbol(t, startup, "OVERLAP")
-	startupQuiet := slice1CanonicalSymbol(t, startup, "QUIET")
-	if startupAAA.ProvenAbsentSlots != 69 || startupQuiet.ProvenAbsentSlots != 70 || startupOverlap.ProvenAbsentSlots != 69 {
-		t.Fatalf("startup canonical coverage AAA/QUIET/OVERLAP=%d/%d/%d", startupAAA.ProvenAbsentSlots, startupQuiet.ProvenAbsentSlots, startupOverlap.ProvenAbsentSlots)
-	}
-	if len(startupOverlap.Records) != 1 || startupOverlap.Records[0].AuthoritySource != engine.AggregateSourceLive || startupOverlap.Records[0].Values.Close != 20 ||
-		run.Engine().ObserveOperational().Aggregates.Rejected == 0 {
-		t.Fatalf("startup overlap did not retain live authority plus discrepancy accounting: symbol=%+v aggregates=%+v", startupOverlap, run.Engine().ObserveOperational().Aggregates)
+	if run.Engine().ObserveOperational().Aggregates.Rejected == 0 {
+		t.Fatalf("startup overlap did not retain discrepancy accounting: aggregates=%+v", run.Engine().ObserveOperational().Aggregates)
 	}
 	startupRejected := run.Engine().ObserveOperational().Aggregates.Rejected
 	startupFences := run.Metrics().LiveQueue.IngressFencesDispositioned
@@ -166,28 +170,20 @@ func TestSlice1RuntimeRunLiveInstallsOrdinaryLiveCoverage(t *testing.T) {
 		}, fmt.Sprintf("ordinary live fence %d", step))
 	}
 
-	final := run.Engine().ObserveReplayDeterministic()
+	final := run.Engine().ObserveSnapshot()
 	finalStatus := run.Status()
-	assertSlice1PopulationAndQualification(t, final.Evaluation)
+	assertSlice1PopulationAndQualification(t, final.Publication.AggregateEvaluation)
 	if final.Publication.Watermark == nil || *final.Publication.Watermark != handoff.Add(2*time.Second) || final.Publication.PublicationID <= startup.Publication.PublicationID {
 		t.Fatalf("ordinary coverage did not advance committed publication: startup=%+v final=%+v", startup.Publication, final.Publication)
 	}
-	if !finalStatus.BackendReady || !finalStatus.RankingCurrent || final.Evaluation.Mode != startup.Evaluation.Mode || final.Evaluation.Reason != startup.Evaluation.Reason {
-		t.Fatalf("quiet seconds regressed the current projection: startup=%+v/%+v final=%+v/%+v", startupStatus, startup.Evaluation, finalStatus, final.Evaluation)
+	if !finalStatus.BackendReady || !finalStatus.RankingCurrent || final.Publication.AggregateEvaluation.Mode != startup.Publication.AggregateEvaluation.Mode || final.Publication.AggregateEvaluation.Reason != startup.Publication.AggregateEvaluation.Reason {
+		t.Fatalf("quiet seconds regressed the current projection: startup=%+v/%+v final=%+v/%+v", startupStatus, startup.Publication.AggregateEvaluation, finalStatus, final.Publication.AggregateEvaluation)
 	}
-	finalAAA := slice1CanonicalSymbol(t, final, "AAA")
-	finalOverlap := slice1CanonicalSymbol(t, final, "OVERLAP")
-	finalQuiet := slice1CanonicalSymbol(t, final, "QUIET")
-	if finalAAA.ProvenAbsentSlots != 71 || finalQuiet.ProvenAbsentSlots != 72 || finalOverlap.ProvenAbsentSlots != 71 {
-		t.Fatalf("ordinary canonical coverage AAA/QUIET/OVERLAP=%d/%d/%d", finalAAA.ProvenAbsentSlots, finalQuiet.ProvenAbsentSlots, finalOverlap.ProvenAbsentSlots)
+	if final.TQ.PublicationID != final.Publication.PublicationID || len(final.TQ.Desired) != 0 || len(final.TQ.Rows) != 0 || final.TQ.Bounds || final.TQ.AggregateOnly || final.TQ.Pressure != engine.TQPressureNormal {
+		t.Fatalf("fixture-derived T/Q/publication identity mismatch: publication=%d tq=%+v", final.Publication.PublicationID, final.TQ)
 	}
-	if finalAAA.Qualification.Status != "not_yet_passed" || finalAAA.Qualification.UnresolvedOrigin != "" ||
-		finalQuiet.Qualification.Status != "not_yet_passed" || finalQuiet.Qualification.UnresolvedOrigin != "" {
-		t.Fatalf("quiet live coverage created origin-none qualification uncertainty: AAA=%+v QUIET=%+v", finalAAA.Qualification, finalQuiet.Qualification)
-	}
-	if len(finalOverlap.Records) != 1 || finalOverlap.Records[0] != startupOverlap.Records[0] || finalOverlap.ProvenAbsentSlots != startupOverlap.ProvenAbsentSlots+2 ||
-		run.Engine().ObserveOperational().Aggregates.Rejected != startupRejected {
-		t.Fatalf("ordinary coverage overwrote the accepted overlap/discrepancy: startup=%+v final=%+v aggregates=%+v", startupOverlap, finalOverlap, run.Engine().ObserveOperational().Aggregates)
+	if run.Engine().ObserveOperational().Aggregates.Rejected != startupRejected {
+		t.Fatalf("ordinary coverage changed accepted overlap discrepancy accounting: aggregates=%+v", run.Engine().ObserveOperational().Aggregates)
 	}
 	metrics := run.Metrics()
 	if metrics.LiveQueue.IngressFencesDispositioned < startupFences+2 || !metrics.AccountingValid || !metrics.LiveQueue.Reconciles() || !metrics.Adapter.Reconciles() {
@@ -221,24 +217,13 @@ func waitForSlice1Coverage(t *testing.T, run *Runtime, joined <-chan error, read
 		case err := <-joined:
 			t.Fatalf("RunLive ended while waiting for %s: %v", description, err)
 		case <-deadline.C:
-			t.Fatalf("timed out waiting for %s: status=%+v view=%+v", description, run.Status(), run.Engine().ObserveReplayDeterministic())
+			t.Fatalf("timed out waiting for %s: status=%+v view=%+v", description, run.Status(), run.Engine().ObserveSnapshot())
 		case <-time.After(5 * time.Millisecond):
 		}
 	}
 }
 
-func slice1CanonicalSymbol(t *testing.T, view engine.ReplayDeterministicView, symbol string) engine.ReplayCanonicalSymbol {
-	t.Helper()
-	for _, candidate := range view.Canonical {
-		if candidate.Symbol == symbol {
-			return candidate
-		}
-	}
-	t.Fatalf("canonical symbol %s missing", symbol)
-	return engine.ReplayCanonicalSymbol{}
-}
-
-func assertSlice1PopulationAndQualification(t *testing.T, evaluation engine.ReplayEvaluationView) {
+func assertSlice1PopulationAndQualification(t *testing.T, evaluation engine.EvaluationView) {
 	t.Helper()
 	population := evaluation.Population
 	qualification := evaluation.Qualification

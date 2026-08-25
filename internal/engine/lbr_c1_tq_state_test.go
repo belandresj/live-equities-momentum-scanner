@@ -1,9 +1,7 @@
 package engine
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"reflect"
 	"testing"
 	"time"
@@ -72,11 +70,8 @@ func TestPLBRC1TQState(t *testing.T) {
 		if view := f.e.ObserveTQ(); view.Rows[0].Tape.Status != TQCurrent || view.Rows[0].Tape.FiveSecond != 0 {
 			t.Fatalf("covered quiet Tape = %+v", view)
 		}
-		beforeAggregate := f.e.ObserveReplayDeterministic()
-		beforeAggregateBytes, err := json.Marshal([]any{beforeAggregate.Canonical, beforeAggregate.Evaluation})
-		if err != nil {
-			t.Fatal(err)
-		}
+		beforeAggregate := f.e.ObserveSnapshot()
+		beforeAggregateAccounting := f.e.ObserveOperational().Aggregates
 
 		quoteEquality := QuoteInput{SchemaVersion: TQSchemaV1, BindingIdentity: f.binding.Identity(), TradingDate: f.binding.TradingDate(), Symbol: "AAA",
 			SIPTime: committedT.Add(-30 * time.Second), ReceiptTime: committedT.Add(-time.Second), BidPrice: 10, AskPrice: 10.02,
@@ -170,12 +165,8 @@ func TestPLBRC1TQState(t *testing.T) {
 		if retainedAfter || committed != committedT {
 			t.Fatalf("strict duplicate cleanup/stalled T: retained=%t committed=%s", retainedAfter, committed)
 		}
-		afterTQ := f.e.ObserveReplayDeterministic()
-		afterAggregateBytes, err := json.Marshal([]any{afterTQ.Canonical, afterTQ.Evaluation})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(beforeAggregate.Canonical, afterTQ.Canonical) || !reflect.DeepEqual(beforeAggregate.Evaluation, afterTQ.Evaluation) || !bytes.Equal(beforeAggregateBytes, afterAggregateBytes) {
+		afterTQ := f.e.ObserveSnapshot()
+		if !reflect.DeepEqual(beforeAggregate.Publication.AggregateEvaluation, afterTQ.Publication.AggregateEvaluation) {
 			t.Fatal("T/Q mutation changed aggregate projection")
 		}
 		drop := TQDropInput{SchemaVersion: TQSchemaV1, BindingIdentity: f.binding.Identity(), TradingDate: f.binding.TradingDate(), Family: "Q", Symbol: "AAA",
@@ -209,9 +200,9 @@ func TestPLBRC1TQState(t *testing.T) {
 				t.Fatalf("replacement epoch fact = %+v", got)
 			}
 		}
-		afterAggregate := f.e.ObserveReplayDeterministic()
-		if !reflect.DeepEqual(beforeAggregate.Canonical, afterAggregate.Canonical) {
-			t.Fatalf("T/Q loss/replacement changed canonical aggregate state: before=%+v after=%+v", beforeAggregate.Canonical, afterAggregate.Canonical)
+		afterAggregate := f.e.ObserveSnapshot()
+		if afterAccounting := f.e.ObserveOperational().Aggregates; !reflect.DeepEqual(beforeAggregateAccounting, afterAccounting) {
+			t.Fatalf("T/Q loss/replacement changed aggregate accounting: before=%+v after=%+v publication=%+v", beforeAggregateAccounting, afterAccounting, afterAggregate.Publication)
 		}
 		view := f.e.ObserveTQ()
 		if view.Accounting.RetainedTrades != 0 || view.Accounting.RetainedFingerprints != 0 || view.Accounting.RetainedQuotes != 0 || view.Accounting.RetainedBytes != 0 {

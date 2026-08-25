@@ -121,7 +121,7 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 	if e.state.binding == nil {
 		return nil
 	}
-	if ((node.kind == inputTimer || node.kind == inputReplayGroup) && code == DispositionTimerApplied) ||
+	if (node.kind == inputTimer && code == DispositionTimerApplied) ||
 		(node.kind == inputAggregateIngressFence && code == DispositionAggregateIngressFenceApplied) ||
 		(node.kind == inputLiveCoverageFence && code == DispositionLiveCoverageFenceApplied) {
 		target, evaluate := e.aggregateEvaluationTargetLocked(node)
@@ -140,7 +140,7 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 			symbol := &e.state.binding.symbols[index]
 			if state := symbol.aggregates; state != nil {
 				e.compactSymbolLocked(state, e.state.binding, symbol.symbol, node.admissionTime)
-				if evaluate && !e.hiddenReplayWarmupLocked(node) {
+				if evaluate {
 					advanceSelectionMark(state, e.state.binding, target)
 					// Qualification is canonical owner-local state. Advance its
 					// bounded proof endpoints before staging selection so the cycle
@@ -148,32 +148,19 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 					// independent of publication acceptance; it creates no mark,
 					// coverage, selection membership, or watermark.
 					evaluateQualificationThrough(state, e.state.binding, target, node.admissionTime)
-					if e.mode == RunModeLive {
-						var invalid *invalidMarkEvidence
-						if evidence, ok := e.invalidMarkBeforeLocked(index, target); ok {
-							copyEvidence := evidence
-							invalid = &copyEvidence
-						}
-						maintainCurrentFieldStatuses(e.state.binding, symbol, target, invalid)
+					var invalid *invalidMarkEvidence
+					if evidence, ok := e.invalidMarkBeforeLocked(index, target); ok {
+						copyEvidence := evidence
+						invalid = &copyEvidence
 					}
+					maintainCurrentFieldStatuses(e.state.binding, symbol, target, invalid)
 				}
 			}
 		}
-		if e.hiddenReplayWarmupLocked(node) {
-			for index := range e.state.replay.aggregateTouched {
-				maintainSymbol(index)
-			}
-			clear(e.state.replay.aggregateTouched)
-		} else {
-			for index := range e.state.binding.symbols {
-				maintainSymbol(index)
-			}
-			clear(e.state.replay.aggregateTouched)
+		for index := range e.state.binding.symbols {
+			maintainSymbol(index)
 		}
 		maintenanceElapsed := e.evaluationTimingElapsed(maintenanceStarted)
-		if e.hiddenReplayWarmupLocked(node) {
-			return nil
-		}
 		if !evaluate {
 			return nil
 		}
@@ -223,57 +210,41 @@ func (e *Engine) runAggregateFeatureContributorLocked(node *queueNode, code Disp
 			last = *e.state.committedT
 		}
 		markQualificationProofsDirty(qualification, first, last)
-		if e.mode == RunModeLive {
-			evaluateQualificationThrough(state, e.state.binding, *e.state.committedT, node.admissionTime)
-			var invalid *invalidMarkEvidence
-			if evidence, ok := e.invalidMarkBeforeLocked(index, *e.state.committedT); ok {
-				copyEvidence := evidence
-				invalid = &copyEvidence
-			}
-			maintainCurrentFieldStatuses(e.state.binding, &e.state.binding.symbols[index], *e.state.committedT, invalid)
-			if structuralTrustChange {
-				// [S,T) is right-open. Evidence at T or later cannot change
-				// current-T population, rankability, or field trust.
-				if !node.aggregate.WindowStart.Before(*e.state.committedT) {
-					return nil
-				}
-				e.startActiveAggregateEvaluationSourceLocked(node, *e.state.committedT, AggregateEvaluationPhaseStage, AggregateEvaluationTrustCorrection)
-				started := e.evaluationTimingStart()
-				staged := e.stageAggregateEvaluationAtLocked(*e.state.committedT, node.admissionTime)
-				elapsed := e.evaluationTimingElapsed(started)
-				if aggregateEvaluationEqual(e.state.aggregateEvaluator.current, staged) {
-					return nil
-				}
-				return e.commitTrustCorrectionCycleLocked(node, staged, elapsed)
-			}
-			if qualification.result != qualificationBefore {
-				e.startActiveAggregateEvaluationSourceLocked(node, *e.state.committedT, AggregateEvaluationPhaseStage, AggregateEvaluationTrustCorrection)
-				started := e.evaluationTimingStart()
-				staged := e.stageAggregateEvaluationAtLocked(*e.state.committedT, node.admissionTime)
-				return e.commitTrustCorrectionCycleLocked(node, staged, e.evaluationTimingElapsed(started))
-			}
-			started := e.evaluationTimingStart()
-			staged := e.selectedTrustClosureCandidateLocked(node, index, *e.state.committedT)
-			if staged == nil {
+		evaluateQualificationThrough(state, e.state.binding, *e.state.committedT, node.admissionTime)
+		var invalid *invalidMarkEvidence
+		if evidence, ok := e.invalidMarkBeforeLocked(index, *e.state.committedT); ok {
+			copyEvidence := evidence
+			invalid = &copyEvidence
+		}
+		maintainCurrentFieldStatuses(e.state.binding, &e.state.binding.symbols[index], *e.state.committedT, invalid)
+		if structuralTrustChange {
+			// [S,T) is right-open. Evidence at T or later cannot change
+			// current-T population, rankability, or field trust.
+			if !node.aggregate.WindowStart.Before(*e.state.committedT) {
 				return nil
 			}
-			e.recordTrustCorrectionTimingLocked(node, *staged, e.evaluationTimingElapsed(started))
-			return staged
+			e.startActiveAggregateEvaluationSourceLocked(node, *e.state.committedT, AggregateEvaluationPhaseStage, AggregateEvaluationTrustCorrection)
+			started := e.evaluationTimingStart()
+			staged := e.stageAggregateEvaluationAtLocked(*e.state.committedT, node.admissionTime)
+			elapsed := e.evaluationTimingElapsed(started)
+			if aggregateEvaluationEqual(e.state.aggregateEvaluator.current, staged) {
+				return nil
+			}
+			return e.commitTrustCorrectionCycleLocked(node, staged, elapsed)
 		}
-		if e.deferReplayAggregateProjectionLocked(node) {
-			return nil
+		if qualification.result != qualificationBefore {
+			e.startActiveAggregateEvaluationSourceLocked(node, *e.state.committedT, AggregateEvaluationPhaseStage, AggregateEvaluationTrustCorrection)
+			started := e.evaluationTimingStart()
+			staged := e.stageAggregateEvaluationAtLocked(*e.state.committedT, node.admissionTime)
+			return e.commitTrustCorrectionCycleLocked(node, staged, e.evaluationTimingElapsed(started))
 		}
 		started := e.evaluationTimingStart()
-		e.recordAggregateEvaluationStartLocked(node, *e.state.committedT)
-		staged := e.stageAggregateEvaluationAtLocked(*e.state.committedT, node.admissionTime)
-		e.state.evaluationTiming.EngineSequence = node.engineSequence
-		e.state.evaluationTiming.Stage = e.evaluationTimingElapsed(started)
-		e.state.evaluationTiming.Apply = 0
-		e.state.evaluationTiming.Publication = 0
-		return &staged
-	}
-	if e.deferReplayAggregateProjectionLocked(node) {
-		return nil
+		staged := e.selectedTrustClosureCandidateLocked(node, index, *e.state.committedT)
+		if staged == nil {
+			return nil
+		}
+		e.recordTrustCorrectionTimingLocked(node, *staged, e.evaluationTimingElapsed(started))
+		return staged
 	}
 	return nil
 }
@@ -299,7 +270,7 @@ func (e *Engine) recordTrustCorrectionTimingLocked(node *queueNode, staged aggre
 func (e *Engine) duplicateTrustCorrectionCycleLocked(node *queueNode, target time.Time) bool {
 	last := e.state.lastTrustCorrectionCycle
 	if node == nil || node.kind != inputTimer && node.kind != inputLiveCoverageFence ||
-		e.mode != RunModeLive || e.state.binding == nil || e.state.aggregateProjectionPending ||
+		e.state.binding == nil || e.state.aggregateProjectionPending ||
 		(e.state.lifecycle != lifecycleLive && e.state.lifecycle != lifecycleHydrating) || last.bindingIdentity == "" ||
 		last.bindingIdentity != e.state.binding.identity || last.trustRevision != e.state.trustCorrectionRevision || !last.target.Equal(target) {
 		return false
@@ -446,17 +417,10 @@ func priceRangeFieldStatuses(binding *installedBinding, symbol *coreSymbol, at t
 }
 
 // aggregateEvaluationTargetLocked chooses the sole full-population projection
-// boundary. Replay retains its existing group target. Live prefers a supported
-// later target, then falls back to the committed watermark when pending
+// boundary. Live prefers a supported later target, then falls back to the committed watermark when pending
 // aggregate work must be exposed without claiming unsupported time.
 func (e *Engine) aggregateEvaluationTargetLocked(node *queueNode) (time.Time, bool) {
-	if e.mode == RunModeReplay {
-		if e.state.latestTarget == nil {
-			return time.Time{}, false
-		}
-		return *e.state.latestTarget, true
-	}
-	if e.mode != RunModeLive || (node.kind != inputTimer && node.kind != inputAggregateIngressFence && node.kind != inputLiveCoverageFence) {
+	if node.kind != inputTimer && node.kind != inputAggregateIngressFence && node.kind != inputLiveCoverageFence {
 		return time.Time{}, false
 	}
 	if node.kind == inputTimer && node.timerPolicy == timerMaintenanceOnly {
@@ -480,8 +444,7 @@ func (e *Engine) aggregateEvaluationTargetLocked(node *queueNode) (time.Time, bo
 	if node.kind == inputTimer && e.state.committedT != nil && e.candidateTargetSupportedLocked(*e.state.committedT) {
 		deadlineDue := e.state.aggregateEvaluationDeadline != nil && node.admissionTime.After(*e.state.aggregateEvaluationDeadline)
 		projectionMissing := !e.state.aggregateEvaluator.current.at.Equal(*e.state.committedT)
-		lifecycleEvaluationDue := e.state.lifecycle != lifecycleLive && e.state.lifecycle != lifecycleHydrating &&
-			e.state.lifecycle != lifecycleReplaying && e.state.aggregateEvaluator.current.mode != rankingUnavailable
+		lifecycleEvaluationDue := e.state.lifecycle != lifecycleLive && e.state.lifecycle != lifecycleHydrating && e.state.aggregateEvaluator.current.mode != rankingUnavailable
 		finalEvaluationDue := e.state.lifecycle == lifecycleEnded &&
 			(e.state.evaluationTiming.Target.IsZero() || !e.state.evaluationTiming.Target.Equal(*e.state.committedT))
 		if deadlineDue || projectionMissing || lifecycleEvaluationDue || finalEvaluationDue {
@@ -502,9 +465,6 @@ func (e *Engine) recordAggregateEvaluationStartLocked(node *queueNode, target ti
 	case inputAggregateIngressFence:
 		view.Source = AggregateEvaluationIngressFence
 		view.Starts.AggregateIngressFence++
-	case inputReplayGroup:
-		view.Source = AggregateEvaluationReplay
-		view.Starts.Replay++
 	default:
 		view.Source = AggregateEvaluationTimer
 		view.Starts.Timer++

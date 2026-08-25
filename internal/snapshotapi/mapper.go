@@ -1,10 +1,8 @@
 package snapshotapi
 
 import (
-	"encoding/hex"
 	"math"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/belandresj/live-equities-momentum-scanner/internal/engine"
@@ -54,11 +52,8 @@ func mapCaptureView(capture operations.SnapshotCaptureView) (Snapshot, error) {
 		Accounting: mapAccounting(publication.AggregateEvaluation),
 		Recovery:   mapRecovery(operational.Hydration),
 		TQ:         mapTQ(capture.Engine.TQ, capture.Metrics.TQNormalization),
-		Checkpoint: mapCheckpoint(operational.InstalledCheckpoint, capture.Metrics),
+		Checkpoint: fixedDisabledCheckpoint(),
 		Operations: mapOperations(capture.Metrics, operational),
-	}
-	if capture.Replay != nil {
-		result.Replay = mapReplay(*capture.Replay)
 	}
 	if publication.Watermark != nil {
 		lag := capture.Status.WatermarkLag.Milliseconds()
@@ -82,63 +77,13 @@ func mapCaptureView(capture operations.SnapshotCaptureView) (Snapshot, error) {
 		}
 		result.Rows[index] = mapped
 	}
-	if result.Replay != nil {
-		applyReplayPresentation(&result)
-	}
 	if err := validateSnapshot(result); err != nil {
 		return Snapshot{}, err
 	}
 	return result, nil
 }
 
-func mapReplay(value operations.ReplayCaptureView) *Replay {
-	result := &Replay{Phase: string(value.Phase), ArtifactID: value.ArtifactID, ArtifactEnd: timestamp(value.ArtifactEnd),
-		ObservationStart: timestamp(value.ObservationStart), ObservationEnd: timestamp(value.ObservationEnd), LogicalTime: timestamp(value.LogicalTime),
-		Completion: string(value.Completion),
-		Source: ReplaySource{ArtifactRecords: decimal(value.Source.ArtifactRecords), CompletedRecordDispositions: decimal(value.Source.CompletedRecordDispositions),
-			IntentionallyUnappliedSuffixRecords: decimal(value.Source.IntentionallyUnappliedSuffixRecords), UnreadRecords: decimal(value.Source.UnreadRecords),
-			PlannedGroups: decimal(value.Source.PlannedGroups), CompletedGroups: decimal(value.Source.CompletedGroups), ActiveGroup: decimal(value.Source.ActiveGroup),
-			RemainingGroups: decimal(value.Source.RemainingGroups), CompletedRuns: decimal(value.Source.CompletedRuns), FailedRuns: decimal(value.Source.FailedRuns), CanceledRuns: decimal(value.Source.CanceledRuns)},
-		Window: ReplayWindow{WarmupGroupsPlanned: decimal(value.Window.WarmupGroupsPlanned), WarmupGroupsCompleted: decimal(value.Window.WarmupGroupsCompleted),
-			WarmupGroupActive: decimal(value.Window.WarmupGroupActive), WarmupGroupsRemaining: decimal(value.Window.WarmupGroupsRemaining),
-			ObservationSecondsPlanned: decimal(value.Window.ObservationSecondsPlanned), ObservationSecondsCompleted: decimal(value.Window.ObservationSecondsCompleted),
-			ObservationSecondActive: decimal(value.Window.ObservationSecondActive), ObservationSecondsRemaining: decimal(value.Window.ObservationSecondsRemaining),
-			ObservationBoundariesPublished: decimal(value.Window.ObservationBoundariesPublished)}}
-	if value.ScheduleLag != nil {
-		lag := durationMilliseconds(*value.ScheduleLag)
-		result.ScheduleLagMS = &lag
-	}
-	return result
-}
-
-func applyReplayPresentation(value *Snapshot) {
-	value.Status.BackendReady = false
-	value.Status.ReadinessReason = "not_live_mode"
-	value.TQ.DesiredSymbols = []string{}
-	for index := range value.Rows {
-		value.Rows[index].Tape5s = Tape5s{Status: "unavailable", Reason: "replay_unavailable"}
-		value.Rows[index].Spread = Spread{Status: "unavailable", Reason: "replay_unavailable"}
-		value.Rows[index].TQMembership = TQMembership{}
-	}
-	switch value.Replay.Phase {
-	case "warming":
-		value.Ranking = Ranking{Mode: "unavailable", Reason: "replay_warming"}
-		value.Rows = []Row{}
-		value.Status.RankingCurrent = false
-	case "canceling", "shutting_down":
-		value.Ranking = Ranking{Mode: "unavailable", Reason: "no_committed_watermark"}
-		value.Rows = []Row{}
-		value.Status.RankingCurrent = false
-	case "suppressed":
-		value.Ranking = Ranking{Mode: "suppressed", Reason: "global_suppression"}
-		value.Rows = []Row{}
-		value.Status.RankingCurrent = false
-	case "retained_success":
-		value.Status.RankingCurrent = false
-	}
-}
-
-func mapPublication(p engine.ReplayPublicationView, operational engine.OperationalView) Publication {
+func mapPublication(p engine.PublicationView, operational engine.OperationalView) Publication {
 	result := Publication{
 		ID: decimal(p.PublicationID), BindingIdentity: p.BindingIdentity, TradingDate: p.TradingDate,
 		RunMode: string(p.RunMode), Lifecycle: p.Lifecycle, LifecycleReason: p.LifecycleReason, Suppression: string(p.Suppression),
@@ -160,12 +105,12 @@ func mapPublication(p engine.ReplayPublicationView, operational engine.Operation
 	return result
 }
 
-func mapRanking(value engine.ReplayEvaluationView) Ranking {
+func mapRanking(value engine.EvaluationView) Ranking {
 	return Ranking{Mode: value.Mode, Reason: value.Reason, TotalPassers: value.TotalPassers, KnownRankableCount: value.KnownRankableCount,
 		DayInvalidRankable: value.DayInvalidRankable, QualifiedDayInvalid: value.QualifiedDayInvalid}
 }
 
-func mapAccounting(value engine.ReplayEvaluationView) Accounting {
+func mapAccounting(value engine.EvaluationView) Accounting {
 	p, q, u, d := value.Population, value.Qualification, value.Uncertainty, value.PopulationTransition
 	return Accounting{
 		Population: PopulationAccounting{UniverseTotal: p.UniverseTotal, ValidPriorClose: p.ValidPriorClose, InvalidOrMissingPriorClose: p.InvalidOrMissingPriorClose,
@@ -208,23 +153,9 @@ func mapTQ(value engine.TQView, normalization massive.TQNormalizationAccounting)
 			Fenced: decimal(c.Fenced), ResultFenced: decimal(c.ResultFenced)}}
 }
 
-func mapCheckpoint(installed bool, metrics operations.Metrics) Checkpoint {
-	w, e := metrics.Checkpoint, metrics.CheckpointEngine
-	age := time.Duration(0)
-	if !e.LastSuccessfulT0.IsZero() && metrics.SampledAt.After(e.LastSuccessfulT0) {
-		age = metrics.SampledAt.Sub(e.LastSuccessfulT0)
-	}
-	return Checkpoint{Installed: installed, Eligible: decimal(e.Eligible), PressureDeferred: decimal(e.PressureDeferred),
-		ProjectionStarted: decimal(e.ProjectionStarted), ProjectionInProgress: decimal(e.ProjectionInProgress), Projected: decimal(e.Projected), ProjectionRejected: decimal(e.ProjectionRejected),
-		SubmitRejected: decimal(e.SubmitRejected), Submitted: decimal(e.Submitted), Outstanding: decimal(e.Outstanding),
-		InProgress: decimal(w.InProgress), Pending: decimal(w.Pending), Completed: decimal(e.Completed), Failed: decimal(e.Failed),
-		Canceled: decimal(e.Canceled), Superseded: decimal(e.Superseded), LastAttemptedT0: optionalNonzeroTime(e.LastAttemptedT0),
-		LastProjectedT0: optionalNonzeroTime(e.LastProjectedT0), LastSubmittedT0: optionalNonzeroTime(e.LastSubmittedT0),
-		LastSuccessfulT0: optionalNonzeroTime(e.LastSuccessfulT0), UsableAgeMS: durationMilliseconds(age),
-		ProjectionTotalMS: durationMilliseconds(e.LastProjectionTotal), ProjectionLockMS: durationMilliseconds(e.LastProjectionLock),
-		ArtifactBytes: decimal(uint64(max(0, w.LastArtifactBytes))), WriteMS: durationMilliseconds(w.LastWriteDuration),
-		EncodeMS: durationMilliseconds(w.LastEncodeDuration), ReopenValidationMS: durationMilliseconds(w.LastReopenValidationDuration),
-		LastFailureStep: string(w.LastFailureStep), LastProjectionFailure: e.LastProjectionFailure, LastSubmitFailure: e.LastSubmitFailure}
+func fixedDisabledCheckpoint() Checkpoint {
+	return Checkpoint{Eligible: "0", PressureDeferred: "0", ProjectionStarted: "0", ProjectionInProgress: "0", Projected: "0", ProjectionRejected: "0",
+		SubmitRejected: "0", Submitted: "0", Outstanding: "0", InProgress: "0", Pending: "0", Completed: "0", Failed: "0", Canceled: "0", Superseded: "0", ArtifactBytes: "0"}
 }
 
 func mapOperations(metrics operations.Metrics, operational engine.OperationalView) Operations {
@@ -240,7 +171,7 @@ func mapOperations(metrics operations.Metrics, operational engine.OperationalVie
 		MaxProcessingDelayOneSecondMS: durationMilliseconds(metrics.MaxProcessingDelayOneSecond),
 		DeliveryLatencyAttribution: DeliveryLatencyAttribution{
 			Aggregate: decimal(attribution.Aggregate), TQ: decimal(attribution.TQ), Control: decimal(attribution.Control),
-			HydrationFence: decimal(attribution.HydrationFence), Checkpoint: decimal(attribution.Checkpoint), Timer: decimal(attribution.Timer), Unknown: decimal(attribution.Unknown),
+			HydrationFence: decimal(attribution.HydrationFence), Checkpoint: "0", Timer: decimal(attribution.Timer), Unknown: decimal(attribution.Unknown),
 			MaximumMS: durationMilliseconds(attribution.MaximumDuration), MaximumFamily: string(attribution.MaximumFamily),
 		},
 		HeapAllocBytes: decimal(metrics.HeapAllocBytes),
@@ -254,7 +185,7 @@ func mapOperations(metrics operations.Metrics, operational engine.OperationalVie
 	return result
 }
 
-func mapRow(row engine.ReplayRankingRowView, tq engine.TQSymbolView) (Row, error) {
+func mapRow(row engine.RankingRowView, tq engine.TQSymbolView) (Row, error) {
 	if row.Rank == 0 || row.Rank > 20 || row.Symbol == "" || !finite(row.Last) || row.Last < .25 || !finite(row.DayPercent) || row.MarkAge < 0 ||
 		tq.Symbol != "" && tq.Spread.QuoteAge < 0 {
 		return Row{}, rejectMapping("ranking_source_row")
@@ -287,7 +218,7 @@ func mapRow(row engine.ReplayRankingRowView, tq engine.TQSymbolView) (Row, error
 	return result, nil
 }
 
-func mapShares(value engine.ReplayFieldView) ShareMeasurement {
+func mapShares(value engine.FieldView) ShareMeasurement {
 	result := ShareMeasurement{Status: value.Status, Reason: value.Reason}
 	if value.Status == "current" {
 		result.ValueShares = floatPointer(value.Value)
@@ -295,7 +226,7 @@ func mapShares(value engine.ReplayFieldView) ShareMeasurement {
 	return result
 }
 
-func mapFloat(value engine.ReplayFloatFieldView) FloatMeasurement {
+func mapFloat(value engine.FloatFieldView) FloatMeasurement {
 	result := FloatMeasurement{Status: value.Status, Reason: value.Reason}
 	if value.Status != "current" && value.Status != "stale" {
 		return result
@@ -315,7 +246,7 @@ func mapFloat(value engine.ReplayFloatFieldView) FloatMeasurement {
 	return result
 }
 
-func mapRatio(value engine.ReplayFieldView) RatioMeasurement {
+func mapRatio(value engine.FieldView) RatioMeasurement {
 	result := RatioMeasurement{Status: value.Status, Reason: value.Reason}
 	if value.Status == "current" {
 		result.ValueRatio = floatPointer(percentagePointsToRatio(value.Value))
@@ -336,6 +267,9 @@ func validateSnapshot(value Snapshot) error {
 	if value.SchemaVersion != SchemaVersion {
 		return rejectMapping("schema_version")
 	}
+	if checkpoint != fixedDisabledCheckpoint() {
+		return rejectMapping("checkpoint_disabled")
+	}
 	if !validTimestamp(value.Sample.SampledAt) || !validTimestamp(value.Publication.GeneratedAt) || !validTimestamp(value.Status.CausalTarget) || !validTradingDate(value.Publication.TradingDate) {
 		return rejectMapping("required_time")
 	}
@@ -351,16 +285,16 @@ func validateSnapshot(value Snapshot) error {
 	if !deliveryLatencyAttributionValid(value.Operations) {
 		return rejectMapping("delivery_latency_attribution")
 	}
-	if !oneOf(value.Publication.RunMode, "live", "replay") {
+	if value.Publication.RunMode != "live" {
 		return rejectMapping("run_mode")
 	}
-	if !oneOf(value.Publication.Lifecycle, "initializing", "awaiting_session", "awaiting_aggregate_ack", "hydrating", "live", "recovering", "replaying", "suppressed", "ended") {
+	if !oneOf(value.Publication.Lifecycle, "initializing", "awaiting_session", "awaiting_aggregate_ack", "hydrating", "live", "recovering", "suppressed", "ended") {
 		return rejectMapping("lifecycle")
 	}
-	if !oneOf(value.Publication.LifecycleReason, "", "binding_before_session", "binding_in_session", "binding_after_session", "session_start_without_aggregate_ack", "session_end", "controlled_stop", "sequence_exhaustion", "clock_regression", "canonical_integrity", "publication_integrity", "accounting_integrity", "closed", "replay_start", "replay_end", "replay_requested_end", "replay_failure", "aggregate_acknowledged", "aggregate_acknowledged_at_session_start", "aggregate_epoch_lost", "ingress_integrity", "hydration_complete", "recovery_exhausted", "scheduled_recovery") {
+	if !oneOf(value.Publication.LifecycleReason, "", "binding_before_session", "binding_in_session", "binding_after_session", "session_start_without_aggregate_ack", "session_end", "controlled_stop", "sequence_exhaustion", "clock_regression", "canonical_integrity", "publication_integrity", "accounting_integrity", "closed", "aggregate_acknowledged", "aggregate_acknowledged_at_session_start", "aggregate_epoch_lost", "ingress_integrity", "hydration_complete", "recovery_exhausted", "scheduled_recovery") {
 		return rejectMapping("lifecycle_reason")
 	}
-	if !oneOf(value.Publication.Suppression, "", "same_binding_recovery_allowed", "clean_reinitialization_required", "restart_required", "terminal_replay_failure") {
+	if !oneOf(value.Publication.Suppression, "", "same_binding_recovery_allowed", "clean_reinitialization_required", "restart_required") {
 		return rejectMapping("suppression")
 	}
 	if !oneOf(value.Status.ReadinessReason, "", "runtime_unavailable", "binding_mismatch", "not_live_mode", "lifecycle_not_ready", "suppressed", "aggregate_unacknowledged", "fence_pending", "ranking_noncurrent", "watermark_missing", "watermark_stale", "accounting_invalid") {
@@ -369,10 +303,10 @@ func validateSnapshot(value Snapshot) error {
 	if !oneOf(value.Ranking.Mode, "unavailable", "qualified_current", "degraded_bootstrap", "degraded_current", "stale", "suppressed") {
 		return rejectMapping("ranking_mode")
 	}
-	if !oneOf(value.Ranking.Reason, "", "no_committed_watermark", "no_trusted_marks", "incomplete_population", "qualification_incomplete", "global_suppression", "replay_warming") {
+	if !oneOf(value.Ranking.Reason, "", "no_committed_watermark", "no_trusted_marks", "incomplete_population", "qualification_incomplete", "global_suppression") {
 		return rejectMapping("ranking_reason")
 	}
-	if !oneOf(value.Recovery.Purpose, "", "fresh_bootstrap", "checkpoint_catchup", "gap_recovery") {
+	if !oneOf(value.Recovery.Purpose, "", "fresh_bootstrap", "gap_recovery") {
 		return rejectMapping("recovery_purpose")
 	}
 	if !oneOf(value.TQ.PressureMode, "normal", "taq_degraded", "aggregate_only") || value.Status.TQPressureMode != value.TQ.PressureMode || value.Status.TQShed != value.TQ.Shed ||
@@ -392,9 +326,7 @@ func validateSnapshot(value Snapshot) error {
 		return rejectMapping("tq_pressure_recovery")
 	}
 	if !validOptionalTimestamp(value.Publication.CommittedT) || !validOptionalTimestamp(value.Recovery.Start) || !validOptionalTimestamp(value.Recovery.End) ||
-		!validOptionalTimestamp(value.Recovery.SupportedThrough) || !validOptionalTimestamp(value.Publication.HydrationFence.SupportedThrough) ||
-		!validOptionalTimestamp(checkpoint.LastAttemptedT0) || !validOptionalTimestamp(checkpoint.LastProjectedT0) ||
-		!validOptionalTimestamp(checkpoint.LastSubmittedT0) || !validOptionalTimestamp(checkpoint.LastSuccessfulT0) {
+		!validOptionalTimestamp(value.Recovery.SupportedThrough) || !validOptionalTimestamp(value.Publication.HydrationFence.SupportedThrough) {
 		return rejectMapping("optional_time")
 	}
 	if (value.Publication.CommittedT == nil) != (value.Status.WatermarkLagMS == nil) ||
@@ -440,24 +372,6 @@ func validateSnapshot(value Snapshot) error {
 	if !sumDecimalEquals(commands.Issued, commands.Pending, commands.Written, commands.Failed, commands.Fenced) {
 		return rejectMapping("tq_command_identity")
 	}
-	if !sumDecimalEquals(checkpoint.Submitted, checkpoint.Outstanding, checkpoint.Completed, checkpoint.Failed, checkpoint.Canceled, checkpoint.Superseded) {
-		return rejectMapping("checkpoint_identity")
-	}
-	if !sumDecimalEquals(checkpoint.Eligible, checkpoint.PressureDeferred, checkpoint.ProjectionStarted) ||
-		!sumDecimalEquals(checkpoint.ProjectionStarted, checkpoint.ProjectionInProgress, checkpoint.Projected, checkpoint.ProjectionRejected) ||
-		!sumDecimalEquals(checkpoint.Projected, checkpoint.Submitted, checkpoint.SubmitRejected) {
-		return rejectMapping("checkpoint_projection_identity")
-	}
-	if checkpoint.ProjectionInProgress != "0" && checkpoint.ProjectionInProgress != "1" {
-		return rejectMapping("checkpoint_projection_in_progress")
-	}
-	if !oneOf(checkpoint.LastProjectionFailure, "", "sequence_exhausted", "ownership_invalidated", "projection_invariant", "sealed_t0_marker_invalid", "pre_t0_mutation", "sequence_changed", "shutdown") ||
-		!oneOf(checkpoint.LastSubmitFailure, "", "request_invalid", "writer_rejected") {
-		return rejectMapping("checkpoint_failure_reason")
-	}
-	if !validReplaySnapshot(value) {
-		return rejectMapping("replay_consistency")
-	}
 	for _, count := range []uint64{p.UniverseTotal, p.ValidPriorClose, p.InvalidOrMissingPriorClose, p.TrustedRankableMark, p.TrustedBelowPriceMark,
 		p.NoPrintThroughT, p.InvalidMark, p.UnknownDueFailureOrFence, p.CoveredPopulation, p.UnresolvedPopulation, value.Ranking.TotalPassers,
 		value.Ranking.KnownRankableCount, value.Ranking.DayInvalidRankable, value.Ranking.QualifiedDayInvalid,
@@ -468,8 +382,7 @@ func validateSnapshot(value Snapshot) error {
 		value.TQ.KnownPresent, value.TQ.KnownAbsent, value.TQ.Unknown, value.Operations.QueueCapacityFrames,
 		value.TQ.PressureMisses, value.TQ.RetainedTrades, value.TQ.RetainedQuotes, value.TQ.RetainedFingerprints,
 		value.Operations.QueueCurrentFrames, value.Operations.QueueHighFrames, value.Operations.QueueCurrentBytes, value.Operations.QueueHighBytes,
-		value.Operations.MeanProcessingDelayMS, value.Operations.MaxProcessingDelayMS, value.Operations.MaxProcessingDelayOneSecondMS, latency.MaximumMS, value.Operations.Goroutines,
-		checkpoint.UsableAgeMS, checkpoint.ProjectionTotalMS, checkpoint.ProjectionLockMS, checkpoint.WriteMS, checkpoint.EncodeMS, checkpoint.ReopenValidationMS} {
+		value.Operations.MeanProcessingDelayMS, value.Operations.MaxProcessingDelayMS, value.Operations.MaxProcessingDelayOneSecondMS, latency.MaximumMS, value.Operations.Goroutines} {
 		if count > maximumExactJSONInteger {
 			return rejectMapping("exact_json_integer_bound")
 		}
@@ -603,7 +516,7 @@ func tape5sValid(value Tape5s) bool {
 	case "current":
 		return value.TradeCoverage && value.Reason == "qualifying_original_prints"
 	case "unavailable":
-		return oneOf(value.Reason, "coverage", "channel_unconfirmed", "control_error", "replay_unavailable")
+		return oneOf(value.Reason, "coverage", "channel_unconfirmed", "control_error")
 	case "invalid":
 		return value.TradeCoverage && value.Reason == "unequal_repeat"
 	case "pressure_shed":
@@ -624,7 +537,7 @@ func spreadTupleValid(value Spread) bool {
 	case "stale":
 		return value.QuoteCoverage && value.Reason == "stale_quote"
 	case "unavailable":
-		return value.Reason == "coverage" || value.Reason == "channel_unconfirmed" || value.Reason == "control_error" || value.Reason == "replay_unavailable" || value.QuoteCoverage && value.Reason == "one_sided_quote"
+		return value.Reason == "coverage" || value.Reason == "channel_unconfirmed" || value.Reason == "control_error" || value.QuoteCoverage && value.Reason == "one_sided_quote"
 	case "invalid":
 		return value.QuoteCoverage && value.Reason == "crossed_quote"
 	case "pressure_shed":
@@ -656,120 +569,7 @@ func tqStatus(value string) bool {
 }
 
 func tqReason(value string) bool {
-	return oneOf(value, "", "coverage", "channel_unconfirmed", "control_error", "coverage_warming", "five_second_warming", "qualifying_original_prints", "unequal_repeat", "one_sided_quote", "crossed_quote", "stale_quote", "insufficient_coverage", "pressure", "replay_unavailable")
-}
-
-func validReplaySnapshot(value Snapshot) bool {
-	if value.Publication.RunMode == "live" {
-		return value.Replay == nil
-	}
-	if value.Replay == nil || value.Status.BackendReady || value.Status.ReadinessReason != "not_live_mode" || !validArtifactID(value.Replay.ArtifactID) ||
-		!validTimestamp(value.Replay.ArtifactEnd) || !validTimestamp(value.Replay.ObservationStart) || !validTimestamp(value.Replay.ObservationEnd) || !validTimestamp(value.Replay.LogicalTime) {
-		return false
-	}
-	r := value.Replay
-	artifactEnd, _ := time.Parse(time.RFC3339Nano, r.ArtifactEnd)
-	start, _ := time.Parse(time.RFC3339Nano, r.ObservationStart)
-	end, _ := time.Parse(time.RFC3339Nano, r.ObservationEnd)
-	logical, _ := time.Parse(time.RFC3339Nano, r.LogicalTime)
-	generated, _ := time.Parse(time.RFC3339Nano, value.Publication.GeneratedAt)
-	if !start.Before(end) || end.After(artifactEnd) || generated.After(logical) || logical.Before(start) && !oneOf(r.Phase, "warming", "canceling", "suppressed", "shutting_down") || logical.After(end) ||
-		!oneOf(r.Phase, "warming", "observing", "finalizing", "retained_success", "canceling", "suppressed", "shutting_down") {
-		return false
-	}
-	switch r.Phase {
-	case "warming":
-		if logical.After(start) || value.Publication.Lifecycle != "replaying" || value.Status.RankingCurrent || len(value.Rows) != 0 || value.Ranking.Mode != "unavailable" || value.Ranking.Reason != "replay_warming" {
-			return false
-		}
-	case "observing":
-		if logical.Before(start) || !logical.Before(end) || value.Publication.Lifecycle != "replaying" {
-			return false
-		}
-	case "finalizing":
-		if logical != end || value.Publication.Lifecycle != "replaying" {
-			return false
-		}
-	case "retained_success":
-		artifactCompletion := r.Completion == "artifact_end"
-		requestedCompletion := r.Completion == "requested_end"
-		if !oneOf(r.Completion, "artifact_end", "requested_end") || artifactCompletion != end.Equal(artifactEnd) ||
-			artifactCompletion != (value.Publication.LifecycleReason == "replay_end") || requestedCompletion != (value.Publication.LifecycleReason == "replay_requested_end") ||
-			value.Publication.Lifecycle != "ended" || logical != end || generated != logical {
-			return false
-		}
-	case "canceling":
-		if value.Publication.Lifecycle != "ended" || value.Publication.LifecycleReason != "controlled_stop" || value.Status.RankingCurrent || len(value.Rows) != 0 {
-			return false
-		}
-	case "suppressed":
-		if value.Publication.Lifecycle != "suppressed" || value.Publication.LifecycleReason != "replay_failure" || value.Publication.Suppression != "terminal_replay_failure" || value.Status.RankingCurrent || len(value.Rows) != 0 {
-			return false
-		}
-	case "shutting_down":
-		if value.Status.RankingCurrent || len(value.Rows) != 0 {
-			return false
-		}
-	}
-	if r.Phase != "retained_success" && r.Completion != "" {
-		return false
-	}
-	if (r.ScheduleLagMS == nil) != oneOf(r.Phase, "warming", "canceling", "suppressed", "shutting_down") {
-		return false
-	}
-	s := r.Source
-	if !sumDecimalEquals(s.ArtifactRecords, s.CompletedRecordDispositions, s.IntentionallyUnappliedSuffixRecords, s.UnreadRecords) ||
-		!sumDecimalEquals(s.PlannedGroups, s.CompletedGroups, s.ActiveGroup, s.RemainingGroups) {
-		return false
-	}
-	switch r.Phase {
-	case "retained_success":
-		if s.CompletedRuns != "1" || s.FailedRuns != "0" || s.CanceledRuns != "0" || s.ActiveGroup != "0" || s.RemainingGroups != "0" || s.UnreadRecords != "0" ||
-			r.Completion == "artifact_end" && s.IntentionallyUnappliedSuffixRecords != "0" {
-			return false
-		}
-	case "canceling":
-		if s.CompletedRuns != "0" || s.FailedRuns != "0" || s.CanceledRuns != "1" {
-			return false
-		}
-	case "suppressed":
-		if s.CompletedRuns != "0" || s.FailedRuns != "1" || s.CanceledRuns != "0" {
-			return false
-		}
-	}
-	w := r.Window
-	if !sumDecimalEquals(w.WarmupGroupsPlanned, w.WarmupGroupsCompleted, w.WarmupGroupActive, w.WarmupGroupsRemaining) ||
-		!sumDecimalEquals(w.ObservationSecondsPlanned, w.ObservationSecondsCompleted, w.ObservationSecondActive, w.ObservationSecondsRemaining) {
-		return false
-	}
-	if r.Phase == "warming" {
-		planned, plannedErr := strconv.ParseUint(w.WarmupGroupsPlanned, 10, 64)
-		completedWarmup, completedErr := strconv.ParseUint(w.WarmupGroupsCompleted, 10, 64)
-		if plannedErr != nil || completedErr != nil || completedWarmup >= planned {
-			return false
-		}
-	}
-	if r.Phase == "retained_success" && (w.WarmupGroupActive != "0" || w.WarmupGroupsRemaining != "0" || w.ObservationSecondActive != "0" || w.ObservationSecondsRemaining != "0") {
-		return false
-	}
-	completed, err1 := strconv.ParseUint(w.ObservationSecondsCompleted, 10, 64)
-	boundaries, err2 := strconv.ParseUint(w.ObservationBoundariesPublished, 10, 64)
-	if err1 != nil || err2 != nil {
-		return false
-	}
-	if boundaries == 0 {
-		return completed == 0 && !oneOf(r.Phase, "observing", "finalizing", "retained_success")
-	}
-	return boundaries == completed+1 && r.Phase != "warming"
-}
-
-func validArtifactID(value string) bool {
-	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") {
-		return false
-	}
-	digest := strings.TrimPrefix(value, "sha256:")
-	decoded, err := hex.DecodeString(digest)
-	return err == nil && hex.EncodeToString(decoded) == digest
+	return oneOf(value, "", "coverage", "channel_unconfirmed", "control_error", "coverage_warming", "five_second_warming", "qualifying_original_prints", "unequal_repeat", "one_sided_quote", "crossed_quote", "stale_quote", "insufficient_coverage", "pressure")
 }
 
 func validPosition(present bool, value Position) bool {
@@ -801,7 +601,7 @@ func validPositiveDecimal(value string) bool { return value != "0" && validDecim
 
 func deliveryLatencyAttributionValid(value Operations) bool {
 	attribution := value.DeliveryLatencyAttribution
-	if !oneOf(attribution.MaximumFamily, "aggregate", "tq", "control", "hydration_fence", "checkpoint", "timer", "unknown") ||
+	if !oneOf(attribution.MaximumFamily, "aggregate", "tq", "control", "hydration_fence", "timer", "unknown") ||
 		attribution.MaximumMS != value.MaxProcessingDelayOneSecondMS {
 		return false
 	}
@@ -818,8 +618,6 @@ func deliveryLatencyAttributionValid(value Operations) bool {
 		countByFamily = attribution.Control
 	case "hydration_fence":
 		countByFamily = attribution.HydrationFence
-	case "checkpoint":
-		countByFamily = attribution.Checkpoint
 	case "timer":
 		countByFamily = attribution.Timer
 	}
