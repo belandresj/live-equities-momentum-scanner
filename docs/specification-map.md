@@ -3,7 +3,8 @@
 **Status:** Approved authority index; the 2026-08-23 live backend replacement
 is the current sequential delivery program, owner-revised on 2026-08-24 to
 insert bounded parallel hydration `LBR-A3` and the accepted narrow watermark-
-diagnostic preservation correction before D1.
+diagnostic preservation correction before D1, then owner-revised on 2026-08-25
+to defer E2 as non-gating and permit E3 next under exact provider authorization.
 
 **Phase 1 approved:** 2026-08-05
 
@@ -16,7 +17,8 @@ trader-facing status, and compact Rank-column revisions approved:** 2026-08-17
 
 **Live backend replacement architecture and delivery program approved:**
 2026-08-23; E2 owner-revised to exactly one 10-minute deterministic run on
-2026-08-23; bounded `1|2|4|8` live hydration restored on 2026-08-24
+2026-08-23; bounded `1|2|4|8` live hydration restored on 2026-08-24; E2
+deferred/non-gating and E3 permitted next on 2026-08-25
 
 **Phase 2 sequence approved:** 2026-08-05
 
@@ -63,7 +65,7 @@ records are never tie-breakers.
 | Document | Status and role |
 | --- | --- |
 | [`product/product-goals.md`](product/product-goals.md) | Approved product contract, 2026-08-05 and owner-revised 2026-08-14; highest product authority. The revised feature set supersedes conflicting lower-level formulas and displayed-field contracts pending sequential reconciliation. |
-| [`live-backend-replacement.md`](live-backend-replacement.md) | Approved 2026-08-23 and owner-revised 2026-08-24 current replacement architecture; controls one state owner/handoff, bounded parallel hydration, compact state, two-phase evaluation, resource policy, and deletion boundary. |
+| [`live-backend-replacement.md`](live-backend-replacement.md) | Approved 2026-08-23 and owner-revised through 2026-08-25 current replacement architecture; controls one state owner/handoff, bounded parallel hydration, compact state, two-phase evaluation, resource policy, E2 deferral/E3 ordering, and deletion boundary. |
 | [`architecture/system-overview.md`](architecture/system-overview.md) | Historical approved architecture and compatible evidence; superseded for conflicting replacement topology, state, queue, evaluation, replay/checkpoint-live-core, and resource decisions. |
 | [`architecture/data-time-and-event-contract.md`](architecture/data-time-and-event-contract.md) | Approved semantic architecture and compatible evidence; focused replacement specs route retained live session, identity, ordering, merge, coverage, and watermark meaning. Replay/checkpoint sections are non-gating. |
 | [`architecture/scanner-state-engine-lifecycle.md`](architecture/scanner-state-engine-lifecycle.md) | Approved lifecycle semantics and compatible evidence; focused replacement specs route retained live startup, hydration, recovery, currentness, suppression, session-end, and shutdown meaning. Replay/checkpoint states are non-gating. |
@@ -112,7 +114,7 @@ and review records.
 
 | Document | Status and role |
 | --- | --- |
-| [`live-backend-replacement/delivery-program.md`](live-backend-replacement/delivery-program.md) | Current owner-approved delivery authority, owner-revised 2026-08-24: Capabilities A–D and `LBR-E1` accepted; `LBR-E2` is next permitted but inactive; sole ledger, bounded execution, and hard integrated acceptance. |
+| [`live-backend-replacement/delivery-program.md`](live-backend-replacement/delivery-program.md) | Current owner-approved delivery authority, owner-revised 2026-08-25: Capabilities A–D and `LBR-E1` accepted; synthetic `LBR-E2` is deferred/non-gating after invalid measurement; `LBR-E3` is next permitted subject to exact provider authorization; sole ledger and bounded acceptance authority. |
 | [`live-feature-mvp-program.md`](live-feature-mvp-program.md) | Historical accepted 2026-08-14 feature/API/UI/stability delivery evidence; superseded as the active implementation program. |
 | [`live-evaluation-cycle-coalescing-correction.md`](live-evaluation-cycle-coalescing-correction.md) | Accepted historical scanner-stability evidence: one fence-owned evaluation opportunity, maintenance-only following timer, and coalesced missed ticks. Its old evaluator implementation is not replacement authority. |
 | [`tq-publication-coalescing-correction.md`](tq-publication-coalescing-correction.md) | Accepted historical scanner-stability evidence: synchronous canonical T/Q mutation with one-second combined publication and immediate trust transitions. Its old T/Q representation is not replacement authority. |
@@ -144,8 +146,10 @@ each capability. `LBR-P1` and A1/A2/B/C evidence remain accepted. The
 hydration; A3 is now accepted. The corrected watermark-stall diagnostic was
 then semantically forward-ported without reopening A/B/C. D1/D2 and their
 Capability D review are accepted. `LBR-E1` completed the exclusive live cutover
-and owner-selected replay/checkpoint deletion; `LBR-E2` is next permitted but
-inactive.
+and owner-selected replay/checkpoint deletion. The invalid E2 harness is
+removed and its evidence retained; E2 capacity characterization is deferred and
+non-gating. E3 live-provider validation is next permitted but inactive until an
+exact execution authorization is recorded.
 
 The active capability order is:
 
@@ -154,20 +158,21 @@ The active capability order is:
 2. incremental evaluation and immutable publication;
 3. compact selected-row T/Q under the approved 30-second late/duplicate policy;
 4. single-pass Massive ingress and one decoded-batch handoff; and
-5. exclusive cutover, deletion, deterministic resource/stability acceptance,
-   then separately authorized live confirmation.
+5. exclusive cutover and deletion, separately authorized live confirmation,
+   with synthetic deterministic capacity characterization deferred as optional
+   future evidence.
 
 The accepted live-feature MVP, scanner-stability corrections, numbered
 components, and V1 program are reusable evidence. They cannot preserve a
 superseded feature, queue, representation, evaluator, replay/checkpoint-live-
 core path, or proof gate. The API v2 and finished UI meanings remain fixed.
 
-Numeric resource values in the parent are design targets. E2 executes exactly
-one 10-minute deterministic acceptance run; a hard-conforming target miss is
-recorded as a deviation without another timed trial. Only correctness/loss,
-unbounded resource growth, sustained backlog/readiness failure, or unusable
-one-second API/dashboard behavior blocks completion. No optional, fallback,
-diagnostic, host-coexistence, or non-gating repeat run exists.
+Numeric resource values in the parent remain design targets for any future E2
+capacity characterization. E2 retains its exact one-run/no-repeat rule when
+reactivated, but it is not a gate for E3 or live-stability confirmation. E3
+instead records observed correctness/loss, resource trend, backlog/readiness,
+and one-second API/dashboard usability against the real provider without
+claiming deterministic 300-frames/s capacity.
 
 ## Historical Phase 2 focused component sequence
 

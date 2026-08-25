@@ -1,7 +1,9 @@
 # LBR-P1 baseline characterization
 
 **Status:** Frozen deterministic comparison input for `LBR-P1`, 2026-08-23;
-owner-revised to the exact 10-minute E2 manifest on 2026-08-23.
+owner-revised to the exact 10-minute E2 manifest on 2026-08-23. E2 is deferred
+and non-gating as of 2026-08-25; these bytes remain frozen for any future
+reactivation and do not gate E3.
 
 **Authority:** [delivery program](delivery-program.md), Section 5, and
 [integration/removal/acceptance](integration-removal-and-acceptance.md),

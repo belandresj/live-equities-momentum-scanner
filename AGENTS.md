@@ -33,17 +33,19 @@ disabled; neither is a replacement gate.
 
 The active goal is the private/local
 [`live backend replacement`](docs/live-backend-replacement/delivery-program.md):
-compact canonical state and hydration, incremental two-phase evaluation,
-bounded selected-row T/Q, single-pass live ingress with one handoff, then
-exclusive cutover/removal and integrated resource/stability acceptance. The
-current phase is `LBR-P1`: the five focused specs are owner-approved after a
-clean independent cross-review; freeze the baseline characterization before
-implementation.
+Capabilities A–D and `LBR-E1` are accepted on the exclusive replacement path.
+The invalid synthetic E2 execution is preserved, while E2 deterministic
+capacity characterization is deferred and non-gating. `LBR-E3` real-provider
+market-hours validation is the next permitted slice but remains inactive until
+an exact owner authorization names the date, Massive environment and credential
+source, duration, procedure, redaction, stop/shutdown behavior, and any
+permitted recovery action.
 
 Keep one active write-capable slice and finally review each capability before
-starting the next. Public deployment, replay repair, checkpoint compatibility,
-and credentialed market-hours work are outside current authority. A provider
-request always requires separate exact authorization.
+starting the next. Public deployment, replay repair, and checkpoint
+compatibility remain outside current authority. Credentialed market-hours work
+is permitted next only after its separate exact authorization; a provider
+request always requires that authorization.
 
 ## Replacement fixed and revisable decisions
 

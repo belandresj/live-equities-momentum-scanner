@@ -125,6 +125,7 @@ Compile-time dependencies and closed constructors should prevent alternate
 production paths. Runtime composition proof contains remaining failure cases.
 Any semantic/interface regression reopens the lowest A–D slice; do not patch it
 locally in E1. E1 requires proportionate review for cross-cutting owner/
-concurrency/failure conformance, followed later by final integrated review
-after E2. Only the orchestrator records acceptance and commits after
+concurrency/failure conformance. The revised program allocates a focused live-
+evidence review after E3 and a separate capacity-evidence review only if E2 is
+later resumed. Only the orchestrator records acceptance and commits after
 quiescence.

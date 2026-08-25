@@ -2,7 +2,9 @@
 
 **Status:** Owner-approved replacement architecture, 2026-08-23; owner-revised
 E2 to exactly one 10-minute deterministic acceptance run on 2026-08-23 and
-restored bounded parallel live hydration on 2026-08-24.
+restored bounded parallel live hydration on 2026-08-24; owner-revised on
+2026-08-25 to defer E2 as non-gating and permit E3 next under exact provider
+authorization.
 
 **Baseline:** `0d043c1 stabilize live evaluation and local continuity` on
 `codex/live-backend-replacement`.
@@ -328,9 +330,12 @@ simplify lower-level machinery but may not weaken these failure domains.
 
 ### `LBR-ARCH-12` — bounded private/local operation
 
-Measure the replacement in E2 against the exact mature 5,694-symbol manifest with
-representative selected-row T/Q and dashboard polling. The values below are
-design targets and diagnostic thresholds, not independent completion gates.
+If E2 is resumed, measure the replacement against the exact mature 5,694-symbol
+manifest with representative selected-row T/Q and dashboard polling. E2 is a
+deferred deterministic capacity characterization, not a prerequisite for the
+authorized E3 real-provider observation or live-stability confirmation. The
+values below remain design targets and diagnostic thresholds, not independent
+completion gates.
 
 | Metric | Initial design target |
 | --- | ---: |
@@ -347,7 +352,7 @@ design targets and diagnostic thresholds, not independent completion gates.
 | Additional processing beyond the fixed four-second semantic delay, p99 | `< 500 ms` |
 | Aggregate/control loss or capacity rejection | `0` |
 
-Hard resource acceptance requires:
+Hard E2 resource acceptance, when resumed, requires:
 
 - heap, RSS, retained state, queues, and goroutines reach a bounded plateau;
 - the characterized ordinary feed and accepted stress composition show no
@@ -369,10 +374,12 @@ measurement mechanics, or the reported target deviation when evidence
 requires it. It may not loosen product correctness, readiness, market-time, or
 bounded-plateau requirements to pass a benchmark.
 
-`LBR-E2` executes exactly one 10-minute deterministic acceptance run. No
-optional, fallback, diagnostic, host-coexistence, or non-gating repeat run is
-part of the replacement authority. The single run must still establish every
-hard semantic, loss, plateau, backlog, readiness, and polling gate above.
+`LBR-E2`, if separately reactivated, executes exactly one 10-minute
+deterministic characterization run. No fallback, diagnostic, host-coexistence,
+or repeat run is authorized. Deferral does not weaken that future proof; it
+changes only program ordering and completion status. `LBR-E3` may proceed first
+under exact provider authorization and can establish bounded real-provider
+operation, but it cannot establish the synthetic 300-frames/s capacity claim.
 
 ## 9. Retain, replace, and remove
 

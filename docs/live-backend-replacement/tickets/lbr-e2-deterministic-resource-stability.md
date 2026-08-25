@@ -1,13 +1,14 @@
 # LBR-E2 implementation assignment — deterministic resource stability
 
-**Status:** Independently reviewed implementation assignment; owner-revised to
-exactly one 10-minute deterministic acceptance run on 2026-08-23. Activation
-occurs only through the [delivery program](../delivery-program.md); this file is
-not a mutable ledger.
+**Status:** Deferred, non-gating deterministic capacity-characterization
+assignment. Its invalid 2026-08-25 execution is preserved in the delivery
+ledger. If reactivated, the owner-approved exact 10-minute manifest and
+one-run/no-repeat rule remain unchanged. Activation occurs only through the
+[delivery program](../delivery-program.md); this file is not a mutable ledger.
 
-**Activation gate:** `LBR-E1` must be accepted and the delivery ledger must
-record the exact `LBR-P1` manifest/characterization frozen. The
-[delivery program](../delivery-program.md) must mark only `LBR-E2` active.
+**Activation gate:** a future owner/program revision must explicitly reactivate
+E2 after `LBR-E1`, retain the exact frozen `LBR-P1` manifest, and mark only
+`LBR-E2` active. E2 is not a prerequisite for `LBR-E3`.
 
 ## 1. Authority and exact requirements
 
@@ -109,9 +110,9 @@ at the gate. Do not execute another timed composition.
 Handoff records command/config/checksum, host/Go/GC, complete target table,
 hard-gate results, time-series artifact paths, semantic/accounting digests,
 target deviations, proof limitation, and any reopened capability. A hard-
-conforming result triggers the
-required final integrated read-only review. E3 remains unauthorized until its
-separate owner gate.
+conforming result triggers the required E2 capacity-evidence read-only review.
+E3 follows its independent exact provider-authorization gate and does not wait
+for this optional characterization.
 
 ## 9. Implementer discretion and prohibited changes
 
@@ -128,7 +129,8 @@ an optional/fallback/diagnostic composition.
 Manifest validation and safety stops prevent an incomparable or runaway trial.
 Measurement-tool failure is repaired once and distinguished from scanner
 failure. Every implementation correction routes to the lowest owning ticket
-before mutation. Final integrated review covers sole owner/path, semantic
+before mutation. The capacity-evidence review covers sole owner/path, semantic
 compatibility, deletion, plateaus/slopes/backlog/readiness, polling, and bounded
-target-miss handling. Only the orchestrator records deterministic completion
-and commits after all reviewers are quiet.
+target-miss handling. Only the orchestrator records
+`deterministic_capacity_characterized` and commits after all reviewers are
+quiet.

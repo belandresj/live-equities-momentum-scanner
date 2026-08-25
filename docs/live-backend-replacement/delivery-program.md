@@ -3,7 +3,9 @@
 **Status:** Owner-approved current delivery authority, 2026-08-23; owner-revised
 E2 to exactly one 10-minute deterministic acceptance run on 2026-08-23,
 inserted bounded parallel live hydration `LBR-A3` before D1, and accepted the
-narrow diagnostic-preservation correction between A3 and D1 on 2026-08-24.
+narrow diagnostic-preservation correction between A3 and D1 on 2026-08-24;
+owner-revised on 2026-08-25 to defer E2 as non-gating and permit E3 next under
+exact provider authorization.
 
 **Parent:** [`../live-backend-replacement.md`](../live-backend-replacement.md).
 
@@ -28,10 +30,11 @@ through the replacement architecture and:
 - publishes the existing API v2 contract to the finished dashboard;
 - removes the old live state/evaluator/handoff and superseded feature
   machinery from the supported path;
-- passes semantic, recovery, concurrency, and resource-stability
-  acceptance; and
-- records live-provider confirmation only when separately owner-authorized or
-  owner-executed.
+- passes accepted semantic, recovery, concurrency, and ordinary verification;
+- records bounded real-provider stability only when separately owner-authorized
+  or owner-executed; and
+- records deterministic whole-composition capacity separately only if deferred
+  E2 is later reactivated and passes.
 
 This program delivers a private/local scanner, not a public service, trading
 signal, replay product, checkpoint restart claim, or provider SLA.
@@ -328,9 +331,9 @@ API v2, dashboard, launcher, reference, hydration, and operator behavior remain
 compatible unless an accepted focused contract explicitly revises an internal
 interface.
 
-### `LBR-E2` — deterministic resource and stability acceptance
+### `LBR-E2` — deferred deterministic resource and stability characterization
 
-Run exactly one mature 5,694-symbol deterministic 10-minute mixed-feed
+If separately reactivated, run exactly one mature 5,694-symbol deterministic 10-minute mixed-feed
 acceptance composition with selected-row T/Q and one-second dashboard polling. Use a fixed
 manifest at exactly 300 frames/s: 600 timed seconds, 180,000 frames, 3,416,400
 base aggregates, 600 resource samples, 600 dashboard polls, and 11 ranking/
@@ -349,16 +352,20 @@ a numeric miss is recorded as a deviation and cannot authorize an additional
 timed trial. Measurement invalidity or a hard failure reopens the lowest owning
 ticket; a corrected future E2 activation again owns exactly one 10-minute run.
 The orchestrator must not append optimization, coexistence, or diagnostic runs.
+E2 is retained as optional future capacity evidence and is not a prerequisite
+for E3 or `live_stability_confirmed`.
 
 ### `LBR-E3` — separately authorized market-hours confirmation
 
-After deterministic acceptance, one exact-date owner-authorized or owner-run
-observation confirms the final provider wiring, hydration, connection
+After accepted A–D semantics and E1 exclusive cutover, one exact-date
+owner-authorized or owner-run observation confirms the final provider wiring, hydration, connection
 continuity/recovery, ranking, T/Q, API, dashboard, and resource trend.
 
 This program does not itself authorize credential access or a provider request.
-Without `LBR-E3`, the implementation may be recorded
-`deterministically_complete` but not `live_stability_confirmed`.
+E3 may proceed while E2 is deferred, but it cannot claim the synthetic
+300-frames/s capacity result. Without a clean E3 observation and final
+integrated program review, the implementation is not
+`live_stability_confirmed`.
 
 ## 11. Proof and verification policy
 
@@ -446,8 +453,9 @@ Review cadence:
 - a narrow slice review only when a consequential ownership, ordering,
   concurrency, external trust, or false-success boundary cannot be established
   by construction and primary proof alone; and
-- one final integrated review after `LBR-E2`, plus focused live-evidence review
-  after `LBR-E3` when executed.
+- one final integrated program review after `LBR-E3`, incorporating focused
+  live-evidence inspection, plus an independent capacity-evidence review only
+  if deferred `LBR-E2` is later reactivated.
 
 One implementation assignment covers one slice and contains the ten items
 required by `AGENTS.md`. Tickets are generated from the approved focused specs;
@@ -1519,6 +1527,41 @@ committed.
   `deterministically_complete` is not established, and `LBR-E3` remains
   unauthorized/inactive.
 
+#### Owner revision — defer E2 and permit E3 next — 2026-08-25
+
+- **Decision:** the failed E2 harness and evidence remain preserved, but E2 is
+  deferred as optional, non-gating deterministic capacity characterization. Its
+  exact frozen manifest, 10-minute duration, one-run/no-repeat rule, and claims
+  remain unchanged if a future owner activation resumes it. No E2 code is
+  retained in production or test packages.
+- **Reason:** the owner prioritizes evidence from the actual Massive REST and
+  WebSocket paths, ordinary `RunLive` composition, state engine, API v2, and
+  local dashboard over near-term investment in a full fake-provider composition.
+  Live evidence gives stronger provider-integration confidence but cannot prove
+  exact 300-frames/s deterministic capacity or forced rare-event coverage.
+- **Revised ordering:** accepted A–D semantics, E1 cutover, and existing
+  deterministic component/ordinary evidence are sufficient to permit E3 next.
+  E3 remains inactive until an execution prompt explicitly authorizes the exact
+  trading date, ordinary Massive environment and credential source, bounded
+  duration, procedure, redaction, stop/shutdown behavior, and any permitted
+  recovery action. The activation audit must verify a clean exact commit before
+  credential access.
+- **Claim boundary:** a clean E3 observation and final integrated program review
+  may establish `live_stability_confirmed` for the observed private/local
+  scanner path. It
+  does not establish `deterministic_capacity_characterized`, provider SLA,
+  public deployment, replay/checkpoint support, or trading expectancy. A future
+  clean E2 run may separately establish
+  `deterministic_capacity_characterized`; neither status depends on the other.
+- **Next permitted slice:** `LBR-E3` is next permitted but inactive. This
+  program revision is not credential authority and makes no provider request.
+- **Independent authority review:** final read-only review returned
+  `CLEAN/PASS` after aligning repository-wide phase routing, sole-ledger states,
+  E3's final integrated review scope, exact authorization for any induced
+  recovery or T/Q shedding, authority metadata, and deferred-E2 terminology.
+  The reviewer confirmed that E3 can be authorized next without production-code
+  changes or deletion/rewrite of E2 evidence.
+
 ### Owner-approved E2 duration and manifest revision — 2026-08-23
 
 The owner revised E2 to exactly one 10-minute deterministic acceptance run. The
@@ -1539,9 +1582,9 @@ but copy no status.
 
 | Item | State | Gate / next action |
 | --- | --- | --- |
-| Parent architecture | `approved_owner_revised_parallel_hydration` | Current replacement architecture; bounded live hydration accepts `1|2|4|8`, defaults to 8, and E2 remains exactly one 10-minute deterministic run. |
-| Delivery program | `approved_owner_revised_parallel_hydration` | `LBR-A3` is inserted before D1; no optional/fallback/diagnostic E2 repeat exists. |
-| `LBR-P1` focused contracts and characterization | `accepted_owner_revised_parallel_hydration` | Five-spec review/owner acceptance remains valid subject to the recorded A3 hydration-topology revision. The frozen baseline/manifest remains unchanged; comparable baseline CPU/RSS remain explicitly unknown. |
+| Parent architecture | `approved_owner_revised_e3_next_e2_deferred` | Current replacement architecture; bounded live hydration accepts `1|2|4|8`, E2 capacity characterization is deferred/non-gating, and E3 is permitted next only under exact provider authorization. |
+| Delivery program | `approved_owner_revised_e3_next_e2_deferred` | A–D/E1 remain accepted; E3 is next permitted but inactive, and no fallback/diagnostic/repeat E2 composition is authorized. |
+| `LBR-P1` focused contracts and characterization | `accepted_frozen_e2_deferred` | Five-spec review/owner acceptance remains valid. The frozen E2 baseline/manifest is retained for optional future reactivation and does not gate E3; comparable baseline CPU/RSS remain explicitly unknown. |
 | Capability A — canonical state and hydration | `finally_accepted_lbr_a3` | A1/A2 semantics remain accepted; A3 supersedes only their one-worker ordinary-live composition restriction. |
 | `LBR-A3` bounded parallel live hydration | `accepted` | Exact `1|2|4|8`, default 8, bounded concurrency/budgets, terminal/fence/live-tail/API equivalence, joined cancellation, and final focused review are clean. |
 | Watermark-stall diagnostic preservation | `accepted_between_a3_d1` | Baseline commit `e88eef7` was semantically forward-ported with offline verification and clean final review; diagnostic-only, no A/B/C reopening or D1 activation. |
@@ -1549,10 +1592,10 @@ but copy no status.
 | Capability B — evaluation and publication | `finally_accepted` | B1/B2/B3 and the required final read-only review remain accepted and unaffected by A3. |
 | Capability C — selected-row T/Q | `finally_accepted` | C1/C2 remain accepted and unaffected by the A3 hydration-topology revision. |
 | Capability D — live ingress | `finally_accepted` | D1/D2, one decoded-batch FIFO/owner handoff, exact connection semantics, final-byte gates, corrections, and final read-only review are clean and preserved by E1. |
-| Capability E — integration/removal/acceptance | `lbr_e2_reopened_measurement_invalid` | E1 exclusive cutover remains accepted. E2 did not start timed pacing; invalid-harness removal and final documentation/evidence gates are recorded, but a future 10-minute run requires new authorization. E3 remains unauthorized/inactive. |
-| E2 deterministic duration/manifest revision | `owner_approved` | Exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |
-| Deterministic replacement | `not_complete_lbr_e2_measurement_invalid` | No timed E2 evidence exists. Final-byte verification is green; deterministic completion requires a newly authorized E2 activation and conforming run. |
-| Live stability confirmation | `not_authorized` | `LBR-E3` requires separate exact-date authorization or owner execution |
+| Capability E — integration/removal/acceptance | `lbr_e3_next_permitted_e2_deferred` | E1 exclusive cutover remains accepted. Invalid E2 evidence is preserved and E2 is deferred/non-gating. E3 is next permitted but inactive pending exact execution authorization. |
+| E2 deterministic duration/manifest revision | `deferred_non_gating` | If reactivated: exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |
+| Deterministic capacity characterization | `not_established_deferred` | No timed E2 evidence exists. This optional status requires a newly authorized E2 activation and conforming run but does not gate E3. |
+| Live stability confirmation | `next_permitted_not_authorized` | `LBR-E3` may proceed before E2 only after an exact-date/environment/credential/duration/recovery authorization is recorded. |
 
 ## 15. Git and milestone policy
 
@@ -1570,7 +1613,11 @@ but copy no status.
 
 ## 16. Completion boundary
 
-`deterministically_complete` requires:
+The former combined `deterministically_complete` gate is retired for the current
+ordering because it made optional whole-composition capacity evidence a
+prerequisite for observing the real provider. Current statuses are independent.
+
+`live_stability_confirmed` requires:
 
 - approved parent/program and accepted focused specs;
 - Capabilities A-D and `LBR-E1` accepted;
@@ -1578,12 +1625,15 @@ but copy no status.
 - superseded product feature state and old fallback implementations removed;
 - API v2/UI/launcher compatibility proven;
 - ordinary/race/vet/diff verification green as allocated;
-- `LBR-E2` hard resource/stability acceptance, with every target measured and
-  deviations recorded; and
-- a clean final integrated read-only review.
+- one exactly authorized `LBR-E3` observation of the ordinary private/local
+  provider path; and
+- a clean final integrated program review covering its bounded, redacted live
+  evidence, retained one-owner/path conformance, and claim limits.
 
-`live_stability_confirmed` additionally requires `LBR-E3` and a clean focused
-review of its bounded evidence.
+`deterministic_capacity_characterized` separately requires the deferred exact
+E2 manifest, hard resource/stability acceptance with every target measured and
+deviations recorded, and its clean independent evidence review. It is not a
+gate for `live_stability_confirmed`.
 
 Neither state establishes replay/checkpoint support, public deployment,
 provider SLA, or trading expectancy.

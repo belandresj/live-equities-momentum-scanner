@@ -2,7 +2,9 @@
 
 **Status:** Owner-approved focused replacement specification, 2026-08-23;
 owner-revised E2 to exactly one 10-minute deterministic acceptance run on
-2026-08-23 and restored bounded parallel live hydration on 2026-08-24. The
+2026-08-23, restored bounded parallel live hydration on 2026-08-24, and on
+2026-08-25 deferred E2 as non-gating while permitting E3 next under exact
+provider authorization. The
 [delivery program](delivery-program.md) is the sole mutable status ledger.
 
 **Parent:** [Live backend replacement architecture](../live-backend-replacement.md).
@@ -11,8 +13,8 @@ owner-revised E2 to exactly one 10-minute deterministic acceptance run on
 
 This contract cuts the ordinary private scanner over to one replacement live
 path, removes the superseded live path, preserves API-v2/dashboard/launcher
-behavior, and performs deterministic resource/stability acceptance plus a
-separately authorized live observation. It owns final runtime composition,
+behavior, and allocates optional deterministic capacity characterization plus
+a separately authorized live observation. It owns final runtime composition,
 source/dependency exclusion, compatibility verification, measurement, and
 integrated evidence. It owns no market formula, alternate state engine,
 provider policy, UI redesign, or mutable component status.
@@ -211,20 +213,22 @@ authorize a second timed trial. Measurement invalidity or a hard failure
 reopens the narrowest implicated capability; a later E2 activation again owns
 exactly one 10-minute run.
 
-## 7. Single deterministic run and live boundary
+## 7. Deferred deterministic characterization and live boundary
 
-E2 has no optional, fallback, diagnostic, host-coexistence, or non-gating
-repeat. Its exact 10-minute composition is the sole deterministic resource/
-stability run.
+E2 is retained as deferred, non-gating deterministic capacity characterization.
+If separately reactivated, it has no fallback, diagnostic, host-coexistence, or
+repeat: its exact 10-minute composition remains the sole deterministic
+resource/stability run.
 
-`LBR-E3` is a separate exact-date market-hours observation only after
-deterministic acceptance. It may access credentials or Massive only when the
-owner executes it or grants explicit authorization for that exact run. It
+`LBR-E3` is the next permitted exact-date market-hours observation after the
+accepted A–D semantics and E1 exclusive cutover; E2 is not its prerequisite. It
+may access credentials or Massive only when the owner executes it or grants
+explicit authorization for that exact run. It
 observes fresh hydration/fence, sustained provider ingress, ranking/TQ/API/UI,
 one recovery when naturally observed or safely owner-authorized, and bounded
 resource trend. It does not create a provider SLA, public deployment, or
-trading-edge claim. Without it the program can be deterministically complete
-but not live-stability confirmed.
+trading-edge claim, and it does not prove the deferred 300-frames/s synthetic
+capacity target.
 
 ## 8. Failure and trust boundaries
 
@@ -246,7 +250,7 @@ closed market is lack of authorization/evidence, not deterministic failure.
 | Slice | Primary proof | Claim, dangerous counterexample, observable distinction, limitation |
 | --- | --- | --- | --- |
 | `LBR-E1` | `P-LBR-E1-CUTOVER` | Build/dependency/source inspection plus a production composition trace proves `cmd/scanner` constructs exactly one replacement owner/ingress/evaluator, uses only the parent-allowed bounded concurrency, preserves the component-defined common failure domains, leaves old sentinels unreachable, removes old product fields from active state/API, needs no engine checkpoint state when checkpoint-off, and keeps API-v2/UI/launcher goldens exact through startup/current/recovery/terminal/API/UI-failure cases. It detects a fallback, shadow mutation, competing owner, unjustified runtime worker/queue, or unsupported tool importing the live core. It does not prove sustained resources or provider traffic. |
-| `LBR-E2` | `P-LBR-E2-STABILITY` | The validated exact 10-minute deterministic manifest runs the complete backend/dashboard composition once with one-second polling. It reports every parent target and proves exact final oracle/accounting, zero aggregate/control loss, bounded state/queue/heap/RSS/goroutine plateaus, no sustained backlog/readiness flap, and usable isolated polling. A numeric miss is recorded from that one run when hard acceptance passes; no repeat composition is authorized. This is host/fixture evidence, not provider capacity or an SLA. |
+| `LBR-E2` | `P-LBR-E2-STABILITY` | If reactivated, the validated exact 10-minute deterministic manifest runs the complete backend/dashboard composition once with one-second polling. It reports every parent target and proves exact final oracle/accounting, zero aggregate/control loss, bounded state/queue/heap/RSS/goroutine plateaus, no sustained backlog/readiness flap, and usable isolated polling. A numeric miss is recorded from that one run when hard acceptance passes; no repeat composition is authorized. This optional host/fixture capacity characterization is not provider capacity or an SLA and does not gate E3. |
 | `LBR-E3` | `P-LBR-E3-LIVE` | One exact-date authorized/owner-run market-hours observation follows the frozen procedure and records hydration/fence completion, continuous provider progression, exact observable ranking/TQ/API/UI behavior, transport terminals/recovery if observed, and resource slopes. It rejects a credentialed smoke test that never reaches current or silently restarts. It is bounded operational confirmation, not deterministic formula proof, exhaustive recovery, provider SLA, deployment, or expectancy evidence. |
 
 `LBR-E1` performs cutover and deletion after applying the owner source/tool
@@ -254,25 +258,26 @@ choice. Acceptance makes every old live engine, state, evaluator, queue,
 envelope, feature path, compatibility flag, and active route removable—and
 requires actual removal or proven standalone separation rather than dead code.
 
-`LBR-E2` owns deterministic whole-process resource and stability acceptance.
-`LBR-E3` owns only separately authorized live confirmation. No implementation
-ticket combines these slices.
+`LBR-E2` owns optional deterministic whole-process capacity characterization.
+`LBR-E3` owns separately authorized real-provider live confirmation and may
+execute before E2. No implementation ticket combines these slices, and neither
+proof may borrow the other's claim.
 
 ## 10. Verification, review, and owner gates
 
 `LBR-E1` runs its proof, all API/UI/launcher regressions, affected race tests,
-focused vet, `git diff --check`, and ordinary repository verification. `E2`
-runs the prevalidated non-short manifest once for exactly 10 minutes with an
-explicit 15-minute command timeout and bounded stop conditions. It does not
-append any optional or target-miss trial. `E3`
-uses the separately approved market-hours procedure and no credential access
-is implied by this spec.
+focused vet, `git diff --check`, and ordinary repository verification. A future
+`E2` runs the prevalidated non-short manifest once for exactly 10 minutes with
+an explicit 15-minute command timeout and bounded stop conditions; it appends
+no optional or target-miss trial. `E3` uses the separately approved
+market-hours procedure, and no credential access is implied by this spec.
 
-One final integrated read-only review after `E2` checks requirement allocation,
-one owner/queue/publication, source removal, semantic compatibility, plateau/
-backlog interpretation, target-miss handling, and remaining claims. `E3`, when
-executed, receives a focused evidence review. Any correction reopens the lowest
-affected focused contract or slice and preserves unrelated evidence.
+`E3`, when executed, receives the final integrated program review, incorporating
+focused live-evidence inspection of the production path, one-owner/queue/
+publication conformance, live claims, redaction, resource/backlog/readiness
+interpretation, and limitations. A future E2 receives its own independent
+capacity-evidence review. Any correction reopens the lowest affected focused
+contract or slice and preserves unrelated evidence.
 
 The remaining owner decisions are deliberately latest-responsible:
 

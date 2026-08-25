@@ -1,12 +1,14 @@
 # LBR-E3 execution assignment — authorized market-hours confirmation
 
-**Status:** Independently reviewed execution assignment. Activation occurs only
-through the [delivery program](../delivery-program.md); this file grants no
-credential or provider authority and is not a mutable ledger.
+**Status:** Next permitted but inactive market-hours execution assignment after
+the 2026-08-25 owner ordering revision. Activation occurs only through the
+[delivery program](../delivery-program.md); this file grants no credential or
+provider authority and is not a mutable ledger.
 
-**Activation gate:** `LBR-E2` and the final integrated review must be accepted.
-The owner must execute the observation or grant explicit authorization naming
-the exact date, account/environment, procedure, duration, and permitted
+**Activation gate:** Capabilities A–D and `LBR-E1` must remain accepted on an
+exact clean commit; deferred E2 is not a prerequisite. The owner must execute
+the observation or grant explicit authorization naming the exact date,
+account/environment and credential source, procedure, duration, and permitted
 recovery action. The [delivery program](../delivery-program.md) must then mark
 only `LBR-E3` active.
 
@@ -94,12 +96,13 @@ expectancy.
 
 ## 7. Verification and timeout policy
 
-All deterministic/ordinary evidence must already be accepted; do not rerun
-unrelated expensive tests during market hours. The owner authorization sets a
-bounded live duration and shutdown deadline. Preflight and postflight commands
-use explicit timeouts. Afterward run only narrow deterministic regressions if a
-captured anomaly needs classification; no live retry without new exact
-authorization.
+Accepted A–D/E1 deterministic and ordinary evidence must remain valid; the
+deferred E2 whole-composition capacity run is explicitly not required. Do not
+rerun unrelated expensive tests during market hours. The owner authorization
+sets a bounded live duration and shutdown deadline. Preflight and postflight
+commands use explicit timeouts. Afterward run only narrow deterministic
+regressions if a captured anomaly needs classification; no live retry without
+new exact authorization.
 
 ## 8. Evidence handoff and claim boundary
 
@@ -107,7 +110,10 @@ Handoff contains the authorization reference, redacted command/config, exact
 times, hydration/fence/currentness timeline, provider/heartbeat/recovery facts,
 ranking/TQ/API/UI observations, resource/queue/readiness/accounting series,
 stop/shutdown result, artifact checksums, anomalies, and limitations. Without a
-clean focused evidence review, do not record `live_stability_confirmed`.
+clean final integrated program review—including focused live-evidence and
+retained one-owner/path conformance—do not record `live_stability_confirmed`.
+Even a clean result does not establish the deferred deterministic 300-frames/s
+capacity characterization.
 
 ## 9. Observer discretion and prohibited changes
 
@@ -121,6 +127,7 @@ repair while live, expose secrets, claim a provider SLA, or infer market edge.
 Authorization, preflight, redaction, bounded duration, stop conditions, and
 controlled shutdown are mandatory containment. A defect or inconclusive run
 records evidence and reopens the lowest deterministic ticket; it does not
-authorize improvisation or another provider call. One focused read-only review
-checks evidence/claim scope. Only the orchestrator updates the sole ledger and
-commits after all live work/review is quiescent.
+authorize improvisation or another provider call. One final integrated
+read-only program review incorporates focused live evidence/claim inspection
+and retained one-owner/path conformance. Only the orchestrator updates the sole
+ledger and commits after all live work/review is quiescent.
