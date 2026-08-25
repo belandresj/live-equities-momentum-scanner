@@ -169,6 +169,7 @@ func cloneReadinessDiagnosticStatus(value Status) Status {
 	result := value
 	result.Watermark = cloneTime(value.Watermark)
 	result.CausalTarget = cloneTime(value.CausalTarget)
+	result.TQWatermarkRecoveryBoundary = cloneTime(value.TQWatermarkRecoveryBoundary)
 	result.IntegrityFailure = cloneIntegrityFailure(value.IntegrityFailure)
 	return result
 }

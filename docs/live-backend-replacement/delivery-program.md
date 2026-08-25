@@ -1823,9 +1823,11 @@ than treated as a product rule.
 
 `LBR-R1` retains current-epoch T/Q provider membership and ingestion across an
 aggregate-only watermark-stale interval when queue, capacity, accounting,
-control, epoch, and state-bound evidence remain healthy. It withholds T/Q
-values immediately and releases the continuously ingested projection only
-after five complete ready seconds from an engine-owned recovery boundary. Real
+control, epoch, and state-bound evidence remain healthy. The same sealed
+runtime capture that derives readiness withholds T/Q values, preventing a
+`watermark_stale` response from exposing older current numeric T/Q. It releases
+the continuously ingested projection only after both five wall and committed-
+watermark seconds from the boundary-inclusive first clean second. Real
 pressure/loss keeps the accepted closure and unsubscribe containment.
 
 `LBR-R2` corrects the observed full-population maintenance boundary. The live
@@ -1838,6 +1840,47 @@ uses one bounded rebuildable expiry/presence index, updates it incrementally,
 and preserves the canonical tail/prefix as sole truth. Offline attribution and
 the mature deterministic proof must distinguish this work from remaining
 qualification/field maintenance before acceptance.
+
+#### `LBR-R1/R2` correction acceptance — 2026-08-25
+
+`LBR-R1` now treats aggregate-watermark staleness as a presentation condition,
+not direct-feed pressure. The sealed runtime capture immediately masks numeric
+Tape and Spread while preserving provider membership, generation, accounting,
+and canonical T/Q ingestion. Recovery releases the continuously ingested view
+only after both five wall seconds and five committed-watermark seconds; renewed
+staleness restarts the hold, and Spread independently requires a quote at or
+after the inclusive recovery boundary. Actual queue pressure, loss, accounting,
+epoch, and state-bound failures retain the accepted closure behavior.
+
+`LBR-R2` replaces the per-symbol map copy, complete-tail scan/sort, and coverage
+rebuild with one sorted expiry identity slice and one session-slot presence
+bitmap. Both are bounded, rebuildable, nonauthoritative indexes over the sole
+canonical tail map. A canonical-tail mutation revision must equal the indexed
+revision and indexed identity count, and every presence word must match its
+independently maintained complement guard, before derived presence may prove
+coverage; otherwise coverage fails closed. Insert, revision, withdrawal, direct hydration
+compaction, and strict-horizon expiry update the index incrementally; an
+unchanged cycle reads only the oldest identity. The allocated mature timing
+fixture used 5,554 independent 961-entry canonical tail maps and independent
+index storage (sharing only immutable record objects) and completed in
+4.979667 ms with zero cycle allocation, below the 250 ms hard maximum.
+Strict/equality expiry, out-of-order insert, revision, withdrawal, exact
+coverage, malformed rebuild and same-cardinality stale-index rejection,
+hydration compaction, R1 capture/publication behavior, and focused race checks
+passed. This evidence does not claim a separate full-state scan-oracle
+comparison or E2 capacity.
+
+The ordinary short repository gate passed every package except the pre-existing
+`TestPLBRA3ParallelHydration/workers_4` operations fixture, which again remained
+inside its test server/fence wait until the command's two-minute timeout. The
+focused A3-independent R1/R2 packages and race gates passed; this timeout neither
+creates live evidence nor proves the A3 fixture healthy. Final read-only review
+returned `CLEAN/PASS` after correcting stale revision/count and bitmap-only
+derived-index counterexamples. The reviewer confirmed R1 capture linearization,
+continuous T/Q ingestion, actual-pressure precedence, canonical/index sole
+ownership, guarded coverage, hydration compaction, and the narrowed evidence
+claims with no P1/P2/P3 finding. A newly bounded provider observation remains
+required.
 
 Non-scope remains provider protocol changes, another state owner, concurrent
 T/Q commands, changed ranking/readiness meaning, E2 execution, replay or
@@ -1864,22 +1907,22 @@ but copy no status.
 
 | Item | State | Gate / next action |
 | --- | --- | --- |
-| Parent architecture | `approved_e3_minimum_read_passed_correction_required_e2_deferred` | Current architecture remains unchanged. Minimum live connection/read passed, but recurring watermark-stale readiness flapping reopens full-population maintenance/evaluation performance. |
-| Delivery program | `lbr_r1_tq_continuity_active` | Preserve passed minimum live facts. Implement R1 then R2 sequentially, review final bytes, and obtain exact-duration authorization before one provider validation. E2 remains deferred/non-gating. |
+| Parent architecture | `approved_e3_correction_implemented_live_revalidation_pending_e2_deferred` | Current architecture remains unchanged. R1/R2 correct the observed T/Q continuity and full-population maintenance boundaries; fresh live stability evidence remains required. |
+| Delivery program | `lbr_r1_r2_accepted_live_revalidation_pending` | Preserve passed minimum live facts. Commit the clean reviewed correction, then obtain exact-duration authorization before one provider validation. E2 remains deferred/non-gating. |
 | `LBR-P1` focused contracts and characterization | `accepted_frozen_e2_deferred` | Five-spec review/owner acceptance remains valid. The frozen E2 baseline/manifest is retained for optional future reactivation and does not gate E3; comparable baseline CPU/RSS remain explicitly unknown. |
-| Capability A — canonical state and hydration | `reopened_lbr_r2_incremental_maintenance_pending` | A2/A3 hydration and launcher semantics remain accepted. R2 owns incremental tail expiry/presence after R1 acceptance. |
+| Capability A — canonical state and hydration | `reaccepted_lbr_r2_incremental_maintenance` | The canonical tail/prefix remains sole truth; revision-matched bounded indexes update incrementally and the independent-map 5,554 × 961 unchanged-cycle measurement is below the hard maintenance boundary with zero allocation. |
 | `LBR-A3` bounded parallel live hydration | `accepted_launcher_isolation_correction` | Wrapper tests are isolated; atomic replacement, failure preservation, startup/steady-state process-group retirement, and cleanup are proven without changing exact `1|2|4|8` hydration semantics. |
 | Watermark-stall diagnostic preservation | `accepted_between_a3_d1` | Baseline commit `e88eef7` was semantically forward-ported with offline verification and clean final review; diagnostic-only, no A/B/C reopening or D1 activation. |
 | `LBR-B3` removal slice | `accepted` | Commit `f697288`; removal proof, resource evidence, focused corrections, and final focused re-review are clean. |
-| Capability B — evaluation and publication | `reopened_lbr_r2_maintenance_measurement_pending` | Ranking/publication semantics remain accepted. R2 must prove the remaining fixed-scalar maintenance plus incremental expiry meets the hard cycle boundary. |
-| Capability C — selected-row T/Q | `reopened_lbr_r1_watermark_continuity_active` | Preserve C1/C2 formula, membership, loss, and pressure evidence; remove watermark-only unsubscribe and add the five-second presentation hold. |
+| Capability B — evaluation and publication | `reaccepted_lbr_r2_maintenance_measurement` | Ranking/publication semantics remain unchanged; mature unchanged maintenance measured 4.979667 ms and zero allocated bytes against the 250 ms hard maximum. |
+| Capability C — selected-row T/Q | `reaccepted_lbr_r1_watermark_continuity` | Aggregate-watermark staleness masks one sealed API capture without provider membership churn; continuously ingested T/Q returns after the five-wall/five-watermark-second hold. |
 | Capability D — live ingress | `finally_accepted` | D1/D2, one decoded-batch FIFO/owner handoff, exact connection semantics, final-byte gates, corrections, and final read-only review are clean and preserved by E1. |
-| Capability E — integration/removal/acceptance | `lbr_e3_minimum_read_passed_correction_required` | E1 and the corrected launcher remain accepted; minimum connection/read passed, but recurring watermark-stale readiness flapping blocks live stability and provider retry. |
+| Capability E — integration/removal/acceptance | `lbr_e3_correction_implemented_live_revalidation_pending` | E1 and the corrected launcher remain accepted; the observed defect is corrected offline, but live stability is not confirmed until one newly authorized bounded provider observation passes. |
 | E2 deterministic duration/manifest revision | `deferred_non_gating` | If reactivated: exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |
 | Deterministic capacity characterization | `not_established_deferred` | No timed E2 evidence exists. This optional status requires a newly authorized E2 activation and conforming run but does not gate E3. |
 | `LBR-E3` authorized observation | `minimum_read_passed_correction_required_no_retry` | Credential/provider/hydration/fence/ranking/TQ/API/UI/shutdown passed; two recovered watermark-stale flaps require offline correction before any newly authorized provider attempt. |
-| Live stability confirmation | `not_confirmed_recurring_watermark_stale` | The minimum path worked, but two honest readiness flaps violate the hard normal-operation condition. |
-| Final integrated program review | `clean_pass_correction_handoff` | The corrected live-evidence handoff passed focused re-review with no finding. Program acceptance remains open because the observed maintenance/evaluation defect still requires correction and new live evidence. |
+| Live stability confirmation | `not_confirmed_revalidation_pending` | The prior minimum path worked but flapped twice; deterministic correction evidence cannot replace a newly authorized ordinary-provider observation. |
+| Final integrated program review | `clean_pass_lbr_r1_r2_correction` | Final read-only review found no P1/P2/P3 issue after revision/count and bitmap-word guard corrections; live evidence remains the only open acceptance boundary. |
 | A3 launcher correction review | `clean_pass` | Final focused re-review found no P1/P2/P3 issue after atomic replacement, process-group containment, and isolated-test corrections. |
 
 ## 15. Git and milestone policy

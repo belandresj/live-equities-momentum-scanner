@@ -533,7 +533,10 @@ func (e *Engine) stageAggregateEvaluationAtLocked(at, engineTime time.Time) aggr
 		var projectionState symbolAggregateState
 		if state != nil {
 			projectionState = *state
-			if state.tailCoverageBuilt {
+			if state.tailIndexBuilt {
+				// exactAggregateCoverage reads the canonical state's bounded
+				// incremental presence index through this shallow projection.
+			} else if state.tailCoverageBuilt {
 				if state.tailCoverageUsable {
 					projectionState.evaluationTailPresence = &state.tailCoverage
 				}
@@ -818,7 +821,9 @@ func (e *Engine) enrichSelectedRowLocked(result *aggregateEvaluationResult, rowI
 		return
 	}
 	projection := *state
-	if state.tailCoverageBuilt && state.tailCoverageUsable {
+	if state.tailIndexBuilt {
+		// The shallow projection retains the immutable-under-engine-lock index.
+	} else if state.tailCoverageBuilt && state.tailCoverageUsable {
 		projection.evaluationTailPresence = &state.tailCoverage
 	} else {
 		var presence evaluationTailWindow

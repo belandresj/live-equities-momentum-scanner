@@ -75,12 +75,42 @@ func mapCaptureView(capture operations.SnapshotCaptureView) (Snapshot, error) {
 		if err != nil {
 			return Snapshot{}, err
 		}
+		applyTQWatermarkAvailability(&mapped, tqRows[row.Symbol], capture.Status)
 		result.Rows[index] = mapped
 	}
 	if err := validateSnapshot(result); err != nil {
 		return Snapshot{}, err
 	}
 	return result, nil
+}
+
+func applyTQWatermarkAvailability(row *Row, source engine.TQSymbolView, status operations.Status) {
+	if row == nil || !status.TQWatermarkVisibilityHold && status.TQWatermarkRecoveryBoundary == nil {
+		return
+	}
+	if status.TQWatermarkVisibilityHold {
+		reason := "watermark_recovery_warming"
+		if status.Reason == operations.ReasonWatermarkStale {
+			reason = "aggregate_watermark_stale"
+		}
+		if tqStatusCanWarm(row.Tape5s.Status) {
+			row.Tape5s.Status, row.Tape5s.Reason, row.Tape5s.TradesPerSecond = "warming", reason, nil
+		}
+		if tqStatusCanWarm(row.Spread.Status) {
+			row.Spread.Status, row.Spread.Reason = "warming", reason
+			row.Spread.Cents, row.Spread.BasisPoints = nil, nil
+		}
+		return
+	}
+	boundary := status.TQWatermarkRecoveryBoundary
+	if boundary != nil && (source.Spread.ObservedAt.IsZero() || source.Spread.ObservedAt.Before(*boundary)) && tqStatusCanWarm(row.Spread.Status) {
+		row.Spread.Status, row.Spread.Reason = "warming", "watermark_recovery_quote_warming"
+		row.Spread.Cents, row.Spread.BasisPoints = nil, nil
+	}
+}
+
+func tqStatusCanWarm(status string) bool {
+	return status == "current" || status == "stale" || status == "warming"
 }
 
 func mapPublication(p engine.PublicationView, operational engine.OperationalView) Publication {
@@ -512,7 +542,7 @@ func tape5sValid(value Tape5s) bool {
 	case "unselected":
 		return value.Reason == "" && !value.TradeCoverage
 	case "warming":
-		return value.TradeCoverage && oneOf(value.Reason, "coverage_warming", "five_second_warming")
+		return value.TradeCoverage && oneOf(value.Reason, "coverage_warming", "five_second_warming", "aggregate_watermark_stale", "watermark_recovery_warming")
 	case "current":
 		return value.TradeCoverage && value.Reason == "qualifying_original_prints"
 	case "unavailable":
@@ -531,7 +561,7 @@ func spreadTupleValid(value Spread) bool {
 	case "unselected":
 		return value.Reason == "" && !value.QuoteCoverage
 	case "warming":
-		return value.QuoteCoverage && value.Reason == "coverage_warming"
+		return value.QuoteCoverage && oneOf(value.Reason, "coverage_warming", "aggregate_watermark_stale", "watermark_recovery_warming", "watermark_recovery_quote_warming")
 	case "current":
 		return value.QuoteCoverage && value.Reason == ""
 	case "stale":

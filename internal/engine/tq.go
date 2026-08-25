@@ -259,6 +259,7 @@ type SpreadView struct {
 	Cents, BasisPoints float64
 	QuoteAge           time.Duration
 	Quality            string
+	ObservedAt         time.Time
 }
 
 type TQSymbolView struct {
@@ -1376,7 +1377,8 @@ func validTQPublication(value TQView, publicationID uint64, evaluation aggregate
 		seen[symbol] = struct{}{}
 		row := value.Rows[index]
 		if !validTQFieldStatus(row.Tape.Status) || !validTQFieldStatus(row.Spread.Status) || !finiteTQ(row.Tape.FiveSecond) ||
-			!finiteTQ(row.Spread.Cents) || !finiteTQ(row.Spread.BasisPoints) || row.Spread.QuoteAge < 0 {
+			!finiteTQ(row.Spread.Cents) || !finiteTQ(row.Spread.BasisPoints) || row.Spread.QuoteAge < 0 ||
+			!row.Spread.ObservedAt.IsZero() && row.Spread.ObservedAt != row.Spread.ObservedAt.UTC() {
 			return false
 		}
 	}
@@ -1475,6 +1477,7 @@ func spreadView(m *tqSymbolState, target *time.Time) SpreadView {
 		v.Status, v.Reason = TQWarming, "coverage_warming"
 		return v
 	}
+	v.ObservedAt = latest.at
 	v.Quality = latest.quality
 	if !latest.bidPresent || !latest.askPresent {
 		v.Status, v.Reason = TQUnavailable, "one_sided_quote"

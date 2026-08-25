@@ -168,8 +168,19 @@ func (b *slotBitmap) has(slot int) bool {
 }
 
 type symbolAggregateState struct {
-	prefix             aggregatePrefix
-	tail               map[int64]*canonicalAggregate
+	prefix aggregatePrefix
+	tail   map[int64]*canonicalAggregate
+	// tailOrder and tailPresence are bounded, rebuildable indexes over tail.
+	// They let routine maintenance expire only the oldest eligible identities
+	// and answer coverage without rescanning the at-most-961-record map.
+	tailOrder          []int64
+	tailPresence       *slotBitmap
+	tailPresenceGuard  *slotBitmap
+	tailPresenceCount  int
+	tailRevision       uint64
+	tailIndexRevision  uint64
+	tailIndexBuilt     bool
+	tailIndexValid     bool
 	presence           *slotBitmap
 	sealedLive         *slotBitmap
 	provenAbsent       *slotBitmap
@@ -694,14 +705,13 @@ func (e *Engine) installAggregateLocked(symbol *coreSymbol, input frozenAggregat
 		}
 	} else {
 		copyRecord := record
-		state.tail[record.identity.start] = &copyRecord
+		putTailAggregate(state, e.state.binding, &copyRecord)
 		retainMutableMVPMeasurement(state, record)
 	}
 	if !foldedDirect || !state.prefix.latestUncertain {
 		considerLatestMark(state, record)
 	}
 	updateSelectionForAcceptedMutation(state, record)
-	rebuildTailCoverage(state, e.state.binding)
 	state.recomputations++
 	state.notifyAggregate(record, aggregateProofAll)
 	if revision {
@@ -712,7 +722,7 @@ func (e *Engine) installAggregateLocked(symbol *coreSymbol, input frozenAggregat
 
 func (e *Engine) integrityWithdrawLocked(symbol *coreSymbol, existing *canonicalAggregate) DispositionCode {
 	state := ensureAggregateState(symbol)
-	delete(state.tail, existing.identity.start)
+	deleteTailAggregate(state, e.state.binding, existing.identity.start)
 	removeMutableMVPMeasurement(state, existing.identity.start)
 	removeFoldedMVPMeasurement(state, existing.identity.start)
 	if state.presence != nil {
@@ -732,7 +742,6 @@ func (e *Engine) integrityWithdrawLocked(symbol *coreSymbol, existing *canonical
 		state.priorSelectionMark = nil
 		state.priorSelectionMark = repairSelectionMarkBefore(state, e.state.binding, state.priorSelectionAt)
 	}
-	rebuildTailCoverage(state, e.state.binding)
 	state.recomputations++
 	state.notifyAggregate(*existing, aggregateProofAll)
 	e.state.aggregateIntegrity = true
@@ -742,7 +751,7 @@ func (e *Engine) integrityWithdrawLocked(symbol *coreSymbol, existing *canonical
 func (e *Engine) historicalWithdrawLocked(symbol *coreSymbol, existing *canonicalAggregate, input frozenAggregateInput) DispositionCode {
 	state := ensureAggregateState(symbol)
 	wasFolded := state.presence != nil && state.presence.has(sessionSlot(e.state.binding, existing.windowStart))
-	delete(state.tail, existing.identity.start)
+	deleteTailAggregate(state, e.state.binding, existing.identity.start)
 	removeMutableMVPMeasurement(state, existing.identity.start)
 	removeFoldedMVPMeasurement(state, existing.identity.start)
 	slot := sessionSlot(e.state.binding, existing.windowStart)
@@ -771,7 +780,6 @@ func (e *Engine) historicalWithdrawLocked(symbol *coreSymbol, existing *canonica
 		state.priorSelectionMark = nil
 		state.priorSelectionMark = repairSelectionMarkBefore(state, e.state.binding, state.priorSelectionAt)
 	}
-	rebuildTailCoverage(state, e.state.binding)
 	state.recomputations++
 	state.notifyAggregate(*existing, aggregateProofAll)
 	return DispositionAggregateWithdrawn
@@ -779,7 +787,7 @@ func (e *Engine) historicalWithdrawLocked(symbol *coreSymbol, existing *canonica
 
 func ensureAggregateState(symbol *coreSymbol) *symbolAggregateState {
 	if symbol.aggregates == nil {
-		symbol.aggregates = &symbolAggregateState{tail: make(map[int64]*canonicalAggregate)}
+		symbol.aggregates = &symbolAggregateState{tail: make(map[int64]*canonicalAggregate), tailIndexBuilt: true, tailIndexValid: true}
 	}
 	return symbol.aggregates
 }
@@ -815,33 +823,20 @@ func (e *Engine) compactSymbolLocked(state *symbolAggregateState, binding *insta
 	// Current-token historical rows can fill directly into the prefix, so an
 	// active hydration request no longer pins a full-session mutable tail.
 	_ = symbol
-	type compactableAggregate struct {
-		start  int64
-		record *canonicalAggregate
-	}
-	compactable := make([]compactableAggregate, 0, len(state.tail))
-	for start, record := range state.tail {
-		if now.Sub(record.windowEnd) > correctionHorizon {
-			compactable = append(compactable, compactableAggregate{start: start, record: record})
+	ensureTailIndex(state, binding)
+	for len(state.tailOrder) != 0 {
+		start := state.tailOrder[0]
+		record := state.tail[start]
+		if record == nil {
+			state.tailIndexValid = false
+			state.tailOrder = state.tailOrder[1:]
+			continue
 		}
-	}
-	// Hydration retains a full-session tail until its exact ingress fence. Map
-	// iteration order is random, while price/range sufficient evidence is time
-	// ordered. Folding a late-session population in map order repeatedly shifted
-	// those slices and made the one-time fence pass quadratic within each symbol.
-	// Sorting once makes every evidence insertion an append without changing the
-	// canonical records, cutoff, or fold semantics.
-	sort.Slice(compactable, func(i, j int) bool {
-		if compactable[i].record.windowStart.Equal(compactable[j].record.windowStart) {
-			return compactable[i].start < compactable[j].start
+		if now.Sub(record.windowEnd) <= correctionHorizon {
+			break
 		}
-		return compactable[i].record.windowStart.Before(compactable[j].record.windowStart)
-	})
-	for _, candidate := range compactable {
-		record := candidate.record
 		e.compactAggregateLocked(state, binding, record, now)
 	}
-	rebuildTailCoverage(state, binding)
 	if len(state.tail) > maximumTailRecords {
 		// Valid one-second identities within the inclusive horizon cannot exceed
 		// 961. Preserve the state for diagnostics, but record the invariant breach
@@ -872,7 +867,109 @@ func (e *Engine) compactAggregateLocked(state *symbolAggregateState, binding *in
 		(state.committedLatest == nil || record.windowStart.After(state.committedLatest.windowStart)) {
 		state.committedLatest = committedMark(*record)
 	}
-	delete(state.tail, record.identity.start)
+	deleteTailAggregate(state, binding, record.identity.start)
+}
+
+func ensureTailIndex(state *symbolAggregateState, binding *installedBinding) {
+	if state == nil || state.tailIndexBuilt {
+		return
+	}
+	state.tailOrder = state.tailOrder[:0]
+	state.tailPresence = &slotBitmap{}
+	state.tailPresenceGuard = newTailPresenceGuard()
+	state.tailPresenceCount = 0
+	state.tailIndexValid = binding != nil
+	for key, record := range state.tail {
+		state.tailOrder = append(state.tailOrder, key)
+		if binding == nil || record == nil || record.identity.start != key || key != record.windowStart.Unix() ||
+			record.windowStart.Before(binding.sessionStart) || !record.windowStart.Before(binding.sessionEnd) {
+			state.tailIndexValid = false
+			continue
+		}
+		state.tailPresence.set(sessionSlot(binding, record.windowStart))
+		guardTailPresenceWord(state, sessionSlot(binding, record.windowStart))
+		state.tailPresenceCount++
+	}
+	sort.Slice(state.tailOrder, func(i, j int) bool { return state.tailOrder[i] < state.tailOrder[j] })
+	state.tailIndexRevision = state.tailRevision
+	state.tailIndexBuilt = true
+}
+
+func putTailAggregate(state *symbolAggregateState, binding *installedBinding, record *canonicalAggregate) {
+	ensureTailIndex(state, binding)
+	start := record.identity.start
+	_, exists := state.tail[start]
+	state.tailRevision++
+	if !exists {
+		index := sort.Search(len(state.tailOrder), func(i int) bool { return state.tailOrder[i] >= start })
+		state.tailOrder = append(state.tailOrder, 0)
+		copy(state.tailOrder[index+1:], state.tailOrder[index:])
+		state.tailOrder[index] = start
+		state.tailPresenceCount++
+	}
+	state.tail[start] = record
+	state.tailIndexRevision = state.tailRevision
+	if binding == nil || record.windowStart.Before(binding.sessionStart) || !record.windowStart.Before(binding.sessionEnd) ||
+		record.windowStart.Unix() != start {
+		state.tailIndexValid = false
+		return
+	}
+	if state.tailPresence == nil {
+		state.tailPresence = &slotBitmap{}
+		state.tailPresenceGuard = newTailPresenceGuard()
+	}
+	slot := sessionSlot(binding, record.windowStart)
+	state.tailPresence.set(slot)
+	guardTailPresenceWord(state, slot)
+}
+
+func deleteTailAggregate(state *symbolAggregateState, binding *installedBinding, start int64) {
+	if state == nil {
+		return
+	}
+	ensureTailIndex(state, binding)
+	record, exists := state.tail[start]
+	if !exists {
+		// Withdrawals may target a compacted prefix/mark identity. They have no
+		// mutable-tail consequence and must not poison the valid derived index.
+		return
+	}
+	state.tailRevision++
+	delete(state.tail, start)
+	index := sort.Search(len(state.tailOrder), func(i int) bool { return state.tailOrder[i] >= start })
+	if index < len(state.tailOrder) && state.tailOrder[index] == start {
+		if index == 0 {
+			state.tailOrder = state.tailOrder[1:]
+		} else {
+			copy(state.tailOrder[index:], state.tailOrder[index+1:])
+			state.tailOrder = state.tailOrder[:len(state.tailOrder)-1]
+		}
+	} else {
+		state.tailIndexValid = false
+	}
+	state.tailPresenceCount--
+	state.tailIndexRevision = state.tailRevision
+	if record != nil && binding != nil && !record.windowStart.Before(binding.sessionStart) && record.windowStart.Before(binding.sessionEnd) && state.tailPresence != nil {
+		slot := sessionSlot(binding, record.windowStart)
+		state.tailPresence.clear(slot)
+		guardTailPresenceWord(state, slot)
+	}
+}
+
+func newTailPresenceGuard() *slotBitmap {
+	guard := &slotBitmap{}
+	for word := range guard {
+		guard[word] = ^uint64(0)
+	}
+	return guard
+}
+
+func guardTailPresenceWord(state *symbolAggregateState, slot int) {
+	if state == nil || state.tailPresence == nil || state.tailPresenceGuard == nil {
+		return
+	}
+	word := slot / 64
+	state.tailPresenceGuard[word] = ^state.tailPresence[word]
 }
 
 func committedMark(record canonicalAggregate) *committedAggregateMark {
@@ -948,7 +1045,19 @@ func exactAggregateCoverage(state *symbolAggregateState, binding *installedBindi
 			return false
 		}
 		var covered uint64
-		if state.evaluationTailPresence != nil {
+		if state.tailIndexBuilt {
+			if !state.tailIndexValid || state.tailIndexRevision != state.tailRevision || len(state.tail) != len(state.tailOrder) ||
+				state.tailPresenceCount != len(state.tail) || state.tailPresence == nil && len(state.tail) != 0 ||
+				state.tailPresenceGuard == nil && len(state.tail) != 0 {
+				return false
+			}
+			if state.tailPresence != nil {
+				if state.tailPresence[word]^state.tailPresenceGuard[word] != ^uint64(0) {
+					return false
+				}
+				covered = state.tailPresence[word]
+			}
+		} else if state.evaluationTailPresence != nil {
 			if !state.evaluationTailPresence.valid || len(state.tail) != state.evaluationTailPresence.tailCount {
 				return false
 			}
@@ -964,7 +1073,7 @@ func exactAggregateCoverage(state *symbolAggregateState, binding *installedBindi
 			covered |= state.provenAbsent[word]
 		}
 		missing := required &^ covered
-		if state.evaluationTailPresence != nil && missing != 0 {
+		if (state.tailIndexBuilt || state.evaluationTailPresence != nil) && missing != 0 {
 			return false
 		}
 		for ; missing != 0; missing &= missing - 1 {
@@ -1021,6 +1130,8 @@ func rebuildTailCoverage(state *symbolAggregateState, binding *installedBinding)
 	}
 	state.tailCoverageUsable = buildEvaluationTailPresence(state, binding, &state.tailCoverage)
 	state.tailCoverageBuilt = true
+	state.tailIndexBuilt = false
+	ensureTailIndex(state, binding)
 }
 
 func aggregatePresentAt(state *symbolAggregateState, start int64) bool {

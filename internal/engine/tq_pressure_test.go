@@ -90,7 +90,7 @@ func TestPC9PressureTransitionsExpiryAndRankedRestoration(t *testing.T) {
 
 func TestPC9DiagnosticsAndQuietWindowsDoNotGatePressure(t *testing.T) {
 	policy := defaultTQPressurePolicy()
-	if policy.degradedSamples != 2 || policy.aggregateSamples != 3 || policy.watermarkSamples != 2 || policy.recoverySamples != 5 ||
+	if policy.degradedSamples != 2 || policy.aggregateSamples != 3 || policy.recoverySamples != 5 ||
 		policy.degradedQueuePercent != 10 || policy.aggregateQueuePercent != 25 || policy.recoveryQueuePercent != 1 ||
 		policy.degradedOldest != time.Second || policy.aggregateOldest != 2*time.Second || policy.recoveryOldest != 750*time.Millisecond {
 		t.Fatalf("direct pressure policy = %+v", policy)
@@ -307,26 +307,20 @@ func TestPC9RecoveryHysteresisAndObservation(t *testing.T) {
 	e.mu.Unlock()
 }
 
-func TestPC9WatermarkLagRequiresTQWorkAndGreaterThanTwoSeconds(t *testing.T) {
+func TestPLBRR1WatermarkLagDoesNotMutatePressureOrMembership(t *testing.T) {
 	e, _, clock, start := pressureProofEngine(t)
 	defer closeAndWait(t, e)
 	sample := healthyTQPressureSample()
 	sample.TQWorkPresent = true
-	for second, lag := range []time.Duration{0, time.Second, 2 * time.Second} {
-		sample.AggregateWatermarkLag = lag
+	sample.AggregateWatermarkLag = 3 * time.Second
+	before := e.ObserveTQ()
+	for second := 0; second < 3; second++ {
 		applyPressureSample(t, e, clock, start.Add(time.Duration(second)*time.Second), sample)
 	}
-	if got := e.ObserveTQ().Pressure; got != TQPressureNormal {
-		t.Fatalf("lag at or below two seconds triggered: %s", got)
-	}
-	sample.AggregateWatermarkLag = 2*time.Second + time.Nanosecond
-	applyPressureSample(t, e, clock, start.Add(3*time.Second), sample)
-	if got := e.ObserveTQ().Pressure; got != TQPressureNormal {
-		t.Fatalf("one excessive lag sample triggered: %s", got)
-	}
-	applyPressureSample(t, e, clock, start.Add(4*time.Second), sample)
-	if view := e.ObserveTQ(); view.Pressure != TQPressureAggregateOnly || view.PressureCause != TQPressureCauseWatermarkLag {
-		t.Fatalf("two excessive lag samples with T/Q work = %+v", view)
+	view := e.ObserveTQ()
+	if view.Pressure != TQPressureNormal || view.AggregateOnly || view.CommandPending || view.Commands != before.Commands ||
+		view.Accounting != before.Accounting || !view.Rows[0].ProviderPresent || !view.Rows[0].TradeCoverage || !view.Rows[0].QuoteCoverage {
+		t.Fatalf("watermark lag changed T/Q pressure or membership: before=%+v after=%+v", before, view)
 	}
 }
 

@@ -39,18 +39,28 @@ func (r *Runtime) CaptureSnapshot() (SnapshotCapture, error) {
 	if r == nil || r.engine == nil || r.clock == nil {
 		return SnapshotCapture{}, errors.New("runtime snapshot unavailable")
 	}
-	sequence, err := r.nextCaptureSequence()
-	if err != nil {
-		return SnapshotCapture{}, err
-	}
+	// This short operations-local critical section is the readiness/TQ-visibility
+	// observation linearization. It includes no network, diagnostics, response
+	// mapping, or engine mutation, so a slow/canceled HTTP client cannot hold it.
+	// Serializing the atomic engine read, readiness derivation, sequence, and
+	// latch transition prevents an older ready observation from overtaking a
+	// later stale observation and shortening the five-second recovery hold.
+	r.captureObservationMu.Lock()
 	sampledAt := r.clock().UTC()
 	processLive := r.processLive.Load() && !r.joined.Load()
 	view := r.engine.ObserveSnapshot()
 	status := deriveStatus(processLive, r.binding, r.config, sampledAt, view.Operational)
+	sequence, err := r.nextCaptureSequence()
+	if err != nil {
+		r.captureObservationMu.Unlock()
+		return SnapshotCapture{}, err
+	}
+	status = r.applyTQWatermarkVisibility(sequence, status)
 	// Retain the readiness observation immediately after the one atomic engine
 	// read, before even bounded diagnostics composition can allow a later
 	// scanner sample to overtake this chronology.
 	r.recordReadinessObservation(status)
+	r.captureObservationMu.Unlock()
 	metrics := r.metricsFromDiagnostics(sampledAt, processLive, view)
 	return SnapshotCapture{sealed: &sealedSnapshotCapture{view: SnapshotCaptureView{
 		SampleID: sequence, SampledAt: sampledAt, ProcessLive: processLive,
@@ -58,6 +68,57 @@ func (r *Runtime) CaptureSnapshot() (SnapshotCapture, error) {
 		IngressIncident: r.ingressIncident.get(),
 		RecoveryAttempt: r.recoveryAttempt.get(),
 	}}}, nil
+}
+
+const tqWatermarkRecoveryWindow = 5 * time.Second
+
+type tqWatermarkVisibilityState struct {
+	sequence         uint64
+	hold             bool
+	recoveryStarted  time.Time
+	recoveryBoundary *time.Time
+}
+
+func (r *Runtime) applyTQWatermarkVisibility(sequence uint64, status Status) Status {
+	if r == nil || sequence == 0 || status.SampledAt.IsZero() {
+		return status
+	}
+	for {
+		prior := r.tqWatermarkVisibility.Load()
+		if prior != nil && sequence <= prior.sequence {
+			status.TQWatermarkVisibilityHold = status.Reason == ReasonWatermarkStale || prior.hold
+			status.TQWatermarkRecoveryBoundary = cloneTime(prior.recoveryBoundary)
+			return status
+		}
+		next := tqWatermarkVisibilityState{sequence: sequence}
+		if prior != nil {
+			next.hold = prior.hold
+			next.recoveryStarted = prior.recoveryStarted
+			next.recoveryBoundary = cloneTime(prior.recoveryBoundary)
+		}
+		switch {
+		case status.Reason == ReasonWatermarkStale:
+			next.hold = true
+			next.recoveryStarted = time.Time{}
+			next.recoveryBoundary = nil
+		case next.hold && status.BackendReady && status.Watermark != nil:
+			if next.recoveryStarted.IsZero() {
+				next.recoveryStarted = status.SampledAt
+				next.recoveryBoundary = cloneTime(status.Watermark)
+			} else if next.recoveryBoundary != nil && status.SampledAt.Sub(next.recoveryStarted) >= tqWatermarkRecoveryWindow &&
+				!status.Watermark.Before(next.recoveryBoundary.Add(tqWatermarkRecoveryWindow)) {
+				next.hold = false
+			}
+		case next.hold:
+			next.recoveryStarted = time.Time{}
+			next.recoveryBoundary = nil
+		}
+		if r.tqWatermarkVisibility.CompareAndSwap(prior, &next) {
+			status.TQWatermarkVisibilityHold = next.hold
+			status.TQWatermarkRecoveryBoundary = cloneTime(next.recoveryBoundary)
+			return status
+		}
+	}
 }
 
 func (r *Runtime) nextCaptureSequence() (uint64, error) {
@@ -83,6 +144,7 @@ func cloneSnapshotCaptureView(value SnapshotCaptureView) SnapshotCaptureView {
 	result.Engine.TQ.Rows = append([]engine.TQSymbolView(nil), value.Engine.TQ.Rows...)
 	result.Status.Watermark = cloneTime(value.Status.Watermark)
 	result.Status.CausalTarget = cloneTime(value.Status.CausalTarget)
+	result.Status.TQWatermarkRecoveryBoundary = cloneTime(value.Status.TQWatermarkRecoveryBoundary)
 	result.Status.IntegrityFailure = cloneIntegrityFailure(value.Status.IntegrityFailure)
 	result.Metrics.Engine.Watermark = cloneTime(value.Metrics.Engine.Watermark)
 	result.Metrics.Engine.Hydration.SupportedThrough = cloneTime(value.Metrics.Engine.Hydration.SupportedThrough)

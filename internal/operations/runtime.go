@@ -48,6 +48,7 @@ type Runtime struct {
 	metricsMu                  sync.Mutex
 	liveMu                     sync.Mutex
 	shutdownMu                 sync.Mutex
+	captureObservationMu       sync.Mutex
 	captureSequence            atomic.Uint64
 	diagnostics                atomic.Pointer[diagnosticsSample]
 	diagnosticCollections      atomic.Uint64
@@ -83,6 +84,7 @@ type Runtime struct {
 	watermarkActiveCycle       atomic.Pointer[watermarkStallActiveCycle]
 	watermarkCycleSequence     atomic.Uint64
 	readinessObservations      atomic.Pointer[readinessObservationState]
+	tqWatermarkVisibility      atomic.Pointer[tqWatermarkVisibilityState]
 	// beforeHydrationPump is a package-private diagnostic-test seam. A nil
 	// hook is the complete production behavior; tests use it only to hold the
 	// consumer while exercising the fixed production queue ceiling.

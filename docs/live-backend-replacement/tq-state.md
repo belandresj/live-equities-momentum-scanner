@@ -188,15 +188,18 @@ loss, accounting, control, epoch, or state-bound evidence retains provider T/Q
 membership and continues normal classification and canonical ingestion. It
 immediately withholds the selected Tape and Spread projection with reason
 `aggregate_watermark_stale` but creates no unsubscribe, generation change,
-coverage gap, or cleanup liability. When aggregate readiness returns, one
-engine-owned presentation boundary starts a five-second continuous clean hold.
-Any renewed watermark staleness restarts that hold. After five complete seconds
-with current aggregate readiness and coherent direct-pressure evidence, Tape
-and Spread are released together from the continuously ingested canonical T/Q
-state. Tape uses only its post-boundary five-second window; Spread additionally
-requires an eligible post-boundary quote and otherwise remains honestly
-warming or stale. An actual transport/coverage gap still uses the ordinary
-coverage closure and fresh provider-confirmed generation rules.
+coverage gap, or cleanup liability. The sealed runtime capture that derives
+`backend_ready` owns this presentation-only latch so one API response cannot
+combine `watermark_stale` with current numeric T/Q from an older engine
+publication. It does not mutate canonical T/Q or provider membership. When
+aggregate readiness returns, that capture boundary starts a five-second
+continuous clean hold. Any renewed watermark staleness restarts the hold. After
+both five wall seconds and five committed-watermark seconds, Tape and Spread
+are released together from the continuously ingested canonical T/Q state.
+The boundary second is included as the first clean second. Spread additionally
+requires an eligible quote at or after that boundary and otherwise remains
+honestly warming or stale. An actual transport/coverage gap still uses the
+ordinary coverage closure and fresh provider-confirmed generation rules.
 
 Independently, a decoded frame has a 500 ms monotonic classification budget.
 After it expires, ingress still classifies the rest of the frame in order but
@@ -231,7 +234,7 @@ does not suppress aggregate state.
 | --- | --- | --- | --- |
 | `LBR-C1` | `P-LBR-C1-TQ-STATE` | A deterministic selected-symbol trace covers the strict `B` boundary, independent trade/quote confirmation, Tape warm/current/covered-zero, Spread locked/one-sided/crossed/stale, exact duplicate, unequal repeat, lifecycle disclosure, out-of-order events at `T-30s` and one tick older, duplicate expiry at receipt+30s and one tick later, channel gap, rank removal, per-symbol/global count and byte hits. It observes exact fields, coverage, membership, counters, and aggregate publication equivalence. It detects a broad 16-minute fingerprint store or status-created coverage. It does not prove socket writes or pressure queue behavior. |
 | `LBR-C2` | `P-LBR-C2-TQ-MEMBERSHIP` | Compose fresh batched membership, rapid rank churn, unsubscribe-before-subscribe, write failure, generic/late statuses, post-write data confirmation, quiet unconfirmed channels, T/Q error, two pressure entry levels, early mixed-frame shedding, removal to zero, exact five-sample 749/750-ms recovery, gradual restoration, reconnect reset, and immediate trust publication. It asserts one in-flight write, bounded members, exact accounting, no T/Q-caused aggregate/watermark/readiness change, and no aggregate/control loss. It does not prove provider acceptance of a request or final ingress queue implementation. |
-| `LBR-R1` | `P-LBR-R1-TQ-WATERMARK-CONTINUITY` | Starting from 20 data-confirmed rows, cross ready to watermark-stale while queue, capacity, accounting, control, and epoch evidence remain healthy. Assert zero provider commands, unchanged membership/generations, continued T/Q accounting, immediate noncurrent projection, restart on a second stale crossing, and simultaneous release only after five complete ready seconds with post-boundary Tape and quote evidence. Contrasts actual queue pressure, loss, and accounting failure, which retain existing coverage closure/unsubscribe behavior. It does not prove provider capacity or repair aggregate maintenance latency. |
+| `LBR-R1` | `P-LBR-R1-TQ-WATERMARK-CONTINUITY` | Starting from data-confirmed rows, cross ready to watermark-stale while queue, capacity, accounting, control, and epoch evidence remain healthy. Assert zero provider commands, unchanged membership/generations, continued T/Q accounting, same-capture noncurrent projection, restart on a second stale crossing, and release only after both five wall and committed-watermark seconds. Boundary-equality and one-tick-before quote cases prove the explicitly inclusive first clean second. Contrasts actual queue pressure, loss, and accounting failure, which retain existing coverage closure/unsubscribe behavior. It does not prove provider capacity or repair aggregate maintenance latency. |
 
 `LBR-C1` replaces broad trade/string retention with the bounded contribution,
 30-second duplicate, and O(1) quote state. Acceptance makes old one-second Tape

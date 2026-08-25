@@ -902,11 +902,6 @@ func (e *Engine) applyHydrationChunkLocked(node *queueNode) (DispositionCode, Di
 				state := e.state.binding.symbols[symbolIndex].aggregates
 				if state != nil {
 					e.compactAggregateLocked(state, e.state.binding, state.tail[row.windowStart.Unix()], node.admissionTime)
-					// Hydration compacts one just-installed row at a time rather
-					// than through compactSymbolLocked. Refresh the bounded derived
-					// view after that direct canonical-tail mutation so an evaluation
-					// between chunks cannot observe stale negative coverage.
-					rebuildTailCoverage(state, e.state.binding)
 				}
 			}
 		}

@@ -62,10 +62,10 @@ type TQPressureResultInput struct {
 type frozenTQPressureResultInput struct{ TQPressureResultInput }
 
 type tqPressurePolicy struct {
-	sampleCadence, commandTimeout                                        time.Duration
-	degradedQueuePercent, aggregateQueuePercent, recoveryQueuePercent    uint64
-	degradedOldest, aggregateOldest, recoveryOldest                      time.Duration
-	degradedSamples, aggregateSamples, watermarkSamples, recoverySamples uint8
+	sampleCadence, commandTimeout                                     time.Duration
+	degradedQueuePercent, aggregateQueuePercent, recoveryQueuePercent uint64
+	degradedOldest, aggregateOldest, recoveryOldest                   time.Duration
+	degradedSamples, aggregateSamples, recoverySamples                uint8
 }
 
 func defaultTQPressurePolicy() tqPressurePolicy {
@@ -73,14 +73,14 @@ func defaultTQPressurePolicy() tqPressurePolicy {
 		sampleCadence: time.Second, commandTimeout: 2 * time.Second,
 		degradedQueuePercent: 10, aggregateQueuePercent: 25, recoveryQueuePercent: 1,
 		degradedOldest: time.Second, aggregateOldest: 2 * time.Second, recoveryOldest: 750 * time.Millisecond,
-		degradedSamples: 2, aggregateSamples: 3, watermarkSamples: 2, recoverySamples: 5,
+		degradedSamples: 2, aggregateSamples: 3, recoverySamples: 5,
 	}
 }
 
 type tqPressureStreaks struct {
 	degradedFrames, degradedBytes, degradedOldest    uint8
 	aggregateFrames, aggregateBytes, aggregateOldest uint8
-	watermark, healthy                               uint8
+	healthy                                          uint8
 }
 
 type tqPressureState struct {
@@ -243,10 +243,9 @@ func (e *Engine) applyTQPressureSampleLocked(sample TQPressureSample, now time.T
 	s.aggregateFrames = nextPressureStreak(s.aggregateFrames, pressureAtLeast(sample.WaitingFrames, sample.FrameCapacity, policy.aggregateQueuePercent))
 	s.aggregateBytes = nextPressureStreak(s.aggregateBytes, pressureAtLeast(sample.WaitingBytes, sample.ByteCapacity, policy.aggregateQueuePercent))
 	s.aggregateOldest = nextPressureStreak(s.aggregateOldest, sample.OldestWaitingFrameAge >= policy.aggregateOldest)
-	s.watermark = nextPressureStreak(s.watermark, sample.TQWorkPresent && sample.AggregateWatermarkLag > 2*time.Second)
 	healthy := pressureBelow(sample.WaitingFrames, sample.FrameCapacity, policy.recoveryQueuePercent) &&
 		pressureBelow(sample.WaitingBytes, sample.ByteCapacity, policy.recoveryQueuePercent) &&
-		sample.OldestWaitingFrameAge < policy.recoveryOldest && sample.AggregateWatermarkLag <= time.Second && !e.state.tq.globalBound
+		sample.OldestWaitingFrameAge < policy.recoveryOldest && !e.state.tq.globalBound
 	p.lastSampleRecoveryHealthy = healthy
 	if p.mode == TQPressureNormal {
 		s.healthy = 0
@@ -263,10 +262,6 @@ func (e *Engine) applyTQPressureSampleLocked(sample TQPressureSample, now time.T
 	}
 	if s.aggregateOldest >= policy.aggregateSamples {
 		e.setTQPressureModeLocked(TQPressureAggregateOnly, now, TQPressureCauseOldestWaitingFrame)
-		return
-	}
-	if s.watermark >= policy.watermarkSamples {
-		e.setTQPressureModeLocked(TQPressureAggregateOnly, now, TQPressureCauseWatermarkLag)
 		return
 	}
 	if p.mode == TQPressureNormal {

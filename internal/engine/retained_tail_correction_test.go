@@ -212,12 +212,11 @@ func TestHydrationDirectCompactionRefreshesTailCoverage(t *testing.T) {
 		t.Fatalf("compacted state=%+v", state)
 	}
 	projection := *state
-	if !state.tailCoverageBuilt || !state.tailCoverageUsable {
+	if !state.tailIndexBuilt || !state.tailIndexValid || len(state.tailOrder) != 0 {
 		e.mu.Unlock()
 		closeAndWait(t, e)
-		t.Fatalf("derived coverage built=%t usable=%t", state.tailCoverageBuilt, state.tailCoverageUsable)
+		t.Fatalf("incremental tail index built=%t valid=%t order=%v", state.tailIndexBuilt, state.tailIndexValid, state.tailOrder)
 	}
-	projection.evaluationTailPresence = &state.tailCoverage
 	if !exactAggregateCoverage(&projection, e.state.binding, start, start.Add(time.Second)) {
 		e.mu.Unlock()
 		closeAndWait(t, e)

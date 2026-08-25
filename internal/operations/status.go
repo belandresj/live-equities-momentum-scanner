@@ -36,6 +36,8 @@ type Status struct {
 	TQAvailable                               bool
 	AccountingValid                           bool
 	IntegrityFailure                          *engine.EvaluatorIntegrityView
+	TQWatermarkVisibilityHold                 bool
+	TQWatermarkRecoveryBoundary               *time.Time
 }
 
 func deriveStatus(processLive bool, binding reference.Binding, config Config, now time.Time, view engine.OperationalView) Status {

@@ -675,6 +675,41 @@ func TestStaleSpreadRetainsNumericValuesAcrossSnapshotBoundary(t *testing.T) {
 	}
 }
 
+func TestPLBRR1WatermarkAvailabilityMasksTheSamePublicSnapshot(t *testing.T) {
+	boundary := time.Date(2026, 8, 25, 19, 0, 0, 0, time.UTC)
+	currentRow := Row{
+		Tape5s: Tape5s{Status: "current", Reason: "qualifying_original_prints", TradeCoverage: true, TradesPerSecond: floatPointer(12)},
+		Spread: Spread{Status: "current", QuoteCoverage: true, Cents: floatPointer(2), BasisPoints: floatPointer(20)},
+	}
+	source := engine.TQSymbolView{Spread: engine.SpreadView{Status: engine.TQCurrent, ObservedAt: boundary}}
+
+	stale := currentRow
+	applyTQWatermarkAvailability(&stale, source, operations.Status{Reason: operations.ReasonWatermarkStale, TQWatermarkVisibilityHold: true})
+	if stale.Tape5s.Status != "warming" || stale.Tape5s.Reason != "aggregate_watermark_stale" || stale.Tape5s.TradesPerSecond != nil ||
+		stale.Spread.Status != "warming" || stale.Spread.Reason != "aggregate_watermark_stale" || stale.Spread.Cents != nil || stale.Spread.BasisPoints != nil {
+		t.Fatalf("same-capture stale mask = %+v", stale)
+	}
+
+	recovering := currentRow
+	applyTQWatermarkAvailability(&recovering, source, operations.Status{BackendReady: true, TQWatermarkVisibilityHold: true, TQWatermarkRecoveryBoundary: &boundary})
+	if recovering.Tape5s.Reason != "watermark_recovery_warming" || recovering.Spread.Reason != "watermark_recovery_warming" {
+		t.Fatalf("recovery hold = %+v", recovering)
+	}
+
+	equality := currentRow
+	applyTQWatermarkAvailability(&equality, source, operations.Status{BackendReady: true, TQWatermarkRecoveryBoundary: &boundary})
+	if equality.Tape5s.Status != "current" || equality.Spread.Status != "current" || equality.Spread.Cents == nil {
+		t.Fatalf("boundary-inclusive clean quote was not released: %+v", equality)
+	}
+
+	before := currentRow
+	source.Spread.ObservedAt = boundary.Add(-time.Nanosecond)
+	applyTQWatermarkAvailability(&before, source, operations.Status{BackendReady: true, TQWatermarkRecoveryBoundary: &boundary})
+	if before.Spread.Status != "warming" || before.Spread.Reason != "watermark_recovery_quote_warming" || before.Spread.Cents != nil {
+		t.Fatalf("pre-boundary quote escaped recovery mask: %+v", before)
+	}
+}
+
 func schemaCapture() operations.SnapshotCaptureView {
 	at := time.Date(2026, 8, 8, 16, 0, 0, 0, time.UTC)
 	target := at.Add(-4 * time.Second)
