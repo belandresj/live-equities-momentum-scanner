@@ -1562,6 +1562,55 @@ committed.
   The reviewer confirmed that E3 can be authorized next without production-code
   changes or deletion/rewrite of E2 evidence.
 
+#### `LBR-E3` pre-execution audit and activation — 2026-08-25
+
+- **Exact authorization:** the owner authorized one private/local real-provider
+  observation for trading date `2026-08-25` against the ordinary Massive
+  production US-equities environment and existing private account/entitlements.
+  The approved launcher credential chain is the already-exported environment
+  value, otherwise the existing runbook-defined macOS Keychain item. Credential
+  access and ordinary scanner REST/WebSocket requests are authorized only for
+  this run. The launcher must run for exactly 30 minutes from launcher start
+  unless a mandatory stop condition fires; no provider retry is authorized.
+- **Authority and accepted-evidence audit:** `AGENTS.md`, `README.md`, the
+  specification map, replacement parent/program, five accepted focused
+  capabilities, the E3 ticket, integration contract, market-hours procedure,
+  private scanner runbook, and accepted A-D/E1 ledger records agree on one
+  ordinary production path. E2's invalid zero-timed-seconds artifact remains
+  preserved, deferred, and non-gating. The exact activation base is clean
+  commit `5a3aae437e2754918b3296a9fb25b14320c51484` on
+  `codex/live-backend-replacement`; the focused `P-LBR-E1-CUTOVER` production
+  composition proof and validated embedded-schedule package pass unchanged.
+- **Production dependency and host audit:** `cmd/scanner` retains one
+  `operations.Runtime`, engine owner, decoded-batch/causal-marker FIFO,
+  evaluator/publication, API-v2 path, and independent dashboard. Its sole
+  non-standard module is `github.com/coder/websocket v1.8.15`; the current
+  scanner dependency-list SHA-256 is
+  `7b703e2aef50b2b8b0c5742d2bb0f1c82887af312a9d7b61bfa95cfdad967fea`.
+  The validated exchange artifact declares `2026-08-25` a full session with
+  prior session `2026-08-24`; its artifact SHA-256 is
+  `3fb957d2c41f53e64883699d6324f378fd896755fa299a4bd209d1e60d190784`.
+  Loopback ports `127.0.0.1:8080` and `127.0.0.1:4173` are free. The Apple M1
+  host has 8 GiB RAM and 4.2 GiB available disk; its existing high swap use and
+  disk occupancy are explicit unsafe-impact/growth stop watches.
+- **Evidence, redaction, and stop audit:** the command is exactly
+  `./scripts/run-private-scanner --trading-date 2026-08-25 --hydration-workers 8 --open`.
+  Built-in bounded owner-only incident output remains under `var/diagnostics`;
+  the bounded redacted acceptance record belongs under
+  `docs/live-backend-replacement/evidence`. Neither destination may contain a
+  credential, authorization header, signed URL, raw provider payload, or
+  unbounded log. Controlled SIGINT shutdown is the approved stop action. Stop
+  immediately for credential/authentication anomalies, accounting/integrity or
+  silent aggregate/control loss, unbounded resource/queue growth, recurring
+  false readiness, unusable API/dashboard polling, unsafe host impact, or any
+  authorization-boundary violation.
+- **Activation and exclusions:** `LBR-E3` is the sole active execution slice.
+  Do not induce disconnect, recovery, queue pressure, or T/Q shedding; record
+  them only if naturally observed. No production code/configuration semantic
+  change, E2 work, replay/checkpoint access, public deployment, provider SLA,
+  deterministic 300-frames/s capacity claim, or trading-expectancy claim is
+  authorized.
+
 ### Owner-approved E2 duration and manifest revision — 2026-08-23
 
 The owner revised E2 to exactly one 10-minute deterministic acceptance run. The
@@ -1592,10 +1641,10 @@ but copy no status.
 | Capability B — evaluation and publication | `finally_accepted` | B1/B2/B3 and the required final read-only review remain accepted and unaffected by A3. |
 | Capability C — selected-row T/Q | `finally_accepted` | C1/C2 remain accepted and unaffected by the A3 hydration-topology revision. |
 | Capability D — live ingress | `finally_accepted` | D1/D2, one decoded-batch FIFO/owner handoff, exact connection semantics, final-byte gates, corrections, and final read-only review are clean and preserved by E1. |
-| Capability E — integration/removal/acceptance | `lbr_e3_next_permitted_e2_deferred` | E1 exclusive cutover remains accepted. Invalid E2 evidence is preserved and E2 is deferred/non-gating. E3 is next permitted but inactive pending exact execution authorization. |
+| Capability E — integration/removal/acceptance | `lbr_e3_active_e2_deferred` | E1 exclusive cutover remains accepted. Invalid E2 evidence is preserved and E2 is deferred/non-gating. E3 is the sole active execution slice on the exact clean activation commit. |
 | E2 deterministic duration/manifest revision | `deferred_non_gating` | If reactivated: exactly one 10-minute run; 5,694 symbols, 300 frames/s, 600 polls/samples, 180,000 frames, recomputed counts/digests, 15-minute command timeout, and no repeat composition. |
 | Deterministic capacity characterization | `not_established_deferred` | No timed E2 evidence exists. This optional status requires a newly authorized E2 activation and conforming run but does not gate E3. |
-| Live stability confirmation | `next_permitted_not_authorized` | `LBR-E3` may proceed before E2 only after an exact-date/environment/credential/duration/recovery authorization is recorded. |
+| Live stability confirmation | `lbr_e3_active_authorized_once` | One 30-minute `2026-08-25` ordinary Massive private/local observation is authorized; no retry, induced recovery/pressure/shedding, or expanded claim is permitted. |
 
 ## 15. Git and milestone policy
 
