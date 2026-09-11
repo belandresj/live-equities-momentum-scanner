@@ -62,9 +62,9 @@ Permitted current-repository evidence is:
   `scripts/run-private-scanner`;
 - current `HydrationWorker.Run`, `NewHydrationWorkerPlan`, A2 admission/fence
   paths, and their directly named tests;
-- [`live-rest-hydration-progression.md`](../../live-rest-hydration-progression.md)
+- [`live-rest-hydration-progression.md`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/live-rest-hydration-progression.md)
   for deterministic concurrent-live acceptance conditions;
-- [`private-live-scanner-operational-finalization.md`](../../private-live-scanner-operational-finalization.md)
+- [`private-live-scanner-operational-finalization.md`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/private-live-scanner-operational-finalization.md)
   for the formerly accepted `1|2|4|8`, default-8 launcher surface; and
 - the bounded 2026-08-24 observation recorded in the delivery program solely
   as motivation and limitation evidence.

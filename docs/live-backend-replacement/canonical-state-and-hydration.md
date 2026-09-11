@@ -20,7 +20,7 @@ owned by the integration contract; this contract supplies its canonical-
 aggregate implementation obligation. Allocated retained product semantics are
 `PG-UNIVERSE-01`, `PG-REFERENCE-01`, `PG-REFERENCE-02`, `PG-RANK-02`,
 `PG-FEATURE-07`, `PG-OPS-01`, `PG-OPS-02`, and `PG-OBS-02` from
-[`product-goals.md`](../product/product-goals.md). This document routes only
+[`product-goals.md`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/product/product-goals.md). This document routes only
 their canonical-state and hydration consequences; it does not restate their
 formulas.
 
@@ -30,13 +30,13 @@ The compatible historical semantics routed here are:
   `DTE-WINDOW-02`, `DTE-WINDOW-04`, `DTE-EVENT-03`, `DTE-AGG-01` through `DTE-AGG-04`,
   `DTE-HYDRATE-01`, `DTE-HYDRATE-02`, and `DTE-MERGE-01` through
   `DTE-MERGE-05` from the
-  [data/time/event contract](../architecture/data-time-and-event-contract.md);
+  [data/time/event contract](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/architecture/data-time-and-event-contract.md);
 - `DTE-RECOVERY-01` through `DTE-RECOVERY-05` for interval, catch-up, empty,
   and fence meaning, but not the old state representation; and
 - `LIFE-MODEL-01` through `LIFE-MODEL-04`, `LIFE-INIT-01`, `LIFE-INIT-02`,
   `LIFE-INIT-04`, `LIFE-INIT-05`, `LIFE-HYDRATE-01` through
   `LIFE-HYDRATE-07`, and `LIFE-RECOVER-02` through `LIFE-RECOVER-06` from the
-  [engine lifecycle](../architecture/scanner-state-engine-lifecycle.md), with
+  [engine lifecycle](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/architecture/scanner-state-engine-lifecycle.md), with
   connection-attempt execution allocated to
   [`live-ingress.md`](live-ingress.md).
 
@@ -65,9 +65,9 @@ evaluation consumes it, T/Q consumes evaluation, ingress implements the final
 producer seam, and integration consumes all four.
 
 Only the current repository's
-[`S2 canonical aggregate`](../specifications/scanner-state-engine-and-canonical-state/s2-canonical-aggregates.md),
-[`REST acquisition`](../specifications/aggregate-rest-hydration-and-recovery/rest-acquisition-and-terminal-outcomes.md),
-and [`engine hydration`](../specifications/aggregate-rest-hydration-and-recovery/engine-hydration-reconciliation-and-recovery.md)
+[`S2 canonical aggregate`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/specifications/scanner-state-engine-and-canonical-state/s2-canonical-aggregates.md),
+[`REST acquisition`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/specifications/aggregate-rest-hydration-and-recovery/rest-acquisition-and-terminal-outcomes.md),
+and [`engine hydration`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/specifications/aggregate-rest-hydration-and-recovery/engine-hydration-reconciliation-and-recovery.md)
 contracts and their directly named fixtures are reuse evidence. Their merge,
 terminal, fence, bounded `1|2|4|8` worker-pool, cancellation, and joined-result
 outcomes are retained; their representations, ledgers, checkpoint/replay paths,

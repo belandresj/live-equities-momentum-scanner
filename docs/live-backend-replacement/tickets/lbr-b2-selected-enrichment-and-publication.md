@@ -56,7 +56,7 @@ excluded.
 
 Predecessor V2 whitelist: empty. Reuse the current approved product fixtures,
 the focused contract's named qualification/ranking/accounting evidence, and the
-[`snapshot capture correction`](../../snapshot-capture-and-dashboard-transport-isolation-correction.md).
+[`snapshot capture correction`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/snapshot-capture-and-dashboard-transport-isolation-correction.md).
 Old aggregate feature implementations are oracles only when they implement a
 still-current formula; HOD/rolling/old Activity/Tape and cross-snapshot joins
 are explicitly rejected.

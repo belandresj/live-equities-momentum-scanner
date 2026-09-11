@@ -21,7 +21,7 @@ Read [`AGENTS.md`](../../../AGENTS.md), the
 [evaluation](../evaluation-and-publication.md), [T/Q](../tq-state.md),
 [ingress](../live-ingress.md), and
 [integration](../integration-removal-and-acceptance.md) contracts and handoffs,
-and [`market-hours-validation.md`](../../market-hours-validation.md). This
+and [`market-hours-validation.md`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/market-hours-validation.md). This
 ticket executes only `LBR-E3` and `P-LBR-E3-LIVE`.
 
 Controlling requirements are preserved fresh hydration/fence, bounded

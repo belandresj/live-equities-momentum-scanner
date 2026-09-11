@@ -66,8 +66,8 @@ credentials or provider requests.
 ## 4. Evidence and source whitelist
 
 Predecessor V2 whitelist: empty. Reuse only current approved fixtures and the
-[`REST acquisition`](../../specifications/aggregate-rest-hydration-and-recovery/rest-acquisition-and-terminal-outcomes.md)
-and [`engine hydration`](../../specifications/aggregate-rest-hydration-and-recovery/engine-hydration-reconciliation-and-recovery.md)
+[`REST acquisition`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/specifications/aggregate-rest-hydration-and-recovery/rest-acquisition-and-terminal-outcomes.md)
+and [`engine hydration`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/specifications/aggregate-rest-hydration-and-recovery/engine-hydration-reconciliation-and-recovery.md)
 behavior evidence. Preserve existing request shape, at most two pages, at most
 three bounded attempts per page, page/row/byte limits, and one terminal outcome;
 reject old ledgers, state shape, checkpoint catch-up, and worker topology.

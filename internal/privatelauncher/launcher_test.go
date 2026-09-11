@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -1362,4 +1363,27 @@ func nyTime(t *testing.T, year int, month time.Month, day, hour, minute int) tim
 		t.Fatal(err)
 	}
 	return time.Date(year, month, day, hour, minute, 0, 0, location)
+}
+
+func TestKeychainLookupUsesCurrentAccount(t *testing.T) {
+	arguments, err := keychainLookupArguments(func() (*user.User, error) {
+		return &user.User{Username: "test-operator"}, nil
+	})
+	want := []string{"find-generic-password", "-a", "test-operator", "-s", "momentum-scanner-massive-api", "-w"}
+	if err != nil || !reflect.DeepEqual(arguments, want) {
+		t.Fatalf("arguments=%v err=%v", arguments, err)
+	}
+}
+
+func TestKeychainLookupRejectsUnavailableAccount(t *testing.T) {
+	for _, lookup := range []func() (*user.User, error){
+		func() (*user.User, error) { return nil, errors.New("private account details") },
+		func() (*user.User, error) { return nil, nil },
+		func() (*user.User, error) { return &user.User{}, nil },
+	} {
+		arguments, err := keychainLookupArguments(lookup)
+		if arguments != nil || err == nil || err.Error() != "current macOS account unavailable" {
+			t.Fatalf("arguments=%v err=%v", arguments, err)
+		}
+	}
 }

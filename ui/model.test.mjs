@@ -317,12 +317,12 @@ test("P-MVP-UI interpolates Move 30s continuously through signed RGB control poi
 });
 
 test("P-MVP-UI interpolates Tape 5s through exact absolute-rate RGB control points", () => {
-  const anchors = [[0, "#8F9AA3"], [50, "#8F9AA3"], [100, "#B8793E"], [250, "#E98212"], [500, "#FF8A00"]];
+  const anchors = [[0, "#8F9AA3"], [5, "#8F9AA3"], [15, "#B8793E"], [50, "#E98212"], [100, "#FF8A00"]];
   for (const [value, color] of anchors) assert.equal(tapeColor(value), color);
-  assert.deepEqual([tapeColor(25), tapeColor(75), tapeColor(175), tapeColor(400)], ["#8F9AA3", "#A48A71", "#D17E28", "#F68707"]);
-  assert.notEqual(tapeColor(99), tapeColor(100)); assert.notEqual(tapeColor(100), tapeColor(102));
-  assert.notEqual(tapeColor(245), tapeColor(250)); assert.notEqual(tapeColor(250), tapeColor(260));
-  assert.equal(tapeColor(501), "#FF8A00"); assert.equal(tapeColor(5000), "#FF8A00");
+  assert.deepEqual([tapeColor(2.5), tapeColor(10), tapeColor(32.5), tapeColor(75)], ["#8F9AA3", "#A48A71", "#D17E28", "#F48609"]);
+  assert.notEqual(tapeColor(14), tapeColor(15)); assert.notEqual(tapeColor(15), tapeColor(16));
+  assert.notEqual(tapeColor(40), tapeColor(50)); assert.notEqual(tapeColor(50), tapeColor(60));
+  assert.equal(tapeColor(101), "#FF8A00"); assert.equal(tapeColor(5000), "#FF8A00");
 });
 
 test("P-MVP-UI interpolates Spread through exact absolute-bps RGB control points", () => {
@@ -612,13 +612,13 @@ test("P-MVP-UI colors only current Move 30s text and leaves its cell neutral", (
 });
 
 test("P-MVP-UI colors only current Tape 5s text and leaves its cell neutral", () => {
-  const rates = [0, 50, 100, 250, 500];
+  const rates = [0, 5, 15, 50, 100, 125];
   const snapshot = snapshotFixtureV2(rates.length);
   rates.forEach((rate, index) => { snapshot.rows[index].tape_5s.trades_per_second = rate; });
   const document = new FakeDocument(); renderDashboard(document, { transport: "connected", model: buildViewModel(snapshot) });
   const cells = find(document.body, node => node.dataset.focusKey?.endsWith(":tape"));
   assert.deepEqual(cells.map(cell => cell.children[0].style.color), rates.map(tapeColor));
-  assert.deepEqual(cells.map(cell => cell.textContent), ["0.0/s", "50.0/s", "100.0/s", "250.0/s", "500.0/s"]);
+  assert.deepEqual(cells.map(cell => cell.textContent), ["0.0/s", "5.0/s", "15.0/s", "50.0/s", "100.0/s", "125.0/s"]);
   assert.ok(cells.every(cell => cell.style.background === undefined && cell.dataset.palette === undefined));
 
   const unavailable = snapshotFixtureV2(); unavailable.rows[0].tape_5s = { status: "unavailable", reason: "coverage", trade_coverage: false, trades_per_second: null, timestamp_basis: "none", lifecycle_records_observed: false };

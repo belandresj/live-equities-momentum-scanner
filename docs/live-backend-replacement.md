@@ -1,5 +1,8 @@
 # Live backend replacement architecture
 
+> Completed design record. Current behavior is summarized in [implementation status](current-state.md) and [system architecture](architecture/system-overview.md). Delivery instructions below describe the completed replacement, not a new work plan.
+
+
 **Status:** Owner-approved replacement architecture, 2026-08-23; owner-revised
 E2 to exactly one 10-minute deterministic acceptance run on 2026-08-23 and
 restored bounded parallel live hydration on 2026-08-24; owner-revised on
@@ -57,7 +60,7 @@ accepted inbound-aware heartbeat behavior.
 
 ## 2. Authority and supersession
 
-[`product/product-goals.md`](product/product-goals.md) remains the highest
+[`product/product-goals.md`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/product/product-goals.md) remains the highest
 authority and is not revised by this architecture.
 
 Approval of this document supersedes lower-level architecture and component

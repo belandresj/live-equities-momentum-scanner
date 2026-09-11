@@ -24,13 +24,13 @@ faithfully transports the product facts owned by the other focused specs.
 The compatible historical semantics routed here are `DTE-MODEL-01` through
 `DTE-MODEL-03`, `DTE-SESSION-03`, `DTE-SESSION-04`, `DTE-CLOCK-03`,
 `DTE-EVENT-01`, `DTE-EVENT-02`, `DTE-CONTROL-01`, and `DTE-REJECT-01` from the
-[data/time/event contract](../architecture/data-time-and-event-contract.md).
+[data/time/event contract](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/architecture/data-time-and-event-contract.md).
 Connection-attempt behavior routes `LIFE-RECOVER-01` from the
-[engine lifecycle](../architecture/scanner-state-engine-lifecycle.md) and the
+[engine lifecycle](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/architecture/scanner-state-engine-lifecycle.md) and the
 inbound-aware retry facts from
-[`live-aggregate-heartbeat-and-resubscription-correction.md`](../live-aggregate-heartbeat-and-resubscription-correction.md).
+[`live-aggregate-heartbeat-and-resubscription-correction.md`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/live-aggregate-heartbeat-and-resubscription-correction.md).
 The data-confirmed dynamic T/Q status behavior is routed from
-[`tq-data-confirmed-subscription-correction.md`](../tq-data-confirmed-subscription-correction.md).
+[`tq-data-confirmed-subscription-correction.md`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/tq-data-confirmed-subscription-correction.md).
 
 ## 2. Boundary and dependencies
 
@@ -56,8 +56,8 @@ mutation sequence. Hydration results and engine timers remain the parent-
 allowed owner-local paths; they do not share or compete for provider ordering.
 
 Reuse evidence is limited to the current repository's
-[`provider normalization`](../specifications/massive-live-adapter/provider-classification-and-normalization.md),
-[`transport/epoch`](../specifications/massive-live-adapter/transport-commands-and-epochs.md),
+[`provider normalization`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/specifications/massive-live-adapter/provider-classification-and-normalization.md),
+[`transport/epoch`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/specifications/massive-live-adapter/transport-commands-and-epochs.md),
 heartbeat, and data-confirmed corrections cited above, plus their directly
 named provider fixtures. Wire shapes, classifications, and recovery
 counterexamples are retained; the double parse, raw queue, intermediate

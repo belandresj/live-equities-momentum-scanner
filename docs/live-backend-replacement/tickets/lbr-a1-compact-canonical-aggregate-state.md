@@ -57,7 +57,7 @@ through the delivery program before editing it.
 
 Predecessor V2 whitelist: empty; do not inspect it. Reuse only the current
 repository's approved aggregate tests/fixtures and the
-[`S2 canonical aggregate`](../../specifications/scanner-state-engine-and-canonical-state/s2-canonical-aggregates.md)
+[`S2 canonical aggregate`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/specifications/scanner-state-engine-and-canonical-state/s2-canonical-aggregates.md)
 behavior evidence. The baseline oracle may be compiled test-only from commit
 `0d043c1`; it cannot be a production fallback or compare private struct shape.
 

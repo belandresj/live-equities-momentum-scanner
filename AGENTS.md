@@ -1,308 +1,206 @@
-# Repository instructions
+# Repository guidance
+
+## Repository goal
+
+This repository implements a private/local live equities momentum scanner. The
+supported path is a fresh-start live scanner that hydrates historical aggregate
+coverage, consumes live aggregate and selected-row trade/quote data, maintains
+one canonical state, publishes immutable snapshots through a local API, and
+renders the dashboard independently.
+
+The current product scope is described in `README.md` and
+`docs/current-state.md`. Replay and checkpoint packages have been removed. Public service deployment
+and credentialed market-hours validation are outside ordinary agent work.
+
+## How to approach work
+
+Read `README.md` first, then only the product, architecture, operational, and
+implementation documents directly relevant to the task. Do not load every file
+under `docs/` by default. Older design and delivery documents may explain why
+the code looks the way it does, but they are reference material rather than a
+required workflow.
+
+For implementation work:
+
+1. Establish the current behavior from the relevant code, tests, and current
+   documentation.
+2. Identify the smallest coherent change that solves the requested problem
+   while preserving the invariants below.
+3. Implement it without unrelated cleanup, speculative abstractions, or a
+   second state path.
+4. Run focused verification that distinguishes the intended behavior, then run
+   the ordinary repository command when proportionate to the change.
+5. Report what changed, what the evidence proves, important limitations, and
+   the next practical decision.
+
+Do not create extra process or planning documents unless the owner explicitly
+asks for one. A short implementation brief is appropriate when a change has
+meaningful ordering, ownership, persistence,
+external-input, or market-semantics risk; it should contain only the objective,
+design boundary, important invariants, non-scope, and focused verification.
+
+When evidence invalidates an assumption, correct the relevant code or current
+document and rerun the narrowest useful proof. Do not preserve an obsolete test,
+fixture, benchmark, document, or implementation merely because it was accepted
+earlier.
 
 ## Authority
 
-Read `README.md`, `docs/specification-map.md`, and the relevant approved
-product, architecture, delivery-program, and component documents before
-changing code or contracts. The current program is
-[`docs/live-backend-replacement/delivery-program.md`](docs/live-backend-replacement/delivery-program.md).
+Use this order when sources disagree:
 
-Authority descends in this order:
+1. the current owner request;
+2. `docs/product/product-goals.md`;
+3. the architecture documents under `docs/architecture/`;
+4. the current delivery or implementation brief relevant to the task;
+5. current operational documentation, tests, and code; and
+6. historical design and delivery records.
 
-1. owner-approved product specifications;
-2. owner-approved architecture specifications;
-3. owner-approved delivery-program authority for its stated scope;
-4. focused component contracts; and
-5. implementation assignments, plans, tests, fixtures, benchmarks, and code.
+Product behavior controls what the scanner means. Architecture controls state
+ownership, ordering, time, lifecycle, and publication boundaries. Lower-level
+documents and code must be corrected when they conflict with those meanings.
 
-When a lower-level artifact conflicts with a higher-level authority, revise the
-lower-level artifact and continue. Do not preserve a test, fixture, benchmark,
-component decision, or accepted implementation merely because it was approved
-earlier. For C7-C11, apply the V1 program's zero-interruption policy and strict
-compatible interpretation of controlling Phase 1 authority; never invent a
-component-local owner gate.
+## Canonical system model
 
-## Current phase
+Use domain language that describes the running scanner:
 
-The product contract and the
-[`live backend replacement architecture`](docs/live-backend-replacement.md)
-are owner-approved. The accepted feature-MVP, numbered components, stability
-corrections, and private/local baseline remain reusable evidence, not the
-active implementation plan. Replay is unverified and checkpoint persistence is
-disabled; neither is a replacement gate.
+- reference data and session binding;
+- live transport, frame classification, and normalization;
+- historical aggregate hydration and recovery;
+- the `ScannerStateEngine` and canonical symbol state;
+- aggregate features, qualification, and ranking;
+- selected-row trade/quote coverage and enrichment;
+- committed aggregate watermark and readiness;
+- immutable snapshot publication and the snapshot API;
+- dashboard presentation; and
+- operational diagnostics and failure containment.
 
-The private/local
-[`live backend replacement`](docs/live-backend-replacement/delivery-program.md)
-is complete for its defined scope: Capabilities A–E, the exclusive E1 cutover,
-the corrected E3 provider observation, and the final integrated review are
-accepted. The invalid synthetic E2 execution is preserved, while E2
-deterministic capacity characterization remains deferred and non-gating.
+Avoid delivery-era numbering or internal planning terminology in new code and
+documentation. Name behavior by the market fact, state transition, boundary, or
+user-visible capability it represents.
 
-Any new implementation scope must retain one active write-capable slice and
-the applicable final review. Public deployment, replay repair, and checkpoint
-compatibility remain outside current authority. Every future credentialed
-provider request requires a new exact owner authorization.
+## Core invariants
 
-## Replacement fixed and revisable decisions
-
-For the current replacement, fixed behavior, revisable delivery choices,
-resource-target policy, proof/review allocation, and completion boundaries in
-the [parent architecture](docs/live-backend-replacement.md) and
-[delivery program](docs/live-backend-replacement/delivery-program.md) control.
-The former live-feature MVP and V1 material remains compatible historical
-evidence; it does not preserve an old representation, queue, feature state,
-replay path, checkpoint shape, or delivery gate.
-
-The fixed product/architecture meanings and agent-revisable delivery decisions
-are authoritative in
-[`docs/v1-release-program.md`](docs/v1-release-program.md#2-fixed-product-behavior-and-revisable-delivery-decisions).
-
-For C7-C11, the program orchestrator may revise component contracts, document
-maps, internal interfaces, V2 whitelists, fixtures, proof allocation, test
-scale, benchmarks, performance targets below a fixed product limit, slice
-boundaries, review routing, implementation mechanics, and accepted lower-level
-decisions. Record the revision and affected evidence in the component parent.
-This authority does not permit changed market semantics, another state owner,
-T/Q-to-ranking dependence, fabricated availability/readiness, or unrelated
-scope.
-
-The containment and fallback rules in
-[`docs/v1-release-program.md`](docs/v1-release-program.md#3-zero-interruption-execution-policy)
-are mandatory for C7-C11. A component contract, assignment, failed proof,
-benchmark, review, prior approval, progress update, or milestone commit must
-not create an owner-interruption gate.
-
-## Focused component contracts
-
-Contract-first design remains mandatory:
-
-1. Read this file, the repository guide and map, the current delivery program,
-   relevant Phase 1 authorities, and accepted dependency contracts.
-2. Enumerate the exact controlling `PG-*` and `LBR-ARCH-*` IDs plus any routed
-   compatible `DTE-*`/`LIFE-*` semantic dependencies.
-3. State one component ownership boundary and explicit non-scope.
-4. Choose the simplest design satisfying every cited requirement and current
-   replacement outcome.
-5. Introduce no new product rule, competing owner, watermark, evaluator,
-   T/Q-to-ranking dependency, changed time-window meaning, speculative edge
-   case, or duplicated responsibility.
-6. Before inspecting Version 2, record a compact Phase 1 boundary and the exact
-   reconnaissance questions, source categories, and exclusions. The C8-C11
-   plans already supply the initial owner-approved boundary; revise the plan
-   first if evidence or a stable dependency changes it.
-7. Inspect only recorded Version 2 scope. Record exact source paths/functions/
-   fixtures, provenance where relevant, reuse decision, preserved behavior,
-   coupling to remove, and required proof. Version 2 is evidence, never
-   authority.
-8. Complete the focused contract with exact requirements, trust boundaries,
-   primary proofs, verification tiers, sequential slices, review triggers,
-   discretion, deferrals, and correction conditions.
-9. Prefer one compact contract and no more than two slices for C8-C11. Add a
-   third only when a distinct provider/canonical, trust, ownership, or proof
-   boundary cannot be coherently implemented and reviewed in two.
-10. Record the completed contract as the current executable plan. Under the
-    replacement program this does not freeze it: later evidence invokes the
-    correction loop rather than an owner stop.
-
-Use the mandatory
-[`focused component specification template`](docs/specifications/focused-component-spec-template.md).
-The replacement parent controls shared ownership/topology; existing approved
-data/time/lifecycle semantics remain compatible evidence until routed to one
-focused replacement home. Do not create another shared architecture or
-core-domain spec.
-
-### Modular focused contracts
-
-A modular set is one component contract and one authority. Its parent remains
-at the path listed in the specification map and is the mandatory entry point.
-It owns the outcome, single boundary, non-scope, cross-cutting invariants,
-document map, and sole delivery ledger.
-
-Each subordinate spec owns one cohesive semantic, trust, proof, or delivery
-boundary; names its parent, exact requirements, dependencies, and allocated
-slices; and avoids restating normative text owned elsewhere. Every requirement,
-decision, evidence/reuse decision, primary proof, and slice has one
-authoritative home. Dependencies are explicit and acyclic.
-
-For localized work, read the parent and only the routed details/dependencies.
-Read the complete set for cross-cutting contract changes and final component
-review. Within C7-C11, a document-map change is agent-revisable under the V1
-correction loop. Outside that program, follow the applicable owner approval
-gate.
-
-## Replacement correction and acceptance
-
-Use the correction and acceptance policy in the current
-[delivery program](docs/live-backend-replacement/delivery-program.md#13-correction-and-acceptance).
-A failure records evidence; it does not freeze the failed premise. A numeric
-resource-target miss alone receives the program's one bounded diagnostic/
-correction/rerun response; it cannot create an indefinite optimization loop
-when hard behavioral and bounded-plateau acceptance passes.
-
-An accepted slice means its current proofs passed. If later evidence exposes a
-defect, mark the slice/component `reopened`, name the invalidated claim, preserve
-unaffected evidence, revise the lower-level artifact, and rerun the narrowest
-distinguishing proof. A reopened earlier slice does not authorize concurrent
-implementation or a second state path.
-
-At each slice gate, record:
-
-- coherent behavior now available and exact requirements/proofs completed;
-- changed ownership/interfaces and behavior still deferred;
-- proof design, result, dangerous counterexample, and limitation;
-- important invalid states prevented by construction;
-- success and failure-path walkthrough;
-- deviations, failed assumptions, or inspection-only claims;
-- whether a narrow independent review was triggered and its result; and
-- whether the next slice remains valid or needs an in-program revision.
-
-Final capability/component acceptance requires its allocated proofs,
-proportionate verification, one final read-only review, a clean conformance
-walkthrough, and no unresolved fixed-authority conflict. It may later be
-reopened by integration evidence before final current-program acceptance.
-
-## Program orchestration and Git
-
-The current delivery goal may use one write-capable implementation worker at a
-time. Independent reviewers are read-only. The orchestrator updates ledgers,
-stages, or commits only while all workers/reviewers are quiescent.
-
-The orchestrator alone stages exact paths after verifying unrelated user
-changes remain untouched. Make local commits at coherent planning/correction
-milestones, accepted implementation slices, final capability/component
-acceptance, and distinct vertical milestones. Do not push, rebase, amend,
-rewrite history, delete branches, or use destructive reset operations.
-
-## Engineering rules
-
-### Language and tooling
-
-- Use Go 1.26 with standard Go module tooling.
-- The module path is
-  `github.com/belandresj/live-equities-momentum-scanner`.
-- Prefer the Go standard library; add a third-party dependency only when the
-  current focused contract and replacement slice require it.
-
-### Architecture and implementation
-
-- Keep one authoritative `ScannerStateEngine` and one canonical symbol state.
-- Provider adapters normalize facts; they do not determine ranking readiness.
+- There is one authoritative `ScannerStateEngine` and one canonical symbol
+  state. Only the engine's ordered execution path mutates scanner state.
+- Provider adapters normalize bounded facts. They do not own ranking,
+  readiness, canonical merge decisions, or lifecycle transitions.
 - REST and live aggregates use the same canonical identity and merge rules.
-- Aggregate ranking never depends on trade/quote availability or T/Q health.
+- Live item order is explicit through connection epoch, frame sequence, and
+  array index. Goroutine completion and map iteration are not ordering
+  authorities.
+- Aggregate ranking and aggregate readiness never depend on trade/quote
+  availability or health.
+- T/Q may be rejected or shed only through the approved observable containment
+  paths. A mixed frame must continue to preserve later aggregate and control
+  facts.
 - Successful empty hydration is explicit no-print evidence, not a fabricated
   mark or unfinished work.
-- Every primary population counter participates in a documented accounting
-  identity. Overlapping feature dimensions are labeled separately.
-- Checkpoints represent one coherent committed timestamp.
+- Every primary population and work counter participates in a documented
+  accounting identity. Overlapping diagnostic dimensions remain separately
+  labelled.
+- A published snapshot is immutable and coherent at one committed aggregate
+  watermark. API and UI readers do not observe partially applied state.
+- Fresh reference resolution and aggregate hydration are the restart path.
+  Replay and checkpoint restoration are not implemented.
 - The UI remains independently runnable from the scanner backend.
-- Do not introduce a database, service split, generic event bus, runtime plugin
-  system, generalized framework, or hypothetical extension point without an
-  approved architectural need.
-- Prefer the minimum number of mutable states, owners, representations, and
-  handoffs.
+- Inputs, queues, retries, waits, retained state, and external work are bounded.
+- Do not add a database, service split, generic event bus, runtime plugin
+  system, generalized framework, worker pool for canonical mutation, or another
+  mutable owner without an explicit architectural need.
 
-## Evidence, edge cases, and tests
+## Provider and evidence boundaries
 
-Do not implement a nontrivial provider edge case without provider
-documentation, a captured/approved fixture, a production observation, a
-product or mathematical invariant, a predecessor regression, or explicit owner
-approval.
+Do not access provider credentials or make live provider requests unless the
+owner explicitly authorizes that exact execution. A documented market-hours
+procedure is not itself authorization.
 
-Each requirement has one primary proof. A second layer is justified only when
-it proves a distinct boundary. One proof may cover tightly coupled requirements
-when it separately states each claim, dangerous counterexample, observable
-result, participating path, and limitation.
+Do not implement a nontrivial provider edge case without at least one of:
 
-For an external, persisted, or consequential cross-component boundary, define
-what reaches success, what is rejected/contained, the failure domain, and the
-smallest invalid evidence that could falsely appear complete/current/valid.
-Distinguish invalid states prevented by construction from representable states
-requiring runtime validation.
+- provider documentation;
+- a captured or owner-approved fixture;
+- a production observation;
+- a product or mathematical invariant;
+- an existing regression; or
+- explicit owner direction.
 
-The ordinary repository command and the current acceptance, capacity,
-deterministic-fixture, and live tiers are authoritative in the
-[`implementation process`](docs/implementation-process.md#6-verification-tiers-and-cost-policy)
-as bounded by the current delivery program.
-In particular:
-
-- ordinary verification is `go test -short -timeout 2m ./...`;
-- ordinary tests use the smallest deterministic population and stream that
-  prove the claim;
-- capacity, benchmark, soak, race, and live work is explicitly selected and
-  skipped by `testing.Short()` when long-running;
-- loops, retries, channel waits, polling, and generators are bounded;
-- every long command and each performance trial has an explicit timeout;
-- no local acceptance command exceeds 15 minutes without a recorded specific
-  justification;
-- validate fixture bytes, symbol count, correction count, interval, state
-  families, and planned work before timing;
-- run the narrowest affected proof during correction and do not rerun the full
-  repository after every edit;
-- reuse unchanged expensive evidence; and
-- separate semantic correctness from capacity/latency measurement.
-
-Never access provider credentials or make live provider requests without an
-explicit owner authorization for that exact task. The approved procedure in
-[`docs/market-hours-validation.md`](docs/market-hours-validation.md) does not
-itself authorize execution.
-
-## Predecessor reuse
-
-The only predecessor permitted by default is:
+The only predecessor checkout permitted by default is:
 
 ```text
-/Users/joshuabelandres/Dev/Momentum-Equities-Live-Scanner-v2
+../Momentum-Equities-Live-Scanner-v2 (relative to the original project checkout)
 ```
 
-Do not inspect the older Version 1 checkout without an explicit owner-approved
-exception for a precise purpose. Inspect Version 2 only after the current
-component records its Phase 1 boundary and exact reconnaissance scope. A V1
-program orchestrator may revise that scope before inspection and record the
-change; it may not use unrecorded sources.
+Inspect it only when a concrete question cannot be answered more directly in
+the current repository. Do not inspect the older Version 1 checkout without an
+explicit owner-approved reason. Predecessor code is evidence, never authority;
+adapt behavior into the current ownership model rather than transplanting its
+structure.
 
-Implementation may use only the current recorded whitelist. A whitelist can be
-revised inside C7-C11 when new evidence remains within the component and fixed
-authority. Record the new source, reason, provenance, adaptation, and proof.
+## Engineering conventions
 
-## Implementation assignments
+- Use Go 1.26 and the module path
+  `github.com/belandresj/live-equities-momentum-scanner`.
+- Prefer the Go standard library. Add a third-party dependency only when it is
+  clearly required by the requested behavior.
+- Prefer the minimum number of mutable states, representations, owners, and
+  handoffs.
+- Keep blocking network, disk, and UI work outside the engine's ordered path.
+- Preserve unrelated user changes in a dirty worktree. Never use destructive
+  Git operations to make the tree look clean.
+- Do not stage, commit, push, rebase, amend, or rewrite history unless the owner
+  asks for that Git action.
 
-One assignment covers exactly one current slice and states:
+## Verification
 
-1. authoritative documents and exact requirements;
-2. outcome, scope, non-scope, dependencies, interfaces, and owner;
-3. allowed files/packages or ownership boundary;
-4. current V2 source/fixture whitelist and evidence inputs;
-5. one primary proof per assigned requirement;
-6. verification tier, timeout, and acceptance record;
-7. deferred behavior and decisions delegated to the implementer;
-8. prohibited fixed-authority changes;
-9. consequential trust-boundary counterexamples and proof limitations; and
-10. the current-program containment reference plus in-program correction
-    triggers.
+The ordinary repository command is:
 
-Implementers make routine lower-level choices within those bounds. If the
-current slice is no longer coherent, revise/split it through the current
-program's correction loop, record the change, and continue sequentially. This
-repository does not use an ADR workflow.
+```text
+go test -short -timeout 2m ./...
+```
 
-## Independent review execution
+During correction, run the narrowest affected proof first. Use the smallest
+deterministic fixture that proves the behavior. Validate fixture shape and work
+before interpreting timing.
 
-Use the risk-based cadence in the
-[`implementation process`](docs/implementation-process.md#7-independent-review-cadence).
-Do not spawn a reviewer merely because a slice or contract changed.
+Capacity, benchmark, soak, race, and live work must be explicitly selected and
+must be skipped by `testing.Short()` when long-running. Bound loops, retries,
+channel waits, polling, and generators. Give every long command and performance
+trial an explicit timeout; no local acceptance command should exceed 15 minutes
+without a specific reason.
 
-When a review is required and the model is available, use `gpt-5.6-sol` with
-medium reasoning. Use high reasoning only when medium leaves concrete
-uncertainty about concurrency linearization, persistence/atomicity, invalid
-external evidence reaching false success, sole-owner enforcement, or a cross-
-component authority conflict. Record any substitution.
+Separate these claims in both tests and reporting:
 
-After corrections, reuse the same reviewer when practical for a focused
-re-review of the finding and affected boundary. Reviewers do not edit, approve,
-stage, commit, or expand scope. A review finding is correction input. If the
-preferred model is unavailable, record a substitution; if review capacity is
-temporarily unavailable, complete other work and retry without asking the
-owner to unblock it.
+- measurement and accounting correctness;
+- descriptive path or state quality;
+- predictive evidence about future market behavior; and
+- validated executable trading expectancy.
 
-One final read-only review is required per completed current-program
-capability, plus one final integrated review at current-program completion.
+Passing tests establishes only the behavior those tests exercise. It does not
+establish live-provider capacity, latency distributions, market-hours behavior,
+or trading edge unless the evidence directly measures those claims.
+
+## Reviews and collaboration
+
+Use another read-only reviewer when the change has material concurrency,
+persistence, security, external-evidence, sole-owner, or cross-boundary risk, or
+when the owner requests one. Do not require a ceremonial review for every
+change.
+
+When multiple agents are used, keep one write-capable agent at a time. Reviewers
+remain read-only. Preserve unrelated work and coordinate before touching shared
+files.
+
+## Communication
+
+Communicate as a technically sophisticated software engineer and quantitative
+trader. Lead with the actual conclusion and why it matters. Use exact behavior,
+numbers, functions, and comparisons instead of project-management labels.
+
+For quantitative work, explain what a signal measures, when it becomes knowable
+in real time, what causes it to fire, how it compares with a relevant baseline,
+and whether apparent edge is broad or concentrated. State uncertainty,
+selection bias, costs, latency, and what remains unproven.
+
+For implementation work, start with the capability or behavior that changed.
+Explain important design choices and tradeoffs, then report verification in
+terms of what it proves. Avoid long file inventories and chronological tool
+summaries unless requested.

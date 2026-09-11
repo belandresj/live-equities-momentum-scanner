@@ -19,18 +19,18 @@ Allocated parent requirements are `LBR-ARCH-04`, `LBR-ARCH-08`, and
 `PG-RANK-03`, `PG-RANK-04`, `PG-RANK-05`, `PG-FEATURE-01`,
 `PG-FEATURE-02`, `PG-FEATURE-03`, `PG-FEATURE-04`, `PG-AVAIL-01`,
 `PG-AVAIL-02`, `PG-OBS-01`, and `PG-OBS-03` from
-[`product-goals.md`](../product/product-goals.md). Product formulas and wire
+[`product-goals.md`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/product/product-goals.md). Product formulas and wire
 fields remain defined there and in the accepted API contract; this document
 allocates their evaluation and publication implementation once.
 
 The compatible historical semantics routed here are `DTE-CLOCK-04` through
 `DTE-CLOCK-06`, the system-position portion of `DTE-EVENT-04`,
 `DTE-TIMER-01`, `DTE-COMMIT-01` through `DTE-COMMIT-04`, and `DTE-REJECT-02` from the
-[data/time/event contract](../architecture/data-time-and-event-contract.md),
+[data/time/event contract](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/architecture/data-time-and-event-contract.md),
 plus `LIFE-LIVE-01` through `LIFE-LIVE-03`, `LIFE-LIVE-05`, and
 `LIFE-SUPPRESS-01` through `LIFE-SUPPRESS-03`, `LIFE-END-01` through
 `LIFE-END-03`, and `LIFE-PUBLISH-01` through `LIFE-PUBLISH-03` from the
-[engine lifecycle](../architecture/scanner-state-engine-lifecycle.md).
+[engine lifecycle](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/architecture/scanner-state-engine-lifecycle.md).
 `LIFE-LIVE-04` and replay/checkpoint publication meanings are not routed.
 
 ## 2. Boundary and dependencies
@@ -56,11 +56,11 @@ source. Callers receive immutable values or detached copies; no API, metrics,
 or UI caller can request an evaluation or mutate publication members.
 
 Reuse evidence is limited to the current repository's
-[`qualification/corrections`](../specifications/aggregate-features-qualification-ranking-and-accounting/qualification-and-corrections.md),
-[`ranking/availability`](../specifications/aggregate-features-qualification-ranking-and-accounting/ranking-availability-and-delivery.md),
-[`population accounting`](../specifications/aggregate-features-qualification-ranking-and-accounting/population-accounting.md),
+[`qualification/corrections`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/specifications/aggregate-features-qualification-ranking-and-accounting/qualification-and-corrections.md),
+[`ranking/availability`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/specifications/aggregate-features-qualification-ranking-and-accounting/ranking-availability-and-delivery.md),
+[`population accounting`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/specifications/aggregate-features-qualification-ranking-and-accounting/population-accounting.md),
 current-product feature fixtures, and the
-[`snapshot capture correction`](../snapshot-capture-and-dashboard-transport-isolation-correction.md).
+[`snapshot capture correction`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/snapshot-capture-and-dashboard-transport-isolation-correction.md).
 They supply semantic oracles and concurrency counterexamples only. Old feature
 mathematics, full-population implementation, ledgers, replay/checkpoint paths,
 and private structs are rejected. No predecessor checkout is inspected.

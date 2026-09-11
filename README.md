@@ -129,13 +129,15 @@ go test -short -timeout 2m ./...
 
 The supported workflow is a fresh-start local live scanner. Each process start
 resolves reference data and hydrates session history before reconciling with
-the live stream. Checkpoint persistence is disabled, and historical replay is
-retained but unsupported for the current feature set.
+the live stream. Replay and checkpoint packages have been removed; process
+restart uses fresh hydration.
 
 Offline verification covers implemented calculations, state transitions,
-accounting, and failure handling. Credentialed market-hours capacity and
-latency remain unverified; public hosting and
-multi-user operation are outside the current scope.
+accounting, and failure handling. A [recorded ten-minute extended-hours provider
+observation](docs/live-backend-replacement/evidence/lbr-e3-stability-live-2026-08-25.json) completed hydration and sustained 468 consecutive ready samples
+with valid accounting and no snapshot or dashboard HTTP failures. This bounded
+observation does not establish regular-session capacity or latency guarantees.
+Public hosting and multi-user operation remain outside the current scope.
 
 The scanner measures observed market conditions. It does not generate trade
 entries or exits, route orders, or manage positions. Predictive value and

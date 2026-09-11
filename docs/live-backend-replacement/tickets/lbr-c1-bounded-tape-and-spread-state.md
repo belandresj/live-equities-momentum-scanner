@@ -48,8 +48,8 @@ aggregate evaluator, UI, launcher, replay, or checkpoint paths.
 ## 4. Evidence and source whitelist
 
 Predecessor V2 whitelist: empty. Reuse only current
-[`top-20 T/Q`](../../specifications/top-20-tq-coverage-and-features.md),
-[`data-confirmed subscription`](../../tq-data-confirmed-subscription-correction.md),
+[`top-20 T/Q`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/specifications/top-20-tq-coverage-and-features.md),
+[`data-confirmed subscription`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/tq-data-confirmed-subscription-correction.md),
 trade-condition, Tape/Spread, and API fixtures. Reject old 16-minute T/Q
 fingerprints, generic-status coverage, one-second Tape output, historical
 ledgers, and private retention shapes.

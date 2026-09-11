@@ -118,7 +118,7 @@ func equalLBRTQProduct(left, right engine.TQView) bool {
 }
 
 // TestLiveRESTHydrationProgression is the opt-in deterministic progression
-// specified by docs/live-rest-hydration-progression.md. Every worker level gets
+// specified by docs/architecture/hydration-and-recovery.md. Every worker level gets
 // a fresh runtime, adapter, engine, HTTP server, WebSocket server, and hydration
 // generation. The fixture bytes and pacing are unchanged between levels.
 func TestLiveRESTHydrationProgression(t *testing.T) {

@@ -20,16 +20,16 @@ supplies their engine-owned T/Q, bounded-state, and T/Q-local containment
 obligations. Allocated retained product semantics are
 `PG-FEATURE-05`, `PG-FEATURE-06`, `PG-AVAIL-03`, `PG-TAQ-01`,
 `PG-TAQ-02`, and `PG-TAQ-03` from
-[`product-goals.md`](../product/product-goals.md).
+[`product-goals.md`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/product/product-goals.md).
 
 The compatible historical semantics routed here are `DTE-CLOCK-02`,
 `DTE-WINDOW-03`, `DTE-TRADE-01`, `DTE-TRADE-02`, `DTE-QUOTE-01`,
 `DTE-QUOTE-02`, and `DTE-TQ-01` through `DTE-TQ-03` from the
-[data/time/event contract](../architecture/data-time-and-event-contract.md),
+[data/time/event contract](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/architecture/data-time-and-event-contract.md),
 plus `LIFE-TQ-01` through `LIFE-TQ-03` from the
-[engine lifecycle](../architecture/scanner-state-engine-lifecycle.md).
+[engine lifecycle](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/architecture/scanner-state-engine-lifecycle.md).
 The provider-status correction in
-[`tq-data-confirmed-subscription-correction.md`](../tq-data-confirmed-subscription-correction.md)
+[`tq-data-confirmed-subscription-correction.md`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/tq-data-confirmed-subscription-correction.md)
 controls over earlier status-count assumptions. No replay T/Q meaning is
 routed.
 
@@ -60,7 +60,7 @@ closures notify publication immediately; ordinary measurement changes may
 coalesce to the next one-second snapshot.
 
 Reuse evidence is limited to the current repository's
-[`top-20 T/Q contract`](../specifications/top-20-tq-coverage-and-features.md),
+[`top-20 T/Q contract`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/specifications/top-20-tq-coverage-and-features.md),
 the data-confirmed correction cited above, and their directly named condition,
 membership, pressure, and API fixtures. Tape/Spread meanings and dangerous
 counterexamples are retained; broad retention, status acknowledgement,

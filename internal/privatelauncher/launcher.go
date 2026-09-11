@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -26,7 +27,6 @@ const (
 	dashboardAddress = "127.0.0.1:4173"
 	scannerOrigin    = "http://" + scannerAddress
 	dashboardOrigin  = "http://" + dashboardAddress
-	keychainAccount  = "joshuabelandres"
 	keychainService  = "momentum-scanner-massive-api"
 	preconnectLead   = 5 * time.Minute
 	dashboardRetries = 3
@@ -346,7 +346,7 @@ func run(ctx context.Context, repoRoot string, arguments []string, stdout, stder
 	environment := deps.credentialEnvironment()
 	credential, source, err := deps.credential(ctx, environment)
 	if err != nil {
-		credentialErr := errors.New("Massive credential unavailable; export MASSIVE_API_KEY or create the macOS Keychain generic-password item for account joshuabelandres and service momentum-scanner-massive-api")
+		credentialErr := errors.New("Massive credential unavailable; supply MASSIVE_API_KEY or configure the scanner Keychain item for the current macOS account")
 		if dashboard != nil {
 			return errors.Join(credentialErr, stopChildren(nil, dashboard, false, false, syscall.SIGTERM, deps))
 		}
@@ -895,9 +895,13 @@ func productionCredential(ctx context.Context, environment []string) (string, st
 	if runtime.GOOS != "darwin" {
 		return "", "", errors.New("macOS Keychain is unavailable")
 	}
+	arguments, err := keychainLookupArguments(user.Current)
+	if err != nil {
+		return "", "", err
+	}
 	credentialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	command := exec.CommandContext(credentialCtx, "/usr/bin/security", "find-generic-password", "-a", keychainAccount, "-s", keychainService, "-w")
+	command := exec.CommandContext(credentialCtx, "/usr/bin/security", arguments...)
 	command.Env = removeEnvironment(environment, "MASSIVE_API_KEY")
 	output, err := command.Output()
 	if err != nil {
@@ -911,6 +915,15 @@ func productionCredential(ctx context.Context, environment []string) (string, st
 		return "", "", errors.New("Keychain item is invalid")
 	}
 	return value, "macOS Keychain", nil
+}
+
+// Resolve the account locally rather than embedding an operator's identity.
+func keychainLookupArguments(currentUser func() (*user.User, error)) ([]string, error) {
+	account, err := currentUser()
+	if err != nil || account == nil || account.Username == "" {
+		return nil, errors.New("current macOS account unavailable")
+	}
+	return []string{"find-generic-password", "-a", account.Username, "-s", keychainService, "-w"}, nil
 }
 
 func startCommand(spec processSpec) (childProcess, error) {

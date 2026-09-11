@@ -47,9 +47,9 @@ transport/hydration, snapshot API/UI, launcher, replay, or checkpoint code.
 ## 4. Evidence and source whitelist
 
 Predecessor V2 whitelist: empty. Reuse only the current approved
-[`qualification/corrections`](../../specifications/aggregate-features-qualification-ranking-and-accounting/qualification-and-corrections.md),
-[`ranking/availability`](../../specifications/aggregate-features-qualification-ranking-and-accounting/ranking-availability-and-delivery.md),
-and [`population accounting`](../../specifications/aggregate-features-qualification-ranking-and-accounting/population-accounting.md)
+[`qualification/corrections`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/specifications/aggregate-features-qualification-ranking-and-accounting/qualification-and-corrections.md),
+[`ranking/availability`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/specifications/aggregate-features-qualification-ranking-and-accounting/ranking-availability-and-delivery.md),
+and [`population accounting`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/specifications/aggregate-features-qualification-ranking-and-accounting/population-accounting.md)
 fixtures/oracles. Old cloned maps, full evaluator, private state, delivery
 ledger, replay, and checkpoint cases are rejection evidence, not requirements.
 

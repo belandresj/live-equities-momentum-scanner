@@ -50,8 +50,8 @@ checkpoint code.
 ## 4. Evidence and source whitelist
 
 Predecessor V2 whitelist: empty. Reuse only current
-[`provider normalization`](../../specifications/massive-live-adapter/provider-classification-and-normalization.md),
-[`transport/epoch`](../../specifications/massive-live-adapter/transport-commands-and-epochs.md),
+[`provider normalization`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/specifications/massive-live-adapter/provider-classification-and-normalization.md),
+[`transport/epoch`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/specifications/massive-live-adapter/transport-commands-and-epochs.md),
 data-confirmation correction, and their directly named provider fixtures.
 Wire shapes/classifications are evidence; double parsing, raw event copies,
 intermediate envelopes, status-count coverage, and delivery ledgers are

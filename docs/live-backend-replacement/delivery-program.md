@@ -45,7 +45,7 @@ signal, replay product, checkpoint restart claim, or provider SLA.
 
 After owner approval, authority for this program descends as:
 
-1. [`product-goals.md`](../product/product-goals.md);
+1. [`product-goals.md`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/product/product-goals.md);
 2. the [replacement parent architecture](../live-backend-replacement.md);
 3. this delivery program;
 4. the five focused replacement specifications routed by the parent; and
@@ -1494,7 +1494,7 @@ committed.
   evidence. The durable machine-readable record is
   `docs/live-backend-replacement/evidence/lbr-e2-acceptance.json`.
 - **Invocation record and deviation:** the exact command was
-  `env LBR_E2_ARTIFACT=/Users/joshuabelandres/.codex/worktrees/live-backend-replacement/live-equities-momentum-scanner/docs/live-backend-replacement/evidence/lbr-e2-acceptance.json go test -v -count=1 -timeout 15m -run '^TestPLBRE2DeterministicResourceStability$' ./internal/operations`.
+  `env LBR_E2_ARTIFACT=<local-worktree> go test -v -count=1 -timeout 15m -run '^TestPLBRE2DeterministicResourceStability$' ./internal/operations`.
   Measurement-tool setup was repeatedly invoked while correcting pre-pacing
   failures; every invocation and available test-reported duration is retained
   in the artifact. None emitted the timed-start marker or consumed paced input.

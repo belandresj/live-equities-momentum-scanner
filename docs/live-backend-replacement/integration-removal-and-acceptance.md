@@ -26,12 +26,12 @@ Capabilities A through D, while this contract owns the final proof that the
 ordinary composition has one owner, only justified bounded concurrency, and
 the common failure domains. Allocated retained product semantics are
 `PG-UI-01` and `PG-UI-02` from
-[`product-goals.md`](../product/product-goals.md). The exact API/UI behavior is
+[`product-goals.md`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/product/product-goals.md). The exact API/UI behavior is
 reused from the accepted
-[`versioned-snapshot-api.md`](../specifications/versioned-snapshot-api.md),
-[`independent-ui.md`](../specifications/independent-ui.md),
-[`readiness-and-operations.md`](../specifications/readiness-and-operations.md), and the
-[`snapshot capture correction`](../snapshot-capture-and-dashboard-transport-isolation-correction.md);
+[`versioned-snapshot-api.md`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/specifications/versioned-snapshot-api.md),
+[`independent-ui.md`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/specifications/independent-ui.md),
+[`readiness-and-operations.md`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/specifications/readiness-and-operations.md), and the
+[`snapshot capture correction`](https://github.com/belandresj/live-equities-momentum-scanner/blob/eda0d46eccb95ac96a239e6de50bcf2f26a52e04/docs/snapshot-capture-and-dashboard-transport-isolation-correction.md);
 their historical delivery ledgers and replay/checkpoint acceptance narratives
 are not routed.
 

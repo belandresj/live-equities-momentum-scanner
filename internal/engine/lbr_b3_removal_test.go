@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	lbrB3ManifestSHA = "5745a6eed3e25891f61f58b40b06a4e9733c7b3f7d0914d411b142fe3ad8d62d"
+	lbrB3ManifestSHA = "bcd58af0116e2b26767a41f8a578293a3e300d2c318df2fad4a9dae0a2ec4512"
 	lbrB3Population  = 5_694
 	lbrB3ValueRows   = 5_470_012
 )

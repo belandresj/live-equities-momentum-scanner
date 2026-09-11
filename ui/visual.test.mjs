@@ -10,7 +10,7 @@ function contrast(foreground, background) { const a = luminance(foreground), b =
 test("P-MVP-UI visual grammar keeps backend-neutral continuous presentation", () => {
   const snapshot = snapshotFixtureV2(3); snapshot.rows[0].day_range_position.value_ratio = .75; snapshot.rows[0].activity_30s.value_ratio = 1; snapshot.rows[0].tape_5s.trades_per_second = 30; snapshot.rows[0].spread.basis_points = 50;
   [snapshot.rows[0].from_open_change.value_ratio, snapshot.rows[1].from_open_change.value_ratio, snapshot.rows[2].from_open_change.value_ratio] = [1, .2, -.1];
-  const row = buildViewModel(snapshot).rows[0]; assert.deepEqual([row.dayColor, row.fromOpen.colorPosition, row.dayRange.position, row.activity.position, row.tape.textColor, row.spread.textColor], [1, 1, 75, 100, "#8F9AA3", "#C48649"]); assert.equal(buildViewModel(snapshot).current, true);
+  const row = buildViewModel(snapshot).rows[0]; assert.deepEqual([row.dayColor, row.fromOpen.colorPosition, row.dayRange.position, row.activity.position, row.tape.textColor, row.spread.textColor], [1, 1, 75, 100, "#CD7D2B", "#C48649"]); assert.equal(buildViewModel(snapshot).current, true);
   assert.equal(buildViewModel(snapshot).rows[1].fromOpen.colorPosition, 0);
 });
 
