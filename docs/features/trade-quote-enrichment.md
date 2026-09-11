@@ -93,4 +93,3 @@ coverage, command, and projection counters are closed and observable. A mixed
 frame with invalid or shed T/Q still delivers every later aggregate and control
 fact. T/Q publication may be cadence-coalesced, but trust transitions publish
 immediately and aggregate `T` never advances because of a T/Q event.
-

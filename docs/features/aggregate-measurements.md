@@ -87,4 +87,3 @@ Ranking membership cannot initiate or backfill feature history.
 
 The superseded HOD drawdown, rolling 30/60-minute range, and composite Activity
 implementations have been removed. They are not calculated by the live backend.
-

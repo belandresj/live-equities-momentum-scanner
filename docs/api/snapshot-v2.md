@@ -99,4 +99,3 @@ The Go structs in `internal/snapshotapi/schema.go` are the exact wire field
 inventory. Any schema change requires coordinated mapper, validator, dashboard,
 fixture, and documentation changes and a new version when compatibility cannot
 be preserved.
-

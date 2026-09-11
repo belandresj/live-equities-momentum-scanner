@@ -76,4 +76,3 @@ replacement backend.
 
 Never run credentialed diagnostics or market-hours trials without explicit
 authorization for that exact run.
-

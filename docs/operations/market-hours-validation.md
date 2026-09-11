@@ -66,4 +66,3 @@ expectancy.
 
 Live evidence may motivate a focused correction, but the correction returns to
 offline deterministic proof before another separately authorized live run.
-

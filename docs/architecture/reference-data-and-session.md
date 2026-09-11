@@ -80,4 +80,3 @@ The binding is immutable after installation. A different trading date,
 universe, or prior-close basis requires a new engine instance. Live events,
 hydration rows, commands, and fences must match the binding
 identity before they can affect canonical state.
-

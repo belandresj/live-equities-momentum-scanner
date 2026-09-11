@@ -100,4 +100,3 @@ Qualification status and feature availability are overlapping diagnostics, not
 additional mutually exclusive population buckets. The evaluator stages the
 full population, validates these identities, and commits ranking and `T`
 atomically.
-
