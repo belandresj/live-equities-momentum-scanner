@@ -1,144 +1,143 @@
 # Live Equities Momentum Scanner
 
-Live Equities Momentum Scanner is a private/local real-time U.S. equities
-scanner for a discretionary momentum trader. It ranks qualified stocks
-by return from the adjusted previous regular-session close, presents
-aggregate-derived session context, and provides trade- and quote-derived
-measurements for the displayed top 20.
+A real-time U.S. equities scanner built in Go for discretionary momentum
+research and monitoring. The system screens the eligible market for sustained
+trading activity, ranks qualified stocks by return from the previous adjusted
+close, and presents up to 20 leaders with price, volume, and trade-and-quote
+measurements.
 
-The scanner is a market-data measurement and discovery product. It does not
-produce forecasts, recommendations, entries, exits, orders, or claims of
-executable trading expectancy.
+![Live Equities Momentum Scanner dashboard](docs/assets/live-scanner-dashboard.png)
 
-## Product behavior
+A large percentage gain alone does not describe the trading activity behind a
+move. The scanner separates activity qualification from return-based ranking,
+then provides measurements of session location, recent volume participation,
+short-term returns, trade frequency, and quoted spread. These measurements help
+a trader examine the conditions accompanying a move as they develop.
 
-The scanner is designed to:
+The project integrates historical data acquisition, live feed processing,
+rolling feature calculations, correction-aware market state, and an independent
+browser dashboard. It runs locally for a single operator using Massive market
+and reference data.
 
-- bind each run to an exchange schedule, eligible U.S. common-stock/ADRC
-  universe, and exact adjusted prior closes;
-- consume live one-second aggregates through one canonical event and state
-  path;
-- qualify symbols using the approved same-session aggregate-tape gate, then rank
-  passers by Day % descending with exact-symbol tie-breaking;
-- publish at most 20 rows with independently available Float, session share
-  Volume, Last, From Close %, From Open %, Day Range, Activity 30s, Move 30s,
-  Tape Speed, and Spread;
-- retain at least 330 seconds of aggregate/coverage evidence plus the
-  predecessor mark for every display-eligible symbol, independent of top-20
-  membership;
-- recover from fresh start and same-process aggregate gaps without fabricating
-  marks or treating successful empty hydration as unfinished work; and
-- expose readiness, coverage, population accounting, and field availability
-  honestly through a versioned read-only API.
+## Market Universe and Selection
 
-The complete product contract is
-[`docs/product/product-goals.md`](docs/product/product-goals.md).
+The eligible universe consists of active U.S. common shares and common-stock
+American depositary receipts (ADRs). ETFs, ETNs, preferred shares, warrants,
+rights, units, funds, and inactive or non-U.S. listings are excluded. The
+scanner covers the extended session from 04:00 to 20:00 New York time.
 
-## Architecture
+Qualification evaluates rolling 60-second windows of one-second aggregates.
+A passing window must satisfy every requirement below:
 
-The approved live-backend replacement has:
-
-- one authoritative `ScannerStateEngine` and one canonical per-symbol session
-  state;
-- a compact sealed session prefix plus sparse correction tail;
-- one single-pass Massive decoder and one bounded decoded-batch live handoff;
-- one committed aggregate watermark and one qualification/ranking path;
-- incremental qualification and one-second two-phase selection/enrichment;
-- default T/Q coverage for displayed rows, with T/Q degraded before aggregate
-  correctness;
-- fresh/gap hydration through the same canonical state and exact ingress fence;
-- replay/checkpoint state excluded from the supported live core;
-- immutable snapshots served by the scanner backend; and
-- an independently deployable UI that owns presentation, not market state.
-
-The architecture deliberately excludes a database, microservice split, generic
-event bus, runtime plugin system, and browser-owned scanner logic unless a future
-approved requirement establishes a concrete need.
-
-## Repository guide
-
-| Document | Purpose |
+| Criterion | Requirement |
 | --- | --- |
-| [`AGENTS.md`](AGENTS.md) | Repository rules, authority order, engineering invariants, and agent-assignment requirements. |
-| [`docs/product/product-goals.md`](docs/product/product-goals.md) | Highest product authority: user-facing behavior, formulas, version 1 scope, and non-goals. |
-| [`docs/live-backend-replacement.md`](docs/live-backend-replacement.md) | Current architecture authority: compact live state, two-phase evaluation, one ingress handoff, retained hydration/recovery, resource policy, and removal boundary. |
-| [`docs/live-backend-replacement/delivery-program.md`](docs/live-backend-replacement/delivery-program.md) | Current delivery authority: focused-contract gate, five sequential capabilities, agent/review policy, and integrated acceptance. |
-| [`docs/live-feature-mvp-program.md`](docs/live-feature-mvp-program.md) | Historical accepted feature/API/UI/stability delivery evidence; superseded as the active program. |
-| [`docs/architecture/system-overview.md`](docs/architecture/system-overview.md) | Runtime topology, component boundaries, state ownership, and failure containment. |
-| [`docs/architecture/data-time-and-event-contract.md`](docs/architecture/data-time-and-event-contract.md) | Session, clock, event, ordering, coverage, reconciliation, replay, and checkpoint-cutoff semantics. |
-| [`docs/architecture/scanner-state-engine-lifecycle.md`](docs/architecture/scanner-state-engine-lifecycle.md) | Legal engine states, transitions, publication permissions, recovery, and termination. |
-| [`docs/glossary.md`](docs/glossary.md) | Shared vocabulary; the controlling product or architecture contract wins when more specific. |
-| [`docs/specification-map.md`](docs/specification-map.md) | Current component sequence, document status, dependencies, and implementation milestones. |
-| [`docs/implementation-process.md`](docs/implementation-process.md) | Contract-first research, approval, predecessor-reuse, proof, slice, integration, and release workflow. |
-| [`docs/v1-release-program.md`](docs/v1-release-program.md) | Historical accepted delivery authority and reusable evidence for the former feature set; superseded where it conflicts with the current MVP. |
-| [`docs/c12-implementation-goal.md`](docs/c12-implementation-goal.md) | Historical replay follow-on authority; not active and not an MVP gate. |
-| [`docs/market-hours-validation.md`](docs/market-hours-validation.md) | Separately authorized post-RC live-provider observation procedure; pending by default. |
-| [`docs/specifications/focused-component-spec-template.md`](docs/specifications/focused-component-spec-template.md) | Mandatory template and modular-layout rules for focused component contracts. |
-| [`docs/history/`](docs/history/) | Non-authoritative Phase 1 drafting and review history. |
+| Latest price | At least $0.25 |
+| Aggregate coverage | At least 45 of 60 seconds |
+| Maximum gap | No more than 3 consecutive missing seconds, including window boundaries |
+| Estimated trade count | At least 1,000 over 60 seconds |
+| Dollar volume | At least $250,000 over 60 seconds |
+| Recent estimated trade count | At least 100 over the final 5 seconds |
+| Volume concentration | No single second contributes more than 50% of the window's share volume |
 
-## How work advances
+Estimated trade counts are calculated as aggregate volume divided by average
+trade size, summed over the relevant window. Dollar volume is the sum of
+aggregate volume multiplied by volume-weighted average price (VWAP).
 
-The product contract and live-backend replacement architecture are
-owner-approved. Current status and the sequential roadmap live in the
-[`replacement delivery program`](docs/live-backend-replacement/delivery-program.md)
-and [`specification map`](docs/specification-map.md).
+The first passing window establishes qualification for the session. A provider
+correction can revoke the sole passing evidence within the 16-minute correction
+horizon; after that evidence is finalized, subsequent quiet trading does not
+revoke qualification.
 
-The live-backend replacement is implemented and accepted through Capabilities
-A–E. Ordinary-live hydration accepts exactly `1|2|4|8` workers and defaults to
-8. `LBR-E1` completed the exclusive cutover, and the corrected `LBR-E3`
-observation established bounded private/local extended-hours live stability.
-The failed synthetic `LBR-E2` capacity composition is preserved as evidence
-but deferred and non-gating. Historical numbered components and stability
-corrections remain evidence, not requirements to preserve their private
-representations.
+Qualified, rankable stocks are ordered by percentage return from the immediately
+preceding regular session's adjusted close, with symbol order breaking ties.
+The dashboard displays the first 20. Float and the other contextual measurements
+do not affect qualification or ranking. During incomplete population coverage,
+any provisional ordering is explicitly marked as partial.
 
-The only supported operating path remains the ordinary fresh-start live
-scanner. Replay and checkpoint tooling are removed; restart uses fresh hydration.
-Deterministic fixtures remain proof tools, not product replay. Every future
-credentialed provider observation still requires separate exact owner
-authorization. No current document establishes deterministic 300-frames/s
-capacity, a provider SLA, public deployment, or a trading-edge claim.
+## Scanner Measurements
 
-## Private local dashboard
+| Measurement | Definition |
+| --- | --- |
+| **Rank** | Position among qualified, rankable stocks by return from the previous adjusted close. |
+| **Float** | Provider-reported public free float in shares, when available. |
+| **Volume** | Cumulative share volume from accepted aggregates in the current extended session. |
+| **Last** | Close of the latest accepted one-second aggregate. |
+| **From Close** | Percentage return from the previous regular session's adjusted close. |
+| **From Open** | Percentage return from the open of the first accepted aggregate in the current extended session. |
+| **Day Range** | Latest price's relative position between the session low and high, expressed from 0% to 100%. |
+| **Activity 30s** | Empirical percentile of current 30-second share-volume activity against 55 preceding 30-second reference windows. |
+| **Move 30s** | Signed percentage price change over the preceding 30 seconds. |
+| **Tape Speed** | Distinct qualifying original trades per second over the preceding 5 seconds. |
+| **Spread** | Latest valid bid–ask spread in basis points and cents. |
 
-For ordinary private daily operation on macOS, use the supervised one-command
-workflow documented in the
-[`private live scanner runbook`](docs/private-live-scanner-runbook.md):
+Activity 30s compares the current window with reference windows sampled every
+five seconds across the preceding five minutes. The references overlap one
+another but do not overlap the current window. A high reading indicates elevated
+recent volume relative to that stock's own history; it is not a probability or
+a directional signal.
+
+Trade and quote subscriptions are limited to the qualified displayed symbols.
+Tape speed and spread require their own confirmed coverage and can be
+unavailable independently. Warming, stale, invalid, and missing measurements
+have explicit states; unavailable data is never presented as measured zero.
+
+## System Architecture
+
+The backend maintains one authoritative `ScannerStateEngine`. Concurrent
+adapters acquire and normalize provider data, while a single ordered execution
+path owns canonical symbol state, qualification, ranking, and publication.
+
+- **Historical and live reconciliation.** Startup hydrates aggregates from
+  session start while buffering live ingress. Historical and live bars use the
+  same identity and merge rules, allowing a mid-session start to recover earlier
+  activity and session measurements.
+- **Deterministic event processing.** Live facts retain connection epoch, frame
+  sequence, and array position. State updates follow explicit ordering rather
+  than goroutine completion order, including correction handling.
+- **Coherent snapshot publication.** Aggregate evaluation commits at a shared
+  watermark—the time boundary through which the population has been evaluated.
+  Immutable snapshots reach the dashboard through a versioned local API, so
+  readers cannot observe partially applied state.
+- **Bounded processing and failure isolation.** Queues, retained state, retries,
+  and external work are bounded. Under feed pressure, trade-and-quote enrichment
+  can be shed while aggregate and control facts continue through processing.
+  Enrichment availability does not determine aggregate ranking or readiness.
+- **Independent presentation.** The dashboard reads backend snapshots and owns
+  rendering, not market calculations. It can restart without resetting scanner
+  state, and browser work remains outside the engine's mutation path.
+
+## Local Development
+
+The project uses Go 1.26. Live operation requires authorized Massive market-data
+access, with credentials supplied at runtime.
+
+From the repository root on macOS:
 
 ```text
-./scripts/run-private-scanner
+./scripts/run-private-scanner --open
 ```
 
-It may be started at any time. Before the 03:55 America/New_York preconnect
-boundary it runs the dashboard in calendar-aware standby, then starts the
-ordinary scanner for the current or next exchange-declared trading session.
-Starting at approximately 03:55 remains the shortest path. It builds and
-supervises the existing scanner and dashboard and reports authoritative
-liveness and readiness without moving market-state ownership into the launcher. For the current MVP,
-restart uses fresh hydration. Hydration defaults
-to eight workers; `--hydration-workers` accepts exactly `1`, `2`, `4`, or `8`.
-The manual commands below remain useful for development and
-independent-process inspection.
+The dashboard opens at `http://127.0.0.1:4173`.
 
-The dashboard is an independent loopback process. Start the scanner API with
-the dashboard origin explicitly allowed, then start the static UI server from
-the repository root:
+Run the standard offline test suite with:
 
 ```text
-go run ./cmd/scanner --trading-date YYYY-MM-DD --api-address 127.0.0.1:8080 --allow-origin http://127.0.0.1:4173
-go run ./cmd/dashboard --address 127.0.0.1:4173 --api-origin http://127.0.0.1:8080 --assets ui
+go test -short -timeout 2m ./...
 ```
 
-Open `http://127.0.0.1:4173` in Chrome. The UI polls `GET /api/v2/snapshot`
-once per second with one request in flight. Restarting the dashboard does not stop
-or relink the scanner. This is a private/local configuration; it does not add
-public binding, authentication, TLS, hosting, or credentialed live validation.
+## Validation and Scope
 
-## Predecessor evidence
+The supported workflow is a fresh-start local live scanner. Each process start
+resolves reference data and hydrates session history before reconciling with
+the live stream. Checkpoint persistence is disabled, and historical replay is
+retained but unsupported for the current feature set.
 
-The version 2 predecessor is retained separately as a source of Massive protocol
-behavior, observed edge cases, fixtures, algorithms, and regression evidence. It
-is evidence, never authority. It may be inspected only within a narrow,
-owner-approved reconnaissance scope after the new component boundary has been
-derived from Phase 1. Its orchestration architecture is not the starting point
-for this implementation.
+Offline verification covers implemented calculations, state transitions,
+accounting, and failure handling. Credentialed market-hours capacity and
+latency remain unverified; public hosting and
+multi-user operation are outside the current scope.
+
+The scanner measures observed market conditions. It does not generate trade
+entries or exits, route orders, or manage positions. Predictive value and
+executable trading expectancy require separate evaluation with explicit
+latency, liquidity, slippage, fees, and position-sizing assumptions.
